@@ -1,0 +1,21 @@
+{
+  "name": "prospecting-email-send",
+  "version": "1.0.0",
+  "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
+  "main": "electron/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "extract": "node send/extract.js",
+    "import-csv": "node send/import-csv.js",
+    "send": "node send/send.js",
+    "status": "node send/status.js"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^42.4.1"
+  }
+}

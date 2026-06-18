@@ -1,0 +1,29 @@
+{
+  "smtp": {
+    "host": "smtp.mxhichina.com",
+    "port": 465,
+    "secure": true,
+    "user": "zayne_jin@yqn.com",
+    "pass": "使用环境变量 SMTP_PASS 设置，或在此填入密码"
+  },
+  "sender": {
+    "name": "金颖哲 Zayne Jin",
+    "email": "zayne_jin@yqn.com"
+  },
+  "signature": {
+    "text": "金颖哲 Zayne Jin | Overseas Sales · LatAm Desk\nYQN Logistics Technology Group\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com",
+    "html": "<div style=\"font-family:Arial,sans-serif;color:#333;border-top:1px solid #ddd;padding-top:12px;margin-top:16px\">\n  <p style=\"margin:0 0 4px 0;font-size:14px\"><strong>金颖哲 Zayne Jin</strong></p>\n  <p style=\"margin:0 0 4px 0;font-size:13px;color:#666\">Overseas Sales · LatAm Desk</p>\n  <p style=\"margin:0 0 8px 0;font-size:13px;color:#666\">YQN Logistics Technology Group</p>\n  <p style=\"margin:0;font-size:12px;color:#999\">\n    📧 zayne_jin@yqn.com &nbsp;|&nbsp; 📱 +86 18487665870 &nbsp;|&nbsp; 🌐 <a href=\"https://www.yqn.com\" style=\"color:#1a73e8\">www.yqn.com</a>\n  </p>\n</div>",
+    "imageUrl": ""
+  },
+  "schedule": {
+    "max_per_day": 500,
+    "start_hour_beijing": 19,
+    "end_hour_beijing": 3,
+    "min_delay_seconds": 45,
+    "max_delay_seconds": 120
+  },
+  "tracking": {
+    "file": "send-log.json",
+    "bounce_check_days": 3
+  }
+}

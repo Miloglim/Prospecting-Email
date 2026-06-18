@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+
+# CodeGraph 本地索引
+.codegraph/
+
+# 敏感配置（含 SMTP 密码）
+send/config.json
+
+# 发送日志与队列（运行时数据）
+send/send-log.json
+send/send-batch.json
+
+# 背调请求文件（临时）
+reports/背调请求-*.md
+
+# 用户数据文件
+*.csv
+*.xlsx
+*.xls
+
+# Electron 构建产物
+dist/
+out/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/

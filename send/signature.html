@@ -1,0 +1,39 @@
+<!--
+  邮件签名模板（HTML）
+  此文件独立于邮件正文，send.js 会自动附加到每封邮件末尾。
+  修改签名只需改这个文件，不需动任何邮件模板。
+
+  可用变量:
+    {{name}}        - 发件人姓名
+    {{email}}       - 发件人邮箱
+    {{phone}}       - 手机号
+    {{website}}     - 官网
+    {{imageUrl}}    - 签名图 URL（config.json 中配置）
+
+  如果签名图放在 send/signature.png，脚本自动内嵌：
+    <img src="cid:signature" ...>
+-->
+<div style="font-family:Arial,Helvetica,sans-serif;color:#333;border-top:1px solid #ddd;padding-top:12px;margin-top:16px">
+  <table cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    <tr>
+      <!-- 文字部分 -->
+      <td style="vertical-align:top;padding-right:16px">
+        <p style="margin:0 0 4px 0;font-size:15px;font-weight:bold;color:#222">金颖哲 Zayne Jin</p>
+        <p style="margin:0 0 2px 0;font-size:13px;color:#555">Overseas Sales · LatAm Desk</p>
+        <p style="margin:0 0 6px 0;font-size:13px;color:#555">YQN Logistics Technology Group</p>
+        <p style="margin:0;font-size:12px;color:#888">
+          📧 zayne_jin@yqn.com &nbsp;|&nbsp;
+          📱 +86 18487665870 &nbsp;|&nbsp;
+          🌐 <a href="https://www.yqn.com" style="color:#1a73e8;text-decoration:none">www.yqn.com</a>
+        </p>
+        <p style="margin:4px 0 0 0;font-size:11px;color:#aaa">
+          红杉中国投资 · 国际物流数字化独角兽 · 300+船司合作 · 35,000+企业信赖
+        </p>
+      </td>
+      <!-- 图片部分 — 如果签名图存在则显示 -->
+      <td style="vertical-align:bottom">
+        <!-- <img src="cid:signature" style="max-width:200px;height:auto" alt="YQN"> -->
+      </td>
+    </tr>
+  </table>
+</div>

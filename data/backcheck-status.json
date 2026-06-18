@@ -1,0 +1,36 @@
+{
+  "Xinquan México Automotive Trim Ags": {
+    "status": "done",
+    "rating": 5,
+    "requestedAt": "2026-06-18T06:56:23.774Z",
+    "completedAt": "2026-06-18T07:10:00.000Z"
+  },
+  "SMC AUTOMACAO DO BRASIL LTDA": {
+    "status": "done",
+    "rating": 1,
+    "requestedAt": "2026-06-18T07:05:50.964Z",
+    "completedAt": "2026-06-18T07:20:00.000Z"
+  },
+  "GURGELMIX MAQUINAS E FERRAMENTAS S.A.": {
+    "status": "done",
+    "rating": 4,
+    "requestedAt": "2026-06-18T07:38:45.595Z",
+    "completedAt": "2026-06-18T07:42:00.000Z"
+  },
+  "LUMINI SOLUCOES EM ILUMINACAO LTDA": {
+    "status": "done",
+    "rating": 2,
+    "requestedAt": "2026-06-18T07:41:22.426Z",
+    "completedAt": "2026-06-18T07:48:00.000Z"
+  },
+  "INNOVIA FILMS MEXICO S.A DE C.V.": {
+    "status": "done",
+    "rating": 2,
+    "requestedAt": "2026-06-18T07:49:52.331Z",
+    "completedAt": "2026-06-18T07:52:00.000Z"
+  },
+  "KUKA HOME MEXICO S. DE R.L DE C.V. ": {
+    "status": "researching",
+    "requestedAt": "2026-06-18T08:42:02.508Z"
+  }
+}
