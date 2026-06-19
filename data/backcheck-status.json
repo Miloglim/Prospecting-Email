@@ -1,9 +1,9 @@
 {
   "Xinquan México Automotive Trim Ags": {
     "status": "done",
+    "completedAt": "2026-06-19T06:47:49.397Z",
     "rating": 5,
-    "requestedAt": "2026-06-18T06:56:23.774Z",
-    "completedAt": "2026-06-18T07:10:00.000Z"
+    "progress": "已有报告"
   },
   "SMC AUTOMACAO DO BRASIL LTDA": {
     "status": "done",
@@ -30,7 +30,27 @@
     "completedAt": "2026-06-18T07:52:00.000Z"
   },
   "KUKA HOME MEXICO S. DE R.L DE C.V. ": {
-    "status": "researching",
-    "requestedAt": "2026-06-18T08:42:02.508Z"
+    "status": "done",
+    "rating": 5,
+    "completedAt": "2026-06-19T07:57:25.212Z",
+    "progress": "报告已生成"
+  },
+  "GSI GROUP": {
+    "status": "done",
+    "completedAt": "2026-06-19T07:00:16.825Z",
+    "rating": 5,
+    "progress": "已有报告"
+  },
+  "PRODUCTOS TERMOENCOGIBLES DE MEXICO S.A DE C.V.": {
+    "status": "done",
+    "rating": 5,
+    "completedAt": "2026-06-19T07:23:05.427Z",
+    "progress": "报告已生成"
+  },
+  "ALD TRATAMIENTOS TERMICOS S.A DE C.V. ": {
+    "status": "done",
+    "rating": 5,
+    "completedAt": "2026-06-19T07:30:07.934Z",
+    "progress": "报告已生成"
   }
 }

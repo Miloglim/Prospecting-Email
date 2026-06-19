@@ -16,6 +16,9 @@ if (process.env.SMTP_PASS) {
   config.smtp.pass = process.env.SMTP_PASS;
 }
 
+// 测试模式
+const testMode = config.test?.enabled && config.test?.email;
+
 // ── 命令行参数 ────────────────────────────────────────────────────────
 const batchFile = process.argv[2];
 if (!batchFile) {
@@ -97,7 +100,7 @@ if (fs.existsSync(sigHtmlPath)) {
 }
 
 // 文本签名（来自 config）
-signatureText = config.signature?.text || "";
+signatureText = config.signature?.text || "金颖哲 Zayne Jin | Overseas Sales · LatAm Desk\nYQN Logistics Technology Group\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com";
 
 // 检查本地签名图
 const sigImagePath = path.join(__dirname, "signature.png");
@@ -112,13 +115,18 @@ function buildMailContent(bodyText) {
   const textBody = bodyText + "\n--\n" + signatureText;
 
   // HTML：正文转段落
+  let isFirst = true;
   const htmlBody = bodyText
     .split("\n")
     .map((line) => {
       const trimmed = line.trim();
       if (!trimmed) return "<br>";
       if (trimmed === "--" || trimmed === "---") return "<br>";
-      return `<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${trimmed}</p>`;
+      const content = (isFirst && /^(Buen día|Bom dia|Hello|Hola|Olá|Estimado|Prezado)/i.test(trimmed))
+        ? `<strong style="font-size:15px">${trimmed}</strong>`
+        : trimmed;
+      isFirst = false;
+      return `<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${content}</p>`;
     })
     .join("\n");
 
@@ -136,10 +144,11 @@ function buildMailContent(bodyText) {
 async function sendOne(email, index, total) {
   const { text, html } = buildMailContent(email.body);
 
+  const actualTo = testMode ? config.test.email : email.to;
   const mailOptions = {
     from: `"${config.sender.name}" <${config.sender.email}>`,
-    to: email.to,
-    subject: email.subject,
+    to: actualTo,
+    subject: testMode ? `[测试] ${email.subject}` : email.subject,
     text: text,
     html: html,
   };

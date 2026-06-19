@@ -45,65 +45,83 @@ function parseTemplateLibrary() {
   return lib;
 }
 
-// ── 工具函数：按编号前缀解析表格行 ────────────────────────────────────
+// ── 工具函数：按编号前缀解析表格行（支持 ES/PT/EN 三语）──────────────
 function parseTableByPrefix(text, prefix) {
   const results = [];
-  const regex = new RegExp(
-    `\\|\\s*${prefix}(\\d+)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|`,
+  // 匹配 4 列表格：编号 | 西语 | 葡语 | 英语（编号支持 H-1, H-A1, PA-1, PA-A1 等）
+  const pattern = prefix.replace('-', '\\-');
+  const regex4 = new RegExp(
+    `\\|\\s*${pattern}([A-Z]?\\d+)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|`,
     'g'
   );
-
   let match;
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = regex4.exec(text)) !== null) {
     results.push({
       id: `${prefix}${match[1]}`,
       es: match[2].trim(),
+      pt: match[3].trim(),
+      en: match[4].trim(),
+    });
+  }
+  if (results.length > 0) return results;
+  // 回退：匹配旧 3 列表格：编号 | 西语 | 英语
+  const regex3 = new RegExp(
+    `\\|\\s*${pattern}([A-Z]?\\d+)\\s*\\|\\s*(.+?)\\s*\\|\\s*(.+?)\\s*\\|`,
+    'g'
+  );
+  while ((match = regex3.exec(text)) !== null) {
+    results.push({
+      id: `${prefix}${match[1]}`,
+      es: match[2].trim(),
+      pt: '',
       en: match[3].trim(),
     });
   }
   return results;
 }
 
-// ── CTA 特殊解析（多一列"类型"）───────────────────────────────────────
+// ── CTA 特殊解析（类型 | 编号 | 西语 | 葡语 | 英语）─ 支持 C-A1 等 ────
 function parseCTAs(text) {
   const results = [];
-  const regex = /\|\s*(.+?)\s*\|\s*(C-\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g;
+  // 5 列格式（含葡语）
+  const regex5 = /\|\s*(.+?)\s*\|\s*(C-[A-Z]?\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g;
   let match;
-  while ((match = regex.exec(text)) !== null) {
-    // 跳过表头行
+  while ((match = regex5.exec(text)) !== null) {
     if (match[1].includes('类型') || match[1].includes(':-')) continue;
-    results.push({
-      type: match[1].trim(),
-      id: match[2].trim(),
-      es: match[3].trim(),
-      en: match[4].trim(),
-    });
+    results.push({ type: match[1].trim(), id: match[2].trim(), es: match[3].trim(), pt: match[4].trim(), en: match[5].trim() });
+  }
+  if (results.length > 0) return results;
+  // 回退 4 列
+  const regex4 = /\|\s*(.+?)\s*\|\s*(C-[A-Z]?\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g;
+  while ((match = regex4.exec(text)) !== null) {
+    if (match[1].includes('类型') || match[1].includes(':-')) continue;
+    results.push({ type: match[1].trim(), id: match[2].trim(), es: match[3].trim(), pt: '', en: match[4].trim() });
   }
   return results;
 }
 
-// ── 解析主题行 ────────────────────────────────────────────────────────
+// ── 解析主题行（三语：西语 | 葡语 | 英语）─────────────────────────────
 function parseSubjects(text) {
   const subjects = { agent: {}, direct: {}, unlabeled: {} };
-
-  // 代理主题行
-  const agentMatch = text.match(/### 3\.1 代理[\s\S]*?🇲🇽 西语 \|\s*(.+?)\s*\|[\s\S]*?🇬🇧 英语 \|\s*(.+?)\s*\|/);
-  if (agentMatch) {
-    subjects.agent = { es: agentMatch[1].trim(), en: agentMatch[2].trim() };
+  const sections = [
+    { key: 'agent', re: /### 3\.1 代理/ },
+    { key: 'direct', re: /### 3\.2 直客/ },
+    { key: 'unlabeled', re: /### 3\.3 未标签/ },
+  ];
+  for (const { key, re } of sections) {
+    const start = text.search(re);
+    if (start < 0) continue;
+    const chunk = text.slice(start, start + 800);
+    // 提取三语主题行
+    const esM = chunk.match(/西语\s*\|\s*(.+?)\s*\|/);
+    const ptM = chunk.match(/葡语\s*\|\s*(.+?)\s*\|/);
+    const enM = chunk.match(/英语\s*\|\s*(.+?)\s*\|/);
+    subjects[key] = {
+      es: esM ? esM[1].trim() : '',
+      pt: ptM ? ptM[1].trim() : '',
+      en: enM ? enM[1].trim() : '',
+    };
   }
-
-  // 直客主题行
-  const directMatch = text.match(/### 3\.2 直客[\s\S]*?🇲🇽 西语 \|\s*(.+?)\s*\|[\s\S]*?🇬🇧 英语 \|\s*(.+?)\s*\|/);
-  if (directMatch) {
-    subjects.direct = { es: directMatch[1].trim(), en: directMatch[2].trim() };
-  }
-
-  // 未标签主题行
-  const unlabeledMatch = text.match(/### 3\.3 未标签[\s\S]*?🇲🇽 西语 \|\s*(.+?)\s*\|[\s\S]*?🇬🇧 英语 \|\s*(.+?)\s*\|/);
-  if (unlabeledMatch) {
-    subjects.unlabeled = { es: unlabeledMatch[1].trim(), en: unlabeledMatch[2].trim() };
-  }
-
   return subjects;
 }
 

@@ -25,5 +25,22 @@
   "tracking": {
     "file": "send-log.json",
     "bounce_check_days": 3
+  },
+  "search": {
+    "apiKey": "在此填入 Tavily API Key → https://tavily.com"
+  },
+  "test": {
+    "email": "",
+    "enabled": false
+  },
+  "translate": {
+    "youdao": {
+      "appKey": "有道 App Key → https://ai.youdao.com",
+      "appSecret": "有道 App Secret"
+    },
+    "baidu": {
+      "appId": "百度翻译 App ID → https://fanyi-api.baidu.com",
+      "key": "百度翻译 Key"
+    }
   }
 }

@@ -2,10 +2,7 @@
 
 // ===== 全局状态 ======================================================
 let templateLib = null;
-let currentLang = 'es';
-let isEditing = false;
 let queue = JSON.parse(localStorage.getItem('emailQueue') || '[]');
-let currentAssembled = { es: '', en: '', subject: '' };
 let unsubscribeProgress = null;
 let sendInProgress = false;
 let clientsData = [];
@@ -50,6 +47,7 @@ document.querySelector('.nav-parent')?.addEventListener('click', function(e) {
     if (pageId === 'signature') initSignature();
     if (pageId === 'email-send') initEmailSend();
     if (pageId === 'queue') renderQueue();
+    if (pageId === 'settings') initSettings();
   });
 });
 
@@ -163,11 +161,44 @@ document.getElementById('clients-clear-btn')?.addEventListener('click', () => {
 });
 
 // ===== 联系人 ========================================================
-let allCollapsed = false;
+let contactsGroupMap = new Map();
+let selectedContactCompany = null;
+let contactsFilter = 'all';  // all | agent | direct | unlabeled
+
+let contactsSendHistory = {};
 
 async function loadContacts() {
   contactsData = await window.electronAPI.getContacts();
-  renderContactsGrouped();
+  contactsSendHistory = await window.electronAPI.getSendHistory() || {};
+  // 诊断：打印分类统计
+  const diag = { agent: 0, direct: 0, unlabeled: 0, noField: 0 };
+  const seen = new Set();
+  for (const c of contactsData) {
+    if (!seen.has(c.company)) { seen.add(c.company); diag[c.clientType || 'noField']++; }
+  }
+  console.log('📊 联系人分类:', JSON.stringify(diag), '| 公司数:', seen.size, '| 总人数:', contactsData.length);
+  // 绑定筛选标签事件（仅一次）
+  if (!window._contactsFilterBound) {
+    window._contactsFilterBound = true;
+    document.querySelectorAll('#contacts-filter .cf-tab').forEach(tab => {
+      tab.addEventListener('click', (e) => {
+        e.preventDefault();
+        contactsFilter = tab.dataset.filter;
+        selectedContactCompany = null;
+        renderContactsList();
+      });
+    });
+  }
+  renderContactsList();
+}
+
+function clientTypeTag(clientType) {
+  const map = {
+    agent: '<span class="ctype-tag ctype-agent">🌐 代理</span>',
+    direct: '<span class="ctype-tag ctype-direct">🏭 直客</span>',
+    unlabeled: '',
+  };
+  return map[clientType] || '';
 }
 
 function groupByCompany(data) {
@@ -177,26 +208,72 @@ function groupByCompany(data) {
     if (!groups[key]) groups[key] = [];
     groups[key].push(c);
   }
-  // 按公司名字母排序
   return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-function renderContactsGrouped(filtered) {
-  const data = filtered || contactsData;
-  const container = document.getElementById('contacts-groups');
+function renderContactsList(filtered) {
+  let data = filtered || contactsData;
+
+  // 应用类型筛选
+  if (contactsFilter !== 'all') {
+    data = data.filter(c => (c.clientType || 'unlabeled') === contactsFilter);
+  }
+
+  const sidebar = document.getElementById('contacts-sidebar');
+  const detail = document.getElementById('contacts-detail');
+  const layout = document.getElementById('contacts-layout');
+  const filterBar = document.getElementById('contacts-filter');
   const empty = document.getElementById('contacts-empty');
   const statsBar = document.getElementById('contacts-stats');
 
   if (!data.length) {
-    if (empty) empty.style.display = 'block';
-    if (container) container.innerHTML = '';
+    if (empty) { empty.style.display = 'block'; empty.textContent = contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
+    if (layout) layout.style.display = 'none';
     if (statsBar) statsBar.style.display = 'none';
+    if (filterBar) filterBar.style.display = 'none';
+    contactsGroupMap.clear();
+    selectedContactCompany = null;
     return;
   }
 
   if (empty) empty.style.display = 'none';
-  // 按人数降序排列
+  if (layout) layout.style.display = 'flex';
+  if (filterBar) filterBar.style.display = 'flex';
+
+  // 统计各类型公司数（始终基于全部数据）
+  const counts = { agent: 0, direct: 0, unlabeled: 0 };
+  const seenCompanies = new Set();
+  for (const c of contactsData) {
+    const key = c.company;
+    if (!seenCompanies.has(key)) {
+      seenCompanies.add(key);
+      counts[c.clientType || 'unlabeled']++;
+    }
+  }
+
+  // 更新筛选标签（只更新文本和 active，不重建 DOM）
+  const tabs = filterBar?.querySelectorAll('.cf-tab');
+  if (tabs) {
+    const labelMap = {
+      all: `全部 ${seenCompanies.size}`,
+      agent: `🌐 代理 ${counts.agent}`,
+      direct: `🏭 直客 ${counts.direct}`,
+      unlabeled: `❓ 未标签 ${counts.unlabeled}`,
+    };
+    tabs.forEach(tab => {
+      const f = tab.dataset.filter;
+      tab.textContent = labelMap[f] || f;
+      tab.classList.toggle('active', contactsFilter === f);
+    });
+  }
+
   const groups = groupByCompany(data).sort((a, b) => b[1].length - a[1].length);
+
+  // 快速查找表
+  contactsGroupMap.clear();
+  for (const [company, members] of groups) {
+    contactsGroupMap.set(company, members);
+  }
 
   // 统计
   const vipCount = groups.filter(g => g[1].length >= 5).length;
@@ -205,82 +282,104 @@ function renderContactsGrouped(filtered) {
     statsBar.innerHTML = `<span>👥 <strong>${data.length}</strong> 位联系人</span><span>🏢 <strong>${groups.length}</strong> 家公司</span><span>⭐ <strong>${vipCount}</strong> 可定制客户</span>`;
   }
 
-  if (container) {
-    container.innerHTML = groups.map(([company, members]) => `
-      <div class="contact-group${allCollapsed ? ' collapsed' : ''}">
-        <div class="contact-group-header">
-          <span class="contact-group-title">
-            <span class="contact-group-arrow">▼</span>
-            ${escapeHtml(company)}
-            <span class="contact-group-count">${members.length} 人</span>
-            ${members.length >= 5 ? '<span class="badge-vip">可定制</span>' : ''}
-          </span>
-          <span style="font-size:11px;color:var(--text-secondary)">${escapeHtml(members[0]?.country || '')}</span>
+  // 左侧公司列表
+  if (sidebar) {
+    sidebar.innerHTML = groups.map(([company, members]) => {
+      const ctype = members[0]?.clientType || 'unlabeled';
+      const tagHtml = clientTypeTag(ctype);
+      const ctry = escapeHtml(members[0]?.country || '');
+      const hist = contactsSendHistory[company];
+      const stageLabel = hist?.stage ? `<span class="ci-stage-badge">${hist.stage.toUpperCase()}</span>` : '';
+      const vipClass = members.length >= 5 ? ' ci-vip' : '';
+      const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
+      return `
+      <div class="contact-item${selectedContactCompany === company ? ' active' : ''}" data-company="${escapeHtml(company)}">
+        <div class="ci-main">
+          <span class="ci-name${vipClass}">${escapeHtml(company)}</span>
+          <span class="ci-count">${members.length}</span>
         </div>
-        <div class="contact-group-body">
-          <table>
-            <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>添加时间</th><th>操作</th></tr></thead>
-            <tbody>
-              ${members.map(m => `
-                <tr>
-                  <td>${escapeHtml(m.country)}</td>
-                  <td>${escapeHtml(m.category)}</td>
-                  <td>${escapeHtml(m.email)}</td>
-                  <td>${formatDate(m.addedAt)}</td>
-                  <td><button class="btn-delete danger" data-id="${m.id}">删除</button></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `).join('');
+        <div class="ci-sub">${subParts.join(' · ')}</div>
+      </div>`;
+    }).join('');
 
-    // 折叠/展开
-    container.querySelectorAll('.contact-group-header').forEach(header => {
-      header.addEventListener('click', () => {
-        header.parentElement.classList.toggle('collapsed');
+    // 点击公司 → 右侧显示成员
+    sidebar.querySelectorAll('.contact-item').forEach(item => {
+      item.addEventListener('click', () => {
+        sidebar.querySelectorAll('.contact-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        selectedContactCompany = item.dataset.company;
+        renderContactDetail(selectedContactCompany);
       });
     });
 
-    // 删除单个联系人
-    container.querySelectorAll('.btn-delete').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm('确定删除该联系人？')) return;
-        await window.electronAPI.deleteContact(btn.dataset.id);
-        contactsData = contactsData.filter(c => c.id !== btn.dataset.id);
-        renderContactsGrouped();
-      });
-    });
+    // 如果之前有选中，恢复选中状态；否则自动选第一个
+    if (selectedContactCompany && contactsGroupMap.has(selectedContactCompany)) {
+      renderContactDetail(selectedContactCompany);
+    } else {
+      selectedContactCompany = groups[0]?.[0] || null;
+      if (selectedContactCompany) {
+        const firstItem = sidebar.querySelector(`[data-company="${escapeHtml(selectedContactCompany)}"]`);
+        if (firstItem) firstItem.classList.add('active');
+        renderContactDetail(selectedContactCompany);
+      }
+    }
   }
 }
 
-// 一键折叠/展开
-document.getElementById('contacts-collapse-all')?.addEventListener('click', () => {
-  allCollapsed = !allCollapsed;
-  document.querySelectorAll('.contact-group').forEach(g => {
-    if (allCollapsed) g.classList.add('collapsed');
-    else g.classList.remove('collapsed');
-  });
-  const btn = document.getElementById('contacts-collapse-all');
-  btn.textContent = allCollapsed ? '📂 一键展开' : '📂 一键折叠';
-});
+function renderContactDetail(company) {
+  const detail = document.getElementById('contacts-detail');
+  if (!detail) return;
+  const members = contactsGroupMap.get(company) || [];
+  const ctype = members[0]?.clientType || 'unlabeled';
+  detail.innerHTML = `
+    <div class="contacts-detail-header">${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</div>
+    <div class="contacts-detail-body">
+      <table>
+        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>添加时间</th><th>操作</th></tr></thead>
+        <tbody>
+          ${members.map(m => `
+            <tr>
+              <td>${escapeHtml(m.country)}</td>
+              <td>${escapeHtml(m.category)}</td>
+              <td>${escapeHtml(m.email)}</td>
+              <td>${formatDate(m.addedAt)}</td>
+              <td><button class="btn-delete danger" data-id="${m.id}">删除</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 
-// 一键删除全部
+  // 删除按钮
+  detail.querySelectorAll('.btn-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('确定删除该联系人？')) return;
+      await window.electronAPI.deleteContact(btn.dataset.id);
+      contactsData = contactsData.filter(c => c.id !== btn.dataset.id);
+      // 刷新列表 + 刷新当前公司详情
+      renderContactsList();
+    });
+  });
+}
+
+// 删除全部
 document.getElementById('contacts-delete-all')?.addEventListener('click', async () => {
   if (!confirm('确定删除全部联系人？此操作不可恢复！')) return;
   await window.electronAPI.deleteAllContacts();
   contactsData = [];
-  renderContactsGrouped();
+  selectedContactCompany = null;
+  renderContactsList();
 });
 
 // 搜索
 document.getElementById('contacts-search')?.addEventListener('input', async (e) => {
   const q = e.target.value.trim();
-  if (!q) { renderContactsGrouped(); return; }
+  if (!q) { renderContactsList(); return; }
   const results = await window.electronAPI.searchContacts(q);
-  renderContactsGrouped(results);
+  selectedContactCompany = null; // 搜索后重置选中
+  renderContactsList(results);
 });
 
 // 「添加客户」→ 跳转到导入页
@@ -324,11 +423,19 @@ async function loadBackcheck() {
 
   container.innerHTML = groups.map(([company, members]) => {
     const st = status[company];
+    const ctype = members[0]?.clientType || 'unlabeled';
+    const tagHtml = clientTypeTag(ctype);
+    const ctry = escapeHtml(members[0]?.country || '');
+    const vipClass = members.length >= 5 ? ' ci-vip' : '';
     let badge = '⬜';
-    if (st?.status === 'researching') badge = '🔄';
-    else if (st?.status === 'pending_claude') badge = '📋';
+    if (st?.status === 'researching' || st?.status === 'pending') badge = '🔄';
+    else if (st?.status === 'timeout') badge = '⏰';
     else if (st?.status === 'done') badge = st.rating ? ratingStars(st.rating) : '✅';
-    return `<div class="backcheck-company" data-company="${escapeHtml(company)}">${escapeHtml(company)} <span style="font-size:11px">(${members.length}人)</span> <span style="font-size:12px">${badge}</span></div>`;
+    const subParts = [tagHtml, ctry].filter(Boolean);
+    return `<div class="backcheck-company" data-company="${escapeHtml(company)}">
+      <div class="bc-main"><span class="bc-name${vipClass}">${escapeHtml(company)}</span><span class="bc-badge">${badge}</span><span class="bc-count">${members.length}人</span></div>
+      <div class="bc-sub">${subParts.join(' · ')}</div>
+    </div>`;
   }).join('');
 
   let selectedCompany = null;
@@ -357,10 +464,10 @@ async function loadBackcheck() {
       // 更新列表中该公司的状态图标
       const updatedSt = freshStatus[selectedCompany];
       let badge = '⬜';
-      if (updatedSt?.status === 'researching') badge = '🔄';
+      if (updatedSt?.status === 'researching' || updatedSt?.status === 'pending') badge = '🔄';
       else if (updatedSt?.status === 'done') badge = updatedSt.rating ? ratingStars(updatedSt.rating) : '✅';
-      const span = el.querySelector('span:last-child');
-      if (span) span.textContent = badge;
+      const badgeEl = el.querySelector('.bc-badge');
+      if (badgeEl) badgeEl.textContent = badge;
     });
   });
 }
@@ -370,84 +477,147 @@ function renderBackcheckCard(info, companyName, st) {
   if (!card) return;
 
   const hasData = info?.raw && info.raw.length > 50;
-  // 每次重新读取状态（确保最新）
   const isDone = st?.status === 'done';
   const isResearching = st?.status === 'researching';
+  const isPending = st?.status === 'pending';
+  const isTimeout = st?.status === 'timeout';
 
   let bodyHtml = '';
   if (hasData || isDone) {
-    // 直接渲染报告全文（轻量 Markdown → HTML）
     const mdText = info.raw || '';
     bodyHtml = `<div class="backcheck-report">${renderMarkdown(mdText)}</div>`;
-  } else if (isResearching) {
-    bodyHtml = '<p style="color:var(--warning);padding:20px;text-align:center">🔄 正在自动搜索中，请稍候...</p>';
+  } else if (isResearching || isPending) {
+    bodyHtml = `<p style="color:var(--warning);padding:20px;text-align:center">🔄 ${st?.progress || '处理中...'}</p>`;
+  } else if (isTimeout) {
+    bodyHtml = '<p style="color:var(--danger);padding:20px;text-align:center">⏰ 请求超时，请检查请求文件</p>';
   } else {
     bodyHtml = '<p style="color:var(--text-secondary);padding:20px;text-align:center">点击下方按钮开始背调</p>';
   }
 
-  // 星级评定
   const rating = info?.rating || 0;
   const ratingHtml = rating > 0 ? `<div style="font-size:16px;margin-bottom:12px">货代开发价值：${ratingStars(rating)} <span style="font-size:12px;color:var(--text-secondary)">(${rating}/5)</span></div>` : '';
 
-  const isPendingClaude = st?.status === 'pending_claude';
-  const progress = st?.progress || '';
+  const showProgress = isResearching || isPending || isTimeout;
+  const showStartBtn = !isDone && !isResearching && !isPending;
+  const showCancelBtn = isResearching || isPending;
 
   card.innerHTML = `
     ${ratingHtml}
     ${bodyHtml}
-    ${(isResearching || isPendingClaude) ? `
+    ${showProgress ? `
       <div style="background:#f8f9fb;border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:12px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">📡 后台状态</div>
-        <div style="font-size:13px;color:var(--primary)">${progress || (isPendingClaude ? '等待 Claude Code 处理...' : '正在搜索...')}</div>
-        ${isPendingClaude ? '<div style="font-size:11px;color:var(--warning);margin-top:6px">⚠️ 自动搜索网络不通，已生成请求文件，请到 Claude Code 说「处理背调请求」</div>' : ''}
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">📡 状态</div>
+        <div style="font-size:13px;color:var(--primary)">${st?.progress || '等待处理...'}</div>
+        ${isPending ? '<div style="font-size:11px;color:var(--warning);margin-top:6px">📋 请求文件已生成，对 Claude 说「处理背调请求」即可自动完成</div>' : ''}
+        ${isTimeout ? '<div style="font-size:11px;color:var(--danger);margin-top:6px">报告未在 10 分钟内生成，请手动检查</div>' : ''}
       </div>
     ` : ''}
     <div style="margin-top:12px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:12px;flex-wrap:wrap">
-      ${(!isDone && !isPendingClaude) ? `<button id="btn-research" ${isResearching ? 'disabled' : ''}>🔍 ${isResearching ? '调查中...' : '开始背调'}</button>` : ''}
+      ${showStartBtn ? `<button id="btn-research">🔍 开始背调</button>` : ''}
       ${isDone ? `<button class="secondary" disabled>${rating > 0 ? ratingStars(rating) + ' 已评定' : '✅ 已完成背调'}</button>` : ''}
-      ${isPendingClaude ? `<button class="secondary" style="color:var(--warning)" disabled>⏳ 等待 Claude Code</button>` : ''}
       ${isDone ? '<button id="btn-recheck" class="secondary">🔄 重新调查</button>' : ''}
-      ${isResearching ? '<button id="btn-cancel-research" class="secondary danger">✕ 取消</button>' : ''}
-      ${isPendingClaude ? '<button id="btn-cancel-research" class="secondary danger">✕ 取消</button>' : ''}
+      ${showCancelBtn ? '<button id="btn-cancel-research" class="secondary danger">✕ 取消</button>' : ''}
     </div>
-    <div style="text-align:center;margin-top:8px">
+    <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button id="btn-open-folder" class="secondary" style="font-size:12px;padding:6px 16px">📂 打开报告文件夹</button>
+      ${isDone ? '<button id="btn-translate" class="secondary" style="font-size:12px;padding:6px 16px">🌐 翻译报告</button>' : ''}
+      <span id="translate-status" style="font-size:11px;color:var(--text-secondary);display:none"></span>
     </div>
   `;
 
-  // 开始背调按钮
-  document.getElementById('btn-research')?.addEventListener('click', async () => {
-    const contact = contactsData.find(c => c.company === companyName);
-    if (!contact) return alert('未找到联系人信息');
-    const result = await window.electronAPI.startResearch(contact);
-    if (result.ok) {
-      // 自动轮询等待完成
-      const btn = document.getElementById('btn-research');
-      if (btn) { btn.disabled = true; btn.textContent = '🔄 调查中...'; }
-      pollBackcheckStatus(companyName, () => {
-        loadBackcheck();
-        // 自动点击该公司显示结果
-        setTimeout(() => {
-          const el = document.querySelector(`.backcheck-company[data-company="${escapeHtml(companyName)}"]`);
-          if (el) el.click();
-        }, 200);
-      });
+  // 开始背调 / 重新调查
+  document.getElementById('btn-research')?.addEventListener('click', () => doResearch(companyName));
+  document.getElementById('btn-recheck')?.addEventListener('click', () => doResearch(companyName));
+
+  // 翻译报告
+  document.getElementById('btn-translate')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-translate');
+    const status = document.getElementById('translate-status');
+    const reportEl = card.querySelector('.backcheck-report');
+    if (!reportEl || !btn) return;
+
+    // 如果已翻译，切回原文
+    if (btn.dataset.translated === '1') {
+      reportEl.innerHTML = renderMarkdown(info.raw);
+      btn.textContent = '🌐 翻译报告';
+      btn.dataset.translated = '0';
+      if (status) { status.style.display = 'none'; status.textContent = ''; }
+      return;
     }
+
+    // 开始翻译
+    btn.disabled = true;
+    btn.textContent = '⏳ 翻译中...';
+    if (status) { status.style.display = 'inline'; status.textContent = '正在调用翻译接口...'; }
+
+    try {
+      const result = await window.electronAPI.translateReport(info.raw);
+      if (result.ok) {
+        reportEl.innerHTML = renderMarkdown(result.text);
+        btn.textContent = '📄 查看原文';
+        btn.dataset.translated = '1';
+        if (status) { status.style.display = 'none'; }
+      } else {
+        const msg = result.error === 'no_keys'
+          ? '未配置翻译 API Key，请在设置中填写有道/百度翻译'
+          : (result.message || '翻译失败');
+        if (status) { status.style.display = 'inline'; status.textContent = '❌ ' + msg; status.style.color = 'var(--danger)'; }
+        btn.textContent = '🌐 翻译报告';
+      }
+    } catch (e) {
+      if (status) { status.style.display = 'inline'; status.textContent = '❌ 网络异常，请检查连接'; status.style.color = 'var(--danger)'; }
+      btn.textContent = '🌐 翻译报告';
+    }
+    btn.disabled = false;
   });
 
-  // 重新调查
-  document.getElementById('btn-recheck')?.addEventListener('click', async () => {
-    const contact = contactsData.find(c => c.company === companyName);
-    if (!contact) return;
-    await window.electronAPI.startResearch(contact);
-    pollBackcheckStatus(companyName, () => {
+  async function doResearch(companyName) {
+    const contact = contactsData.find(c => (c.company || '').trim() === (companyName || '').trim());
+    if (!contact) { alert('未找到联系人: ' + companyName); return; }
+
+    // 即刻反馈
+    const card = document.getElementById('backcheck-card');
+    const btn = document.getElementById('btn-research') || document.getElementById('btn-recheck');
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 搜索中...'; }
+    if (card) {
+      card.innerHTML = '<p style="color:var(--primary);padding:20px;text-align:center;font-size:14px">🔄 正在搜索 ' + escapeHtml(companyName) + ' ...</p>'
+        + '<p style="color:var(--text-secondary);text-align:center;font-size:12px" id="research-progress">启动中...</p>';
+    }
+
+    // 监听后台进度
+    let unsub = null;
+    if (window.electronAPI.onBackcheckProgress) {
+      unsub = window.electronAPI.onBackcheckProgress(async (data) => {
+        if (data.company !== companyName) return;
+        const progEl = document.getElementById('research-progress');
+        if (progEl && data.type === 'research-progress') progEl.textContent = data.progress || '';
+        if (data.type === 'research-done') {
+          if (unsub) unsub();
+          // 直接更新卡片，不等全量刷新
+          const [detail, status] = await Promise.all([
+            window.electronAPI.getBackcheckDetail(companyName),
+            window.electronAPI.getBackcheckStatus(),
+          ]);
+          renderBackcheckCard(detail, companyName, status[companyName]);
+          // 更新左侧列表的状态图标
+          const item = document.querySelector(`.backcheck-company[data-company="${escapeHtml(companyName)}"]`);
+          if (item) {
+            const st = status[companyName];
+            const badge = st?.status === 'done' ? (st.rating ? ratingStars(st.rating) : '✅') : '⬜';
+            const span = item.querySelector('span:last-child');
+            if (span) span.textContent = badge;
+          }
+        }
+      });
+    }
+
+    const result = await window.electronAPI.startResearch(contact);
+    if (!result.ok) {
+      if (unsub) unsub();
+      alert(result.message || '启动失败');
       loadBackcheck();
-      setTimeout(() => {
-        const el = document.querySelector(`.backcheck-company[data-company="${escapeHtml(companyName)}"]`);
-        if (el) el.click();
-      }, 200);
-    });
-  });
+    }
+  }
 
   // 取消调查
   document.getElementById('btn-cancel-research')?.addEventListener('click', async () => {
@@ -463,46 +633,31 @@ function renderBackcheckCard(info, companyName, st) {
 }
 
 
-// ===== 邮件工坊 ======================================================
-async function initEmailSend() {
-  if (!templateLib) templateLib = await window.electronAPI.getTemplateLibrary();
-
-  document.getElementById('ws-stage').onchange = () => { randomizeTemplate(); };
-  document.getElementById('ws-type').onchange = () => { randomizeTemplate(); };
-
-  document.querySelectorAll('.lang-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      currentLang = tab.dataset.lang;
-      document.querySelectorAll('.lang-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById('preview-body-es').style.display = currentLang === 'es' ? 'block' : 'none';
-      document.getElementById('preview-body-en').style.display = currentLang === 'en' ? 'block' : 'none';
-    });
-  });
-
-  document.getElementById('ws-add-queue').addEventListener('click', addToQueue);
-
-  await loadSendContacts();
-  randomizeTemplate();
-}
+// ===== 邮件发送 ======================================================
+const STAGES_SEND = ['cold', 'f1', 'f2', 'f3', 'f4'];
+const STAGE_LABELS_SEND = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
+const STAGE_NEXT_SEND = { '': 'cold', cold: 'f1', f1: 'f2', f2: 'f3', f3: 'f4', f4: 'f4' };
 
 let sendCompanies = {};
+let sendHistory = {};
+let selectedCards = {};
+let selectedCompanySet = new Set(); // 持久化勾选状态，搜索不清除
+
+async function initEmailSend() {
+  if (!templateLib) templateLib = await window.electronAPI.getTemplateLibrary();
+  document.getElementById('ws-add-queue').addEventListener('click', addToQueue);
+  await loadSendContacts();
+}
 
 async function loadSendContacts() {
   contactsData = await window.electronAPI.getContacts();
-  if (!contactsData.length) {
-    document.getElementById('send-company-list').innerHTML = '<p style="font-size:12px;color:var(--text-secondary);padding:8px">暂无联系人</p>';
-    return;
-  }
-
-  // 按公司分组
+  sendHistory = await window.electronAPI.getSendHistory() || {};
   sendCompanies = {};
   for (const c of contactsData) {
     const name = c.company || '未命名';
     if (!sendCompanies[name]) sendCompanies[name] = [];
     sendCompanies[name].push(c);
   }
-
   renderCompanyList();
 }
 
@@ -510,80 +665,169 @@ function renderCompanyList(filter) {
   const container = document.getElementById('send-company-list');
   let companies = Object.entries(sendCompanies).sort((a,b) => b[1].length - a[1].length);
   if (filter) companies = companies.filter(([n]) => n.toLowerCase().includes(filter));
-
-  container.innerHTML = companies.length
-    ? companies.map(([name, members]) => `<div class="send-company-item" data-company="${escapeHtml(name)}">${escapeHtml(name)}<span class="sc-count">${members.length}</span></div>`).join('')
-    : '<p style="font-size:12px;color:var(--text-secondary);padding:8px">无匹配公司</p>';
-
+  if (!companies.length) {
+    container.innerHTML = '<p style="font-size:12px;color:var(--text-secondary);padding:8px">无匹配公司</p>';
+    return;
+  }
+  container.innerHTML = companies.map(([name, members]) => {
+    const ctype = members[0]?.clientType || 'unlabeled';
+    const tagHtml = clientTypeTag(ctype);
+    const ctry = escapeHtml(members[0]?.country || '');
+    const hist = sendHistory[name];
+    const stageLabel = hist?.stage ? `<span class="sci-stage">${STAGE_LABELS_SEND[hist.stage]}</span>` : '';
+    const vipClass = members.length >= 5 ? ' ci-vip' : '';
+    const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
+    return `<div class="send-company-item" data-company="${escapeHtml(name)}">
+      <input type="checkbox" class="sc-check" data-company="${escapeHtml(name)}"${selectedCompanySet.has(name) ? ' checked' : ''}>
+      <div class="sci-info">
+        <span class="ci-name${vipClass}">${escapeHtml(name)}</span>
+        ${subParts.length ? `<span class="sci-sub">${subParts.join(' · ')}</span>` : ''}
+      </div>
+      <span class="ci-count">${members.length}</span>
+    </div>`;
+  }).join('');
+  updateSelectedCount();
   container.querySelectorAll('.send-company-item').forEach(el => {
-    el.addEventListener('click', () => {
-      container.querySelectorAll('.send-company-item').forEach(e => e.classList.remove('active'));
-      el.classList.add('active');
-      selectSendCompany(el.dataset.company);
+    el.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      const cb = el.querySelector('.sc-check');
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event('change'));
+    });
+    el.querySelector('.sc-check').addEventListener('change', (e) => {
+      const name = e.target.dataset.company;
+      if (e.target.checked) selectedCompanySet.add(name);
+      else selectedCompanySet.delete(name);
+      updateSelectedCount();
     });
   });
 }
 
-function selectSendCompany(companyName) {
-  const members = sendCompanies[companyName] || [];
-  const recipDiv = document.getElementById('send-recipients');
-  recipDiv.innerHTML = `<span style="font-size:13px;font-weight:600;margin-right:8px">${escapeHtml(companyName)}</span>` +
-    members.map(m => `<label><input type="checkbox" class="rcpt-check" data-email="${escapeHtml(m.email||'')}" checked> ${escapeHtml(m.email||'无邮箱')}</label>`).join('');
-
-  // 存公司名供队列使用
-  window._sendCompany = companyName;
-  window._sendMembers = members;
+function getSelectedCompanies() {
+  return [...selectedCompanySet];
 }
 
-// 获取当前勾选的收件人
-function getCheckedRecipients() {
-  const checks = document.querySelectorAll('.rcpt-check:checked');
-  return Array.from(checks).map(cb => cb.dataset.email).filter(Boolean);
+function updateSelectedCount() {
+  const selected = getSelectedCompanies();
+  document.getElementById('send-selected-count').textContent = selected.length ? `已选 ${selected.length} 家` : '';
+  renderSelectedCards();
 }
 
-// 搜索
+function renderSelectedCards() {
+  const container = document.getElementById('send-company-cards');
+  const empty = document.getElementById('send-cards-empty');
+  const title = document.getElementById('send-list-title');
+  const selected = getSelectedCompanies();
+  if (!selected.length) {
+    if (container) container.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    if (title) title.textContent = '已选公司';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  if (title) title.textContent = `已选公司 (${selected.length})`;
+  for (const name of selected) {
+    if (!selectedCards[name]) {
+      const members = sendCompanies[name] || [];
+      const ctype = members[0]?.clientType || 'unlabeled';
+      const hist = sendHistory[name];
+      const stage = hist?.stage || 'cold';
+      const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+      selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage) };
+    }
+  }
+  for (const name of Object.keys(selectedCards)) {
+    if (!selected.includes(name)) delete selectedCards[name];
+  }
+  if (container) {
+    container.innerHTML = selected.map(name => {
+      const card = selectedCards[name];
+      const members = sendCompanies[name] || [];
+      const emailCount = members.filter(m => m.email).length;
+      const ctry = escapeHtml(members[0]?.country || '');
+      const nextLabel = STAGE_LABELS_SEND[STAGE_NEXT_SEND[card.stage]] || 'F1';
+      const typeLabel = card.type === 'agent' ? '代理' : card.type === 'direct' ? '直客' : '通用';
+      return `<div class="sc-card">
+        <div class="sc-card-header">
+          <strong>${escapeHtml(name)}</strong>
+          <span class="sc-stage">${STAGE_LABELS_SEND[card.stage]} → ${nextLabel}</span>
+          <button class="sc-card-remove" data-company="${escapeHtml(name)}">✕</button>
+        </div>
+        <div class="sc-card-meta">
+          <span>${emailCount} 收件人</span>
+          ${ctry ? `<span>${ctry}</span>` : ''}
+          <span>${typeLabel}模板</span>
+          <span>${card.lang.toUpperCase()}</span>
+        </div>
+      </div>`;
+    }).join('');
+    container.querySelectorAll('.sc-card-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectedCompanySet.delete(btn.dataset.company);
+        updateSelectedCount();
+      });
+    });
+  }
+}
+
+function randomPick(type, stage) {
+  if (!templateLib) return {};
+  const pick = (arr) => arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null;
+  return {
+    hook: pick(templateLib.hooks),
+    pain: pick(templateLib.painPoints?.[type]),
+    proof: pick(templateLib.proofs?.[type]),
+    cta: pick(templateLib.ctas),
+    followup: stage !== 'cold' ? pick(templateLib.followUps?.[stage]) : null,
+  };
+}
+
+function addToQueue() {
+  const selected = getSelectedCompanies();
+  if (!selected.length) return alert('请先勾选左侧公司');
+  let added = 0, totalContacts = 0;
+  for (const name of selected) {
+    const card = selectedCards[name];
+    if (!card) continue;
+    const members = sendCompanies[name] || [];
+    const emails = members.map(m => m.email).filter(Boolean);
+    if (!emails.length) continue;
+    const tpl = card.template;
+    const lang = card.lang;
+    const body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, name, card.stage);
+    const subjects = templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
+    const subject = subjects[lang] || subjects.es || '';
+    queue.push({ id: Date.now() + added, company: name, to: emails.join(', '), recipients: emails, subject, body, status: 'pending', addedAt: new Date().toISOString(), _stage: card.stage });
+    added++;
+    totalContacts += emails.length;
+  }
+  if (!added) return alert('所选公司无有效邮箱');
+  saveQueue();
+  document.getElementById('stat-queue').textContent = queue.length;
+  // 跳转到发送队列
+  navItems.forEach(n => n.classList.remove('active'));
+  document.querySelector('[data-page="queue"]').classList.add('active');
+  pages.forEach(p => p.classList.remove('active'));
+  document.getElementById('page-queue').classList.add('active');
+  renderQueue();
+}
+
+document.getElementById('send-select-all')?.addEventListener('click', () => {
+  document.querySelectorAll('.sc-check').forEach(cb => {
+    cb.checked = true;
+    if (cb.dataset.company) selectedCompanySet.add(cb.dataset.company);
+  });
+  updateSelectedCount();
+});
+document.getElementById('send-deselect-all')?.addEventListener('click', () => {
+  selectedCompanySet.clear();
+  document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
+  updateSelectedCount();
+});
 document.getElementById('send-search')?.addEventListener('input', (e) => {
   renderCompanyList(e.target.value.toLowerCase());
 });
-
-// 随机模板
-document.getElementById('ws-random')?.addEventListener('click', randomizeTemplate);
-
-// 随机编排模板
-function randomizeTemplate() {
-  if (!templateLib) return;
-  const type = document.getElementById('ws-type').value;
-  const stage = document.getElementById('ws-stage').value;
-  const painKey = PAIN_KEY[type];
-  const proofKey = PROOF_KEY[type];
-  const pick = (arr) => arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null;
-
-  const hook = pick(templateLib.hooks);
-  const pain = pick(templateLib.painPoints?.[painKey]);
-  const proof = pick(templateLib.proofs?.[proofKey]);
-  const cta = pick(templateLib.ctas);
-  const followup = stage !== 'cold' ? pick(templateLib.followUps?.[stage]) : null;
-
-  const subjects = templateLib.subjects?.[type] || { es: '', en: '' };
-  currentAssembled = {
-    es: assembleEmail('es', hook, pain, proof, cta, followup, '', stage),
-    en: assembleEmail('en', hook, pain, proof, cta, followup, '', stage),
-    subject: subjects,
-  };
-
-  document.getElementById('preview-subject').textContent = 'Asunto: ' + (currentAssembled.subject?.[currentLang] || currentAssembled.subject?.es || '');
-  document.getElementById('preview-body-es').textContent = currentAssembled.es;
-  document.getElementById('preview-body-en').textContent = currentAssembled.en;
-  checkSpam(currentAssembled.es, currentAssembled.en);
-}
-
-async function loadSenderInfo() {
-  try {
-    const smtp = await window.electronAPI.checkSmtpStatus();
-    document.getElementById('send-from-name').value = smtp.user ? smtp.user.split('@')[0] : '';
-    document.getElementById('send-from-email').value = smtp.user || '';
-  } catch(e) {}
-}
 
 // ===== 模板编辑器 =====================================================
 
@@ -629,25 +873,40 @@ function buildTree() {
 
   let html = '<ul class="tmpl-tree-list">';
 
-  // 主题行
-  html += `<li><div class="tn-label tn-leaf-item" data-node="subjects"><span class="tn-arrow"></span>🏷️ 主题行</div></li>`;
+  // 主题行（独立项）
+  html += `<li class="tn-leaf"><div class="tn-label" data-node="subjects">🏷️ 主题行</div></li>`;
 
-  // 三个客户类型 × 五个阶段（平铺列表，无折叠）
+  // 三个客户类型下拉分组
+  const typeIcons = { agent: '🌐', direct: '🏭', unlabeled: '❓' };
   for (const [type, label] of Object.entries(TYPES)) {
+    html += `<li class="tn-folder open">`;
+    html += `<div class="tn-label tn-folder-title"><span class="tn-arrow">▶</span>${typeIcons[type]} ${label}</div>`;
+    html += `<ul class="tn-sublist">`;
     for (const stage of STAGES) {
-      html += `<li><div class="tn-label tn-leaf-item" data-node="${type}|${stage}">👤 ${label} · ${STAGE_LABELS[stage]}</div></li>`;
+      html += `<li class="tn-leaf"><div class="tn-label" data-node="${type}|${stage}">${STAGE_LABELS[stage]}</div></li>`;
     }
+    html += `</ul></li>`;
   }
 
-  // 垃圾词黑名单（单一点击，直接打开全配置）
-  html += `<li><div class="tn-label tn-leaf-item" data-node="spam">🚫 垃圾词黑名单</div></li>`;
+  // 垃圾词黑名单（独立项）
+  html += `<li class="tn-leaf"><div class="tn-label" data-node="spam">🚫 垃圾词黑名单</div></li>`;
 
   html += '</ul>';
   tree.innerHTML = html;
 
-  // 列表项点击
-  tree.querySelectorAll('.tn-leaf-item').forEach(el => {
-    el.addEventListener('click', () => {
+  // 点击事件
+  tree.querySelectorAll('.tn-label').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+
+      // 点击的是文件夹标题 → 折叠/展开
+      const folder = el.closest('.tn-folder');
+      if (folder && el === folder.querySelector(':scope > .tn-label')) {
+        folder.classList.toggle('open');
+        return;
+      }
+
+      // 点击的是编辑项 → 高亮并显示编辑器
       tree.querySelectorAll('.tn-label.active').forEach(a => a.classList.remove('active'));
       el.classList.add('active');
       const node = el.dataset.node;
@@ -666,6 +925,10 @@ function showSubjectEditor() {
       <div class="tmpl-sentence">
         <span class="ts-id">ES</span><div class="ts-body"><span class="ts-lang">西语</span>
         <textarea data-type="${type}" data-lang="es">${escapeHtml(subs[type]?.es||'')}</textarea></div>
+      </div>
+      <div class="tmpl-sentence">
+        <span class="ts-id">PT</span><div class="ts-body"><span class="ts-lang">葡语</span>
+        <textarea data-type="${type}" data-lang="pt">${escapeHtml(subs[type]?.pt||'')}</textarea></div>
       </div>
       <div class="tmpl-sentence">
         <span class="ts-id">EN</span><div class="ts-body"><span class="ts-lang">英语</span>
@@ -692,6 +955,9 @@ function showStageEditor(node) {
 
   const groups = [['hooks','Hook 破冰句'],['pains','Pain Point 痛点句'],['proofs','Proof 证明句'],['ctas','CTA 行动呼吁'],['followups','衔接句']];
 
+  // 读垃圾词黑名单
+  const spamWords = templateLib.spamWords || { es: [], en: [] };
+
   panel.innerHTML = `<h3>👤 ${TYPES[type]} · ${STAGE_LABELS[stage]}</h3>` +
     groups.map(([key, title]) => {
       const items = stageData[key] || [];
@@ -700,40 +966,96 @@ function showStageEditor(node) {
         <div class="tmpl-sentence" data-key="${key}" data-index="${i}">
           <span class="ts-id">${item.id}</span>
           <div class="ts-body">
-            <span class="ts-lang">ES</span>
-            <textarea class="ts-es">${escapeHtml(item.es||'')}</textarea>
-            <span class="ts-lang" style="margin-top:4px">EN</span>
-            <textarea class="ts-en">${escapeHtml(item.en||'')}</textarea>
+            <div class="ts-row">
+              <span class="ts-lang">ES</span>
+              <textarea class="ts-es">${escapeHtml(item.es||'')}</textarea>
+              <span class="ts-check" data-lang="es"></span>
+            </div>
+            <div class="ts-row">
+              <span class="ts-lang">PT</span>
+              <textarea class="ts-pt">${escapeHtml(item.pt||'')}</textarea>
+              <span class="ts-check" data-lang="pt"></span>
+            </div>
+            <div class="ts-row">
+              <span class="ts-lang">EN</span>
+              <textarea class="ts-en">${escapeHtml(item.en||'')}</textarea>
+              <span class="ts-check" data-lang="en"></span>
+            </div>
           </div>
         </div>
       `).join('') + '</div>';
     }).join('') +
     `<button id="btn-save-stage" style="margin-top:8px">💾 保存</button>
-    <div class="tmpl-skeleton" id="stage-preview"></div>`;
+    <div id="quality-report" style="margin-top:12px;font-size:12px"></div>`;
 
-  // 实时预览骨架
-  const updatePreview = () => {
-    const preview = document.getElementById('stage-preview');
-    if (!preview) return;
-    const data = stageData;
-    const h = data.hooks?.[0]?.es || '';
-    const p = data.pains?.[0]?.es || '';
-    const pf = data.proofs?.[0]?.es || '';
-    const c = data.ctas?.[0]?.es || '';
-    const f = data.followups?.[0]?.es || '';
-    preview.textContent = [f, h, p, 'Soy Zayne, de YQN. ' + pf, c, 'Saludos,\n--\n金颖哲 Zayne Jin | YQN'].filter(Boolean).join('\n\n');
-  };
-  updatePreview();
-  panel.querySelectorAll('textarea').forEach(ta => ta.addEventListener('input', updatePreview));
+  // 质量检查
+  const limitES = 150, limitPT = 155, limitEN = 120;
+  const allChecks = panel.querySelectorAll('.ts-check');
+  const allAreas = panel.querySelectorAll('textarea');
+
+  function wordCount(text) { return text.trim().split(/\s+/).filter(Boolean).length; }
+  function hasSpam(text, lang) {
+    const words = spamWords[lang] || [];
+    const lower = text.toLowerCase();
+    return words.filter(w => lower.includes(w.toLowerCase()));
+  }
+
+  function runQualityCheck() {
+    const issues = [];
+    allAreas.forEach(ta => {
+      const lang = ta.classList.contains('ts-es') ? 'es' : ta.classList.contains('ts-pt') ? 'pt' : 'en';
+      const limit = lang === 'es' ? limitES : lang === 'pt' ? limitPT : limitEN;
+      const text = ta.value;
+      const wc = wordCount(text);
+      const spam = hasSpam(text, lang);
+      const row = ta.closest('.ts-row');
+      const check = row?.querySelector('.ts-check');
+
+      let status = '✅';
+      if (wc > limit) { status = '⚠️'; issues.push(`${ta.closest('.tmpl-sentence')?.querySelector('.ts-id')?.textContent} ${lang.toUpperCase()} 超字数 (${wc}/${limit})`); }
+      if (spam.length) { status = '🚫'; issues.push(`${ta.closest('.tmpl-sentence')?.querySelector('.ts-id')?.textContent} ${lang.toUpperCase()} 含垃圾词: ${spam.slice(0,3).join(', ')}`); }
+      if (check) check.textContent = status + ` ${wc}词`;
+    });
+
+    const byGroup = {};
+    allAreas.forEach(ta => {
+      const langCls = ta.classList.contains('ts-es') ? 'es' : ta.classList.contains('ts-pt') ? 'pt' : 'en';
+      const key = ta.closest('.tmpl-sentence')?.dataset.key + '/' + langCls;
+      if (!byGroup[key]) byGroup[key] = [];
+      byGroup[key].push({ ta, text: ta.value.trim() });
+    });
+    for (const [, group] of Object.entries(byGroup)) {
+      const seen = new Map();
+      group.forEach(({ ta, text }) => {
+        if (!text) return;
+        if (seen.has(text)) issues.push(`${ta.closest('.tmpl-sentence')?.querySelector('.ts-id')?.textContent} 与 ${seen.get(text)} 重复`);
+        else seen.set(text, ta.closest('.tmpl-sentence')?.querySelector('.ts-id')?.textContent);
+      });
+    }
+
+    // 汇总报告
+    const report = document.getElementById('quality-report');
+    if (!report) return;
+    if (issues.length === 0) {
+      report.innerHTML = '<div style="color:var(--success);padding:8px;background:#e8f5e9;border-radius:4px">✅ 全部通过 — 无字数超标、无垃圾词、无重复</div>';
+    } else {
+      report.innerHTML = `<div style="color:var(--danger);padding:8px;background:#ffebee;border-radius:4px">🚫 ${issues.length} 个问题：<br>${issues.map(s => '· ' + s).join('<br>')}</div>`;
+    }
+  }
+
+  allAreas.forEach(ta => ta.addEventListener('input', runQualityCheck));
+  runQualityCheck();
 
   document.getElementById('btn-save-stage')?.addEventListener('click', () => {
     if (!confirm('确定保存该阶段句库修改？')) return;
     panel.querySelectorAll('.tmpl-sentence').forEach(el => {
       const key = el.dataset.key, idx = parseInt(el.dataset.index);
       const es = el.querySelector('.ts-es')?.value || '';
+      const pt = el.querySelector('.ts-pt')?.value || '';
       const en = el.querySelector('.ts-en')?.value || '';
       if (stageData[key] && stageData[key][idx]) {
         stageData[key][idx].es = es;
+        stageData[key][idx].pt = pt;
         stageData[key][idx].en = en;
       }
     });
@@ -777,72 +1099,31 @@ function showSpamEditor() {
 
 // ===== 签名管理 =======================================================
 
-const SIG_STORAGE_KEY = 'emailSignatures';
-let signatures = [];
-let currentSigId = null;
-
 async function initSignature() {
-  const saved = localStorage.getItem(SIG_STORAGE_KEY);
-  signatures = saved ? JSON.parse(saved) : [{
-    id: 'default',
-    label: '默认签名',
-    content: '金颖哲 Zayne Jin | Overseas Sales · LatAm Desk\nYQN Logistics Technology Group\n📧 zayne_jin@trimanshipping.com | 📱 +86 18487665870 | 🌐 www.yqn.com'
-  }];
-  currentSigId = signatures[0]?.id || null;
-  renderSigList();
-  if (currentSigId) selectSig(currentSigId);
+  // 从 send/signature.html 加载
+  const result = await window.electronAPI.loadSignature();
+  const editor = document.getElementById('sig-content');
+  const preview = document.getElementById('sig-preview');
+  if (editor && result.ok) editor.innerHTML = result.html;
+  if (preview && result.ok) preview.innerHTML = result.html;
+
+  // 实时预览
+  if (editor) {
+    editor.addEventListener('input', () => {
+      if (preview) preview.innerHTML = editor.innerHTML;
+    });
+  }
 }
 
-function renderSigList() {
-  const container = document.getElementById('sig-items');
-  if (!container) return;
-  container.innerHTML = signatures.map(s => `
-    <div class="sig-item${s.id === currentSigId ? ' active' : ''}" data-id="${s.id}">${escapeHtml(s.label)}</div>
-  `).join('');
-  container.querySelectorAll('.sig-item').forEach(el => {
-    el.addEventListener('click', () => selectSig(el.dataset.id));
-  });
-}
-
-function selectSig(id) {
-  currentSigId = id;
-  const sig = signatures.find(s => s.id === id);
-  if (!sig) return;
-  document.getElementById('sig-label').value = sig.label || '';
-  document.getElementById('sig-content').innerHTML = sig.content || '';
-  renderSigList();
-}
-
-document.getElementById('sig-add')?.addEventListener('click', () => {
-  const sig = { id: Date.now().toString(36), label: '新签名', content: '' };
-  signatures.push(sig);
-  saveSignatures();
-  selectSig(sig.id);
+document.getElementById('sig-open-folder')?.addEventListener('click', () => {
+  window.electronAPI.openSendFolder();
 });
 
-document.getElementById('sig-save')?.addEventListener('click', () => {
-  const sig = signatures.find(s => s.id === currentSigId);
-  if (!sig) return;
-  sig.label = document.getElementById('sig-label')?.value || '未命名';
-  sig.content = document.getElementById('sig-content')?.innerHTML || '';
-  saveSignatures();
-  renderSigList();
-  alert('已保存');
+document.getElementById('sig-save')?.addEventListener('click', async () => {
+  const html = document.getElementById('sig-content')?.innerHTML || '';
+  const result = await window.electronAPI.saveSignature(html);
+  alert(result.ok ? '✅ 签名已保存到 send/signature.html' : '❌ 保存失败');
 });
-
-document.getElementById('sig-delete')?.addEventListener('click', () => {
-  if (!confirm('确定删除该签名？')) return;
-  signatures = signatures.filter(s => s.id !== currentSigId);
-  saveSignatures();
-  currentSigId = signatures[0]?.id || null;
-  renderSigList();
-  if (currentSigId) selectSig(currentSigId);
-  else { document.getElementById('sig-label').value = ''; document.getElementById('sig-content').innerHTML = ''; }
-});
-
-function saveSignatures() {
-  localStorage.setItem(SIG_STORAGE_KEY, JSON.stringify(signatures));
-}
 
 function populateSelect(id, items) {
   const sel = document.getElementById(id);
@@ -857,176 +1138,74 @@ function populateCTA() {
 }
 
 function updatePainProofOptions() {
-  const type = document.getElementById('ws-type').value;
-  const stage = document.getElementById('ws-stage').value;
-  if (!templateLib) return;
-  const painKey = type === 'agent' ? 'agent' : type === 'direct' ? 'direct' : 'unlabeled';
-  populateSelect('ws-pain', templateLib.painPoints[painKey]);
-  populateSelect('ws-proof', templateLib.proofs[type === 'agent' ? 'agent' : type === 'direct' ? 'direct' : 'unlabeled']);
-  const fGroup = document.getElementById('followup-group');
-  const fSel = document.getElementById('ws-followup');
-  if (stage !== 'cold') {
-    fGroup.style.display = 'block';
-    populateSelect('ws-followup', templateLib.followUps?.[stage] || []);
-  } else { fGroup.style.display = 'none'; }
-}
-
-async function updateWorkshop() {
-  if (!templateLib) return;
-  const type = document.getElementById('ws-type').value;
-  const stage = document.getElementById('ws-stage').value;
-  const painKey = type === 'agent' ? 'agent' : type === 'direct' ? 'direct' : 'unlabeled';
-  const proofKey = painKey;
-
-  const hook = findById(templateLib.hooks, document.getElementById('ws-hook')?.value);
-  const pain = findById(templateLib.painPoints[painKey], document.getElementById('ws-pain')?.value);
-  const proof = findById(templateLib.proofs[proofKey], document.getElementById('ws-proof')?.value);
-  const cta = findById(templateLib.ctas, document.getElementById('ws-cta')?.value);
-  const followup = stage !== 'cold' ? findById(templateLib.followUps?.[stage] || [], document.getElementById('ws-followup')?.value) : null;
-  const company = document.getElementById('ws-company')?.value?.trim() || '';
-
-  const subjects = await window.electronAPI.getSubjects(type);
-  const esBody = assembleEmail('es', hook, pain, proof, cta, followup, company, stage);
-  const enBody = assembleEmail('en', hook, pain, proof, cta, followup, company, stage);
-
-  currentAssembled = { es: esBody, en: enBody, subject: subjects };
-  document.getElementById('preview-subject').textContent = subjects[currentLang] || subjects.es || '';
-
-  if (!isEditing) {
-    document.getElementById('preview-body-es').textContent = esBody;
-    document.getElementById('preview-body-en').textContent = enBody;
-  }
-  document.getElementById('preview-body-es').style.display = currentLang === 'es' ? 'block' : 'none';
-  document.getElementById('preview-body-en').style.display = currentLang === 'en' ? 'block' : 'none';
-  checkSpam(esBody, enBody);
+  // 旧版 Workshop 函数，已废弃 — 保留空壳防止引用报错
 }
 
 function assembleEmail(lang, hook, pain, proof, cta, followup, company, stage) {
   const t = (item) => item ? (item[lang] || '') : '';
   const lines = [];
+  const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Hello,';
+  lines.push(greeting); lines.push('');
   if (stage !== 'cold' && followup) { lines.push(t(followup)); lines.push(''); }
   if (hook) lines.push(t(hook));
   if (company && stage === 'cold') {
     lines.push('');
-    lines.push(lang === 'es' ? `Sé que ${company} importa regularmente.` : `I know ${company} imports regularly.`);
+    lines.push(lang === 'es' ? `Sé que ${company} importa regularmente.` : lang === 'pt' ? `Sei que a ${company} importa regularmente.` : `I know ${company} imports regularly.`);
   }
   if (pain) { lines.push(''); lines.push(t(pain)); }
   lines.push('');
-  const name = lang === 'es' ? 'Soy Zayne, de YQN.' : "I'm Zayne from YQN.";
+  const name = lang === 'es' ? 'Soy Zayne, de YQN.' : lang === 'pt' ? 'Sou Zayne, da YQN.' : "I'm Zayne from YQN.";
   if (proof) lines.push(name + ' ' + t(proof)); else lines.push(name);
   if (stage === 'cold') {
     lines.push('');
     lines.push(lang === 'es'
       ? 'Si alguna vez tu operación actual enfrenta una demora o necesitas explorar alternativas, tener un respaldo probado puede ahorrarte semanas.'
+      : lang === 'pt'
+      ? 'Se alguma vez sua operação enfrentar um atraso ou precisar explorar alternativas, ter um respaldo comprovado pode economizar semanas.'
       : 'If your current operation ever hits a delay or you need to explore alternatives, having proven backup can save you weeks.');
   }
   if (cta) { lines.push(''); lines.push(t(cta)); }
-  lines.push('');
-  lines.push(lang === 'es' ? 'Saludos,' : 'Best,');
-  lines.push('--');
-  lines.push('金颖哲 Zayne Jin | Overseas Sales · LatAm Desk');
-  lines.push('YQN Logistics Technology Group');
-  lines.push('📧 zayne_jin@trimanshipping.com | 📱 +86 18487665870 | 🌐 www.yqn.com');
+  const closing = lang === 'es' ? 'Saludos,' : lang === 'pt' ? 'Atenciosamente,' : 'Best,';
+  lines.push(closing);
   return lines.join('\n');
-}
-
-function checkSpam(esText, enText) {
-  if (!templateLib?.spamWords) return;
-  const esWords = templateLib.spamWords.es || [];
-  const enWords = templateLib.spamWords.en || [];
-  const esLower = esText.toLowerCase();
-  const enLower = enText.toLowerCase();
-  const foundEs = esWords.filter(w => esLower.includes(w.toLowerCase()));
-  const foundEn = enWords.filter(w => enLower.includes(w.toLowerCase()));
-  const allFound = [...new Set([...foundEs, ...foundEn])];
-  const badge = document.getElementById('spam-badge');
-  if (allFound.length > 0) {
-    badge.textContent = `⚠️ 违规词: ${allFound.slice(0, 5).join(', ')}`;
-    badge.className = 'spam-badge fail';
-  } else {
-    badge.textContent = '✅ 通过';
-    badge.className = 'spam-badge pass';
-  }
-}
-
-function toggleEdit() {
-  isEditing = !isEditing;
-  const esEl = document.getElementById('preview-body-es');
-  const enEl = document.getElementById('preview-body-en');
-  const btn = document.getElementById('ws-edit-toggle');
-  if (isEditing) {
-    btn.textContent = '✅ 保存编辑';
-    esEl.innerHTML = `<textarea id="edit-es">${escapeHtml(currentAssembled.es)}</textarea>`;
-    enEl.innerHTML = `<textarea id="edit-en">${escapeHtml(currentAssembled.en)}</textarea>`;
-    document.getElementById('edit-es').addEventListener('input', onEditChange);
-    document.getElementById('edit-en').addEventListener('input', onEditChange);
-  } else {
-    btn.textContent = '✏️ 编辑正文';
-    const taEs = document.getElementById('edit-es');
-    const taEn = document.getElementById('edit-en');
-    if (taEs) currentAssembled.es = taEs.value;
-    if (taEn) currentAssembled.en = taEn.value;
-    esEl.textContent = currentAssembled.es;
-    enEl.textContent = currentAssembled.en;
-    checkSpam(currentAssembled.es, currentAssembled.en);
-  }
-  esEl.style.display = currentLang === 'es' ? 'block' : 'none';
-  enEl.style.display = currentLang === 'en' ? 'block' : 'none';
-}
-
-function onEditChange() {
-  const taEs = document.getElementById('edit-es');
-  const taEn = document.getElementById('edit-en');
-  if (taEs) currentAssembled.es = taEs.value;
-  if (taEn) currentAssembled.en = taEn.value;
-  checkSpam(currentAssembled.es, currentAssembled.en);
-}
-
-function addToQueue() {
-  const recipients = getCheckedRecipients();
-  if (!recipients.length) return alert('请选择公司并勾选至少一位联系人');
-  const company = window._sendCompany || '未命名';
-
-  randomizeTemplate();
-  const body = currentAssembled[currentLang];
-  const subject = currentAssembled.subject?.[currentLang] || currentAssembled.subject?.es || '';
-  queue.push({ id: Date.now(), company, to: recipients.join(', '), recipients, subject, body, status: 'pending', addedAt: new Date().toISOString() });
-  saveQueue();
-  document.getElementById('stat-queue').textContent = queue.length;
-  alert(`已加入队列: ${company} → ${recipients.length} 位联系人`);
-}
-
-function sendNow() {
-  const recipient = document.getElementById('ws-recipient')?.value?.trim();
-  if (!recipient) return alert('请填写收件人邮箱或从联系人中选择');
-  const company = document.getElementById('ws-company')?.value?.trim() || '未命名';
-  const body = currentAssembled[currentLang];
-  const subject = currentAssembled.subject?.[currentLang] || currentAssembled.subject?.es || '';
-  queue.push({ id: Date.now(), company, to: recipient, subject, body, status: 'pending', addedAt: new Date().toISOString() });
-  saveQueue();
-  navItems.forEach(n => n.classList.remove('active'));
-  document.querySelector('[data-page="queue"]').classList.add('active');
-  pages.forEach(p => p.classList.remove('active'));
-  document.getElementById('page-queue').classList.add('active');
-  renderQueue();
-  startSend();
 }
 
 // ===== 发送队列 =======================================================
 function saveQueue() { localStorage.setItem('emailQueue', JSON.stringify(queue)); }
 
+// 应用重启后，「发送中」的残留项恢复为「待发送」
+queue.forEach(e => { if (e.status === 'sending') e.status = 'pending'; });
+saveQueue();
+
+async function syncTestMode() {
+  try {
+    const config = await window.electronAPI.loadConfig();
+    const testEnabled = !!(config && config.test && config.test.enabled);
+    const testEmail = config?.test?.email || '';
+    const tsEl = document.getElementById('queue-test-status');
+    if (tsEl) {
+      tsEl.textContent = testEnabled ? `测试模式: ${testEmail}` : '';
+    }
+  } catch {}
+}
+
 function renderQueue() {
+  syncTestMode();
   const tbody = document.querySelector('#queue-table tbody');
   const empty = document.getElementById('queue-empty');
   if (!tbody) return;
   if (!queue.length) { tbody.innerHTML = ''; if (empty) empty.style.display = 'block'; return; }
   if (empty) empty.style.display = 'none';
-  tbody.innerHTML = queue.map((e, i) => {
+  const sorted = [...queue].sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
+  let seq = 0;
+  tbody.innerHTML = sorted.map((e) => {
+    seq++;
     const count = e.recipients?.length || (e.to?.split(',')?.length || 1);
+    const stage = e._stage ? ' · ' + e._stage : '';
     return `
     <tr>
-      <td>${i + 1}</td><td>${escapeHtml(e.company)}</td><td>${count} 位收件人</td>
-      <td>${escapeHtml(e.subject)}</td><td class="status-${e.status}">${statusLabel(e.status)}</td>
+      <td>${seq}</td><td>${escapeHtml(e.company)}${stage}</td><td>${count} 位收件人</td>
+      <td>${escapeHtml(e.subject)}</td><td class="status-${e.status}"${e._error ? ` title="${escapeHtml(e._error)}" style="cursor:help"` : ''}>${statusLabel(e.status)}</td>
     </tr>`;
   }).join('');
   document.getElementById('queue-start').disabled = sendInProgress;
@@ -1043,22 +1222,37 @@ async function startSend() {
   sendInProgress = true;
   const pending = queue.filter(e => e.status === 'pending');
   if (!pending.length) { sendInProgress = false; return; }
-  pending.forEach(e => { e.status = 'sending'; });
+  pending.forEach(e => e.status = 'sending');
+  document.getElementById('queue-progress').style.width = '0%';
   renderQueue();
   document.getElementById('queue-start').disabled = true;
   document.getElementById('queue-pause').disabled = false;
+  document.getElementById('queue-cancel').disabled = false;
   if (unsubscribeProgress) unsubscribeProgress();
+
   unsubscribeProgress = await window.electronAPI.onSendProgress((data) => {
     if (data.type === 'sent') {
-      const item = queue.find(e => e.company === data.company && e.status === 'sending');
+      const item = queue.find(e => e.id === data.id || (e.company === data.company && e.status === 'sending'));
       if (item) item.status = 'sent';
     } else if (data.type === 'failed') {
-      const item = queue.find(e => e.company === data.company && e.status === 'sending');
-      if (item) item.status = 'failed';
-    } else if (data.type === 'complete' || data.type === 'paused' || data.type === 'limit') {
+      const item = queue.find(e => e.id === data.id || (e.company === data.company && e.status === 'sending'));
+      if (item) { item.status = 'failed'; item._error = data.error; }
+    } else if (data.type === 'waiting') {
+      // 更新时间窗口等待提示
+      const prog = document.getElementById('queue-progress');
+      if (prog) prog.title = data.message || '等待发送窗口...';
+    } else if (data.type === 'delay') {
+      // 显示延迟倒计时
+    } else if (data.type === 'complete' || data.type === 'paused' || data.type === 'limit' || data.type === 'cancelled') {
       sendInProgress = false;
       document.getElementById('queue-start').disabled = false;
       document.getElementById('queue-pause').disabled = true;
+      document.getElementById('queue-cancel').disabled = true;
+      // 只推进真正发送成功的公司（失败的不推进）
+      const sentCompanies = queue.filter(e => e.status === 'sent' && e._stage).map(e => e.company);
+      if (sentCompanies.length) {
+        window.electronAPI.advanceStage([...new Set(sentCompanies)]);
+      }
     }
     const sent = queue.filter(e => e.status === 'sent' || e.status === 'failed').length;
     document.getElementById('queue-progress').style.width = queue.length > 0 ? Math.round((sent / queue.length) * 100) + '%' : '0%';
@@ -1068,14 +1262,30 @@ async function startSend() {
   window.electronAPI.startSend(pending);
 }
 
-document.getElementById('queue-start')?.addEventListener('click', startSend);
+document.getElementById('queue-start')?.addEventListener('click', () => { startSend().catch(e => console.error(e)); });
 document.getElementById('queue-pause')?.addEventListener('click', async () => {
   await window.electronAPI.pauseSend();
   sendInProgress = false;
   document.getElementById('queue-start').disabled = false;
   document.getElementById('queue-pause').disabled = true;
+  document.getElementById('queue-cancel').disabled = true;
   renderQueue();
 });
+
+document.getElementById('queue-cancel')?.addEventListener('click', async () => {
+  if (!confirm('确定取消发送？正在发送的邮件将被中断，未发送的恢复为待发送。')) return;
+  await window.electronAPI.cancelSend();
+  sendInProgress = false;
+  // 将 sending 状态的恢复为 pending
+  queue.forEach(e => { if (e.status === 'sending') e.status = 'pending'; });
+  saveQueue();
+  document.getElementById('queue-start').disabled = false;
+  document.getElementById('queue-pause').disabled = true;
+  document.getElementById('queue-cancel').disabled = true;
+  document.getElementById('queue-progress').style.width = '0%';
+  renderQueue();
+});
+
 document.getElementById('queue-clear')?.addEventListener('click', () => {
   queue = queue.filter(e => e.status === 'pending' || e.status === 'sending');
   saveQueue();
@@ -1084,10 +1294,40 @@ document.getElementById('queue-clear')?.addEventListener('click', () => {
   document.getElementById('stat-queue').textContent = queue.length;
 });
 
+document.getElementById('queue-bounce-check')?.addEventListener('click', async () => {
+  const btn = document.getElementById('queue-bounce-check');
+  const resultDiv = document.getElementById('bounce-result');
+  btn.disabled = true; btn.textContent = '⏳ 检查中...';
+  resultDiv.style.display = 'none';
+  try {
+    const result = await window.electronAPI.checkBounces();
+    resultDiv.style.display = 'block';
+    if (result.ok) {
+      if (result.bounced.length) {
+        resultDiv.style.background = '#fff3e0';
+        resultDiv.innerHTML = `<strong>📥 发现 ${result.bounced.length} 封退信：</strong><br>` +
+          result.bounced.map(b => `· ${b.subject} <span style="color:var(--text-secondary)">${b.date}</span>`).join('<br>');
+      } else {
+        resultDiv.style.background = '#e8f5e9';
+        resultDiv.textContent = '✅ 未发现退信';
+      }
+    } else {
+      resultDiv.style.background = '#ffebee';
+      resultDiv.textContent = '❌ ' + (result.error || '检查失败');
+    }
+  } catch (e) {
+    resultDiv.style.display = 'block';
+    resultDiv.style.background = '#ffebee';
+    resultDiv.textContent = '❌ 检查异常: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '📥 退信检查';
+});
+
+
 // ===== 工具函数 ======================================================
 function findById(arr, id) { return arr?.find(i => i.id === id); }
 function truncate(str, len) { return str?.length > len ? str.slice(0, len) + '...' : str; }
-function escapeHtml(str) { return str?.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || ''; }
+function escapeHtml(str) { return str?.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') || ''; }
 function formatDate(iso) { if (!iso) return '—'; const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 // 轻量 Markdown → HTML（处理表格/标题/粗体/列表/分隔线）
@@ -1098,49 +1338,49 @@ async function pollBackcheckStatus(companyName, onDone) {
     await new Promise(r => setTimeout(r, 2000));
     const st = await window.electronAPI.getBackcheckStatus();
     const s = st[companyName];
-    // 完成或回落Claude都刷新
-    if (s?.status === 'done' || s?.status === 'pending_claude') { onDone(); return; }
-    // 超过60秒卡死检测
-    if (i > 30 && s?.status === 'researching') {
-      // 可能卡死了，标记为 pending_claude
-      await window.electronAPI.markBackcheckDone(companyName, 0);
-      onDone(); return;
-    }
+    // 完成/超时 → 刷新
+    if (s?.status === 'done' || s?.status === 'timeout') { onDone(); return; }
   }
-  onDone(); // 90秒超时也刷新
+  onDone(); // 90秒超时刷新
 }
 
 function renderMarkdown(md) {
+  // 1. 先转义
   let html = escapeHtml(md);
-  // 标题
-  html = html.replace(/^### (.+)$/gm, '<h4 style="margin:16px 0 8px;color:var(--primary)">$1</h4>');
-  html = html.replace(/^## (.+)$/gm, '<h3 style="margin:20px 0 10px;color:var(--primary)">$1</h3>');
-  html = html.replace(/^# (.+)$/gm, '<h2 style="margin:24px 0 12px;color:var(--primary)">$1</h2>');
-  // 粗体
+  // 2. 标题
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // 3. 水平线
+  html = html.replace(/^---$/gm, '<hr>');
+  // 4. 粗体
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // 水平线
-  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">');
-  // 表格：检测连续的 | 行
+  // 5. 表格
   html = html.replace(/((?:^\|.+\|$\n?)+)/gm, (match) => {
-    const lines = match.trim().split('\n');
-    if (lines.length < 2) return match;
-    // 跳过分隔行
-    const dataLines = lines.filter(l => !/^\|[\s:\-|]+\|$/.test(l));
-    let tableHtml = '<table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:13px">';
-    dataLines.forEach((line, i) => {
+    const lines = match.trim().split('\n').filter(l => !/^\|[\s:\-|]+\|$/.test(l));
+    if (lines.length < 1) return match;
+    let t = '<table>';
+    lines.forEach((line, i) => {
       const cells = line.split('|').filter(c => c.trim());
       const tag = i === 0 ? 'th' : 'td';
-      const style = i === 0 ? 'background:#f8f9fb;font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)' : 'padding:8px 12px;border-bottom:1px solid var(--border)';
-      tableHtml += '<tr>' + cells.map(c => `<${tag} style="${style}">${c.trim()}</${tag}>`).join('') + '</tr>';
+      t += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
     });
-    tableHtml += '</table>';
-    return tableHtml;
+    return t + '</table>';
   });
-  // 无序列表
-  html = html.replace(/^- (.+)$/gm, '<li style="margin-left:20px">$1</li>');
-  // 换行
-  html = html.replace(/\n\n/g, '<br><br>');
-  html = html.replace(/\n/g, '<br>');
+  // 6. 列表
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // 7. 引用块
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // 8. 段落：按双换行切分，每段包 <p>
+  const blocks = html.split('\n\n');
+  html = blocks.map(b => {
+    const trimmed = b.trim();
+    if (!trimmed) return '';
+    if (/^<(h[1-4]|hr|table|ul|ol|li|div|blockquote)/.test(trimmed)) return trimmed;
+    // 单换行转 <br>
+    return '<p>' + trimmed.replace(/\n/g, '<br>') + '</p>';
+  }).join('');
   return html;
 }
 
@@ -1164,6 +1404,135 @@ function renderPagination(container, total, current, onChange) {
   container.querySelectorAll('button[data-p]').forEach(btn => {
     btn.addEventListener('click', () => onChange(parseInt(btn.dataset.p)));
   });
+}
+
+// ===== 设置 ==========================================================
+const CFG_KEYS = [
+  { id: 'cfg-smtp-host', path: 'smtp.host' },
+  { id: 'cfg-smtp-port', path: 'smtp.port' },
+  { id: 'cfg-smtp-secure', path: 'smtp.secure', isBool: true },
+  { id: 'cfg-smtp-user', path: 'smtp.user' },
+  { id: 'cfg-smtp-pass', path: 'smtp.pass' },
+  { id: 'cfg-sender-name', path: 'sender.name' },
+  { id: 'cfg-sender-email', path: 'sender.email' },
+  { id: 'cfg-schedule-max', path: 'schedule.max_per_day' },
+  { id: 'cfg-schedule-start', path: 'schedule.start_hour_beijing', isTime: true },
+  { id: 'cfg-schedule-end', path: 'schedule.end_hour_beijing', isTime: true },
+  { id: 'cfg-schedule-min-delay', path: 'schedule.min_delay_seconds' },
+  { id: 'cfg-schedule-max-delay', path: 'schedule.max_delay_seconds' },
+  { id: 'cfg-search-apikey', path: 'search.apiKey' },
+  { id: 'cfg-tl-youdao-key', path: 'translate.youdao.appKey' },
+  { id: 'cfg-tl-youdao-secret', path: 'translate.youdao.appSecret' },
+  { id: 'cfg-tl-baidu-id', path: 'translate.baidu.appId' },
+  { id: 'cfg-tl-baidu-key', path: 'translate.baidu.key' },
+  { id: 'cfg-test-email', path: 'test.email' },
+  { id: 'cfg-test-enabled', path: 'test.enabled', isBool: true },
+  { id: 'cfg-imap-host', path: 'imap.host' },
+  { id: 'cfg-imap-port', path: 'imap.port' },
+  { id: 'cfg-imap-user', path: 'imap.user' },
+  { id: 'cfg-imap-pass', path: 'imap.pass' },
+];
+
+function loadSettingsIntoForm(config) {
+  if (!config) return;
+  for (const key of CFG_KEYS) {
+    const el = document.getElementById(key.id);
+    if (!el) continue;
+    let val = key.path.split('.').reduce((o, k) => o?.[k], config);
+    // 时间字段：数字 → HH:MM
+    if (key.isTime && val != null) {
+      const h = String(Math.floor(val)).padStart(2, '0');
+      val = h + ':00';
+    }
+    if (key.isBool) el.checked = !!val;
+    else el.value = val ?? '';
+  }
+}
+
+function collectSettingsFromForm() {
+  const config = {};
+  for (const key of CFG_KEYS) {
+    const el = document.getElementById(key.id);
+    if (!el) continue;
+    let val;
+    if (key.isBool) val = el.checked;
+    else if (key.isTime) val = parseInt(el.value) || 0; // "19:00" → 19
+    else if (el.type === 'number') val = Number(el.value) || 0;
+    else val = el.value;
+    getOrSet(config, key.path, val);
+  }
+  return config;
+
+  function getOrSet(obj, path, val) {
+    const keys = path.split('.');
+    let o = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+      if (!o[keys[i]]) o[keys[i]] = {};
+      o = o[keys[i]];
+    }
+    o[keys[keys.length - 1]] = val;
+  }
+}
+
+async function initSettings() {
+  const config = await window.electronAPI.loadConfig();
+  if (config) loadSettingsIntoForm(config);
+  validateRequired();
+}
+
+function deepMerge(base, overlay) {
+  const out = { ...base };
+  for (const key of Object.keys(overlay)) {
+    if (overlay[key] && typeof overlay[key] === 'object' && !Array.isArray(overlay[key])) {
+      out[key] = deepMerge(base[key] || {}, overlay[key]);
+    } else {
+      out[key] = overlay[key];
+    }
+  }
+  return out;
+}
+
+// 自动保存：监听所有设置输入变化
+let settingSaveTimer = null;
+document.querySelectorAll('#page-settings input, #page-settings select').forEach(el => {
+  el.addEventListener('change', () => autoSaveSettings(el));
+  if (el.type === 'text' || el.type === 'password' || el.type === 'number') {
+    el.addEventListener('input', () => {
+      clearTimeout(settingSaveTimer);
+      settingSaveTimer = setTimeout(() => autoSaveSettings(el), 800);
+    });
+  }
+});
+
+// 必填字段检测
+function validateRequired() {
+  document.querySelectorAll('.setting-required input[data-required]').forEach(el => {
+    el.style.borderColor = el.value.trim() ? '' : 'var(--danger)';
+    el.style.background = el.value.trim() ? '' : '#fff5f5';
+  });
+}
+document.querySelectorAll('.setting-required input[data-required]').forEach(el => {
+  el.addEventListener('input', validateRequired);
+});
+
+async function autoSaveSettings(el) {
+  validateRequired();
+  const card = el.closest('.setting-card');
+  const status = card?.querySelector('.setting-status');
+  if (status) { status.textContent = '...'; status.style.color = 'var(--warning)'; }
+  try {
+    const existing = await window.electronAPI.loadConfig() || {};
+    const formData = collectSettingsFromForm();
+    const merged = deepMerge(existing, formData);
+    const result = await window.electronAPI.saveConfig(merged);
+    if (status) {
+      status.textContent = result.ok ? '✓' : '✗';
+      status.style.color = result.ok ? 'var(--success)' : 'var(--danger)';
+      setTimeout(() => { status.textContent = ''; }, 2000);
+    }
+  } catch {
+    if (status) { status.textContent = '✗'; status.style.color = 'var(--danger)'; }
+  }
 }
 
 // ===== 初始化 ========================================================

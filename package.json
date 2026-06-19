@@ -12,6 +12,7 @@
     "status": "node send/status.js"
   },
   "dependencies": {
+    "imap": "^0.8.19",
     "nodemailer": "^6.9.0",
     "xlsx": "^0.18.5"
   },

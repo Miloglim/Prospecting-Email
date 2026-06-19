@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startResearch: (company) => ipcRenderer.invoke('backcheck:research', company),
   markBackcheckDone: (company, rating) => ipcRenderer.invoke('backcheck:markDone', company, rating),
   cancelBackcheck: (company) => ipcRenderer.invoke('backcheck:cancel', company),
+  onBackcheckProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('backcheck:progress', handler);
+    return () => ipcRenderer.removeListener('backcheck:progress', handler);
+  },
 
   // 联系人
   getContacts: () => ipcRenderer.invoke('contacts:list'),
@@ -35,6 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 发送
   startSend: (emails) => ipcRenderer.invoke('send:start', emails),
   pauseSend: () => ipcRenderer.invoke('send:pause'),
+  cancelSend: () => ipcRenderer.invoke('send:cancel'),
   getSendStatus: () => ipcRenderer.invoke('send:status'),
   onSendProgress: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -42,7 +48,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('send:progress', handler);
   },
 
+  // 翻译
+  translateReport: (rawMd) => ipcRenderer.invoke('translate:report', rawMd),
+
+  // 签名
+  loadSignature: () => ipcRenderer.invoke('signature:load'),
+  saveSignature: (html) => ipcRenderer.invoke('signature:save', html),
+
+  // 退信检查
+  checkBounces: () => ipcRenderer.invoke('bounce:check'),
+
+  // 发送历史
+  getSendHistory: () => ipcRenderer.invoke('history:get'),
+  advanceStage: (companies) => ipcRenderer.invoke('history:advance', companies),
+
   // 系统
   minimizeToTray: () => ipcRenderer.invoke('app:minimizeToTray'),
   openReportsFolder: () => ipcRenderer.invoke('app:openReports'),
+  openSendFolder: () => ipcRenderer.invoke('app:openSendFolder'),
+
+  // 设置
+  loadConfig: () => ipcRenderer.invoke('config:load'),
+  saveConfig: (config) => ipcRenderer.invoke('config:save', config),
 });

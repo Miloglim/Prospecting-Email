@@ -83,6 +83,68 @@ function setupIPC() {
     return { ok: !!(cfg.smtp?.host && cfg.smtp?.user), host: cfg.smtp?.host || '未配置', user: cfg.smtp?.user || '' };
   });
 
+  // ── 客户分类 ──────────────────────────────────────────────────────
+  function classifyClient(company, category) {
+    const text = ((company || '') + ' ' + (category || '')).toLowerCase();
+    // 代理关键词
+    const agentKw = [
+      'logistics', 'logistic', 'logística', 'logistico', 'logístico',
+      'freight', 'forwarder', 'forwarding', 'freight forwarder',
+      'cargo', 'shipping', 'transport', 'transporte', 'transportes',
+      'transportadora', 'transitário', 'transitario',
+      'agencia', 'agente', 'agent', 'agência',
+      'despachante', 'aduana', 'customs', 'customs broker',
+      'courier', 'carrier', 'naviera', 'maritime', 'marítimo',
+      'operador logistico', 'operador logístico', 'operator logistics',
+      '3pl', 'third party logistics', 'nvoc', 'nvocc',
+      'international movers', 'cargo express', 'carga express',
+      'ship', 'vessel', 'terminal', 'portuario', 'portuaria',
+      'armador', 'consolidator', 'consolidador',
+    ];
+    if (agentKw.some(kw => text.includes(kw))) return 'agent';
+    // 直客关键词（进口商 / 制造商 / 品牌商 / 分销商）
+    const directKw = [
+      'import', 'importación', 'importadora', 'importador', 'importer',
+      'export', 'exportación', 'exportadora', 'exportador', 'exporter',
+      'manufactur', 'fabricante', 'fabricación', 'fabrica', 'factory', 'fábrica', 'plant', 'planta',
+      'retail', 'retailer', 'varejo', 'comercio', 'comercial', 'trading',
+      'distribuidora', 'distributor', 'distribución', 'distribution',
+      'industria', 'industrial', 'industry',
+      'automotriz', 'automotive', 'auto parts', 'autopeças', 'autopartes',
+      'alimentos', 'food', 'beverage', 'bebidas', 'alimenticia',
+      'textil', 'textile', 'têxtil', 'tejidos', 'confección',
+      'electronics', 'electrónica', 'eletrônica', 'electronic', 'eletronicos',
+      'farmacéutica', 'pharmaceutical', 'farma', 'laboratório',
+      'construção', 'construction', 'construcción', 'constructora',
+      'maquinaria', 'machinery', 'máquinas', 'equipamentos', 'equipment', 'equipos',
+      'metalurgia', 'metal', 'aço', 'steel', 'alumínio', 'aluminum', 'acero',
+      'plástico', 'plastic', 'plásticos', 'plasticos', 'plast',
+      'química', 'chemical', 'química', 'quimica',
+      'embalagem', 'packaging', 'embalaje', 'envase',
+      'móveis', 'furniture', 'muebles', 'moveis',
+      'calçados', 'footwear', 'shoes', 'zapatos', 'calzado',
+      'iluminação', 'lighting', 'iluminación', 'luminaria',
+      'filtros', 'filter', 'filtro',
+      'autopeças', 'repuestos', 'spare parts', 'componentes',
+      'cosmética', 'cosmetic', 'cosméticos', 'perfumaria',
+      'higiene', 'limpeza', 'cleaning', 'personal care',
+      'papel', 'paper', 'celulose', 'cellulose',
+      'vidro', 'glass', 'vidrio', 'cristal',
+      'cerámica', 'ceramic', 'cerâmica',
+      'borracha', 'rubber', 'caucho', 'hule',
+      'pintura', 'paint', 'coating', 'revestimento',
+      'médica', 'medical', 'hospitalar', 'hospital', 'medico',
+      'agricultura', 'agricultural', 'agro', 'fertilizante',
+      'minería', 'mining', 'mineração', 'mineral',
+      'petróleo', 'petroleum', 'petroleo', 'oil', 'gas',
+      'energia', 'energy', 'solar', 'eólica', 'eolica',
+      'tool', 'tools', 'ferramentas', 'herramientas',
+      'marca', 'brand', 'produtos', 'productos', 'products',
+    ];
+    if (directKw.some(kw => text.includes(kw))) return 'direct';
+    return 'unlabeled';
+  }
+
   // ── 客户表导入 ────────────────────────────────────────────────────
   ipcMain.handle('table:importFile', async (_e, filePath) => {
     try {
@@ -114,6 +176,10 @@ function setupIPC() {
         contactName: r['姓名 | 职位'] || r['姓名'] || r['联系人'] || r['Contact'] || r['contact'] || '',
         position: r['职位'] || r['Position'] || r['position'] || r['title'] || '',
         phone: r['Phone'] || r['phone'] || r['电话'] || r['Tel'] || r['tel'] || '',
+        clientType: classifyClient(
+          r['公司名称'] || r['公司名'] || r['公司'] || r['Company'] || r['company'] || r['empresa'] || r['客户名称'] || r['客户'] || '',
+          r['公司类型'] || r['品类'] || r['Category'] || r['category'] || r['rubro'] || r['行业'] || ''
+        ),
       })).filter(c => c.company);
 
       return { clients, total: clients.length };
@@ -177,126 +243,129 @@ function setupIPC() {
     };
   });
 
-  // 后台搜索调用：生成背调请求文件，用户可到 Claude Code 处理
-  ipcMain.handle('backcheck:research', async (_e, company) => {
-    const cname = company.company;
-    const fname = sanitizeFilename(cname);
-    const reportPath = path.join(__dirname, '..', 'reports', `客户背调-${fname}.md`);
-
-    // 标记调查中
-    const status = readBackcheckStatus();
-    status[cname] = {
-      status: 'researching',
-      requestedAt: new Date().toISOString(),
-      progress: '启动搜索...',
-    };
-    writeBackcheckStatus(status);
-
-    // 异步执行背调（不阻塞 UI）
-    runAutoResearch(cname, company, reportPath, status);
-
-    return { ok: true, message: `背调已启动: ${cname}` };
-  });
-
-  function sendBackcheckProgress(cname, progress) {
-    const st = readBackcheckStatus();
-    if (st[cname]) st[cname].progress = progress;
-    writeBackcheckStatus(st);
+  // ── 自动评级 ──────────────────────────────────────────────────────
+  function autoRate(combined, company) {
+    let score = 3;
+    const text = combined.toLowerCase();
+    if (text.includes('import') || text.includes('export') || text.includes('shipping') || text.includes('container')) score++;
+    if (text.includes('expansion') || text.includes('investment') || text.includes('growth') || text.includes('new plant')) score++;
+    if (text.includes('china') || text.match(/chin[ea]/)) score++;
+    if (text.includes('manufacturing') || text.includes('factory') || text.includes('plant')) score++;
+    if (company.country && company.category) score++;
+    if (text.includes('subsidiary') && (text.includes('japan') || text.includes('germany'))) score--;
+    if (text.includes('internal') && text.includes('supply chain')) score--;
+    if (!text.includes('import') && !text.includes('shipping')) score--;
+    return Math.max(1, Math.min(5, score));
   }
 
-  async function runAutoResearch(cname, company, reportPath, initialStatus) {
-    const results = { company: '', scale: '', category: '', imports: '', news: '', rating: 0 };
-    let searchOk = false;
-
-    // 尝试自动搜索（5秒超时）
-    sendBackcheckProgress(cname, '搜索公司概况...');
-    const r1 = await searchWithTimeout(`"${cname}" company profile`, 5000);
-    if (r1) { results.company = r1; searchOk = true; }
-
-    sendBackcheckProgress(cname, '搜索进口/供应链...');
-    const r2 = await searchWithTimeout(`"${cname}" importação shipping container`, 5000);
-    if (r2) results.imports = r2;
-
-    sendBackcheckProgress(cname, '搜索近期新闻...');
-    const r3 = await searchWithTimeout(`"${cname}" notícias 2025 2026`, 5000);
-    if (r3) results.news = r3;
-
-    if (!searchOk) {
-      // 搜索全部失败 → 回落请求文件
-      sendBackcheckProgress(cname, '网络不通，生成请求文件...');
-      const requestFile = path.join(__dirname, '..', 'reports', `背调请求-${sanitizeFilename(cname)}.md`);
-      const fields = [];
-      if (company.country) fields.push(`**国家:** ${company.country}`);
-      if (company.category) fields.push(`**品类:** ${company.category}`);
-      if (company.email) fields.push(`**邮箱:** ${company.email}`);
-      if (company.website) fields.push(`**网站:** ${company.website}`);
-      const req = [
-        `# 背调请求 — ${cname}`,
-        '',
-        '## 已有信息',
-        fields.length > 0 ? fields.join('\n') : '（信息有限）',
-        '',
-        '## 调查任务',
-        '1. 公司官网与规模 2. 主营业务 3. 进口特征 4. 近期动态 5. 决策人',
-        '',
-        `> ${new Date().toISOString()}`,
-      ].join('\n');
-      fs.writeFileSync(requestFile, req);
-
-      const st = readBackcheckStatus();
-      st[cname] = { ...st[cname], status: 'pending_claude', progress: '等待 Claude Code 处理...' };
-      writeBackcheckStatus(st);
-      return;
+  // ── 搜索提供者（可替换配置）────────────────────────────────────────
+  function loadSearchConfig() {
+    const configPath = path.join(__dirname, '..', 'send', 'config.json');
+    if (fs.existsSync(configPath)) {
+      try { return JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return {}; }
     }
-
-    // 搜索成功 → 自动评级 + 生成报告
-    sendBackcheckProgress(cname, '分析结果并评级...');
-    const combined = [r1, r2, r3].join('\n');
-    results.rating = autoRate(combined, company);
-
-    sendBackcheckProgress(cname, '生成报告...');
-    const report = buildReport(cname, company, results);
-    const dir = path.dirname(reportPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(reportPath, report);
-
-    const st = readBackcheckStatus();
-    st[cname] = { status: 'done', completedAt: new Date().toISOString(), rating: results.rating, progress: '完成' };
-    writeBackcheckStatus(st);
+    return {};
   }
 
-  // 带超时的搜索
-  async function searchWithTimeout(query, ms) {
-    try {
-      const result = await Promise.race([
-        duckDuckGoSearch(query),
-        new Promise(r => setTimeout(() => r(''), ms)),
-      ]);
-      return result;
-    } catch { return ''; }
+  // 翻译引擎：有道优先 → 百度备选 → 原文兜底
+  const crypto = require('crypto');
+
+  async function translateToChinese(text) {
+    if (!text || text.length < 20) return text;
+    const cfg = loadSearchConfig();
+    const tlCfg = (cfg && cfg.translate) || {};
+
+    const paragraphs = text.split('\n').filter(p => p.trim().length > 10);
+    const results = [];
+    for (const p of paragraphs) {
+      const chunk = p.slice(0, 500);
+      let translated = '';
+      // 1) 有道
+      if (tlCfg.youdao?.appKey && tlCfg.youdao?.appSecret) {
+        translated = await youdaoTranslate(chunk, tlCfg.youdao);
+      }
+      // 2) 百度
+      if (!translated && tlCfg.baidu?.appId && tlCfg.baidu?.key) {
+        translated = await baiduTranslate(chunk, tlCfg.baidu);
+      }
+      results.push(translated || chunk);
+    }
+    return results.join('\n\n');
   }
 
-  function duckDuckGoSearch(query) {
+  function youdaoTranslate(text, cfg) {
     return new Promise((resolve) => {
-      const q = encodeURIComponent(query);
-      const options = {
-        hostname: 'html.duckduckgo.com',
-        path: `/html/?q=${q}`,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProspectingEmail/1.0' },
-        timeout: 5000,
-      };
-      const req = https.get(options, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
+      const salt = Date.now().toString();
+      const sign = crypto.createHash('md5').update(cfg.appKey + text + salt + cfg.appSecret).digest('hex');
+      const body = new URLSearchParams({ q: text, from: 'auto', to: 'zh-CHS', appKey: cfg.appKey, salt, sign }).toString();
+      const req = https.request({
+        hostname: 'openapi.youdao.com', path: '/api', method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 8000,
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
         res.on('end', () => {
-          const snippets = [];
-          const re = /class="result__snippet"[^>]*>(.*?)<\/a>/g;
-          let m;
-          while ((m = re.exec(data)) !== null) {
-            const text = m[1].replace(/<[^>]+>/g, '').trim();
-            if (text.length > 30) snippets.push(text);
-          }
-          resolve(snippets.slice(0, 8).join('\n'));
+          try {
+            const j = JSON.parse(d);
+            resolve((j.translation || []).join('') || (j.basic?.explains?.join('; ')) || '');
+          } catch { resolve(''); }
+        });
+      });
+      req.on('error', () => resolve(''));
+      req.on('timeout', () => { req.destroy(); resolve(''); });
+      req.write(body); req.end();
+    });
+  }
+
+  function baiduTranslate(text, cfg) {
+    return new Promise((resolve) => {
+      const salt = Date.now().toString();
+      const sign = crypto.createHash('md5').update(cfg.appId + text + salt + cfg.key).digest('hex');
+      const body = new URLSearchParams({ q: text, from: 'auto', to: 'zh', appid: cfg.appId, salt, sign }).toString();
+      const req = https.request({
+        hostname: 'fanyi-api.baidu.com', path: '/api/trans/vip/translate', method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 8000,
+      }, (res) => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(d);
+            resolve((j.trans_result || []).map(r => r.dst).join('') || '');
+          } catch { resolve(''); }
+        });
+      });
+      req.on('error', () => resolve(''));
+      req.on('timeout', () => { req.destroy(); resolve(''); });
+      req.write(body); req.end();
+    });
+  }
+
+  // 官网爬虫：抓取首页 HTML → 提取文本信息
+  async function crawlWebsite(url) {
+    if (!url || !url.startsWith('http')) return '';
+    return new Promise((resolve) => {
+      const req = https.get(url, { timeout: 10000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }, (res) => {
+        // 跟随重定向一次
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          crawlWebsite(res.headers.location).then(resolve);
+          return;
+        }
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => {
+          // 提取文本：去掉 script/style/HTML 标签
+          const text = data
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&[a-z]+;/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          // 取前 3000 字符
+          resolve(text.slice(0, 3000));
         });
       });
       req.on('error', () => resolve(''));
@@ -304,58 +373,266 @@ function setupIPC() {
     });
   }
 
-  function buildReport(cname, company, r) {
-    const stars = '⭐'.repeat(Math.min(5, Math.max(1, r.rating || 3)));
-    const ratingText = r.rating >= 5 ? '极高价值 — 优先开发'
-      : r.rating >= 4 ? '高价值 — 建议开发'
-      : r.rating >= 3 ? '中等价值 — 选择性开发'
-      : r.rating >= 2 ? '低价值 — 暂不优先'
-      : '不建议开发';
-
-    return [
-      `# ${cname} — 背调信息卡`,
-      '',
-      '## 公司概况',
-      '',
-      `**公司名:** ${cname}`,
-      company.country ? `**国家:** ${company.country}` : '',
-      company.category ? `**品类:** ${company.category}` : '',
-      company.email ? `**邮箱:** ${company.email}` : '',
-      company.website ? `**网站:** ${company.website}` : '',
-      '',
-      r.company || r.category ? `**搜索结果摘要:** ${(r.company + ' ' + r.category).slice(0, 500)}` : '',
-      r.scale ? `**规模:** ${r.scale}` : '',
-      '',
-      r.imports ? '## 进口/供应链\n\n' + r.imports.slice(0, 2000) : '',
-      '',
-      r.news ? '## 近期动态\n\n' + r.news.slice(0, 2000) : '',
-      '',
-      '## 背调结论',
-      '',
-      `**货代开发价值:** ${stars}（${r.rating}/5）— ${ratingText}`,
-      '',
-      '---',
-      `> 自动背调 | ${new Date().toISOString()}`,
-    ].filter(Boolean).join('\n');
+  // Tavily API 直接调用
+  async function tavilySearch(query, apiKey) {
+    return new Promise((resolve) => {
+      const body = JSON.stringify({ api_key: apiKey, query, search_depth: 'basic', max_results: 8, include_answer: true });
+      const req = https.request({
+        hostname: 'api.tavily.com', path: '/search', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout: 15000,
+      }, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => {
+          try {
+            const j = JSON.parse(data);
+            const snippets = (j.results || []).map(r => `- ${r.title}: ${r.content}`).join('\n');
+            resolve({ answer: j.answer || '', snippets, ok: true });
+          } catch { resolve({ answer: '', snippets: '', ok: false }); }
+        });
+      });
+      req.on('error', () => resolve({ answer: '', snippets: '', ok: false }));
+      req.on('timeout', () => { req.destroy(); resolve({ answer: '', snippets: '', ok: false }); });
+      req.write(body);
+      req.end();
+    });
   }
 
-  function autoRate(combined, company) {
-    let score = 3; // 默认中等
-    const text = combined.toLowerCase();
+  const searchProviders = {
+    // Tavily API：自动生成结构化基础报告 + 请求文件（供 AI 深度增强）
+    'tavily': {
+      name: 'Tavily',
+      research: async (cname, company) => {
+        const cfg = loadSearchConfig();
+        if (!cfg.search?.apiKey) return { ok: false, status: 'no_key', message: '未配置 search.apiKey' };
 
-    // 加分项
-    if (text.includes('import') || text.includes('export') || text.includes('shipping') || text.includes('container')) score++;
-    if (text.includes('expansion') || text.includes('investment') || text.includes('growth') || text.includes('new plant')) score++;
-    if (text.includes('china') || text.match(/chin[ea]/)) score++;
-    if (text.includes('manufacturing') || text.includes('factory') || text.includes('plant')) score++;
-    if (company.country && company.category) score++;
+        const country = company.country || '';
 
-    // 减分项
-    if (text.includes('subsidiary') && (text.includes('japan') || text.includes('germany'))) score--;
-    if (text.includes('internal') && text.includes('supply chain')) score--;
-    if (!text.includes('import') && !text.includes('shipping')) score--;
+        // 四维并行搜索
+        notifyBackcheck(cname, { type: 'research-progress', progress: '多维度搜索中...' });
+        const tasks = [
+          { key: 'profile',  q: `"${cname}" company profile overview business` },
+          { key: 'trade',    q: `"${cname}" import export trade data shipments` },
+          { key: 'news',     q: `"${cname}" news expansion investment 2025 2026` },
+          { key: 'people',   q: `"${cname}" (CEO OR director OR manager OR采购 OR compras OR supply chain) linkedin` },
+        ];
 
-    return Math.max(1, Math.min(5, score));
+        const results = {};
+        for (const { key, q } of tasks) {
+          const r = await tavilySearch(q, cfg.search?.apiKey);
+          results[key] = r.ok ? (r.answer + '\n\n' + r.snippets).slice(0, 2000) : '';
+        }
+
+        // 官网爬虫
+        let websiteText = '';
+        if (company.website && company.website.startsWith('http')) {
+          notifyBackcheck(cname, { type: 'research-progress', progress: '抓取官网...' });
+          websiteText = await crawlWebsite(company.website);
+        }
+
+        const hasAnyData = Object.values(results).some(v => v.length > 50) || websiteText.length > 100;
+        if (!hasAnyData) return { ok: false, status: 'no_results', message: '搜索无结果' };
+
+        // 评级
+        const allText = websiteText + ' ' + Object.values(results).join(' ');
+        const rating = autoRate(allText, company);
+        const stars = '⭐'.repeat(Math.min(5, Math.max(1, rating)));
+        const ratingLabel = rating >= 5 ? '极高价值 — 优先开发'
+          : rating >= 4 ? '高价值 — 建议开发'
+          : rating >= 3 ? '中等价值 — 选择性开发'
+          : rating >= 2 ? '低价值 — 暂不优先' : '不建议开发';
+
+        // 组装报告
+        const fname = sanitizeFilename(cname).trim();
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const report = [
+          `# ${cname} — 背调信息卡`,
+          '',
+          '## 公司概况',
+          '',
+          `| 项目 | 内容 |`,
+          `|------|------|`,
+          `| **公司名** | ${cname} |`,
+          company.country ? `| **国家** | ${company.country} |` : '',
+          company.category ? `| **品类** | ${company.category} |` : '',
+          company.email ? `| **邮箱** | ${company.email} |` : '',
+          company.website ? `| **网站** | ${company.website} |` : '',
+          '',
+          '## 官网信息',
+          '',
+          websiteText.length > 100 ? websiteText.slice(0, 2000) : '_未抓取到官网信息，建议补充 website 字段_',
+          '',
+          '## 业务与规模',
+          '',
+          results.profile || '_无数据_',
+          '',
+          '## 进口特征与贸易数据',
+          '',
+          results.trade || '_无数据_',
+          '',
+          '## 近期动态',
+          '',
+          results.news || '_无数据_',
+          '',
+          '## 决策人线索',
+          '',
+          results.people || '_无数据_',
+          '',
+          '## 背调结论',
+          '',
+          `> **国家：** ${company.country || '未知'} | **品类：** ${company.category || '未知'} | **货代开发价值：** ${stars}（${rating}/5）`,
+          '',
+          `**${ratingLabel}**`,
+          '',
+          '---',
+          `> 自动背调 · ${dateStr}`,
+        ].join('\n');
+
+        const reportPath = path.join(__dirname, '..', 'reports', `客户背调-${fname}.md`);
+        const dir = path.dirname(reportPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(reportPath, report);
+
+        return { ok: true, status: 'done', rating, message: '报告已生成' };
+      }
+    },
+  };
+
+  // 后台：检测报告文件是否已生成
+  function checkReportExists(cname) {
+    const fname = sanitizeFilename(cname);
+    const reportPath = path.join(__dirname, '..', 'reports', `客户背调-${fname}.md`);
+    return fs.existsSync(reportPath) ? reportPath : null;
+  }
+
+  // 从报告中提取星级
+  function extractRating(content) {
+    const m = content.match(/货代开发价值[：:]\*\*\s*([⭐★1-5]+)/);
+    return m ? (m[1].match(/[⭐★]/g) || []).length || parseInt(m[1]) || 0 : 0;
+  }
+
+  // ── 背调：异步执行 + 实时进度推送 ───────────────────────────────
+  ipcMain.handle('backcheck:research', async (_e, company) => {
+    const cname = company.company;
+    const st = readBackcheckStatus();
+
+    // 已有报告
+    const existingReport = checkReportExists(cname);
+    if (existingReport) {
+      const content = fs.readFileSync(existingReport, 'utf-8');
+      st[cname] = { status: 'done', completedAt: new Date().toISOString(), rating: extractRating(content), progress: '已有报告' };
+      writeBackcheckStatus(st);
+      return { ok: true, message: '报告已存在' };
+    }
+
+    // 立即返回，后台执行
+    st[cname] = { status: 'researching', requestedAt: new Date().toISOString(), progress: '搜索启动...' };
+    writeBackcheckStatus(st);
+    notifyBackcheck(cname, { type: 'research-start' });
+
+    // 后台异步
+    researchInBackground(cname, company);
+
+    return { ok: true, message: '背调已启动' };
+  });
+
+  // 后台搜索 + 进度推送
+  async function researchInBackground(cname, company) {
+    try {
+      const cfg = loadSearchConfig();
+      if (!cfg.search?.apiKey) {
+        // 无 Key → 生成请求文件
+        const fname = sanitizeFilename(cname).trim();
+        const requestFile = path.join(__dirname, '..', 'reports', `背调请求-${fname}.md`);
+        const fields = [];
+        if (company.country) fields.push(`- 国家: ${company.country}`);
+        if (company.category) fields.push(`- 品类: ${company.category}`);
+        if (company.email) fields.push(`- 邮箱: ${company.email}`);
+        notifyBackcheck(cname, { type: 'research-progress', progress: '生成请求文件...' });
+        fs.writeFileSync(requestFile, `# 背调请求 — ${cname}\n\n## 已知信息\n${fields.join('\n') || '（信息有限）'}\n\n> ${new Date().toISOString()}`);
+        updateStatus(cname, 'pending', 0, '请求文件已生成，需配置 Tavily API Key');
+        notifyBackcheck(cname, { type: 'research-done', status: 'pending' });
+        return;
+      }
+
+      // Tavily 搜索
+      const provider = searchProviders['tavily'];
+      notifyBackcheck(cname, { type: 'research-progress', progress: '搜索 + 翻译中...' });
+      const result = await provider.research(cname, company);
+
+      if (result.ok) {
+        updateStatus(cname, 'done', result.rating || 0, '报告已生成');
+        notifyBackcheck(cname, { type: 'research-done', status: 'done' });
+      } else {
+        updateStatus(cname, result.status || 'error', 0, result.message);
+        notifyBackcheck(cname, { type: 'research-done', status: result.status || 'error', message: result.message });
+      }
+    } catch (e) {
+      updateStatus(cname, 'error', 0, e.message);
+      notifyBackcheck(cname, { type: 'research-done', status: 'error', message: e.message });
+    }
+  }
+
+  function updateStatus(cname, status, rating, progress) {
+    const st = readBackcheckStatus();
+    st[cname] = { status, rating, completedAt: new Date().toISOString(), progress };
+    writeBackcheckStatus(st);
+  }
+
+  function notifyBackcheck(cname, data) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('backcheck:progress', { company: cname, ...data });
+    }
+  }
+
+  function getBackcheckDetail(cname) {
+    const reportPath = checkReportExists(cname);
+    if (!reportPath) return { rating: 0, raw: '' };
+    try {
+      const content = fs.readFileSync(reportPath, 'utf-8');
+      return {
+        website: extractField(content, '官网') || extractField(content, '网站') || extractField(content, 'Website'),
+        scale: extractField(content, '规模') || extractField(content, 'Scale'),
+        category: extractField(content, '品类') || extractField(content, 'Category'),
+        imports: extractField(content, '进口特征') || extractField(content, '进口'),
+        contact: extractField(content, '收件人') || extractField(content, 'To'),
+        news: extractField(content, '近期动态') || extractField(content, '动态'),
+        rating: extractRating(content),
+        raw: content,
+      };
+    } catch { return { rating: 0, raw: '' }; }
+  }
+
+  // ── 报告文件监听器 ─────────────────────────────────────────────────
+  const reportWatchers = new Map();
+
+  function startReportWatcher(cname) {
+    if (reportWatchers.has(cname)) return;
+    let attempts = 0;
+    const maxAttempts = 300; // 最长等 10 分钟（2s × 300）
+    const timer = setInterval(() => {
+      attempts++;
+      const reportPath = checkReportExists(cname);
+      if (reportPath) {
+        clearInterval(timer);
+        reportWatchers.delete(cname);
+        try {
+          const content = fs.readFileSync(reportPath, 'utf-8');
+          const rating = extractRating(content);
+          const st = readBackcheckStatus();
+          st[cname] = { status: 'done', completedAt: new Date().toISOString(), rating, progress: '报告已生成' };
+          writeBackcheckStatus(st);
+        } catch (e) { /* ignore */ }
+      } else if (attempts >= maxAttempts) {
+        clearInterval(timer);
+        reportWatchers.delete(cname);
+        const st = readBackcheckStatus();
+        st[cname] = { ...st[cname], status: 'timeout', progress: '超时 — 请检查请求文件' };
+        writeBackcheckStatus(st);
+      }
+    }, 2000);
+    reportWatchers.set(cname, timer);
   }
 
   ipcMain.handle('backcheck:markDone', async (_e, companyName, rating) => {
@@ -375,33 +652,92 @@ function setupIPC() {
     shell.openPath(reportsDir);
   });
 
+  ipcMain.handle('app:openSendFolder', async () => {
+    const sendDir = path.join(__dirname, '..', 'send');
+    if (!fs.existsSync(sendDir)) fs.mkdirSync(sendDir, { recursive: true });
+    shell.openPath(sendDir);
+  });
+
+  // ── 翻译报告 ─────────────────────────────────────────────────────
+  ipcMain.handle('translate:report', async (_e, rawMd) => {
+    const cfg = loadSearchConfig();
+    const tlCfg = (cfg && cfg.translate) || {};
+    const hasYoudao = !!(tlCfg.youdao?.appKey && tlCfg.youdao?.appSecret);
+    const hasBaidu = !!(tlCfg.baidu?.appId && tlCfg.baidu?.key);
+    if (!hasYoudao && !hasBaidu) return { ok: false, error: 'no_keys', message: '请先在设置中配置有道或百度翻译 API Key' };
+
+    try {
+      // 只翻译正文段落，保留 Markdown 结构和标题
+      const lines = rawMd.split('\n');
+      const translated = [];
+      for (const line of lines) {
+        // 标题、表格、分隔线、空行不翻译
+        if (/^(#+\s|\||[-*]{3,}|>\s|$)/.test(line)) {
+          translated.push(line);
+        } else if (line.trim().length > 30) {
+          const zh = await translateToChinese(line);
+          translated.push(zh || line);
+        } else {
+          translated.push(line);
+        }
+      }
+      return { ok: true, text: translated.join('\n') };
+    } catch (e) {
+      return { ok: false, error: 'api_error', message: '翻译接口异常: ' + (e.message || '未知') };
+    }
+  });
+
   ipcMain.handle('backcheck:cancel', async (_e, companyName) => {
+    // 停止监听器
+    if (reportWatchers.has(companyName)) {
+      clearInterval(reportWatchers.get(companyName));
+      reportWatchers.delete(companyName);
+    }
     const status = readBackcheckStatus();
     delete status[companyName];
     writeBackcheckStatus(status);
-    // 同时删除请求文件
+    // 删除请求文件
     const reqFile = path.join(__dirname, '..', 'reports', `背调请求-${sanitizeFilename(companyName)}.md`);
     if (fs.existsSync(reqFile)) fs.unlinkSync(reqFile);
     return { ok: true };
   });
 
-  // ── 联系人（持久化存储）─────────────────────────────────────────────
+  // ── 联系人（持久化存储 + 内存缓存）──────────────────────────────────
   const contactsPath = path.join(__dirname, '..', 'data', 'contacts.json');
+  let contactsCache = null;  // 缓存解析结果，避免重复读 715KB 文件
 
   function readContacts() {
+    if (contactsCache) return contactsCache;
     try {
-      if (fs.existsSync(contactsPath)) return JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+      if (fs.existsSync(contactsPath)) {
+        contactsCache = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+        return contactsCache;
+      }
     } catch (e) { /* ignore */ }
     return [];
   }
 
   function writeContacts(contacts) {
+    contactsCache = contacts;  // 更新缓存
     const dir = path.dirname(contactsPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
   }
 
-  ipcMain.handle('contacts:list', async () => readContacts());
+  ipcMain.handle('contacts:list', async () => {
+    const contacts = readContacts();
+    // 每次读取时补齐/重新分类（兼容旧数据 + 分类规则更新）
+    let changed = false;
+    for (const c of contacts) {
+      const newType = classifyClient(c.company, c.category);
+      if (c.clientType !== newType) {
+        c.clientType = newType;
+        changed = true;
+      }
+    }
+    if (changed) writeContacts(contacts);
+    return contacts;
+  });
 
   ipcMain.handle('contacts:import', async (_e, clients) => {
     const existing = readContacts();
@@ -422,6 +758,7 @@ function setupIPC() {
         contactName: c.contactName || '',
         position: c.position || '',
         phone: c.phone || '',
+        clientType: c.clientType || classifyClient(c.company, c.category),
         addedAt: new Date().toISOString(),
       });
       existingKeys.add(key);
@@ -477,6 +814,16 @@ function setupIPC() {
     return { paused: true };
   });
 
+  let currentTransporter = null;
+
+  ipcMain.handle('send:cancel', async () => {
+    isPaused = true;
+    currentSendAbort = true;
+    sendQueue = [];
+    try { currentTransporter?.close(); } catch {}
+    return { cancelled: true };
+  });
+
   ipcMain.handle('send:status', async () => {
     const logPath = path.join(__dirname, '..', 'send', 'send-log.json');
     let dailyCount = 0, lastDate = '';
@@ -486,6 +833,130 @@ function setupIPC() {
       lastDate = log.last_date || '';
     }
     return { queueLength: sendQueue.length, isPaused, dailyCount, lastDate };
+  });
+
+  // ── 发送历史 / 跟进阶段 ──────────────────────────────────────────
+  const sendHistoryPath = path.join(__dirname, '..', 'data', 'send-history.json');
+
+  function readSendHistory() {
+    try { return fs.existsSync(sendHistoryPath) ? JSON.parse(fs.readFileSync(sendHistoryPath, 'utf-8')) : {}; }
+    catch { return {}; }
+  }
+
+  function writeSendHistory(h) {
+    const dir = path.dirname(sendHistoryPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(sendHistoryPath, JSON.stringify(h, null, 2));
+  }
+
+  ipcMain.handle('history:get', async () => readSendHistory());
+
+  ipcMain.handle('history:advance', async (_e, companies) => {
+    const h = readSendHistory();
+    const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4'];
+    for (const name of companies) {
+      const cur = h[name]?.stage || 'cold'; // 首次发送从 cold 起步
+      const idx = STAGES.indexOf(cur);
+      const nextIdx = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; // F4 停留
+      h[name] = { ...h[name], stage: STAGES[nextIdx], lastSent: new Date().toISOString(), sentCount: (h[name]?.sentCount || 0) + 1 };
+    }
+    writeSendHistory(h);
+    return h;
+  });
+
+  // ── 退信检查 ──────────────────────────────────────────────────────
+  ipcMain.handle('bounce:check', async () => {
+    const configPath = path.join(__dirname, '..', 'send', 'config.json');
+    if (!fs.existsSync(configPath)) return { ok: false, error: '配置文件不存在' };
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const imapCfg = config.imap;
+    if (!imapCfg?.host || !imapCfg?.user || !imapCfg?.pass) {
+      return { ok: false, error: 'IMAP 未配置，请在设置中填写' };
+    }
+
+    const Imap = require('imap');
+    return new Promise((resolve) => {
+      const imap = new Imap({
+        user: imapCfg.user, password: imapCfg.pass,
+        host: imapCfg.host, port: imapCfg.port || 993, tls: true,
+        tlsOptions: { rejectUnauthorized: false },
+        connTimeout: 15000, authTimeout: 10000,
+      });
+
+      const bounced = [];
+      imap.once('ready', () => {
+        imap.openBox('INBOX', false, () => {
+          // 搜索退信邮件（过去30天）
+          const since = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+          imap.search([['SINCE', since], ['OR', ['SUBJECT', 'undelivered'], ['SUBJECT', 'returned']], ['OR', ['SUBJECT', 'failure'], ['SUBJECT', 'bounce']], ['OR', ['SUBJECT', '退信'], ['SUBJECT', '失败']], ['OR', ['SUBJECT', 'Undelivered'], ['SUBJECT', 'Returned']]], (err, results) => {
+            if (err || !results.length) {
+              imap.end();
+              return resolve({ ok: true, bounced: [], message: '未发现退信' });
+            }
+            // 只取最近20封
+            const fetch = imap.fetch(results.slice(-20), { bodies: 'HEADER.FIELDS (SUBJECT FROM DATE)', struct: true });
+            fetch.on('message', (msg) => {
+              msg.on('body', (stream) => {
+                let data = '';
+                stream.on('data', c => data += c);
+                stream.on('end', () => {
+                  const subj = (data.match(/Subject: (.+)/i) || [])[1] || '';
+                  bounced.push({ subject: subj.trim(), date: (data.match(/Date: (.+)/i) || [])[1] || '' });
+                });
+              });
+            });
+            fetch.once('end', () => {
+              imap.end();
+              resolve({ ok: true, bounced, message: `发现 ${bounced.length} 封退信` });
+            });
+          });
+        });
+      });
+      imap.once('error', (e) => { resolve({ ok: false, error: 'IMAP 连接失败: ' + (e.message || e) }); });
+      imap.connect();
+    });
+  });
+
+  // ── 签名管理 ──────────────────────────────────────────────────────
+  const sigFilePath = path.join(__dirname, '..', 'send', 'signature.html');
+
+  ipcMain.handle('signature:load', async () => {
+    try {
+      if (fs.existsSync(sigFilePath)) return { ok: true, html: fs.readFileSync(sigFilePath, 'utf-8') };
+      // 默认签名
+      const defaultSig = '<div style="font-family:Arial,sans-serif;color:#333;border-top:1px solid #ddd;padding-top:12px;margin-top:16px"><p style="margin:0 0 4px;font-size:14px"><strong>Zayne Jin</strong></p><p style="margin:0 0 4px;font-size:13px;color:#666">Overseas Sales · LatAm Desk</p><p style="margin:0 0 8px;font-size:13px;color:#666">YQN Logistics Technology Group</p><p style="margin:0;font-size:12px;color:#999">📧 zayne_jin@yqn.com &nbsp;|&nbsp; 📱 +86 18487665870 &nbsp;|&nbsp; 🌐 www.yqn.com</p></div>';
+      return { ok: true, html: defaultSig };
+    } catch { return { ok: false, html: '' }; }
+  });
+
+  ipcMain.handle('signature:save', async (_e, html) => {
+    try {
+      const dir = path.dirname(sigFilePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(sigFilePath, html);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── 设置 ───────────────────────────────────────────────────────────
+  ipcMain.handle('config:load', async () => {
+    const configPath = path.join(__dirname, '..', 'send', 'config.json');
+    try {
+      if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch {}
+    return null;
+  });
+
+  ipcMain.handle('config:save', async (_e, config) => {
+    const configPath = path.join(__dirname, '..', 'send', 'config.json');
+    try {
+      const dir = path.dirname(configPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   });
 
   // ── 系统 ───────────────────────────────────────────────────────────
@@ -515,7 +986,7 @@ async function runSendBatch() {
   }
 
   const signatureHtml = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '';
-  const signatureText = config.signature?.text || '';
+  const signatureText = config.signature?.text || '金颖哲 Zayne Jin | Overseas Sales · LatAm Desk\nYQN Logistics Technology Group\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com';
   const maxPerDay = config.schedule?.max_per_day || 500;
   const minDelay = (config.schedule?.min_delay_seconds || 45) * 1000;
   const maxDelay = (config.schedule?.max_delay_seconds || 120) * 1000;
@@ -530,7 +1001,8 @@ async function runSendBatch() {
   const today = new Date().toISOString().slice(0, 10);
   if (log.last_date !== today) { log.daily_count = 0; log.last_date = today; }
 
-  const transporter = nodemailer.createTransport({
+  currentSendAbort = false;
+  currentTransporter = nodemailer.createTransport({
     host: config.smtp.host,
     port: config.smtp.port,
     secure: config.smtp.secure,
@@ -551,17 +1023,31 @@ async function runSendBatch() {
 
   function buildContent(bodyText) {
     const textBody = bodyText + '\n--\n' + signatureText;
-    const htmlBody = bodyText.split('\n').map(line => {
+
+    const lines = bodyText.split('\n');
+    const htmlLines = [];
+    let isFirstLine = true;
+    for (const line of lines) {
       const t = line.trim();
-      if (!t) return '<br>';
-      if (t === '--' || t === '---') return '<br>';
-      return `<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${t}</p>`;
-    }).join('\n');
-    const html = htmlBody + '\n' + signatureHtml;
+      if (!t) { htmlLines.push('<br>'); continue; }
+      if (t === '--' || t === '---') { htmlLines.push('<br>'); continue; }
+      const content = (isFirstLine && /^(Buen día|Bom dia|Hello|Hola|Olá|Estimado|Prezado)/i.test(t))
+        ? `<strong style="font-size:15px">${t}</strong>`
+        : t;
+      htmlLines.push(`<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${content}</p>`);
+      isFirstLine = false;
+    }
+    const htmlBody = htmlLines.join('\n');
+    const html = htmlBody + '\n<br>\n' + signatureHtml;
     return { text: textBody, html };
   }
 
   for (let i = 0; i < sendQueue.length; i++) {
+    if (currentSendAbort) {
+      sendProgress({ type: 'cancelled', index: i, total: sendQueue.length, message: '发送已取消' });
+      break;
+    }
+
     if (isPaused) {
       sendProgress({ type: 'paused', index: i, total: sendQueue.length });
       break;
@@ -572,23 +1058,31 @@ async function runSendBatch() {
       break;
     }
 
-    // 等待时间窗口
-    while (!inWindow() && !isPaused) {
+    // 等待时间窗口（测试模式跳过）
+    const testMode = config.test?.enabled && config.test?.email;
+    while (!inWindow() && !isPaused && !testMode && !currentSendAbort) {
       sendProgress({ type: 'waiting', message: '等待发送窗口 (北京时间 19:00-03:00)...' });
-      await sleep(60000);
+      await sleep(30000);
     }
-    if (isPaused) break;
+    if (isPaused || currentSendAbort) break;
 
     const email = sendQueue[i];
     const toList = email.recipients || email.to.split(',').map(s => s.trim()).filter(Boolean);
-    const toField = toList.join(', ');
+    let toField = toList.join(', ');
     const { text, html } = buildContent(email.body);
 
+    // 测试模式：所有收件人替换为测试邮箱
+    const testEmail = config.test?.email;
+    const testEnabled = config.test?.enabled && testEmail;
+    if (testEnabled) {
+      toField = testEmail;
+    }
+
     try {
-      const info = await transporter.sendMail({
+      const info = await currentTransporter.sendMail({
         from: `"${config.sender.name}" <${config.sender.email}>`,
         to: toField,
-        subject: email.subject,
+        subject: testEnabled ? `[测试] ${email.subject}` : email.subject,
         text,
         html,
       });
@@ -601,17 +1095,17 @@ async function runSendBatch() {
       log.daily_count++;
       fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
 
-      sendProgress({ type: 'sent', index: i + 1, total: sendQueue.length, company: email.company, to: toField, count: toList.length });
+      sendProgress({ type: 'sent', id: email.id, index: i + 1, total: sendQueue.length, company: email.company, to: toField, count: toList.length });
     } catch (err) {
       log.sent.push({
-        index: log.daily_count + 1, to: toField, company: email.company || '',
+        index: log.sent.length + 1, to: toField, company: email.company || '',
         subject: email.subject, time: new Date().toISOString(), count: toList.length,
         status: 'failed', error: err.message,
       });
-      log.daily_count++;
+      // 失败不计入每日限额
       fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
 
-      sendProgress({ type: 'failed', index: i + 1, total: sendQueue.length, company: email.company, to: toField, error: err.message });
+      sendProgress({ type: 'failed', id: email.id, index: i + 1, total: sendQueue.length, company: email.company, to: toField, error: err.message });
     }
 
     // 最后一封不延迟
@@ -622,14 +1116,16 @@ async function runSendBatch() {
     }
   }
 
-  await transporter.close();
+  await currentTransporter.close();
 
   // 发送完成通知
-  if (tray && !isPaused) {
-    new Notification({ title: 'Prospecting Email', body: `发送完成: ${log.daily_count} 封` }).show();
+  const sentCount = log.sent.filter(r => r.status === 'sent' && r.time?.startsWith(today)).length;
+  const failedCount = log.sent.filter(r => r.status === 'failed' && r.time?.startsWith(today)).length;
+  if (tray && !isPaused && !currentSendAbort) {
+    new Notification({ title: 'Prospecting Email', body: `发送完成: 成功 ${sentCount} 封` + (failedCount ? `, 失败 ${failedCount} 封` : '') }).show();
   }
 
-  sendProgress({ type: 'complete', total: sendQueue.length });
+  sendProgress({ type: 'complete', total: sendQueue.length, sent: sentCount, failed: failedCount });
   mainWindow?.show();
 }
 
@@ -657,7 +1153,7 @@ function extractFirst(text, regex) {
 }
 
 function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*]/g, '_').slice(0, 100);
+  return (name || '').trim().replace(/[<>:"/\\|?*]/g, '_').slice(0, 100);
 }
 
 // ===== 应用生命周期 =====================================================

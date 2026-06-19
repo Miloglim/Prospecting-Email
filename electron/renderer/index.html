@@ -24,6 +24,9 @@
       <li class="nav-item" data-page="email-send"><span class="nav-icon">📧</span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon">📤</span> 发送队列</li>
     </ul>
+    <ul class="nav-bottom">
+      <li class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span> 设置</li>
+    </ul>
     <div class="nav-footer"><span class="nav-version">v1.2</span></div>
   </nav>
 
@@ -72,11 +75,23 @@
       <div class="contacts-toolbar">
         <input type="text" id="contacts-search" placeholder="搜索公司名、国家、品类...">
         <button id="contacts-add-btn">＋ 添加客户</button>
-        <button id="contacts-collapse-all" class="secondary">📂 一键折叠</button>
         <button id="contacts-delete-all" class="danger">🗑 全部删除</button>
       </div>
       <div class="contacts-stats" id="contacts-stats" style="display:none"></div>
-      <div class="contacts-groups" id="contacts-groups"></div>
+      <div class="contacts-filter" id="contacts-filter" style="display:none">
+        <button type="button" class="cf-tab active" data-filter="all">全部</button>
+        <button type="button" class="cf-tab" data-filter="agent">🌐 代理</button>
+        <button type="button" class="cf-tab" data-filter="direct">🏭 直客</button>
+        <button type="button" class="cf-tab" data-filter="unlabeled">❓ 未标签</button>
+      </div>
+      <div class="contacts-layout" id="contacts-layout" style="display:none">
+        <div class="contacts-sidebar" id="contacts-sidebar">
+          <!-- JS 渲染公司列表 -->
+        </div>
+        <div class="contacts-detail" id="contacts-detail">
+          <p class="placeholder">← 选择左侧公司查看联系人详情</p>
+        </div>
+      </div>
       <p class="placeholder" id="contacts-empty">暂无联系人 — 从「导入客户」导入</p>
     </section>
 
@@ -108,21 +123,22 @@
 
     <!-- 🖊️ 签名管理 -->
     <section id="page-signature" class="page">
+      <h2>🖊️ 签名管理</h2>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <p style="font-size:12px;color:var(--text-secondary);margin:0">编辑 send/signature.html，保存后所有发出的邮件自动使用此签名。</p>
+        <button id="sig-open-folder" class="secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap">📂 打开文件夹</button>
+      </div>
       <div class="sig-layout">
-        <div class="sig-list">
-          <h3>🖊️ 签名管理</h3>
-          <div id="sig-items"></div>
-          <button id="sig-add">＋ 新建签名</button>
-        </div>
-        <div class="sig-editor" id="sig-editor">
+        <div class="sig-editor">
           <div class="sig-editor-header">
-            <input type="text" id="sig-label" placeholder="签名名称（如：西语默认 / 英语正式）">
-            <div>
-              <button id="sig-save">💾 保存</button>
-              <button id="sig-delete" class="danger">🗑 删除</button>
-            </div>
+            <span style="font-weight:600;font-size:13px">HTML 编辑</span>
+            <button id="sig-save">💾 保存到文件</button>
           </div>
-          <div id="sig-content" contenteditable="true" style="flex:1;min-height:300px;border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.6;overflow-y:auto;background:#fff"></div>
+          <div id="sig-content" contenteditable="true" style="flex:1;min-height:250px;border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.6;overflow-y:auto;background:#fff"></div>
+        </div>
+        <div class="sig-editor">
+          <div class="sig-editor-header"><span style="font-weight:600;font-size:13px">预览</span></div>
+          <div id="sig-preview" style="flex:1;min-height:250px;border:1px solid var(--border);border-radius:6px;padding:12px;overflow-y:auto;background:#fafbfc;font-size:13px"></div>
         </div>
       </div>
     </section>
@@ -131,27 +147,23 @@
     <section id="page-email-send" class="page">
       <div class="send-layout">
         <div class="send-side">
-          <input type="text" id="send-search" placeholder="🔍 搜索公司...">
-          <div id="send-company-list"></div>
+          <div class="send-side-head">
+            <input type="text" id="send-search" placeholder="🔍 搜索公司...">
+            <div class="send-side-actions">
+              <button id="send-select-all" class="secondary" style="font-size:11px;padding:3px 8px">☑ 全选</button>
+              <button id="send-deselect-all" class="secondary" style="font-size:11px;padding:3px 8px">☐ 取消</button>
+              <span id="send-selected-count" style="font-size:11px;color:var(--text-secondary)"></span>
+            </div>
+          </div>
+          <div class="send-side-list" id="send-company-list"></div>
         </div>
         <div class="send-body">
           <div class="send-top">
-            <div class="send-recipients" id="send-recipients"></div>
-            <div class="send-controls">
-              <select id="ws-type"><option value="agent">代理</option><option value="direct">直客</option><option value="unlabeled">未标签</option></select>
-              <select id="ws-stage"><option value="cold">冷开发</option><option value="f1">F1</option><option value="f2">F2</option><option value="f3">F3</option><option value="f4">F4</option></select>
-              <button id="ws-random" class="secondary" style="font-size:12px;padding:6px 10px">🎲 随机</button>
-              <button id="ws-add-queue" style="font-size:12px;padding:6px 12px">加入队列</button>
-            </div>
+            <button id="ws-add-queue" style="font-size:12px;padding:6px 12px">📧 加入队列</button>
+            <span id="send-list-title" style="font-weight:600;font-size:13px">已选公司</span>
           </div>
-          <div class="send-preview">
-            <div class="preview-header">
-              <span class="preview-label" id="preview-subject" style="font-weight:700;font-size:14px">Asunto: --</span>
-              <div class="preview-tabs"><button class="lang-tab active" data-lang="es">ES</button><button class="lang-tab" data-lang="en">EN</button></div>
-              <span class="spam-badge" id="spam-badge">✅</span>
-            </div>
-            <div class="preview-body" id="preview-body-es" style="font-size:13px;line-height:1.6;padding:12px"></div>
-            <div class="preview-body" id="preview-body-en" style="display:none;font-size:13px;line-height:1.6;padding:12px"></div>
+          <div class="send-company-cards" id="send-company-cards">
+            <p class="placeholder" id="send-cards-empty">← 勾选左侧公司</p>
           </div>
         </div>
       </div>
@@ -159,18 +171,85 @@
 
     <!-- 📤 发送队列 -->
     <section id="page-queue" class="page">
-      <h2>📤 发送队列</h2>
+      <h2>📤 发送队列 <span id="queue-test-status" style="font-size:13px;font-weight:600;color:var(--warning)"></span></h2>
       <div id="queue-controls">
         <button id="queue-start">▶ 开始发送</button>
         <button id="queue-pause" disabled>⏸ 暂停</button>
+        <button id="queue-cancel" class="danger" disabled>✕ 取消发送</button>
         <button id="queue-clear" class="secondary">清空已完成</button>
+        <button id="queue-bounce-check" class="secondary" style="margin-left:auto;font-size:11px;padding:4px 10px">📥 退信检查</button>
       </div>
+      <div id="bounce-result" style="display:none;margin:8px 0;padding:8px 12px;border-radius:6px;font-size:12px"></div>
       <div class="progress-bar"><div class="progress-fill" id="queue-progress"></div></div>
       <table id="queue-table">
         <thead><tr><th>#</th><th>公司</th><th>收件人</th><th>主题</th><th>状态</th></tr></thead>
         <tbody></tbody>
       </table>
       <p class="placeholder" id="queue-empty">队列为空 — 从邮件工坊加入邮件</p>
+    </section>
+
+    <!-- ⚙️ 设置 -->
+    <section id="page-settings" class="page">
+      <h2>⚙️ 设置</h2>
+      <div class="settings-grid">
+
+        <!-- SMTP -->
+        <div class="setting-card setting-required">
+          <h3>📧 SMTP <span class="setting-status"></span></h3>
+          <div class="form-group"><label>服务器</label><input type="text" id="cfg-smtp-host" data-required="1"></div>
+          <div class="form-group"><label>端口</label><input type="number" id="cfg-smtp-port" data-required="1"> <label style="min-width:auto;margin-left:8px">加密</label><select id="cfg-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div>
+          <div class="form-group"><label>邮箱</label><input type="text" id="cfg-smtp-user" data-required="1"></div>
+          <div class="form-group"><label>密码</label><input type="password" id="cfg-smtp-pass" data-required="1"></div>
+        </div>
+
+        <!-- 发信设置 -->
+        <div class="setting-card setting-required">
+          <h3>✉️ 发信设置 <span class="setting-status"></span></h3>
+          <div class="form-group"><label>发信名称</label><input type="text" id="cfg-sender-name" data-required="1"></div>
+          <div class="form-group"><label>发信邮箱</label><input type="text" id="cfg-sender-email" data-required="1"></div>
+        </div>
+
+        <!-- 发送规则 -->
+        <div class="setting-card setting-required">
+          <h3>📤 发送规则 <span class="setting-status"></span></h3>
+          <div class="form-group"><label>每日上限</label><input type="number" id="cfg-schedule-max" placeholder="0=不限制"></div>
+          <div class="form-group"><label>发送开始</label><input type="time" id="cfg-schedule-start" data-required="1"></div>
+          <div class="form-group"><label>发送结束</label><input type="time" id="cfg-schedule-end" data-required="1"></div>
+          <div class="form-group"><label>最小延迟</label><input type="number" id="cfg-schedule-min-delay"> <span style="font-size:11px;color:var(--text-secondary)">秒</span></div>
+          <div class="form-group"><label>最大延迟</label><input type="number" id="cfg-schedule-max-delay"> <span style="font-size:11px;color:var(--text-secondary)">秒</span></div>
+        </div>
+
+        <!-- API 设置 -->
+        <div class="setting-card">
+          <h3>🔌 API <span class="setting-status"></span></h3>
+          <div class="setting-section"><h4>🔍 Tavily</h4></div>
+          <div class="form-group"><label>API Key</label><input type="password" id="cfg-search-apikey"></div>
+          <div class="setting-section"><h4>🌐 有道翻译</h4></div>
+          <div class="form-group"><label>App Key</label><input type="text" id="cfg-tl-youdao-key"></div>
+          <div class="form-group"><label>Secret</label><input type="password" id="cfg-tl-youdao-secret"></div>
+          <div class="setting-section"><h4>🌐 百度翻译</h4></div>
+          <div class="form-group"><label>App ID</label><input type="text" id="cfg-tl-baidu-id"></div>
+          <div class="form-group"><label>Key</label><input type="password" id="cfg-tl-baidu-key"></div>
+        </div>
+
+        <!-- IMAP -->
+        <div class="setting-card">
+          <h3>📥 退信检查 <span class="setting-status"></span></h3>
+          <div class="form-group"><label>服务器</label><input type="text" id="cfg-imap-host" placeholder="imap.exmail.qq.com"></div>
+          <div class="form-group"><label>端口</label><input type="number" id="cfg-imap-port" placeholder="993"></div>
+          <div class="form-group"><label>邮箱</label><input type="text" id="cfg-imap-user"></div>
+          <div class="form-group"><label>密码</label><input type="password" id="cfg-imap-pass"></div>
+        </div>
+
+        <!-- 测试 -->
+        <div class="setting-card">
+          <h3>🧪 测试 <span class="setting-status"></span></h3>
+          <div class="form-group"><label>测试邮箱</label><input type="text" id="cfg-test-email" placeholder="test@qq.com"></div>
+          <div class="form-group"><label>测试模式</label><label style="min-width:auto;cursor:pointer"><input type="checkbox" id="cfg-test-enabled"> 启用（跳过发送时段限制）</label></div>
+          <div class="form-note">⚠️ 正式发送仅在设定的时段内执行，开启测试模式可跳过此限制</div>
+        </div>
+
+      </div>
     </section>
 
   </main>
