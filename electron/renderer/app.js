@@ -215,7 +215,9 @@ function renderContactsList(filtered) {
   let data = filtered || contactsData;
 
   // 应用类型筛选
-  if (contactsFilter !== 'all') {
+  if (contactsFilter === 'archived') {
+    data = data.filter(c => contactsSendHistory[c.company]?.stage === 'archived');
+  } else if (contactsFilter !== 'all') {
     data = data.filter(c => (c.clientType || 'unlabeled') === contactsFilter);
   }
 
@@ -227,7 +229,7 @@ function renderContactsList(filtered) {
   const statsBar = document.getElementById('contacts-stats');
 
   if (!data.length) {
-    if (empty) { empty.style.display = 'block'; empty.textContent = contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
+    if (empty) { empty.style.display = 'block'; empty.textContent = contactsFilter === 'archived' ? '暂无已归档客户 — 客户发完 F4 后自动归档' : contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
     if (layout) layout.style.display = 'none';
     if (statsBar) statsBar.style.display = 'none';
     if (filterBar) filterBar.style.display = 'none';
@@ -259,6 +261,7 @@ function renderContactsList(filtered) {
       agent: `🌐 代理 ${counts.agent}`,
       direct: `🏭 直客 ${counts.direct}`,
       unlabeled: `❓ 未标签 ${counts.unlabeled}`,
+      archived: `📦 已归档 ${Object.values(contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
     };
     tabs.forEach(tab => {
       const f = tab.dataset.filter;
@@ -289,7 +292,7 @@ function renderContactsList(filtered) {
       const tagHtml = clientTypeTag(ctype);
       const ctry = escapeHtml(members[0]?.country || '');
       const hist = contactsSendHistory[company];
-      const stageLabel = hist?.stage ? `<span class="ci-stage-badge">${hist.stage.toUpperCase()}</span>` : '';
+      const stageLabel = hist?.stage ? `<span class="ci-stage-badge">${STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
       const vipClass = members.length >= 5 ? ' ci-vip' : '';
       const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
       return `
@@ -331,6 +334,8 @@ function renderContactDetail(company) {
   if (!detail) return;
   const members = contactsGroupMap.get(company) || [];
   const ctype = members[0]?.clientType || 'unlabeled';
+  const hist = contactsSendHistory[company];
+  const isArchived = hist?.stage === 'archived';
   detail.innerHTML = `
     <div class="contacts-detail-header">${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</div>
     <div class="contacts-detail-body">
@@ -348,6 +353,7 @@ function renderContactDetail(company) {
           `).join('')}
         </tbody>
       </table>
+      ${isArchived ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:8px"><span style="font-size:13px">📦 已归档 — 不参与常规序列</span><button id="btn-reactivate-contact" style="margin-left:auto;font-size:12px;padding:4px 12px">🔄 重新激活</button></div>` : ''}
     </div>
   `;
 
@@ -358,10 +364,20 @@ function renderContactDetail(company) {
       if (!confirm('确定删除该联系人？')) return;
       await window.electronAPI.deleteContact(btn.dataset.id);
       contactsData = contactsData.filter(c => c.id !== btn.dataset.id);
-      // 刷新列表 + 刷新当前公司详情
       renderContactsList();
     });
   });
+
+  // 重新激活按钮
+  const reactBtn = document.getElementById('btn-reactivate-contact');
+  if (reactBtn) {
+    reactBtn.addEventListener('click', async () => {
+      if (!confirm(`确定重新激活 ${company}？\n将重置为冷开发阶段，清空序列记录。`)) return;
+      await window.electronAPI.reactivateCompany(company);
+      contactsSendHistory = await window.electronAPI.getSendHistory() || {};
+      renderContactsList();
+    });
+  }
 }
 
 // 删除全部
@@ -521,6 +537,7 @@ function renderBackcheckCard(info, companyName, st) {
     <div style="text-align:center;margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button id="btn-open-folder" class="secondary" style="font-size:12px;padding:6px 16px">📂 打开报告文件夹</button>
       ${isDone ? '<button id="btn-translate" class="secondary" style="font-size:12px;padding:6px 16px">🌐 翻译报告</button>' : ''}
+      ${contactsSendHistory[companyName]?.stage === 'archived' ? '<button id="btn-reactivate-bc" class="secondary" style="font-size:12px;padding:6px 16px;color:var(--success)">🔄 重新激活</button>' : ''}
       <span id="translate-status" style="font-size:11px;color:var(--text-secondary);display:none"></span>
     </div>
   `;
@@ -630,13 +647,21 @@ function renderBackcheckCard(info, companyName, st) {
   document.getElementById('btn-open-folder')?.addEventListener('click', () => {
     window.electronAPI.openReportsFolder?.();
   });
+
+  // 重新激活（背调页）
+  document.getElementById('btn-reactivate-bc')?.addEventListener('click', async () => {
+    if (!confirm(`确定重新激活 ${companyName}？\n将重置为冷开发阶段，清空序列记录。`)) return;
+    await window.electronAPI.reactivateCompany(companyName);
+    contactsSendHistory = await window.electronAPI.getSendHistory() || {};
+    loadBackcheck();
+  });
 }
 
 
 // ===== 邮件发送 ======================================================
-const STAGES_SEND = ['cold', 'f1', 'f2', 'f3', 'f4'];
-const STAGE_LABELS_SEND = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
-const STAGE_NEXT_SEND = { '': 'cold', cold: 'f1', f1: 'f2', f2: 'f3', f3: 'f4', f4: 'f4' };
+const STAGES_SEND = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
+const STAGE_LABELS_SEND = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4', archived: '📦 已归档' };
+const STAGE_NEXT_SEND = { '': 'cold', cold: 'f1', f1: 'f2', f2: 'f3', f3: 'f4', f4: 'archived', archived: 'archived' };
 
 let sendCompanies = {};
 let sendHistory = {};
@@ -646,7 +671,22 @@ let selectedCompanySet = new Set(); // 持久化勾选状态，搜索不清除
 async function initEmailSend() {
   if (!templateLib) templateLib = await window.electronAPI.getTemplateLibrary();
   document.getElementById('ws-add-queue').addEventListener('click', addToQueue);
+  document.getElementById('monthly-generate-btn')?.addEventListener('click', generateMonthlyReports);
   await loadSendContacts();
+}
+
+function updateMonthlyReportSection() {
+  const section = document.getElementById('monthly-report-section');
+  const countEl = document.getElementById('monthly-archived-count');
+  if (!section || !countEl) return;
+  const archivedCount = Object.entries(sendCompanies)
+    .filter(([name]) => sendHistory[name]?.stage === 'archived').length;
+  if (archivedCount > 0) {
+    section.style.display = 'block';
+    countEl.textContent = `${archivedCount} 家归档客户`;
+  } else {
+    section.style.display = 'none';
+  }
 }
 
 async function loadSendContacts() {
@@ -659,12 +699,15 @@ async function loadSendContacts() {
     sendCompanies[name].push(c);
   }
   renderCompanyList();
+  updateMonthlyReportSection();
 }
 
 function renderCompanyList(filter) {
   const container = document.getElementById('send-company-list');
   let companies = Object.entries(sendCompanies).sort((a,b) => b[1].length - a[1].length);
   if (filter) companies = companies.filter(([n]) => n.toLowerCase().includes(filter));
+  // 已归档公司不出现在发送列表
+  companies = companies.filter(([name]) => sendHistory[name]?.stage !== 'archived');
   if (!companies.length) {
     container.innerHTML = '<p style="font-size:12px;color:var(--text-secondary);padding:8px">无匹配公司</p>';
     return;
@@ -733,7 +776,9 @@ function renderSelectedCards() {
       const hist = sendHistory[name];
       const stage = hist?.stage || 'cold';
       const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
-      selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage) };
+      const isArgentina = (members[0]?.country || '').toLowerCase().includes('argentina');
+      const usedSentences = hist?.usedSentences || [];
+      selectedCards[name] = { type: ctype, stage, lang, isArgentina, template: randomPick(ctype, stage, usedSentences, isArgentina) };
     }
   }
   for (const name of Object.keys(selectedCards)) {
@@ -771,15 +816,48 @@ function renderSelectedCards() {
   }
 }
 
-function randomPick(type, stage) {
+function randomPick(type, stage, usedSentences, isArgentina) {
   if (!templateLib) return {};
-  const pick = (arr) => arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : null;
+  const usedSet = new Set(usedSentences || []);
+
+  // 从数组随机选取，支持变体过滤和已用排除
+  const pick = (arr, filterMode) => {
+    if (!arr || !arr.length) return null;
+    let pool = arr.filter(item => !usedSet.has(item.id));
+
+    if (filterMode === 'ar') {
+      // 阿根廷：优先 H-A*/C-A* 变体；没有则回退普通
+      const arOnly = pool.filter(item => item.id.includes('-A'));
+      if (arOnly.length > 0) pool = arOnly;
+      else pool = pool.filter(item => !item.id.includes('-A'));
+    } else if (filterMode === 'no-ar') {
+      // 非阿根廷：排除变体
+      pool = pool.filter(item => !item.id.includes('-A'));
+    }
+    // filterMode === 'any': 不做过滤
+
+    // 全部已用过则重置（开始新序列）
+    if (pool.length === 0) {
+      pool = [...arr];
+      if (filterMode === 'no-ar') pool = pool.filter(item => !item.id.includes('-A'));
+    }
+    return pool[Math.floor(Math.random() * pool.length)];
+  };
+
+  // F3: 不用 Hook/Pain（降低压力，留门）
+  // F4: 不用 Hook/Pain/Proof（收尾降级）
+  const skipHook = (stage === 'f3' || stage === 'f4');
+  const skipPain = (stage === 'f3' || stage === 'f4');
+  const skipProof = (stage === 'f4');
+  const hookMode = isArgentina ? 'ar' : 'no-ar';
+  const ctaMode = isArgentina ? 'ar' : 'no-ar';
+
   return {
-    hook: pick(templateLib.hooks),
-    pain: pick(templateLib.painPoints?.[type]),
-    proof: pick(templateLib.proofs?.[type]),
-    cta: pick(templateLib.ctas),
-    followup: stage !== 'cold' ? pick(templateLib.followUps?.[stage]) : null,
+    hook: skipHook ? null : pick(templateLib.hooks, hookMode),
+    pain: skipPain ? null : pick(templateLib.painPoints?.[type], 'any'),
+    proof: skipProof ? null : pick(templateLib.proofs?.[type], 'any'),
+    cta: pick(templateLib.ctas, ctaMode),
+    followup: (stage !== 'cold' && stage !== 'archived') ? pick(templateLib.followUps?.[stage], 'any') : null,
   };
 }
 
@@ -795,10 +873,13 @@ function addToQueue() {
     if (!emails.length) continue;
     const tpl = card.template;
     const lang = card.lang;
-    const body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, name, card.stage);
+    const body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, name, card.stage, card.type, card.isArgentina);
     const subjects = templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
     const subject = subjects[lang] || subjects.es || '';
-    queue.push({ id: Date.now() + added, company: name, to: emails.join(', '), recipients: emails, subject, body, status: 'pending', addedAt: new Date().toISOString(), _stage: card.stage });
+    const sentenceIds = [tpl.hook?.id, tpl.pain?.id, tpl.proof?.id, tpl.cta?.id, tpl.followup?.id].filter(Boolean);
+    queue.push({ id: Date.now() + added, company: name, to: emails.join(', '), recipients: emails, subject, body, status: 'pending', addedAt: new Date().toISOString(), _stage: card.stage, _sentences: sentenceIds });
+    // 记录已用句子（异步，不阻塞）
+    window.electronAPI.recordSentences(name, sentenceIds).catch(() => {});
     added++;
     totalContacts += emails.length;
   }
@@ -1141,33 +1222,246 @@ function updatePainProofOptions() {
   // 旧版 Workshop 函数，已废弃 — 保留空壳防止引用报错
 }
 
-function assembleEmail(lang, hook, pain, proof, cta, followup, company, stage) {
+// ── 辅助文本函数（按客户类型 + 语言切换）────────────────────────────
+function breathingRoomText(lang, type) {
+  const map = {
+    agent: {
+      es: 'Si alguna vez tu capacidad actual se queda corta — o simplemente quieres comparar opciones — tener un respaldo cuesta cero y puede ahorrar muchos dolores de cabeza.',
+      pt: 'Se alguma vez sua capacidade atual ficar limitada — ou simplesmente quiser comparar opções — ter um respaldo não custa nada e pode evitar muitas dores de cabeça.',
+      en: "If your current capacity ever falls short — or you simply want to compare options — having backup costs nothing and can save you plenty of headaches.",
+    },
+    direct: {
+      es: 'Si alguna vez tu operación actual enfrenta una demora o un imprevisto en aduana, contar con una alternativa probada puede ahorrarte semanas y costos inesperados.',
+      pt: 'Se alguma vez sua operação atual enfrentar um atraso ou imprevisto na alfândega, contar com uma alternativa comprovada pode economizar semanas e custos inesperados.',
+      en: 'If your current operation ever hits a customs delay or an unexpected snag, having a proven alternative can save you weeks and unplanned costs.',
+    },
+    unlabeled: {
+      es: 'Si alguna vez necesitas apoyo logístico o simplemente quieres explorar alternativas, estoy a tu disposición.',
+      pt: 'Se alguma vez você precisar de apoio logístico ou simplesmente quiser explorar alternativas, estou à sua disposição.',
+      en: "If you ever need logistics support or simply want to explore alternatives, I'm at your disposal.",
+    },
+  };
+  return (map[type] || map.unlabeled)[lang] || '';
+}
+
+function f4ClosingText(lang, type) {
+  const map = {
+    agent: {
+      es: 'Si en el futuro necesitas respaldo de espacio o comparar opciones de naviera, aquí me tienes. Sin compromiso, sin prisa.',
+      pt: 'Se no futuro você precisar de respaldo de espaço ou comparar opções de armador, estou aqui. Sem compromisso, sem pressa.',
+      en: "If in the future you need space backup or want to compare carrier options, I'm here. No strings, no rush.",
+    },
+    direct: {
+      es: 'Si en el futuro tu operación aduanal necesita un respaldo confiable, aquí me tienes. Sin compromiso, sin prisa.',
+      pt: 'Se no futuro sua operação aduaneira precisar de um respaldo confiável, estou aqui. Sem compromisso, sem pressa.',
+      en: "If in the future your customs operation needs reliable backup, I'm here. No strings, no rush.",
+    },
+    unlabeled: {
+      es: 'Si en el futuro necesitas explorar opciones logísticas, aquí me tienes. Sin compromiso, sin prisa.',
+      pt: 'Se no futuro você quiser explorar opções logísticas, estou aqui. Sem compromisso, sem pressa.',
+      en: "If in the future you want to explore logistics options, I'm here. No strings, no rush.",
+    },
+  };
+  return (map[type] || map.unlabeled)[lang] || '';
+}
+
+function f4FollowupText(lang, type) {
+  const map = {
+    agent: {
+      es: 'Mientras tanto, de vez en cuando te compartiré alguna información de mercado que pueda ser útil para tu operación.',
+      pt: 'Enquanto isso, de vez em quando compartilharei informações de mercado que possam ser úteis para sua operação.',
+      en: "In the meantime, I'll occasionally share market insights that might be useful for your operation.",
+    },
+    direct: {
+      es: 'Mientras tanto, te compartiré ocasionalmente información de mercado que pueda ser relevante para tus importaciones.',
+      pt: 'Enquanto isso, compartilharei ocasionalmente informações de mercado que possam ser relevantes para suas importações.',
+      en: "In the meantime, I'll occasionally share market insights that might be relevant to your imports.",
+    },
+    unlabeled: {
+      es: 'Te compartiré de vez en cuando información del mercado que pueda resultarte útil.',
+      pt: 'Compartilharei de vez em quando informações do mercado que possam ser úteis para você.',
+      en: "I'll occasionally share market insights that might be useful to you.",
+    },
+  };
+  return (map[type] || map.unlabeled)[lang] || '';
+}
+
+function assembleEmail(lang, hook, pain, proof, cta, followup, company, stage, type, isArgentina) {
   const t = (item) => item ? (item[lang] || '') : '';
   const lines = [];
+
+  // 问候
   const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Hello,';
-  lines.push(greeting); lines.push('');
-  if (stage !== 'cold' && followup) { lines.push(t(followup)); lines.push(''); }
+  lines.push(greeting);
+  lines.push('');
+
+  // F1-F4: 跟进衔接句
+  if (stage !== 'cold' && followup) {
+    lines.push(t(followup));
+    lines.push('');
+  }
+
+  // Hook（F3/F4 跳过）
   if (hook) lines.push(t(hook));
+
+  // 冷开发：公司提及
   if (company && stage === 'cold') {
     lines.push('');
-    lines.push(lang === 'es' ? `Sé que ${company} importa regularmente.` : lang === 'pt' ? `Sei que a ${company} importa regularmente.` : `I know ${company} imports regularly.`);
+    lines.push(lang === 'es'
+      ? `Sé que ${company} importa regularmente.`
+      : lang === 'pt'
+      ? `Sei que a ${company} importa regularmente.`
+      : `I know ${company} imports regularly.`);
   }
-  if (pain) { lines.push(''); lines.push(t(pain)); }
+
+  // Pain Point（F3/F4 跳过）
+  if (pain) {
+    lines.push('');
+    lines.push(t(pain));
+  }
+
+  // Proof / F4收尾文
   lines.push('');
   const name = lang === 'es' ? 'Soy Zayne, de YQN.' : lang === 'pt' ? 'Sou Zayne, da YQN.' : "I'm Zayne from YQN.";
-  if (proof) lines.push(name + ' ' + t(proof)); else lines.push(name);
+
+  if (stage === 'f4') {
+    // F4: 收尾降级专用文本（来自模板正文）
+    lines.push(f4ClosingText(lang, type));
+    lines.push('');
+    lines.push(f4FollowupText(lang, type));
+  } else if (proof) {
+    lines.push(name + ' ' + t(proof));
+  } else {
+    lines.push(name);
+  }
+
+  // 冷开发：呼吸句（按客户类型切换）
   if (stage === 'cold') {
     lines.push('');
-    lines.push(lang === 'es'
-      ? 'Si alguna vez tu operación actual enfrenta una demora o necesitas explorar alternativas, tener un respaldo probado puede ahorrarte semanas.'
-      : lang === 'pt'
-      ? 'Se alguma vez sua operação enfrentar um atraso ou precisar explorar alternativas, ter um respaldo comprovado pode economizar semanas.'
-      : 'If your current operation ever hits a delay or you need to explore alternatives, having proven backup can save you weeks.');
+    lines.push(breathingRoomText(lang, type));
   }
-  if (cta) { lines.push(''); lines.push(t(cta)); }
-  const closing = lang === 'es' ? 'Saludos,' : lang === 'pt' ? 'Atenciosamente,' : 'Best,';
+
+  // CTA
+  if (cta) {
+    lines.push('');
+    lines.push(t(cta));
+  }
+
+  // 结语（阿根廷用 Un abrazo）
+  lines.push('');
+  const closing = isArgentina
+    ? (lang === 'es' ? 'Un abrazo,' : 'Best,')
+    : lang === 'es' ? 'Saludos,'
+    : lang === 'pt' ? 'Atenciosamente,'
+    : 'Best,';
   lines.push(closing);
+
   return lines.join('\n');
+}
+
+// ── 月度报告组装（归档客户维护）──────────────────────────────────────
+function assembleMonthlyReport(lang, hook, isArgentina, marketContext) {
+  const t = (item) => item ? (item[lang] || '') : '';
+  const lines = [];
+
+  const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Hello,';
+  lines.push(greeting);
+  lines.push('');
+
+  // Hook 问候句
+  if (hook) {
+    lines.push(t(hook));
+    lines.push('');
+  }
+
+  // 用户填入的市场动态（默认兜底）
+  const defaultMarket = {
+    es: 'El panorama logístico en las rutas Asia-Latinoamérica sigue evolucionando. Los volúmenes de carga se mantienen activos y las tarifas continúan ajustándose. Como siempre, contar con opciones de respaldo marca la diferencia.',
+    pt: 'O panorama logístico nas rotas Ásia-América Latina continua evoluindo. Os volumes de carga seguem ativos e as tarifas continuam se ajustando. Como sempre, contar com opções de respaldo faz a diferença.',
+    en: 'The logistics landscape on Asia-Latin America routes keeps evolving. Cargo volumes remain active and rates continue to adjust. As always, having backup options makes the difference.',
+  };
+  lines.push(marketContext && marketContext.trim() ? marketContext.trim() : defaultMarket[lang] || defaultMarket.en);
+  lines.push('');
+
+  // 软关门
+  const softClose = {
+    es: 'Si en algún momento necesitas apoyo logístico, aquí estoy. Sin compromiso.',
+    pt: 'Se em algum momento precisar de apoio logístico, estou aqui. Sem compromisso.',
+    en: 'If you ever need logistics support, I\'m here. No strings.',
+  };
+  lines.push(softClose[lang] || softClose.en);
+
+  // 结语
+  lines.push('');
+  const closing = isArgentina
+    ? (lang === 'es' ? 'Un abrazo,' : 'Best,')
+    : lang === 'es' ? 'Saludos,'
+    : lang === 'pt' ? 'Atenciosamente,'
+    : 'Best,';
+  lines.push(closing);
+
+  return lines.join('\n');
+}
+
+// ── 批量生成月度报告 ─────────────────────────────────────────────────
+async function generateMonthlyReports() {
+  const marketEl = document.getElementById('monthly-market-context');
+  const marketContext = marketEl?.value || '';
+  const archivedCompanies = Object.entries(sendCompanies)
+    .filter(([name]) => sendHistory[name]?.stage === 'archived');
+
+  if (!archivedCompanies.length) {
+    alert('没有已归档的公司。');
+    return;
+  }
+
+  let added = 0;
+  for (const [name, members] of archivedCompanies) {
+    const emails = members.map(m => m.email).filter(Boolean);
+    if (!emails.length) continue;
+
+    const ctype = members[0]?.clientType || 'unlabeled';
+    const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+    const isArgentina = (members[0]?.country || '').toLowerCase().includes('argentina');
+
+    // 随机 Hook（排除阿根廷变体按常规处理）
+    const hookMode = isArgentina ? 'ar' : 'no-ar';
+    const hook = randomPick(ctype, 'monthly', [], isArgentina).hook; // 月度报告只要 Hook
+
+    const body = assembleMonthlyReport(lang, hook, isArgentina, marketContext);
+    const subjects = {
+      agent: { es: 'Panorama logístico — breve actualización', pt: 'Panorama logístico — breve atualização', en: 'Logistics snapshot — quick update' },
+      direct: { es: 'Panorama logístico — breve actualización', pt: 'Panorama logístico — breve atualização', en: 'Logistics snapshot — quick update' },
+      unlabeled: { es: 'Panorama logístico — breve actualización', pt: 'Panorama logístico — breve atualização', en: 'Logistics snapshot — quick update' },
+    };
+    const subject = subjects[ctype]?.[lang] || subjects.unlabeled[lang];
+
+    queue.push({
+      id: Date.now() + added,
+      company: name,
+      to: emails.join(', '),
+      recipients: emails,
+      subject,
+      body,
+      status: 'pending',
+      addedAt: new Date().toISOString(),
+      _stage: 'monthly',
+    });
+    added++;
+  }
+
+  if (!added) { alert('归档公司无有效邮箱。'); return; }
+
+  saveQueue();
+  document.getElementById('stat-queue').textContent = queue.length;
+  alert(`已生成 ${added} 封月度报告，已加入发送队列。`);
+  renderQueue();
+
+  // 跳转到发送队列
+  navItems.forEach(n => n.classList.remove('active'));
+  document.querySelector('[data-page="queue"]').classList.add('active');
+  pages.forEach(p => p.classList.remove('active'));
+  document.getElementById('page-queue').classList.add('active');
 }
 
 // ===== 发送队列 =======================================================

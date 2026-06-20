@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 发送历史
   getSendHistory: () => ipcRenderer.invoke('history:get'),
   advanceStage: (companies) => ipcRenderer.invoke('history:advance', companies),
+  recordSentences: (company, sentenceIds) => ipcRenderer.invoke('history:recordSentences', company, sentenceIds),
+  reactivateCompany: (company) => ipcRenderer.invoke('history:reactivate', company),
 
   // 系统
   minimizeToTray: () => ipcRenderer.invoke('app:minimizeToTray'),

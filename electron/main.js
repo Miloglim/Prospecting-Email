@@ -853,15 +853,36 @@ function setupIPC() {
 
   ipcMain.handle('history:advance', async (_e, companies) => {
     const h = readSendHistory();
-    const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4'];
+    const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
     for (const name of companies) {
       const cur = h[name]?.stage || 'cold'; // 首次发送从 cold 起步
       const idx = STAGES.indexOf(cur);
-      const nextIdx = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; // F4 停留
+      const nextIdx = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; // archived 停留
       h[name] = { ...h[name], stage: STAGES[nextIdx], lastSent: new Date().toISOString(), sentCount: (h[name]?.sentCount || 0) + 1 };
     }
     writeSendHistory(h);
     return h;
+  });
+
+  // ── 记录已用句子（序列去重）────────────────────────────────────────
+  ipcMain.handle('history:recordSentences', async (_e, company, sentenceIds) => {
+    const h = readSendHistory();
+    const entry = h[company] || {};
+    const used = entry.usedSentences || [];
+    // 追加本次使用的句子 ID，去重
+    const merged = [...new Set([...used, ...(sentenceIds || [])])];
+    // 超过 5 次发送（一个完整序列）后重置，开始新一轮
+    h[company] = { ...entry, usedSentences: (entry.sentCount || 0) >= 5 ? [...(sentenceIds || [])] : merged };
+    writeSendHistory(h);
+    return { ok: true };
+  });
+
+  // ── 重新激活（archived → cold，清空序列记录）─────────────────────
+  ipcMain.handle('history:reactivate', async (_e, company) => {
+    const h = readSendHistory();
+    h[company] = { ...h[company], stage: 'cold', usedSentences: [], lastSent: new Date().toISOString() };
+    writeSendHistory(h);
+    return { ok: true };
   });
 
   // ── 退信检查 ──────────────────────────────────────────────────────

@@ -1187,6 +1187,71 @@ YQN Logistics Technology Group
 
 ---
 
+### 3.4 月度报告（Monthly Report — 归档客户维护）
+
+> 简洁市场简报，无压力触达。仅用于已归档客户，不推进序列。
+> **市场动态段落由你手动填入当期内容。**
+
+#### 主题行
+
+| | 语言 | 主题行 |
+|:---:|------|------|
+| 🇲🇽 | 西语 | Panorama logístico — breve actualización |
+| 🇧🇷 | 葡语 | Panorama logístico — breve atualização |
+| 🇬🇧 | 英语 | Logistics snapshot — quick update |
+
+#### 正文
+
+**🇲🇽 西语**
+
+```
+[Hook 问候句，从 H-1~H-6 选取]
+
+[📝 市场动态 — 此处填入当期内容，2-4句]
+
+Si en algún momento necesitas apoyo logístico, aquí estoy. Sin compromiso.
+
+Saludos,
+--
+金颖哲 Zayne Jin | Overseas Sales · LatAm Desk
+YQN Logistics Technology Group
+📧 zayne_jin@trimanshipping.com | 📱 +86 18487665870 | 🌐 www.yqn.com
+```
+
+**🇧🇷 葡语**
+
+```
+[Hook 问候句]
+
+[📝 市场动态]
+
+Se em algum momento precisar de apoio logístico, estou aqui. Sem compromisso.
+
+Atenciosamente,
+--
+金颖哲 Zayne Jin | Overseas Sales · LatAm Desk
+YQN Logistics Technology Group
+📧 zayne_jin@trimanshipping.com | 📱 +86 18487665870 | 🌐 www.yqn.com
+```
+
+**🇬🇧 英语**
+
+```
+[Hook 问候句]
+
+[📝 市场动态]
+
+If you ever need logistics support, I'm here. No strings.
+
+Best,
+--
+金颖哲 Zayne Jin | Overseas Sales · LatAm Desk
+YQN Logistics Technology Group
+📧 zayne_jin@trimanshipping.com | 📱 +86 18487665870 | 🌐 www.yqn.com
+```
+
+---
+
 ## 四、快速组装速查表
 
 > 选好对象类型和跟进阶段 → 按列取值 → 替换占位符 → 完成。

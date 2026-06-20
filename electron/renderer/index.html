@@ -83,6 +83,7 @@
         <button type="button" class="cf-tab" data-filter="agent">🌐 代理</button>
         <button type="button" class="cf-tab" data-filter="direct">🏭 直客</button>
         <button type="button" class="cf-tab" data-filter="unlabeled">❓ 未标签</button>
+        <button type="button" class="cf-tab" data-filter="archived">📦 已归档</button>
       </div>
       <div class="contacts-layout" id="contacts-layout" style="display:none">
         <div class="contacts-sidebar" id="contacts-sidebar">
@@ -164,6 +165,18 @@
           </div>
           <div class="send-company-cards" id="send-company-cards">
             <p class="placeholder" id="send-cards-empty">← 勾选左侧公司</p>
+          </div>
+
+          <!-- 📊 月度报告（归档客户） -->
+          <div id="monthly-report-section" style="margin-top:16px;padding:12px;background:#f8f9fb;border-radius:8px;border:1px solid var(--border);display:none">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span style="font-weight:600;font-size:13px">📊 月度报告</span>
+              <span id="monthly-archived-count" style="font-size:11px;color:var(--text-secondary)"></span>
+            </div>
+            <textarea id="monthly-market-context" rows="3" style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit" placeholder="市场动态（可选）&#10;例如：曼萨尼约港等泊降至3-5天，南美西航线运价回落..."></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+              <button id="monthly-generate-btn" style="font-size:12px;padding:5px 14px">📧 生成月度报告</button>
+            </div>
           </div>
         </div>
       </div>
