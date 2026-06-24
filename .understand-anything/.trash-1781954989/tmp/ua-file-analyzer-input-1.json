@@ -1,0 +1,15 @@
+{
+  "projectRoot": "E:/Agents Basement/projects/Prospecting Email",
+  "batchFiles": [
+    {"path": "CLAUDE.md", "language": "markdown", "sizeLines": 109, "fileCategory": "docs"},
+    {"path": "README.md", "language": "markdown", "sizeLines": 125, "fileCategory": "docs"},
+    {"path": "package.json", "language": "json", "sizeLines": 26, "fileCategory": "config"},
+    {"path": "启动工具.bat", "language": "batch", "sizeLines": 4, "fileCategory": "script"}
+  ],
+  "batchImportData": {
+    "CLAUDE.md": [],
+    "README.md": [],
+    "package.json": [],
+    "启动工具.bat": []
+  }
+}

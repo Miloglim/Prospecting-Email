@@ -1,0 +1,98 @@
+{
+  "nodes": [
+    {
+      "id": "config:data/backcheck-status.json",
+      "type": "config",
+      "name": "backcheck-status.json",
+      "filePath": "data/backcheck-status.json",
+      "summary": "公司背调任务状态追踪文件，记录 13 家拉美目标客户的背调进度、评级、完成时间和结果状态（done/error/no_results），由 send/status.js 读取以判断背调是否完成。",
+      "tags": ["configuration", "status-tracking", "backcheck", "data-store"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:data/contacts.json",
+      "type": "config",
+      "name": "contacts.json",
+      "filePath": "data/contacts.json",
+      "summary": "联系人数据库主文件（约 47K 行），存储拉美潜客的联系信息，包含公司名、邮箱、国家、品类、职位、客户分类及添加时间等字段，是开发信发送的核心数据源。",
+      "tags": ["contacts-database", "data-store", "customer-data", "lead-management"],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:data/send-history.json",
+      "type": "config",
+      "name": "send-history.json",
+      "filePath": "data/send-history.json",
+      "summary": "发送历史记录占位文件，当前为空对象，用于后续记录已发送开发信的追踪信息（如发送时间、目标邮箱、状态等）。",
+      "tags": ["send-history", "data-store", "placeholder", "tracking"],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:data/signatures.json",
+      "type": "config",
+      "name": "signatures.json",
+      "filePath": "data/signatures.json",
+      "summary": "邮件签名模板配置文件，存储默认签名（含姓名、职位、公司、联系方式等 HTML 格式内容），供开发信发送时拼接到邮件正文末尾。",
+      "tags": ["email-signature", "template", "configuration", "sender-identity"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "config:data/contacts.json",
+      "target": "config:data/backcheck-status.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/backcheck-status.json",
+      "target": "config:data/send-history.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/contacts.json",
+      "target": "config:data/send-history.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/signatures.json",
+      "target": "config:data/contacts.json",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:data/backcheck-status.json",
+      "target": "file:electron/main.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:data/contacts.json",
+      "target": "file:electron/main.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:data/send-history.json",
+      "target": "file:electron/main.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:data/signatures.json",
+      "target": "file:electron/main.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    }
+  ]
+}

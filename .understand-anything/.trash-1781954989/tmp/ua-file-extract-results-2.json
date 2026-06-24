@@ -1,0 +1,130 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 4,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "data/backcheck-status.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 80,
+      "nonEmptyLines": 80,
+      "sections": [
+        {
+          "heading": "VOSS Automotive Brasil",
+          "level": 1,
+          "line": 2
+        },
+        {
+          "heading": "Schadek Automotive",
+          "level": 1,
+          "line": 8
+        },
+        {
+          "heading": "Dae Dong System De Mexico S.a De C.v.",
+          "level": 1,
+          "line": 14
+        },
+        {
+          "heading": "Radec S.a De C.v.",
+          "level": 1,
+          "line": 20
+        },
+        {
+          "heading": "AETHRA GROUP - Automotive Systems",
+          "level": 1,
+          "line": 26
+        },
+        {
+          "heading": "Nexteer Automotive México",
+          "level": 1,
+          "line": 32
+        },
+        {
+          "heading": "Racing Cargo",
+          "level": 1,
+          "line": 38
+        },
+        {
+          "heading": "BENEFICIADORA DE ALAMBRES Y METALES S.A DE C.V.",
+          "level": 1,
+          "line": 44
+        },
+        {
+          "heading": "avianca cargo",
+          "level": 1,
+          "line": 50
+        },
+        {
+          "heading": "Xinquan México Automotive Trim Ags",
+          "level": 1,
+          "line": 56
+        },
+        {
+          "heading": "Viemar Automotive",
+          "level": 1,
+          "line": 62
+        },
+        {
+          "heading": "Mando Corporation",
+          "level": 1,
+          "line": 68
+        },
+        {
+          "heading": "SMC AUTOMACAO DO BRASIL LTDA",
+          "level": 1,
+          "line": 74
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 13
+      }
+    },
+    {
+      "path": "data/contacts.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 47257,
+      "nonEmptyLines": 47257,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 0
+      }
+    },
+    {
+      "path": "data/send-history.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 1,
+      "nonEmptyLines": 1,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 0
+      }
+    },
+    {
+      "path": "data/signatures.json",
+      "language": "json",
+      "fileCategory": "config",
+      "totalLines": 7,
+      "nonEmptyLines": 7,
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0,
+        "sectionCount": 0
+      }
+    }
+  ]
+}

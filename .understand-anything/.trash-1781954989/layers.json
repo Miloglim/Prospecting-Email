@@ -1,0 +1,75 @@
+[
+  {
+    "id": "layer:application",
+    "name": "应用层",
+    "description": "Electron 桌面应用核心，包含主进程（窗口管理、IPC 通信、子进程调度）、预加载安全桥接、渲染进程界面逻辑（联系人管理、发送面板、背调面板、签名编辑）及邮件模板引擎",
+    "nodeIds": [
+      "file:electron/main.js",
+      "file:electron/preload.js",
+      "file:electron/renderer/app.js",
+      "file:electron/renderer/icons.js",
+      "file:electron/renderer/index.html",
+      "file:electron/renderer/styles.css",
+      "file:electron/template-engine.js"
+    ]
+  },
+  {
+    "id": "layer:service",
+    "name": "服务层",
+    "description": "邮件发送与数据处理脚本集合，包含 SMTP 批量发送、背调报告解析提取、CSV 客户表导入、发送状态统计监控、邮件签名模板及发送配置",
+    "nodeIds": [
+      "file:send/send.js",
+      "file:send/extract.js",
+      "file:send/import-csv.js",
+      "file:send/status.js",
+      "file:send/signature.html",
+      "file:send/send-log.json.tmp",
+      "config:send/config.example.json"
+    ]
+  },
+  {
+    "id": "layer:data",
+    "name": "数据层",
+    "description": "运行时数据持久化存储，包含联系人主数据库、背调状态追踪、发送历史记录及邮件签名模板配置",
+    "nodeIds": [
+      "config:data/contacts.json",
+      "config:data/backcheck-status.json",
+      "config:data/send-history.json",
+      "config:data/signatures.json"
+    ]
+  },
+  {
+    "id": "layer:documentation",
+    "name": "文档层",
+    "description": "项目文档与知识资产，包含公司背调事实库、邮件写作规范与排版标准、UI 设计方案与实施计划、通用开发信模板库、已生成的客户背调报告、项目总览说明及 AI 技能定义",
+    "nodeIds": [
+      "document:README.md",
+      "document:CLAUDE.md",
+      "document:docs/company-data.md",
+      "document:docs/email-standard.md",
+      "document:docs/email-writing-rules.md",
+      "document:docs/plans/2026-06-18-electron-implementation-plan.md",
+      "document:docs/plans/2026-06-18-electron-ui-design.md",
+      "document:templates/general-templates.md",
+      "document:reports/客户背调-Mando Corporation-zh.md",
+      "document:reports/客户背调-Mando Corporation.md",
+      "document:reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md",
+      "document:reports/客户背调-Viemar Automotive.md",
+      "document:reports/客户背调-VOSS Automotive Brasil-zh.md",
+      "document:reports/客户背调-VOSS Automotive Brasil.md",
+      "document:.claude/skills/company-researcher/SKILL.md"
+    ]
+  },
+  {
+    "id": "layer:config",
+    "name": "配置层",
+    "description": "项目级配置与独立工具脚本，包含 npm 依赖与脚本声明、代码分析工具设置、Windows 启动批处理及数据修复脚本",
+    "nodeIds": [
+      "config:package.json",
+      "config:.understand-anything/config.json",
+      "file:.understand-anything/.understandignore",
+      "file:启动工具.bat",
+      "file:fix-provider.js"
+    ]
+  }
+]

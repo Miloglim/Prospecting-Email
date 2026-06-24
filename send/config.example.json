@@ -16,11 +16,22 @@
     "imageUrl": ""
   },
   "schedule": {
+    "mode": "multi",
     "max_per_day": 500,
     "start_hour_beijing": 19,
     "end_hour_beijing": 3,
-    "min_delay_seconds": 45,
-    "max_delay_seconds": 120
+    "min_delay_seconds": 30,
+    "max_delay_seconds": 90,
+    "company_delay_min_seconds": 300,
+    "company_delay_max_seconds": 900,
+    "single_recip_delay_min": 60,
+    "single_recip_delay_max": 180,
+    "template_rotate_interval": 50,
+    "batch_size": 10,
+    "batch_pause_min": 150,
+    "batch_pause_max": 210,
+    "batch_size": 20,
+    "batch_pause_seconds": 600
   },
   "tracking": {
     "file": "send-log.json",
@@ -32,6 +43,9 @@
   "test": {
     "email": "",
     "enabled": false
+  },
+  "backcheck": {
+    "filterEnabled": true
   },
   "translate": {
     "youdao": {

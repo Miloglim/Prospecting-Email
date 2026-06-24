@@ -5,15 +5,15 @@
   "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
-    "start": "electron .",
-    "extract": "node send/extract.js",
-    "import-csv": "node send/import-csv.js",
-    "send": "node send/send.js",
-    "status": "node send/status.js"
+    "start": "electron ."
   },
   "dependencies": {
+    "cheerio": "^1.2.0",
     "imap": "^0.8.19",
     "nodemailer": "^6.9.0",
+    "puppeteer": "^25.1.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

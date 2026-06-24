@@ -1,0 +1,75 @@
+{
+  "nodes": [
+    {
+      "id": "document:docs/company-data.md",
+      "type": "document",
+      "name": "company-data.md",
+      "filePath": "docs/company-data.md",
+      "summary": "YQN物流公司核心资料事实库，包含全球员工规模、品牌背书、墨西哥本地化能力、拉美航线数据、清关合规、2025-2026墨西哥重大政策及竞品对比等关键数据，用于开发信中引用真实数字建立客户信任。",
+      "tags": ["documentation", "公司数据", "物流", "拉美", "参考数据"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/email-standard.md",
+      "type": "document",
+      "name": "email-standard.md",
+      "filePath": "docs/email-standard.md",
+      "summary": "开发信标准排版规范文档，定义纯文本邮件格式规则（段落间隔、行宽、强调方式、签名档、链接写法），包含标准渲染示例与JSON模板body字段写法，对比混乱版与标准版以警示常见排版错误。",
+      "tags": ["documentation", "排版规范", "邮件格式", "模板", "开发信"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:docs/email-writing-rules.md",
+      "type": "document",
+      "name": "email-writing-rules.md",
+      "filePath": "docs/email-writing-rules.md",
+      "summary": "拉美B2B冷邮件开发信写作准则，定义黄金公式（Hook+Pain Point+Proof+CTA）、视角铁律、九条硬约束、三条铁律，涵盖拉美各国文化适配、跟进节奏、西语关键措辞及西班牙语质量检查清单，作为AI生成开发信的核心写作规范。",
+      "tags": ["documentation", "写作准则", "冷邮件", "拉美", "b2b"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:docs/company-data.md",
+      "target": "file:send/status.js",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/email-standard.md",
+      "target": "file:send/status.js",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/email-writing-rules.md",
+      "target": "file:send/status.js",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/company-data.md",
+      "target": "document:docs/email-standard.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/company-data.md",
+      "target": "document:docs/email-writing-rules.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:docs/email-standard.md",
+      "target": "document:docs/email-writing-rules.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

@@ -4,15 +4,33 @@ node_modules/
 # CodeGraph 本地索引
 .codegraph/
 
-# 敏感配置（含 SMTP 密码）
+# 敏感配置（含 SMTP 密码、API 密钥）
 send/config.json
+send/config.example.json
 
-# 发送日志与队列（运行时数据）
+# 进程日志（运行时诊断）
+logs/
+
+# 发送日志与队列（运行时数据，含收件人邮箱）
 send/send-log.json
+send/send-log-test.json
+send/session-log.json
 send/send-batch.json
+send/bodies.json
 
-# 背调请求文件（临时）
-reports/背调请求-*.md
+# 用户个人数据（含邮箱、姓名、手机号）
+data/contacts.json
+data/signatures.json
+data/send-history.json
+data/backcheck-status.json
+data/bounce-log.json
+data/bounce-check-cursor.json
+data/send-state.json
+data/email-queue.json
+data/template-overrides.json
+
+# 背调报告（含邮箱、地址）
+reports/
 
 # 用户数据文件
 *.csv

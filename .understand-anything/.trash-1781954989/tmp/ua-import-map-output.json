@@ -1,0 +1,50 @@
+{
+  "scriptCompleted": true,
+  "stats": {
+    "filesScanned": 38,
+    "filesWithImports": 1,
+    "totalEdges": 1
+  },
+  "importMap": {
+    ".claude/skills/company-researcher/SKILL.md": [],
+    ".understand-anything/.understandignore": [],
+    ".understand-anything/config.json": [],
+    "启动工具.bat": [],
+    "CLAUDE.md": [],
+    "data/backcheck-status.json": [],
+    "data/contacts.json": [],
+    "data/send-history.json": [],
+    "data/signatures.json": [],
+    "docs/company-data.md": [],
+    "docs/email-standard.md": [],
+    "docs/email-writing-rules.md": [],
+    "docs/plans/2026-06-18-electron-implementation-plan.md": [],
+    "docs/plans/2026-06-18-electron-ui-design.md": [],
+    "electron/main.js": [
+      "electron/template-engine.js"
+    ],
+    "electron/preload.js": [],
+    "electron/renderer/app.js": [],
+    "electron/renderer/icons.js": [],
+    "electron/renderer/index.html": [],
+    "electron/renderer/styles.css": [],
+    "electron/template-engine.js": [],
+    "fix-provider.js": [],
+    "package.json": [],
+    "README.md": [],
+    "reports/客户背调-Mando Corporation-zh.md": [],
+    "reports/客户背调-Mando Corporation.md": [],
+    "reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md": [],
+    "reports/客户背调-Viemar Automotive.md": [],
+    "reports/客户背调-VOSS Automotive Brasil-zh.md": [],
+    "reports/客户背调-VOSS Automotive Brasil.md": [],
+    "send/config.example.json": [],
+    "send/extract.js": [],
+    "send/import-csv.js": [],
+    "send/send-log.json.tmp": [],
+    "send/send.js": [],
+    "send/signature.html": [],
+    "send/status.js": [],
+    "templates/general-templates.md": []
+  }
+}

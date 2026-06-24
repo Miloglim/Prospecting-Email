@@ -1,0 +1,15 @@
+{
+  "projectRoot": "E:/Agents Basement/projects/Prospecting Email",
+  "batchFiles": [
+    {"path": "data/backcheck-status.json", "language": "json", "sizeLines": 79, "fileCategory": "config"},
+    {"path": "data/contacts.json", "language": "json", "sizeLines": 47256, "fileCategory": "config"},
+    {"path": "data/send-history.json", "language": "json", "sizeLines": 0, "fileCategory": "config"},
+    {"path": "data/signatures.json", "language": "json", "sizeLines": 6, "fileCategory": "config"}
+  ],
+  "batchImportData": {
+    "data/backcheck-status.json": [],
+    "data/contacts.json": [],
+    "data/send-history.json": [],
+    "data/signatures.json": []
+  }
+}

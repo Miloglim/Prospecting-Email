@@ -1,0 +1,98 @@
+{
+  "nodes": [
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "Claude Code 项目指令文件，定义拉美开发信工具的使用方法、输入格式要求、输出规范、目标市场及背调多平台搜索 SOP（P0-P3 优先级并行搜索策略）与工具索引。",
+      "tags": ["documentation", "agent-instructions", "project-config", "search-sop"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目总览文档，涵盖功能矩阵（背调/开发信/自动发送/通用模板/飞书对接）、三步使用流程、完整文件结构、模板系统设计（3 类客户 × 5 跟进阶段）、关键写作约束及依赖说明。",
+      "tags": ["documentation", "overview", "usage-guide", "entry-point"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "config:package.json",
+      "type": "config",
+      "name": "package.json",
+      "filePath": "package.json",
+      "summary": "Node.js 项目配置文件，定义包名 prospecting-email-send、Electron 桌面应用入口（electron/main.js）、npm scripts（start/extract/send/status）及 nodemailer/puppeteer/xlsx 等核心依赖。",
+      "tags": ["configuration", "nodejs", "electron", "build-system"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:启动工具.bat",
+      "type": "file",
+      "name": "启动工具.bat",
+      "filePath": "启动工具.bat",
+      "summary": "Windows 批处理启动脚本，切换控制台为 UTF-8 编码后进入项目目录并执行 npm start 启动 Electron 桌面应用。",
+      "tags": ["entry-point", "launcher", "windows"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:README.md",
+      "target": "document:CLAUDE.md",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "config:package.json",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:send/send.js",
+      "type": "documents",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:electron/main.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "config:package.json",
+      "target": "file:send/send.js",
+      "type": "configures",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "file:启动工具.bat",
+      "target": "config:package.json",
+      "type": "depends_on",
+      "direction": "forward",
+      "weight": 0.6
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "config:package.json",
+      "target": "document:README.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

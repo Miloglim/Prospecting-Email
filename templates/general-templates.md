@@ -24,13 +24,13 @@
 
 #### Hook — 阿根廷变体（vos）
 
-| 编号 | 西语（🇦🇷 vos） | 葡语 | 英语 |
+| 编号 | 西语（🇦🇷 vos） | 英语 |
 |:---:|------|------|
-| H-A1 | Espero que estés teniendo una buena semana. | — | Hope you're having a good week. |
-| H-A2 | Espero que todo marche bien en tu operación. | — | Hope everything's going smoothly on your end. |
-| H-A3 | Te escribo porque estuve revisando las condiciones del mercado. | — | Writing after checking current market conditions. |
-| H-A4 | Pensé en vos al ver los movimientos recientes en esta ruta. | — | I thought of you seeing the recent activity on this route. |
-| H-A5 | Quería compartirte algo que puede servir para tu operatoria. | — | Wanted to share something that might help your operations. |
+| H-A1 | Espero que estés teniendo una buena semana. | Hope you're having a good week. |
+| H-A2 | Espero que todo marche bien en tu operación. | Hope everything's going smoothly on your end. |
+| H-A3 | Te escribo porque estuve revisando las condiciones del mercado. | Writing after checking current market conditions. |
+| H-A4 | Pensé en vos al ver los movimientos recientes en esta ruta. | I thought of you seeing the recent activity on this route. |
+| H-A5 | Quería compartirte algo que puede servir para tu operatoria. | Wanted to share something that might help your operations. |
 
 ### 1.2 Pain Point — 代理专用
 
@@ -215,10 +215,11 @@
 
 #### 主题行（全序列统一）
 
-|  | 语言 | — |  |
-|:---:|------|
+| 语言 | 主题行 |
+|------|------|
 | 🇲🇽 西语 | Más opciones de naviera — a tu alcance |
-|  | 🇬🇧 英语 | — |  |
+| 🇧🇷 葡语 | Mais opções de armador — ao seu alcance |
+| 🇬🇧 英语 | More carrier options — within your reach |
 
 ---
 
@@ -542,10 +543,11 @@ YQN Logistics Technology Group
 
 #### 主题行（全序列统一）
 
-|  | 语言 | — |  |
-|:---:|------|
+| 语言 | 主题行 |
+|------|------|
 | 🇲🇽 西语 | Respaldo aduanal — por si algún día lo necesitas |
-|  | 🇬🇧 英语 | — |  |
+| 🇧🇷 葡语 | Respaldo aduaneiro — para quando você precisar |
+| 🇬🇧 英语 | Customs backup — for when you need it |
 
 ---
 
@@ -868,10 +870,11 @@ YQN Logistics Technology Group
 
 #### 主题行（全序列统一）
 
-|  | 语言 | — |  |
-|:---:|------|
+| 语言 | 主题行 |
+|------|------|
 | 🇲🇽 西语 | Optimizando tu logística — una opción a considerar |
-|  | 🇬🇧 英语 | — |  |
+| 🇧🇷 葡语 | Otimizando sua logística — uma opção a considerar |
+| 🇬🇧 英语 | Optimizing your logistics — an option to consider |
 
 ---
 

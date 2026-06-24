@@ -1,0 +1,74 @@
+{
+  "nodes": [
+    {
+      "id": "document:reports/客户背调-Mando Corporation-zh.md",
+      "type": "document",
+      "name": "客户背调-Mando Corporation-zh.md",
+      "filePath": "reports/客户背调-Mando Corporation-zh.md",
+      "summary": "Mando Corporation 公司背调报告中文版，涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估七个章节。",
+      "tags": ["backcheck", "report", "company-profile", "automotive", "chinese-translation"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:reports/客户背调-Mando Corporation.md",
+      "type": "document",
+      "name": "客户背调-Mando Corporation.md",
+      "filePath": "reports/客户背调-Mando Corporation.md",
+      "summary": "Mando Corporation 公司背调报告原文版（西语/英语），涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估七个章节，为中文版的源文件。",
+      "tags": ["backcheck", "report", "company-profile", "automotive", "latin-america"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md",
+      "type": "document",
+      "name": "客户背调-SMC AUTOMACAO DO BRASIL LTDA.md",
+      "filePath": "reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md",
+      "summary": "SMC AUTOMACAO DO BRASIL LTDA 公司背调报告（葡语），涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估，为单一语言版本。",
+      "tags": ["backcheck", "report", "company-profile", "industrial-automation", "latin-america"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:reports/客户背调-VOSS Automotive Brasil-zh.md",
+      "type": "document",
+      "name": "客户背调-VOSS Automotive Brasil-zh.md",
+      "filePath": "reports/客户背调-VOSS Automotive Brasil-zh.md",
+      "summary": "VOSS Automotive Brasil 公司背调报告中文版，涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估七个章节。",
+      "tags": ["backcheck", "report", "company-profile", "automotive", "chinese-translation"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:reports/客户背调-VOSS Automotive Brasil.md",
+      "type": "document",
+      "name": "客户背调-VOSS Automotive Brasil.md",
+      "filePath": "reports/客户背调-VOSS Automotive Brasil.md",
+      "summary": "VOSS Automotive Brasil 公司背调报告原文版（葡语/英语），涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估七个章节，为中文版的源文件。",
+      "tags": ["backcheck", "report", "company-profile", "automotive", "latin-america"],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:reports/客户背调-Viemar Automotive.md",
+      "type": "document",
+      "name": "客户背调-Viemar Automotive.md",
+      "filePath": "reports/客户背调-Viemar Automotive.md",
+      "summary": "Viemar Automotive 公司背调报告（葡语/英语混合），在六份报告中内容最丰富，涵盖公司概况、业务描述、详情、贸易活动、近期动态及开发价值评估七个章节。",
+      "tags": ["backcheck", "report", "company-profile", "automotive", "latin-america"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:reports/客户背调-Mando Corporation-zh.md",
+      "target": "document:reports/客户背调-Mando Corporation.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    },
+    {
+      "source": "document:reports/客户背调-VOSS Automotive Brasil-zh.md",
+      "target": "document:reports/客户背调-VOSS Automotive Brasil.md",
+      "type": "related",
+      "direction": "forward",
+      "weight": 0.5
+    }
+  ]
+}

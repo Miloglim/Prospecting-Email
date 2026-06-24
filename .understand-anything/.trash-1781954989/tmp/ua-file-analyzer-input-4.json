@@ -1,0 +1,19 @@
+{
+  "projectRoot": "E:/Agents Basement/projects/Prospecting Email",
+  "batchFiles": [
+    {"path": "reports/客户背调-Mando Corporation-zh.md", "language": "markdown", "sizeLines": 80, "fileCategory": "docs"},
+    {"path": "reports/客户背调-Mando Corporation.md", "language": "markdown", "sizeLines": 80, "fileCategory": "docs"},
+    {"path": "reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md", "language": "markdown", "sizeLines": 67, "fileCategory": "docs"},
+    {"path": "reports/客户背调-VOSS Automotive Brasil-zh.md", "language": "markdown", "sizeLines": 53, "fileCategory": "docs"},
+    {"path": "reports/客户背调-VOSS Automotive Brasil.md", "language": "markdown", "sizeLines": 53, "fileCategory": "docs"},
+    {"path": "reports/客户背调-Viemar Automotive.md", "language": "markdown", "sizeLines": 91, "fileCategory": "docs"}
+  ],
+  "batchImportData": {
+    "reports/客户背调-Mando Corporation-zh.md": [],
+    "reports/客户背调-Mando Corporation.md": [],
+    "reports/客户背调-SMC AUTOMACAO DO BRASIL LTDA.md": [],
+    "reports/客户背调-VOSS Automotive Brasil-zh.md": [],
+    "reports/客户背调-VOSS Automotive Brasil.md": [],
+    "reports/客户背调-Viemar Automotive.md": []
+  }
+}

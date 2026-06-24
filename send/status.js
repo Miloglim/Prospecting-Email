@@ -11,8 +11,11 @@ if (!fs.existsSync(logFile)) {
 
 const log = JSON.parse(fs.readFileSync(logFile, "utf-8"));
 
-const today = new Date().toISOString().slice(0, 10);
-const todaySent = log.sent.filter((r) => r.time.startsWith(today));
+const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+const todaySent = log.sent.filter((r) => {
+  if (r.time_beijing) return r.time_beijing === today;
+  return r.time && new Date(r.time).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }) === today;
+});
 
 const succeeded = log.sent.filter((r) => r.status === "sent");
 const failed = log.sent.filter((r) => r.status === "failed");
