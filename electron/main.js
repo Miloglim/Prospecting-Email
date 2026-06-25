@@ -8,9 +8,18 @@ const XLSX = require('xlsx');
 const https = require('https');
 const cheerio = require('cheerio');
 const http = require('http');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
+// ponytail: lazy require，打包后无 puppeteer 时优雅降级
+let _puppeteer = null;
+function getPuppeteer() {
+  if (_puppeteer !== null) return _puppeteer;
+  try {
+    const p = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    p.use(StealthPlugin());
+    _puppeteer = p;
+    return _puppeteer;
+  } catch (e) { _puppeteer = false; console.log('[降级] puppeteer 不可用，DDG 搜索已禁用'); return null; }
+}
 const { execSync, spawn } = require('child_process');
 
 // ── 配置读取（模块级，proxy/network/translate 共用）─────────────────
@@ -877,7 +886,9 @@ function setupIPC() {
   async function ddgSearch(cname) {
     let browser;
     try {
-      browser = await puppeteer.launch({
+      const p = getPuppeteer();
+      if (!p) return '';  // 降级：无 Puppeteer 时跳过
+      browser = await p.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled', '--proxy-server=127.0.0.1:7890'],
         timeout: 30000,
