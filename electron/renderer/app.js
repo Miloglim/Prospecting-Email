@@ -44,6 +44,8 @@ async function loadQueue() {
 }
 let unsubscribeProgress = null;
 let sendInProgress = false;
+let autoBounceTimer = null;
+let nextBounceScanAt = 0;
 let clientsData = [];
 let contactsData = [];
 let clientsPage = 1;
@@ -53,6 +55,9 @@ const PAGE_SIZE = 100;
 const navItems = document.querySelectorAll('.nav-item');
 const navSubs = document.querySelectorAll('.nav-sub');
 const pages = document.querySelectorAll('.page');
+let lastBackcheckProvider = 'deep-research'; // 记忆引擎选择
+let currentBackcheckCompany = null; // 当前背调公司
+let currentBackcheckDetail = null;   // 当前背调报告缓存
 
 // 父级导航：切换子菜单展开
 document.querySelector('.nav-parent')?.addEventListener('click', function(e) {
@@ -81,7 +86,7 @@ document.querySelector('.nav-parent')?.addEventListener('click', function(e) {
     if (pageId === 'dashboard') loadDashboard();
     if (pageId === 'clients') renderClientsTable();
     if (pageId === 'contacts') loadContacts();
-    if (pageId === 'backcheck') loadBackcheck();
+    if (pageId === 'backcheck') { currentBackcheckCompany = null; loadBackcheck(); }
     if (pageId === 'template-editor') initTemplateEditor();
     if (pageId === 'signature') initSignature();
     if (pageId === 'template-preview') initTemplatePreview();
@@ -374,7 +379,7 @@ function renderContactsList(filtered) {
       const tagHtml = clientTypeTag(ctype);
       const ctry = escapeHtml(members[0]?.country || '');
       const hist = contactsSendHistory[company];
-      const stageLabel = hist?.stage ? `<span class="ci-stage-badge">${STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
+      const stageLabel = hist?.stage ? `<span class="ci-stage-badge ci-stage-${hist.stage}">${STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
       const vipClass = members.length >= 5 ? ' ci-vip' : '';
       const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
       return `
@@ -445,7 +450,10 @@ function renderContactDetail(company) {
   const hist = contactsSendHistory[company];
   const isArchived = hist?.stage === 'archived';
   detail.innerHTML = `
-    <div class="contacts-detail-header">${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</div>
+    <div class="contacts-detail-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
+      <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px;margin-left:auto">🔬 背调</button>
+    </div>
     <div class="contacts-detail-body">
       <table>
         <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>状态</th><th>添加时间</th><th>操作</th></tr></thead>
@@ -517,6 +525,21 @@ function renderContactDetail(company) {
     });
   });
 
+  // 发起背调按钮
+  const bcBtn = document.getElementById('btn-backcheck-contact');
+  if (bcBtn) {
+    bcBtn.addEventListener('click', async () => {
+      const contact = members[0];
+      if (!contact) return;
+      showToast(`正在启动 ${company} 背调...`, 'ok');
+      const result = await window.electronAPI.startResearch(contact, 'deep-research');
+      if (!result.ok) { showToast(result.message || '启动失败', 'err'); return; }
+      discoverPreselectCompany = company;
+      const nav = document.querySelector('[data-page="backcheck"]');
+      if (nav) nav.click();
+    });
+  }
+
   // 重新激活按钮
   const reactBtn = document.getElementById('btn-reactivate-contact');
   if (reactBtn) {
@@ -556,7 +579,11 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
 });
 
 // ===== 背调详情 ======================================================
+let networkStatusDismissed = false;
+let foreignNetworkOk = true; // 境外网络可达性
+
 async function checkNetworkStatus() {
+  if (networkStatusDismissed) return;
   const el = document.getElementById('network-status');
   const text = document.getElementById('network-status-text');
   if (!el || !text) return;
@@ -566,6 +593,7 @@ async function checkNetworkStatus() {
     const r = await window.electronAPI.checkNetwork();
     const proxyInfo = r.proxy ? ` 代理: ${r.proxy}` : ' 无代理';
     const bad = r.results.filter(x => !x.ok);
+    foreignNetworkOk = bad.length === 0;
     if (bad.length === 0) {
       el.style.background = '#e8f5e9'; text.innerHTML = `${lucide('check-circle',12)} 网络正常${proxyInfo}`;
     } else if (bad.length <= 2) {
@@ -575,12 +603,20 @@ async function checkNetworkStatus() {
     }
   } catch {
     el.style.background = '#ffebee'; text.innerHTML = `${lucide('x-circle',12)} 网络检测失败`;
+    foreignNetworkOk = false;
   }
 }
 
 async function loadBackcheck() {
   const container = document.getElementById('backcheck-companies');
   if (!container) return;
+
+  // 只在首次进入（无选中公司）时重置，内部刷新不动工具栏
+  if (!currentBackcheckCompany) {
+    const toolbar = document.getElementById('backcheck-toolbar');
+    if (toolbar) { toolbar.innerHTML = ''; toolbar.style.display = 'none'; }
+    currentBackcheckDetail = null;
+  }
 
   // 网络状态检查
   checkNetworkStatus();
@@ -623,7 +659,12 @@ async function loadBackcheck() {
     return;
   }
 
-  container.innerHTML = groups.map(([company, members]) => {
+  container.innerHTML = '<div id="bc-batch-bar" style="display:flex;align-items:center;gap:6px;padding:3px 6px 3px 0;margin-bottom:4px;border-bottom:1px solid var(--border);font-size:11px">'
+    + '<button id="bc-research-all" style="font-size:10px;padding:1px 8px;cursor:pointer;white-space:nowrap">全部调查</button>'
+    + '<span id="bc-selected-count" style="color:var(--text-secondary);font-size:10px;flex:1"></span>'
+    + '<button id="bc-toggle-all" style="font-size:10px;padding:1px 6px;cursor:pointer;white-space:nowrap">选择</button>'
+    + '</div>'
+    + groups.map(([company, members]) => {
     const st = status[company];
     const ctype = members[0]?.clientType || 'unlabeled';
     const tagHtml = clientTypeTag(ctype);
@@ -632,29 +673,66 @@ async function loadBackcheck() {
     let badge = lucide('square',14);
     if (st?.status === 'researching' || st?.status === 'pending') badge = lucide('refresh-cw',14,'spin');
     else if (st?.status === 'timeout') badge = lucide('clock',14);
-    else if (st?.status === 'done') badge = st.rating ? ratingStars(st.rating) : lucide('check-circle',14);
+    else if (st?.status === 'done') badge = st.rating ? '' : lucide('check-circle',14);
+    const ratingText = (st?.status === 'done' && st.rating) ? ratingStars(st.rating) : '';
     const subParts = [tagHtml, ctry].filter(Boolean);
     return `<div class="backcheck-company" data-company="${escapeHtml(company)}">
-      <div class="bc-main"><span class="bc-name${vipClass}">${escapeHtml(company)}</span><span class="bc-badge">${badge}</span><span class="bc-count">${members.length}人</span></div>
+      <div class="bc-main"><input type="checkbox" class="bc-checkbox" data-company="${escapeHtml(company)}" style="width:11px;height:11px;flex-shrink:0;margin:0" onclick="event.stopPropagation()"><span class="bc-name${vipClass}">${escapeHtml(company)}</span><span class="bc-badge">${badge}</span><span class="bc-count">${members.length}人</span></div>
+      ${ratingText ? `<div class="bc-sub">${ratingText}</div>` : ''}
       <div class="bc-sub">${subParts.join(' · ')}</div>
     </div>`;
   }).join('');
 
+  // 批量操作按钮
+  let bcSelectMode = false;
+  document.getElementById('bc-toggle-all')?.addEventListener('click', function() {
+    bcSelectMode = !bcSelectMode;
+    this.textContent = bcSelectMode ? '取消选择' : '选择';
+    this.style.background = bcSelectMode ? 'var(--primary)' : '';
+    this.style.color = bcSelectMode ? '#fff' : '';
+    container.querySelectorAll('.bc-checkbox').forEach(cb => { cb.checked = bcSelectMode; });
+    updateBcSelectedCount();
+  });
+  document.getElementById('bc-research-all')?.addEventListener('click', async () => {
+    const cbs = container.querySelectorAll('.bc-checkbox:checked');
+    const list = cbs.length ? [...cbs] : container.querySelectorAll('.bc-checkbox');
+    if (!list.length) return;
+    if (!confirm(`即将对 ${list.length} 家公司启动背调，确认？`)) return;
+    for (const cb of list) {
+      const cname = cb.dataset.company;
+      const contact = contactsData.find(c => (c.company || '').trim() === cname);
+      if (!contact) continue;
+      await window.electronAPI.startResearch(contact, lastBackcheckProvider);
+      const badgeEl = cb.closest('.backcheck-company')?.querySelector('.bc-badge');
+      if (badgeEl) badgeEl.innerHTML = lucide('refresh-cw',14,'spin');
+    }
+    showToast(`已启动 ${list.length} 家公司背调`, 'ok');
+  });
+  function updateBcSelectedCount() {
+    const cnt = container.querySelectorAll('.bc-checkbox:checked').length;
+    const total = container.querySelectorAll('.bc-checkbox').length;
+    const el = document.getElementById('bc-selected-count');
+    if (el) el.textContent = cnt ? `已选 ${cnt}/${total} 家` : `共 ${total} 家`;
+  }
+  container.addEventListener('change', (e) => {
+    if (e.target.classList.contains('bc-checkbox')) updateBcSelectedCount();
+  });
+  updateBcSelectedCount();
+
   let selectedCompany = null;
 
   container.querySelectorAll('.backcheck-company').forEach(el => {
-    el.addEventListener('click', async () => {
+    el.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('bc-checkbox')) return;
       container.querySelectorAll('.backcheck-company').forEach(e => e.classList.remove('active'));
       el.classList.add('active');
       selectedCompany = el.dataset.company;
 
-      // 每次点击重新读取最新状态 + 背调数据
       const [detail, freshStatus] = await Promise.all([
         window.electronAPI.getBackcheckDetail(selectedCompany),
         window.electronAPI.getBackcheckStatus(),
       ]);
 
-      // 如果报告有星级但状态文件没有，自动同步
       const currentSt = freshStatus[selectedCompany];
       if (detail?.rating > 0 && (!currentSt?.rating || currentSt.rating !== detail.rating)) {
         await window.electronAPI.markBackcheckDone(selectedCompany, detail.rating);
@@ -663,20 +741,213 @@ async function loadBackcheck() {
 
       renderBackcheckCard(detail, selectedCompany, freshStatus[selectedCompany]);
 
-      // 更新列表中该公司的状态图标
       const updatedSt = freshStatus[selectedCompany];
       let badge = lucide('square',14);
       if (updatedSt?.status === 'researching' || updatedSt?.status === 'pending') badge = lucide('refresh-cw',14,'spin');
-      else if (updatedSt?.status === 'done') badge = updatedSt.rating ? ratingStars(updatedSt.rating) : lucide('check-circle',14);
+      else if (updatedSt?.status === 'done') badge = updatedSt.rating ? '' : lucide('check-circle',14);
       const badgeEl = el.querySelector('.bc-badge');
       if (badgeEl) badgeEl.innerHTML = badge;
     });
   });
+
+  // 从客户开发页面预选跳转 → 自动点击对应公司
+  if (discoverPreselectCompany) {
+    const target = container.querySelector(`.backcheck-company[data-company="${escapeHtml(discoverPreselectCompany)}"]`);
+    if (target) target.click();
+    discoverPreselectCompany = null;
+  }
+
+  // 工具栏事件委托（一次性绑定）
+  if (!window._backcheckToolbarBound) {
+    window._backcheckToolbarBound = true;
+    // 网络状态关闭 + 重新检查
+    document.getElementById('network-close-btn')?.addEventListener('click', () => {
+      const el = document.getElementById('network-status');
+      if (el) el.style.display = 'none';
+      networkStatusDismissed = true;
+    });
+    document.getElementById('network-check-btn')?.addEventListener('click', checkNetworkStatus);
+    const tb = document.getElementById('backcheck-toolbar');
+    if (tb) {
+      tb.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button');
+        if (!btn || !currentBackcheckCompany) return;
+        const cname = currentBackcheckCompany;
+        if (btn.id === 'btn-research' || btn.id === 'btn-recheck') doResearch(cname);
+        if (btn.id === 'btn-cancel-research') { if (confirm('确定取消？')) { await window.electronAPI.cancelBackcheck(cname); loadBackcheck(); } }
+        if (btn.id === 'btn-open-folder') window.electronAPI.openReportsFolder?.();
+        if (btn.id === 'btn-reactivate-bc') { if (confirm(`确定重新激活 ${cname}？`)) { await window.electronAPI.reactivateCompany(cname); contactsSendHistory = await window.electronAPI.getSendHistory() || {}; loadBackcheck(); } }
+        if (btn.id === 'btn-fix-country') fixCountryFromToolbar();
+        if (btn.id === 'btn-add-to-queue') addReportToQueue();
+      });
+      tb.addEventListener('change', (e) => {
+        if (e.target.id === 'bc-provider') lastBackcheckProvider = e.target.value;
+      });
+    }
+  }
 }
 
+// ── 工具栏独立事件处理 ─────────────────────────────────────────────
+
+// 背调核心（独立函数，工具按钮可复用）
+async function doResearch(companyName) {
+  const contact = contactsData.find(c => (c.company || '').trim() === (companyName || '').trim());
+  if (!contact) { alert('未找到联系人: ' + companyName); return; }
+
+  const provider = document.getElementById('bc-provider')?.value || 'deep-research';
+
+  const reportWrap = document.getElementById('backcheck-report-wrap');
+  const btn = document.getElementById('btn-research') || document.getElementById('btn-recheck');
+  if (btn) btn.innerHTML = lucide('refresh-cw',14,'spin') + ' 搜索中...';
+  if (reportWrap) {
+    reportWrap.innerHTML = '<p style="color:var(--primary);padding:20px;text-align:center;font-size:14px">' + lucide('refresh-cw',16,'spin') + ' 正在搜索 ' + escapeHtml(companyName) + ' ...</p>'
+      + '<p style="color:var(--text-secondary);text-align:center;font-size:12px" id="research-progress">启动中...</p>';
+  }
+
+  let unsub = null;
+  if (window.electronAPI.onBackcheckProgress) {
+    unsub = window.electronAPI.onBackcheckProgress(async (data) => {
+      if (data.company !== companyName) return;
+      const progEl = document.getElementById('research-progress');
+      if (progEl && data.type === 'research-progress') progEl.textContent = data.progress || '';
+      if (data.type === 'research-done') {
+        if (unsub) unsub();
+        const [detail, status] = await Promise.all([
+          window.electronAPI.getBackcheckDetail(companyName),
+          window.electronAPI.getBackcheckStatus(),
+        ]);
+        renderBackcheckCard(detail, companyName, status[companyName]);
+        const item = document.querySelector('.backcheck-company[data-company="' + escapeHtml(companyName) + '"]');
+        if (item) {
+          const st = status[companyName];
+          const badge = st?.status === 'done' ? (st.rating ? ratingStars(st.rating) : lucide('check-circle',14)) : lucide('square',14);
+          const badgeEl = item.querySelector('.bc-badge');
+          if (badgeEl) badgeEl.innerHTML = badge;
+        }
+      }
+    });
+  }
+
+  const result = await window.electronAPI.startResearch(contact, provider);
+  if (!result.ok) {
+    if (unsub) unsub();
+    alert(result.message || '启动失败');
+    return;
+  }
+  lastBackcheckProvider = provider;
+  // 立即更新左侧图标为动态
+  const bcItem = document.querySelector('.backcheck-company[data-company="' + escapeHtml(companyName) + '"]');
+  if (bcItem) {
+    const badgeEl = bcItem.querySelector('.bc-badge');
+    if (badgeEl) badgeEl.innerHTML = lucide('refresh-cw',14,'spin');
+  }
+  // 兜底检查
+  const [detail, status] = await Promise.all([
+    window.electronAPI.getBackcheckDetail(companyName),
+    window.electronAPI.getBackcheckStatus(),
+  ]);
+  const st = status[companyName];
+  if (st?.status === 'done') {
+    if (unsub) unsub();
+    renderBackcheckCard(detail, companyName, st);
+    const item = document.querySelector('.backcheck-company[data-company="' + escapeHtml(companyName) + '"]');
+    if (item) {
+      const badge = st.rating ? ratingStars(st.rating) : lucide('check-circle',14);
+      const badgeEl = item.querySelector('.bc-badge');
+      if (badgeEl) badgeEl.innerHTML = badge;
+    }
+  }
+}
+
+// 获取开发信正文（优先独立文件，兜底报告内提取）
+function extractEmailFromDetail(detail) {
+  if (detail?.emailBody) return detail.emailBody;
+  if (detail?.raw) {
+    const m = detail.raw.match(/## 开发信[\s\S]+/);
+    return m ? m[0] : '';
+  }
+  return '';
+}
+
+async function addReportToQueue() {
+  if (!currentBackcheckDetail?.raw || !currentBackcheckCompany) return;
+  const emailBody = extractEmailFromDetail(currentBackcheckDetail);
+  if (!emailBody) { showToast('未找到开发信内容', 'err'); return; }
+
+  // 获取公司联系人
+  const members = (contactsData || []).filter(c => (c.company || '').trim() === currentBackcheckCompany.trim());
+  const ctype = members[0]?.clientType || 'unlabeled';
+  const country = members[0]?.country || '';
+  const validMembers = members.filter(m => m.email && m.email.includes('@'));
+  if (!validMembers.length) { showToast('该公司无有效邮箱', 'err'); return; }
+
+  // 生成主题
+  const config = await window.electronAPI.loadConfig().catch(() => ({}));
+  const sendMode = config.schedule?.mode || 'multi';
+  const GROUP_SIZE = sendMode === 'batch' ? (config.schedule?.batch_size || 10) : (config.schedule?.group_size || 20);
+  const groups = [];
+  for (let i = 0; i < validMembers.length; i += GROUP_SIZE) {
+    groups.push(validMembers.slice(i, i + GROUP_SIZE));
+  }
+
+  let added = 0;
+  for (const group of groups) {
+    const toEmails = group.map(m => m.email);
+    // 从开发信中提取 Subject 行
+    const subjMatch = emailBody.match(/\*\*Subject:\*\*\s*(.+)/i);
+    const baseSubject = subjMatch ? subjMatch[1].trim() : ('Logistics Partner / ' + (country || 'LatAm'));
+    queue.push({
+      id: ++queueIdCounter, company: currentBackcheckCompany, to: toEmails.join(', '), recipients: toEmails,
+      subject: baseSubject, body: emailBody, status: 'pending', addedAt: new Date().toISOString(),
+      _stage: 'cold', _type: ctype, _lang: country === 'Brazil' ? 'pt' : 'es', _country: country,
+      _fromReport: true,
+    });
+    added++;
+  }
+
+  showToast(`✅ 已加入 ${added} 组共 ${validMembers.length} 位联系人到队列`, 'ok');
+  saveQueue();
+  document.getElementById('stat-queue').textContent = queue.filter(e => e.status === 'pending').length;
+  // 跳转到发送队列
+  document.querySelector('[data-page="queue"]')?.click();
+}
+
+async function fixCountryFromToolbar() {
+  if (!currentBackcheckDetail) { showToast('无报告数据', 'err'); return; }
+  // 优先用缓存的检测结果，否则实时计算
+  let detectedCountry = currentBackcheckDetail._detectedCountry;
+  let contact = currentBackcheckDetail._contact;
+  if (!detectedCountry && currentBackcheckDetail.country) {
+    const countryMap = { '巴西':'Brazil','brasil':'Brazil','brazil':'Brazil','墨西哥':'Mexico','méxico':'Mexico','mexico':'Mexico','智利':'Chile','chile':'Chile','秘鲁':'Peru','perú':'Peru','peru':'Peru','哥伦比亚':'Colombia','colombia':'Colombia','阿根廷':'Argentina','argentina':'Argentina' };
+    const raw = currentBackcheckDetail.country.split(/[\n(（⚠]/)[0].trim();
+    for (const [k, v] of Object.entries(countryMap)) {
+      if (raw.toLowerCase().includes(k.toLowerCase())) { detectedCountry = v; break; }
+    }
+    contact = contactsData?.find(c => (c.company || '').trim() === (currentBackcheckCompany || '').trim());
+  }
+  if (!detectedCountry) { showToast('未检测到国家信息', 'err'); return; }
+  const old = contact?.country || '(空)';
+  if (!confirm(`确认将「${currentBackcheckCompany}」所有联系人的国家标签从「${old}」修改为「${detectedCountry}」？`)) return;
+  showToast('正在更新...', 'ok');
+  let result;
+  try {
+    result = await window.electronAPI.updateCompanyCountry(currentBackcheckCompany, detectedCountry);
+  } catch(e) {
+    showToast('更新失败（需重启应用生效 main.js 改动）: ' + e.message, 'err');
+    return;
+  }
+  if (result.ok && result.updated > 0) {
+    showToast(`✅ 已修正 ${result.updated}/${result.total} 位联系人：${old} → ${detectedCountry}`, 'ok');
+    contactsData = await window.electronAPI.getContacts();
+    loadBackcheck();
+  } else { showToast(`修正失败: ${result.error || '无匹配联系人'}`, 'err'); }
+}
 function renderBackcheckCard(info, companyName, st) {
-  const card = document.getElementById('backcheck-card');
-  if (!card) return;
+  const reportWrap = document.getElementById('backcheck-report-wrap');
+  if (!reportWrap) return;
+
+  currentBackcheckCompany = companyName;
+  currentBackcheckDetail = info;
 
   const hasData = info?.raw && info.raw.length > 50;
   const isDone = st?.status === 'done';
@@ -687,9 +958,31 @@ function renderBackcheckCard(info, companyName, st) {
 
   const rating = info?.rating || 0;
 
+  // 检测国家标签不匹配
+  const countryMap = {
+    '巴西': 'Brazil', 'brasil': 'Brazil', 'brazil': 'Brazil',
+    '墨西哥': 'Mexico', 'méxico': 'Mexico', 'mexico': 'Mexico',
+    '智利': 'Chile', 'chile': 'Chile',
+    '秘鲁': 'Peru', 'perú': 'Peru', 'peru': 'Peru',
+    '哥伦比亚': 'Colombia', 'colombia': 'Colombia',
+    '阿根廷': 'Argentina', 'argentina': 'Argentina',
+  };
+  let detectedCountry = null, countryMismatch = false, contact = null;
+  if (info?.country) {
+    const rawCountry = info.country.split(/[\n(（⚠]/)[0].trim(); // 提取纯国家名
+    for (const [key, std] of Object.entries(countryMap)) {
+      if (rawCountry.toLowerCase().includes(key.toLowerCase())) { detectedCountry = std; break; }
+    }
+    // 对比联系人当前国家标签
+    contact = contactsData?.find(c => (c.company || '').trim() === (companyName || '').trim());
+    if (detectedCountry && contact && contact.country !== detectedCountry) {
+      countryMismatch = true;
+    }
+  }
+
   let bodyHtml = '';
   if (hasData || isDone) {
-    const mdText = (info.raw || '').replace(/^> \*\*国家.*开发价值.*$/gm, '').replace(/\n\n\n+/g, '\n\n');
+    const mdText = (info.raw || '').replace(/^[^#]*(?=# )/s, '').replace(/^> \*\*国家.*开发价值.*$/gm, '').replace(/\n\n\n+/g, '\n\n');
     const ratingHtml = rating > 0 ? `<div style="margin:8px 0 16px;font-size:13px;color:var(--text-secondary)">开发价值：${ratingStars(rating)} <span style="font-size:11px">(${rating}/5)</span></div>` : '';
     bodyHtml = `<div class="backcheck-report">${ratingHtml}${renderMarkdown(mdText)}</div>`;
   } else if (isError) {
@@ -707,232 +1000,74 @@ function renderBackcheckCard(info, companyName, st) {
   const showStartBtn = !isDone && !isResearching && !isPending;
   const showCancelBtn = isResearching || isPending;
 
-  card.innerHTML = `
-    ${bodyHtml}
-    ${showProgress ? `
-      <div style="background:#f8f9fb;border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:12px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">${lucide('radio-tower',14)} 状态</div>
-        <div style="font-size:13px;color:var(--primary)">${st?.progress || '等待处理...'}</div>
-        ${isPending ? `<div style="font-size:11px;color:var(--warning);margin-top:6px">${lucide('file-text',12)} 请求文件已生成，对 Claude 说「处理背调请求」即可自动完成</div>` : ''}
-        ${isTimeout ? '<div style="font-size:11px;color:var(--danger);margin-top:6px">报告未在 10 分钟内生成，请手动检查</div>' : ''}
-      </div>
-    ` : ''}
-    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        ${showStartBtn ? `<select id=\"bc-provider\" style=\"font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);margin-right:4px\"><option value=\"deep-research\">Exa + DeepSeek</option><option value=\"serper-deepseek\">Google + DeepSeek</option><option value=\"tavily-deepseek\">Tavily + DeepSeek</option><option value=\"ds-only\">DeepSeek（快速）</option></select><button id=\"btn-research\">${lucide("search",14)} 开始背调</button>` : ""}
-        ${isDone ? `<button class="secondary" disabled>${rating > 0 ? ratingStars(rating) + " 已评定" : lucide("check-circle",14) + " 已完成背调"}</button>` : ""}
-        ${showCancelBtn ? `<button id="btn-cancel-research" class="secondary danger">${lucide("x",14)} 取消</button>` : ""}
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        ${isDone ? `<button id="btn-recheck" class="secondary" style="font-size:12px;padding:4px 10px">${lucide("refresh-cw",12)} 重新调查</button>` : ""}
-        ${isDone ? `<button id="btn-translate" class="secondary" style="font-size:12px;padding:4px 10px">${lucide("globe",12)} 翻译报告</button>` : ""}
-        <button id="btn-open-folder" class="secondary" style="font-size:12px;padding:4px 10px">${lucide("folder-open",12)} 打开文件夹</button>
-        ${contactsSendHistory[companyName]?.stage === "archived" ? `<button id="btn-reactivate-bc" class="secondary" style="font-size:12px;padding:4px 10px;color:var(--success)">${lucide("rotate-ccw",12)} 重新激活</button>` : ""}
-        ${info?.website ? `<button id="btn-deep-search" class="secondary" style="font-size:12px;padding:4px 10px;color:var(--primary)">${lucide("user-search",12)} 查找决策人</button>` : ""}
-      </div>
-    </div>
-    <span id="translate-status" style="display:block;margin-top:6px;font-size:11px;color:var(--text-secondary);text-align:center;display:none"></span>
-    <div id="deep-search-results" style="margin-top:12px;display:none"></div>
-    </div>
-  `;
+  info._detectedCountry = detectedCountry;
+  info._contact = contact;
 
-  // 开始背调 / 重新调查
-  document.getElementById('btn-research')?.addEventListener('click', () => doResearch(companyName));
-  document.getElementById('btn-recheck')?.addEventListener('click', () => doResearch(companyName));
-
-  // 翻译报告（生成独立 -zh.md → 原文/译文切换）
-  document.getElementById('btn-translate')?.addEventListener('click', async () => {
-    const btn = document.getElementById('btn-translate');
-    const status = document.getElementById('translate-status');
-    const reportEl = card.querySelector('.backcheck-report');
-    if (!reportEl || !btn) return;
-
-    // 切换回原文
-    if (btn.dataset.translated === '1') {
-      reportEl.innerHTML = renderMarkdown(info.raw);
-      btn.innerHTML = `${lucide('globe',14)} 翻译报告`;
-      btn.dataset.translated = '0';
-      if (status) { status.style.display = 'none'; }
-      return;
-    }
-
-    // 已有缓存的译文 → 直接切换
-    if (btn.dataset.zhCached === '1') {
-      reportEl.innerHTML = renderMarkdown(reportEl._zhText || '');
-      btn.innerHTML = `${lucide('file-text',14)} 查看原文`;
-      btn.dataset.translated = '1';
-      return;
-    }
-
-    btn.disabled = true;
-    btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 检查译文...`;
-    if (status) { status.style.display = 'inline'; status.textContent = '正在检查已有译文...'; }
-
-    try {
-      // 先尝试加载已有的译文文件
-      const cached = await window.electronAPI.loadTranslatedReport(companyName);
-      if (cached.ok) {
-        reportEl._zhText = cached.text;
-        reportEl.innerHTML = renderMarkdown(cached.text);
-        btn.innerHTML = `${lucide('file-text',14)} 查看原文`;
-        btn.dataset.translated = '1';
-        btn.dataset.zhCached = '1';
-        if (status) { status.style.display = 'none'; }
-        btn.disabled = false;
-        return;
-      }
-
-      // 无缓存 → 调用翻译 API 生成译文
-      if (status) status.textContent = '正在调用翻译接口...';
-      btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 翻译中...`;
-      const result = await window.electronAPI.translateReport(companyName);
-      if (result.ok) {
-        reportEl._zhText = result.text;
-        reportEl.innerHTML = renderMarkdown(result.text);
-        btn.innerHTML = `${lucide('file-text',14)} 查看原文`;
-        btn.dataset.translated = '1';
-        btn.dataset.zhCached = '1';
-        if (status) { status.style.display = 'none'; }
-      } else {
-        const msg = result.error === 'no_keys'
-          ? '未配置翻译 API Key，请在设置中填写有道/百度翻译'
-          : (result.message || '翻译失败');
-        if (status) { status.style.display = 'inline'; status.textContent = '❌ ' + msg; status.style.color = 'var(--danger)'; }
-        btn.innerHTML = `${lucide('globe',14)} 翻译报告`;
-      }
-    } catch (e) {
-      if (status) { status.style.display = 'inline'; status.textContent = '❌ 网络异常，请检查连接'; status.style.color = 'var(--danger)'; }
-      btn.innerHTML = `${lucide('globe',14)} 翻译报告`;
-    }
-    btn.disabled = false;
-  });
-
-  async function doResearch(companyName) {
-    const contact = contactsData.find(c => (c.company || '').trim() === (companyName || '').trim());
-    if (!contact) { alert('未找到联系人: ' + companyName); return; }
-
-    // 即刻反馈
-    const card = document.getElementById('backcheck-card');
-    const btn = document.getElementById('btn-research') || document.getElementById('btn-recheck');
-    if (btn) btn.innerHTML = `${lucide('refresh-cw',14,'spin')} 搜索中...`;
-    if (card) {
-      card.innerHTML = '<p style="color:var(--primary);padding:20px;text-align:center;font-size:14px">' + lucide('refresh-cw',16,'spin') + ' 正在搜索 ' + escapeHtml(companyName) + ' ...</p>'
-        + '<p style="color:var(--text-secondary);text-align:center;font-size:12px" id="research-progress">启动中...</p>';
-    }
-
-    // 监听后台进度
-    let unsub = null;
-    if (window.electronAPI.onBackcheckProgress) {
-      unsub = window.electronAPI.onBackcheckProgress(async (data) => {
-        if (data.company !== companyName) return;
-        const progEl = document.getElementById('research-progress');
-        if (progEl && data.type === 'research-progress') progEl.textContent = data.progress || '';
-        if (data.type === 'research-done') {
-          if (unsub) unsub();
-          // 直接更新卡片，不等全量刷新
-          const [detail, status] = await Promise.all([
-            window.electronAPI.getBackcheckDetail(companyName),
-            window.electronAPI.getBackcheckStatus(),
-          ]);
-          renderBackcheckCard(detail, companyName, status[companyName]);
-          // 更新左侧列表的状态图标
-          const item = document.querySelector(`.backcheck-company[data-company="${escapeHtml(companyName)}"]`);
-          if (item) {
-            const st = status[companyName];
-            const badge = st?.status === 'done' ? (st.rating ? ratingStars(st.rating) : lucide('check-circle',14)) : lucide('square',14);
-            const badgeEl = item.querySelector('.bc-badge');
-            if (badgeEl) badgeEl.innerHTML = badge;
-          }
-        }
-      });
-    }
-
-    const provider = document.getElementById('bc-provider')?.value || 'deep-research';
-    const result = await window.electronAPI.startResearch(contact, provider);
-    if (!result.ok) {
-      if (unsub) unsub();
-      alert(result.message || '启动失败');
-      loadBackcheck();
-      return;
-    }
-    // 兜底：立即拉取最新状态。若已生成则直接渲染，否则保持监听等后台事件
-    const [detail, status] = await Promise.all([
-      window.electronAPI.getBackcheckDetail(companyName),
-      window.electronAPI.getBackcheckStatus(),
-    ]);
-    const st = status[companyName];
-    if (st?.status === 'done') {
-      if (unsub) unsub();
-      renderBackcheckCard(detail, companyName, st);
-      const item = document.querySelector(`.backcheck-company[data-company="${escapeHtml(companyName)}"]`);
-      if (item) {
-        const badge = st.rating ? ratingStars(st.rating) : lucide('check-circle',14);
-        const badgeEl = item.querySelector('.bc-badge');
-        if (badgeEl) badgeEl.innerHTML = badge;
-      }
-    }
+  // ── 渲染工具栏（固定区）───────────────────────────────────────
+  const toolbar = document.getElementById('backcheck-toolbar');
+  let toolbarHtml = '';
+  if (countryMismatch) {
+    toolbarHtml += '<div style="width:100%;display:flex;align-items:center;gap:10px;padding:6px 10px;margin-bottom:6px;background:#fff3e0;border:1px solid #ff9800;border-radius:6px;font-size:12px"><span>⚠️ 真实国家：<b>' + detectedCountry + '</b>，当前：<b>' + escapeHtml(contact?.country || '(空)') + '</b></span><button id="btn-fix-country" style="margin-left:auto;font-size:11px;padding:3px 10px;white-space:nowrap">修正</button></div>';
   }
+  toolbarHtml += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">';
+  if (!isResearching && !isPending) {
+    toolbarHtml += '<select id="bc-provider" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg)"><option value="deep-research"' + (lastBackcheckProvider==='deep-research'?' selected':'') + '>Exa + DeepSeek</option><option value="serper-deepseek"' + (lastBackcheckProvider==='serper-deepseek'?' selected':'') + '>Google + DeepSeek</option><option value="tavily-deepseek"' + (lastBackcheckProvider==='tavily-deepseek'?' selected':'') + '>Tavily + DeepSeek</option><option value="ds-only"' + (lastBackcheckProvider==='ds-only'?' selected':'') + '>DeepSeek（快速）</option></select>';
+  }
+  if (showStartBtn) toolbarHtml += '<button id="btn-research">' + lucide('search',14) + ' 开始背调</button>';
+  if (isDone) toolbarHtml += '<button id="btn-recheck" style="font-size:12px;padding:5px 14px">' + lucide('refresh-cw',12) + ' 重新调查</button>';
+  if (isError) toolbarHtml += '<button id="btn-recheck" style="font-size:12px;padding:5px 14px">' + lucide('refresh-cw',12) + ' 重试</button>';
+  if (isTimeout) toolbarHtml += '<button id="btn-recheck" style="font-size:12px;padding:5px 14px">' + lucide('refresh-cw',12) + ' 重新调查</button>';
+  if (showCancelBtn) toolbarHtml += '<button id="btn-cancel-research" class="danger" style="font-size:12px;padding:5px 14px">' + lucide('x',12) + ' 取消</button>';
+  toolbarHtml += '<button id="btn-open-folder" style="font-size:12px;padding:5px 14px">' + lucide('folder-open',12) + ' 打开文件夹</button>';
+  if (contactsSendHistory[companyName]?.stage === 'archived') toolbarHtml += '<button id="btn-reactivate-bc" style="font-size:12px;padding:5px 14px;color:var(--success)">' + lucide('rotate-ccw',12) + ' 重新激活</button>';
+  if (isDone && info?.raw) toolbarHtml += '<button id="btn-add-to-queue" style="font-size:12px;padding:5px 14px;background:var(--success);color:#fff">' + lucide('send',12) + ' 加入队列</button>';
+  toolbarHtml += '</div>';
+  if (toolbar) { toolbar.innerHTML = toolbarHtml; toolbar.style.display = 'flex'; }
 
-  // 取消调查
-  document.getElementById('btn-cancel-research')?.addEventListener('click', async () => {
-    if (!confirm('确定取消该公司的背调请求？')) return;
-    await window.electronAPI.cancelBackcheck(companyName);
-    loadBackcheck();
-  });
+  // ── 渲染报告（可滚动区）───────────────────────────────────────
+  const progressHtml = showProgress ? '<div style="background:#fff8e1;border:1px solid #ffe0b2;border-radius:6px;padding:12px;margin-top:12px"><div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px">' + lucide('radio-tower',14) + ' 状态</div><div style="font-size:13px;color:var(--primary)">' + (st?.progress || '等待处理...') + '</div>' + (isPending ? '<div style="font-size:11px;color:var(--warning);margin-top:6px">' + lucide('file-text',12) + ' 请求文件已生成，对 Claude 说「处理背调请求」即可自动完成</div>' : '') + (isTimeout ? '<div style="font-size:11px;color:var(--danger);margin-top:6px">报告未在 10 分钟内生成，请手动检查</div>' : '') + '</div>' : '';
 
-  // 打开报告文件夹
-  document.getElementById('btn-open-folder')?.addEventListener('click', () => {
-    window.electronAPI.openReportsFolder?.();
-  });
+  if (reportWrap) {
+    reportWrap.dataset.translated = '0';
+    reportWrap.innerHTML = bodyHtml + progressHtml;
+  }
+  const statusEl = document.getElementById('translate-status');
+  if (statusEl) statusEl.style.display = 'none';
+  const dsPanel = document.getElementById('deep-search-results');
+  if (dsPanel) dsPanel.style.display = 'none';
 
-  // 重新激活（背调页）
-  document.getElementById('btn-reactivate-bc')?.addEventListener('click', async () => {
-    if (!confirm(`确定重新激活 ${companyName}？\n将重置为冷开发阶段，清空序列记录。`)) return;
-    await window.electronAPI.reactivateCompany(companyName);
-    contactsSendHistory = await window.electronAPI.getSendHistory() || {};
-    loadBackcheck();
-  });
+  // ── Agnes 开发信验证（后台，境外断网时跳过）─────────────────────
+  if (isDone && info?.emailBody && foreignNetworkOk) {
+    const vBar = document.createElement('div');
+    vBar.id = 'email-verify-bar';
+    vBar.style.cssText = 'margin-top:12px;padding:8px 12px;border-radius:6px;font-size:11px;display:flex;align-items:center;gap:8px;background:#f5f6fa;border:1px solid var(--border)';
+    vBar.innerHTML = lucide('refresh-cw',12,'spin') + ' 正在检查开发信...';
+    reportWrap.appendChild(vBar);
 
-  // 决策人深挖
-  document.getElementById('btn-deep-search')?.addEventListener('click', async () => {
-    const btn = document.getElementById('btn-deep-search');
-    const panel = document.getElementById('deep-search-results');
-    if (!btn || !panel) return;
-
-    btn.disabled = true;
-    btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 搜索中...`;
-    panel.style.display = 'block';
-    panel.innerHTML = `<div style="padding:12px;text-align:center;color:var(--text-secondary);font-size:12px">${lucide('refresh-cw',14,'spin')} 正在搜索决策人...</div>`;
-
-    try {
-      const website = info?.website || contactsData.find(c => c.company === companyName)?.website || '';
-      if (!website) {
-        panel.innerHTML = `<div style="padding:12px;text-align:center;color:var(--danger);font-size:12px">未找到公司官网，无法搜索决策人</div>`;
-        btn.innerHTML = `${lucide('user-search',12)} 查找决策人`;
-        btn.disabled = false;
-        return;
+    window.electronAPI.verifyEmail(info.emailBody).then(result => {
+      if (result?.ok) {
+        const pct = Math.round(result.passed / result.total * 100);
+        const ok = result.passed === result.total;
+        vBar.style.background = ok ? '#e8f5e9' : '#fff3e0';
+        vBar.style.border = ok ? '1px solid #a5d6a7' : '1px solid #ffcc02';
+        vBar.innerHTML = (ok ? lucide('check-circle',12) : lucide('alert-circle',12))
+          + ` 自查通过 ${result.passed}/${result.total} 项` + (ok ? '' : ' — 点击查看详情');
+        vBar.style.cursor = ok ? 'default' : 'pointer';
+        vBar.title = result.details || '';
+        if (!ok) {
+          vBar.addEventListener('click', () => {
+            alert('开发信自查结果：\n\n' + (result.details || '无详情'));
+          });
+        }
+      } else {
+        vBar.innerHTML = lucide('x-circle',12) + ' 验证失败: ' + (result?.error || '未知');
+        vBar.style.background = '#ffebee';
       }
-
-      const result = await window.electronAPI.deepSearchContacts(website, companyName);
-      if (!result?.ok) {
-        panel.innerHTML = `<div style="padding:12px;text-align:center;color:var(--danger);font-size:12px">${result?.message || '搜索失败'}</div>`;
-        btn.innerHTML = `${lucide('user-search',12)} 查找决策人`;
-        btn.disabled = false;
-        return;
-      }
-
-      renderDeepSearchResults(panel, result);
-      btn.innerHTML = `${lucide('user-check',12)} 已找到决策人`;
-      btn.style.color = 'var(--success)';
-    } catch (e) {
-      panel.innerHTML = `<div style="padding:12px;text-align:center;color:var(--danger);font-size:12px">网络异常: ${e.message}</div>`;
-      btn.innerHTML = `${lucide('user-search',12)} 查找决策人`;
-    }
-    btn.disabled = false;
-  });
-
-  // 网络检查按钮
-  document.getElementById('network-check-btn')?.addEventListener('click', checkNetworkStatus);
+    }).catch(e => {
+      vBar.innerHTML = lucide('x-circle',12) + ' 验证异常';
+      vBar.style.background = '#ffebee';
+    });
+  }
 }
 
 // ── 决策人结果渲染 ──────────────────────────────────────────────
@@ -1048,6 +1183,7 @@ let sendHistory = {};
 let selectedCards = {};
 let selectedCompanySet = new Set(); // 持久化勾选状态，搜索不清除
 let sendStageFilter = 'active';    // active | archived
+let discoverPreselectCompany = null; // 从客户开发页面预选公司跳转
 
 async function initEmailSend() {
   if (!templateLib) templateLib = await window.electronAPI.getTemplateLibrary();
@@ -1153,9 +1289,12 @@ function updateMonthlyReportSection() {
   }
 }
 
+let sendBackcheckStatus = {}; // 发送页面背调评分缓存
+
 async function loadSendContacts() {
   contactsData = await window.electronAPI.getContacts();
   sendHistory = await window.electronAPI.getSendHistory() || {};
+  try { sendBackcheckStatus = await window.electronAPI.getBackcheckStatus(); } catch { sendBackcheckStatus = {}; }
   sendCompanies = {};
   for (const c of contactsData) {
     const name = c.company || '未命名';
@@ -1168,7 +1307,14 @@ async function loadSendContacts() {
 
 function renderCompanyList(filter) {
   const container = document.getElementById('send-company-list');
-  let all = Object.entries(sendCompanies).sort((a,b) => b[1].length - a[1].length);
+  // 排序：联系人数 + 背调评分加权（评分 × 2 作为额外权重，高分优先）
+  let all = Object.entries(sendCompanies).sort((a, b) => {
+    const ra = sendBackcheckStatus[a[0]]?.rating || 0;
+    const rb = sendBackcheckStatus[b[0]]?.rating || 0;
+    const scoreA = a[1].length + (ra * 2);
+    const scoreB = b[1].length + (rb * 2);
+    return scoreB - scoreA;
+  });
   if (filter) all = all.filter(([n]) => n.toLowerCase().includes(filter));
 
   const activeList = all.filter(([name]) => sendHistory[name]?.stage !== 'archived');
@@ -2501,21 +2647,18 @@ async function initQueue() {
     }
   });
   if (changed) saveQueue();
-  // 恢复上次发信计时器
+  // 恢复上次计时器
   try {
     const state = await window.electronAPI.loadSendState();
-    if (state.data?.startedAt && state.data?.status !== 'idle') {
+    const sec = state.data?.totalSeconds;
+    if (sec > 0 && state.data?.status !== 'idle' && state.data?.status !== 'done') {
       const t = document.getElementById('queue-timer-title');
       if (t) {
-        const elapsed = Math.round((Date.now() - new Date(state.data.startedAt).getTime()) / 1000);
-        const acc = Number(state.data.accumulatedSeconds) || 0;
-        const total = Math.max(0, acc + elapsed);
-        const m = Math.floor(total / 60);
-        const s = total % 60;
+        t._totalSec = sec;
+        const m = Math.floor(sec / 60), s = sec % 60;
         t.textContent = m + ':' + String(s).padStart(2, '0');
         t.style.display = '';
         t.style.color = 'var(--text-secondary)';
-        t.dataset.accumulated = total;
       }
     }
   } catch {}
@@ -2655,12 +2798,6 @@ async function renderQueue() {
   list.innerHTML = html;
 
   // 自动滚动到正在发送的组
-  if (activeGroupId) {
-    setTimeout(() => {
-      const activeHead = list.querySelector(`.queue-group-head[data-group="${activeGroupId}"]`);
-      if (activeHead) activeHead.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 100);
-  }
 
   // 分组折叠/展开
   list.querySelectorAll('.queue-group-head').forEach(head => {
@@ -2834,27 +2971,22 @@ async function startSend() {
         el.style.display = 'block';
         el.textContent = `📊 共 ${data.total} 封${cd}，组间 ${data.avgDelay}s，预计 ${data.estMin}分${data.estSec}秒`;
       }
-      // 启动/恢复计时器
-      const timerEl2 = document.getElementById('queue-timer-title');
-      if (timerEl2 && data.estMin !== undefined) {
-        const now = Date.now();
-        if (!timerEl2.dataset.startedAt) {
-          timerEl2.dataset.startedAt = now;
-          timerEl2.dataset.accumulated = '0';
-        }
-        timerEl2.style.display = '';
-        timerEl2.style.color = '';
-        clearInterval(timerEl2._interval);
-        timerEl2._interval = setInterval(() => {
-          const started = Number(timerEl2.dataset.startedAt);
-          const acc = Number(timerEl2.dataset.accumulated) || 0;
-          const elapsed = acc + Math.round((Date.now() - started) / 1000);
-          const m = Math.floor(elapsed / 60);
-          const s = elapsed % 60;
-          timerEl2.textContent = m + ':' + String(s).padStart(2, '0');
+      // 启动十分钟自动退信扫描
+      startAutoBounceInterval();
+
+      // 启动计时器
+      const tt = document.getElementById('queue-timer-title');
+      if (tt) {
+        if (!tt._startedAt) { tt._startedAt = Date.now(); tt._accumulated = 0; }
+        tt.style.display = '';
+        tt.style.color = '';
+        clearInterval(tt._interval);
+        tt._interval = setInterval(() => {
+          if (!sendInProgress) { tt.style.color = 'var(--text-secondary)'; return; }
+          const acc = (tt._accumulated || 0) + Math.floor((Date.now() - tt._startedAt) / 1000);
+          const m = Math.floor(acc / 60), s = acc % 60;
+          tt.textContent = m + ':' + String(s).padStart(2, '0');
         }, 1000);
-        // 记录开始时间到文件
-        window.electronAPI.saveSendState({ startedAt: new Date(now).toISOString(), status: 'sending' }).catch(()=>{});
       }
     } else if (data.type === 'waiting') {
       // 更新时间窗口等待提示
@@ -2866,32 +2998,26 @@ async function startSend() {
         const totalSec = data.seconds;
         el.style.display = 'block';
         el.style.color = 'var(--warning)';
-        const update = () => {
-          if (sendInProgress === false) { el.textContent = (el.textContent || '').replace('⏸️', '⏸️ 已暂停 —'); return; }
+        clearTimeout(el._delayTimer);
+        el._delayRemaining = totalSec;
+        const tick = () => {
+          if (sendInProgress === false) {
+            el.style.color = 'var(--text-secondary)';
+            el._delayTimer = setTimeout(tick, 1000);
+            return; // 保持显示，不倒数
+          }
           if (el._delayRemaining <= 0) { el.style.display = 'none'; el.style.color = ''; return; }
           const m = Math.floor(el._delayRemaining / 60);
           const s = el._delayRemaining % 60;
-          const companyLabel = data.company ? ` → ${escapeHtml(data.company)}` : '';
-          el.textContent = `⏸️ 批量暂停${companyLabel}... ${m} 分 ${s} 秒后继续`;
+          const label = data.company ? ` → ${escapeHtml(data.company)}` : '';
+          el.textContent = `⏸️ 批量暂停${label}... ${m} 分 ${s} 秒后继续`;
           el._delayRemaining--;
-          el._delayTimer = setTimeout(update, 1000);
+          el._delayTimer = setTimeout(tick, 1000);
         };
-        clearTimeout(el._delayTimer);
-        el._delayRemaining = totalSec;
-        update();
+        tick();
       }
     } else if (data.type === 'ratelimit') {
-      const tEl2 = document.getElementById('queue-timer-title');
-      if (tEl2) {
-        clearInterval(tEl2._interval);
-        if (tEl2.dataset.startedAt) {
-          const acc = Number(tEl2.dataset.accumulated) || 0;
-          tEl2.dataset.accumulated = acc + Math.round((Date.now() - Number(tEl2.dataset.startedAt)) / 1000);
-          delete tEl2.dataset.startedAt;
-        }
-        tEl2.style.color = 'var(--danger)';
-        window.electronAPI.saveSendState({ status: 'paused' }).catch(()=>{});
-      }
+      freezeAndSaveTimer('var(--danger)');
       const el = document.getElementById('queue-estimate');
       if (el) { el.style.display = 'block'; el.textContent = `⚠️ 发送被限流！${data.error || ''} 发送已自动暂停，请等待后手动恢复。`; el.style.color = 'var(--danger)'; }
       sendInProgress = false;
@@ -2903,29 +3029,29 @@ async function startSend() {
       document.getElementById('queue-start').disabled = false;
       document.getElementById('queue-pause').disabled = true;
       document.getElementById('queue-cancel').disabled = true;
-    } else if (data.type === 'complete' || data.type === 'cancelled') {
-      // 冻结计时器（不清零）
-      const tEl = document.getElementById('queue-timer-title');
-      if (tEl) {
-        clearInterval(tEl._interval);
-        if (tEl.dataset.startedAt) {
-          const acc = Number(tEl.dataset.accumulated) || 0;
-          const delta = Math.round((Date.now() - Number(tEl.dataset.startedAt)) / 1000);
-          tEl.dataset.accumulated = acc + delta;
-          delete tEl.dataset.startedAt;
-        }
-        tEl.style.color = 'var(--text-secondary)';
-        window.electronAPI.saveSendState({ status: 'done' }).catch(()=>{});
-      }
-      // complete / cancel 时推进阶段（只推一次，pause/limit 不推防止重复积累）
+    } else if (data.type === 'cancelled') {
+      resetQueueTimer();
       clearQueueDelayUI();
+      sendInProgress = false;
+      document.getElementById('queue-start').disabled = false;
+      document.getElementById('queue-pause').disabled = true;
+      document.getElementById('queue-cancel').disabled = true;
+      const pb2 = document.getElementById('queue-progress');
+      if (pb2) pb2.classList.remove('active');
+    } else if (data.type === 'complete') {
+      freezeAndSaveTimer('var(--text-secondary)');
+      // 已达上限时保留提示，不清除
+      const limitEl = document.getElementById('queue-estimate');
+      const isAtLimit = limitEl && limitEl.textContent.includes('已达每日上限');
+      if (!isAtLimit) clearQueueDelayUI();
+      // complete / cancel 时推进阶段
       sendInProgress = false;
       const progBar = document.getElementById('queue-progress');
       if (progBar) progBar.classList.remove('active');
       // 隐藏当前发送指示条
       const curBar = document.getElementById('queue-current-bar');
       if (curBar) curBar.style.display = 'none';
-      document.getElementById('queue-start').disabled = false;
+      if (!isAtLimit) document.getElementById('queue-start').disabled = false;
       document.getElementById('queue-pause').disabled = true;
       document.getElementById('queue-cancel').disabled = true;
       // 测试模式不推进阶段。仅当公司所有联系人都已发送时才推进，防止分批发送导致过早归档
@@ -2937,21 +3063,22 @@ async function startSend() {
           window.electronAPI.advanceStage([...new Set(sentCompanies)]);
         }
       }
-    } else if (data.type === 'paused' || data.type === 'limit') {
-      const tEl3 = document.getElementById('queue-timer-title');
-      if (tEl3) {
-        clearInterval(tEl3._interval);
-        if (tEl3.dataset.startedAt) {
-          const acc = Number(tEl3.dataset.accumulated) || 0;
-          tEl3.dataset.accumulated = acc + Math.round((Date.now() - Number(tEl3.dataset.startedAt)) / 1000);
-          delete tEl3.dataset.startedAt;
-        }
-        tEl3.style.color = 'var(--warning)';
-        window.electronAPI.saveSendState({ status: 'paused' }).catch(()=>{});
-      }
-      // 暂停/限流：只更新 UI，不推进阶段
-      const el = document.getElementById('queue-estimate');
-      if (el) el.style.display = 'none';
+    } else if (data.type === 'limit') {
+      // 达到每日上限
+      const el2 = document.getElementById('queue-estimate');
+      if (el2) { el2.style.display = 'block'; el2.style.color = 'var(--danger)'; el2.textContent = `⛔ ${data.message || '已达每日上限'}，今日无法继续发送`; }
+      sendInProgress = false;
+      document.getElementById('queue-start').disabled = true;
+      document.getElementById('queue-pause').disabled = true;
+      document.getElementById('queue-cancel').disabled = true;
+      sendInProgress = false;
+      freezeAndSaveTimer('var(--text-secondary)');
+    } else if (data.type === 'paused') {
+      freezeAndSaveTimer('var(--warning)');
+      // 延迟倒计时保持显示不消失
+      const delayEl = document.getElementById('queue-estimate');
+      if (delayEl) { delayEl.style.color = 'var(--text-secondary)'; }
+      // 暂停：只更新 UI，不推进阶段
       sendInProgress = false;
       const progBar = document.getElementById('queue-progress');
       if (progBar) progBar.classList.remove('active');
@@ -2976,8 +3103,27 @@ async function startSend() {
     renderQueue();
     saveQueue();
   });
-  window.electronAPI.startSend(pending).catch(e => {
+  const result = await window.electronAPI.startSend(pending).catch(e => {
     console.error('发送启动失败:', e);
+    return { error: e.message };
+  });
+  // 兜底：发送返回0封时，把卡在 sending 的项回退
+  if (!result?.error) {
+    setTimeout(() => {
+      const stuck = queue.filter(e => e.status === 'sending');
+      if (stuck.length && !sendInProgress) {
+        console.log('🔄 修复卡住的发送项:', stuck.length);
+        stuck.forEach(e => {
+          e.status = 'pending';
+          if (e._recipientStatus) e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
+        });
+        saveQueue();
+        renderQueue();
+      }
+    }, 1000);
+  }
+  // 错误时回退
+  if (result?.error) {
     sendInProgress = false;
     pending.forEach(e => {
       if (e.status === 'sending') e.status = 'pending';
@@ -2988,7 +3134,7 @@ async function startSend() {
     document.getElementById('queue-cancel').disabled = true;
     saveQueue();
     renderQueue();
-  });
+  }
 }
 
 document.getElementById('queue-start')?.addEventListener('click', () => { startSend().catch(e => console.error(e)); });
@@ -3027,8 +3173,46 @@ document.getElementById('queue-cancel')?.addEventListener('click', async () => {
 
 function resetQueueTimer() {
   const t = document.getElementById('queue-timer-title');
-  if (t) { clearInterval(t._interval); t.textContent = ''; t.style.display = 'none'; t.style.color = ''; delete t.dataset.startedAt; delete t.dataset.accumulated; }
-  window.electronAPI.saveSendState({ startedAt: '', accumulatedSeconds: 0, status: 'idle' }).catch(()=>{});
+  if (t) { clearInterval(t._interval); t.textContent = ''; t.style.display = 'none'; t.style.color = ''; delete t._startedAt; delete t._accumulated; }
+}
+function freezeAndSaveTimer(color) {
+  const t = document.getElementById('queue-timer-title');
+  if (t) {
+    clearInterval(t._interval);
+    if (t._startedAt) { t._accumulated = (t._accumulated || 0) + Math.floor((Date.now() - t._startedAt) / 1000); delete t._startedAt; }
+    t.style.color = color || 'var(--text-secondary)';
+  }
+}
+
+// ── 十分钟循环退信扫描（仅队列发送中生效）─────────────────────────────────
+function startAutoBounceInterval() {
+  clearInterval(autoBounceTimer);
+  nextBounceScanAt = Date.now() + 10 * 60 * 1000;
+  autoBounceTimer = setInterval(async () => {
+    if (!sendInProgress) return; // 没在发送就不扫
+    try {
+      const result = await window.electronAPI.checkBounces();
+      if (result.ok && result.bounced?.length) {
+        const contacts = await window.electronAPI.getContacts();
+        const contactMap = {};
+        contacts.forEach(c => { const e = (c.email || '').toLowerCase().trim(); if (e) contactMap[e] = c; });
+        const records = result.bounced.map(b => {
+          const email = b.bouncedEmail || '';
+          const matched = contactMap[email];
+          return { ...b, email, matched: !!matched, company: matched ? matched.company : '', contactId: matched ? matched.id : '' };
+        });
+        const matched = records.filter(r => r.matched);
+        if (matched.length) {
+          await window.electronAPI.saveBounceLog(records);
+          for (const r of matched) {
+            window.electronAPI.updateBounce(r.email, { type: r.type || 'unknown', reason: r.reason || '未知原因' }).catch(()=>{});
+          }
+          showToast(`📨 自动扫描: ${result.bounced.length} 封退信，${matched.length} 人匹配`, 'warn');
+        }
+      }
+    } catch {}
+    nextBounceScanAt = Date.now() + 10 * 60 * 1000;
+  }, 10 * 60 * 1000);
 }
 
 function clearQueueDelayUI() {
@@ -3097,7 +3281,7 @@ async function doQueueRefresh() {
 function doQueueClearDone() {
   queue = queue.filter(e => e.status === 'pending' || e.status === 'sending' ||
     (e._recipientStatus && e._recipientStatus.some(r => r.status === 'pending')));
-  saveQueue(); renderQueue(); clearQueueDelayUI();
+  saveQueue(); renderQueue(); clearQueueDelayUI(); resetQueueTimer();
   const pb = document.getElementById('queue-progress'); pb.style.width = '0%'; pb.classList.remove('active');
   document.getElementById('stat-queue').textContent = queue.reduce((sum, e) =>
     sum + (e._recipientStatus ? e._recipientStatus.filter(r => r.status === 'pending').length : (e.status === 'pending' ? 1 : 0)), 0);
@@ -3187,7 +3371,10 @@ function formatDate(iso) { if (!iso) return '—'; const d = new Date(iso); retu
 function daysSince(iso) { if (!iso) return ''; const now = new Date(); const then = new Date(iso); const nowUtc = Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()); const thenUtc = Date.UTC(then.getUTCFullYear(),then.getUTCMonth(),then.getUTCDate()); const days = Math.floor((nowUtc - thenUtc) / 86400000); return days >= 0 ? `${days}天` : ''; }
 
 // 轻量 Markdown → HTML（处理表格/标题/粗体/列表/分隔线）
-function ratingStars(n) { return '⭐'.repeat(Math.min(5, Math.max(1, n))); }
+function ratingStars(n) {
+  const r = Math.min(5, Math.max(0, n));
+  return '<span style="color:#f0a500;font-size:11px;letter-spacing:1px">' + '★'.repeat(r) + '☆'.repeat(5 - r) + '</span>';
+}
 
 async function pollBackcheckStatus(companyName, onDone) {
   for (let i = 0; i < 45; i++) {
@@ -3519,6 +3706,9 @@ function renderBounceTable() {
     if (groupsEl) groupsEl.innerHTML = '';
     if (empty) { empty.style.display = 'block'; empty.textContent = '点击「检查退信」扫描邮箱中的退信邮件'; }
     if (status) status.textContent = '';
+    // 隐藏一键删除按钮
+    const dABtn = document.getElementById('bounce-del-all-btn');
+    if (dABtn) dABtn.style.display = 'none';
     return;
   }
   if (empty) empty.style.display = 'none';
@@ -3603,6 +3793,29 @@ async function initBouncePage() {
         renderBounceTable();
       }
     } catch {}
+
+    // 自动检测：上次发信在10分钟~24小时内 → 自动扫一次
+    try {
+      const st = await window.electronAPI.loadSendState();
+      if (st?.data?.startedAt) {
+        const since = (Date.now() - new Date(st.data.startedAt).getTime()) / 1000;
+        if (since > 600 && since < 86400) setTimeout(() => runBtn.click(), 500);
+      }
+    } catch {}
+
+    // 倒计时更新
+    const countdownEl = document.getElementById('bounce-countdown');
+    if (countdownEl && !countdownEl._timer) {
+      countdownEl._timer = setInterval(() => {
+        if (nextBounceScanAt > 0) {
+          const rem = Math.max(0, Math.round((nextBounceScanAt - Date.now()) / 1000));
+          const m = Math.floor(rem / 60), s = rem % 60;
+          countdownEl.textContent = rem > 0 ? `下次扫描: ${m}:${String(s).padStart(2, '0')}` : '即将扫描...';
+        } else {
+          countdownEl.textContent = '';
+        }
+      }, 1000);
+    }
 
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
@@ -3973,7 +4186,11 @@ function initIcons(root = document) {
 }
 
 // ===== 客户开发 ======================================================
-function initDiscover() {
+let discoverResults = [];       // 当前搜索结果
+let discoverSelectedIdx = null; // 当前选中的结果索引
+let discoverActiveTab = 'find'; // 当前激活的 tab
+
+async function initDiscover() {
   // 国家列表（拉美重点市场）
   const countries = ['','Mexico','Brazil','Chile','Peru','Colombia','Argentina','Ecuador','Bolivia','Paraguay','Uruguay','Panama','Costa Rica'];
   const sel = document.getElementById('df-country');
@@ -3987,8 +4204,15 @@ function initDiscover() {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.discover-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      document.getElementById('discover-find').style.display = tab.dataset.tab === 'find' ? '' : 'none';
-      document.getElementById('discover-lookup').style.display = tab.dataset.tab === 'lookup' ? '' : 'none';
+      discoverActiveTab = tab.dataset.tab;
+      const isFind = discoverActiveTab === 'find';
+      document.getElementById('discover-find-search').style.display = isFind ? '' : 'none';
+      document.getElementById('discover-lookup-search').style.display = isFind ? 'none' : '';
+      document.getElementById('df-results').style.display = isFind ? '' : 'none';
+      document.getElementById('df-stats').style.display = isFind ? (document.getElementById('df-stats').textContent ? '' : 'none') : 'none';
+      document.getElementById('dl-results').style.display = isFind ? 'none' : '';
+      document.getElementById('dl-format').style.display = isFind ? 'none' : (document.getElementById('dl-format').textContent ? '' : 'none');
+      document.querySelector('.discover-results-head').style.display = '';
     });
   });
 
@@ -3997,11 +4221,60 @@ function initDiscover() {
   // 邮箱反查
   document.getElementById('dl-search')?.addEventListener('click', doEmailLookup);
   // 全选
-  document.getElementById('df-selectall')?.addEventListener('click', () => toggleAll('#df-results'));
-  document.getElementById('dl-selectall')?.addEventListener('click', () => toggleAll('#dl-results'));
-  // 导入
-  document.getElementById('df-import')?.addEventListener('click', () => importSelected('#df-results'));
-  document.getElementById('dl-import')?.addEventListener('click', () => importSelected('#dl-results'));
+  const fullSelBtn = document.getElementById('df-selectall');
+  if (fullSelBtn && !fullSelBtn.dataset.bound) {
+    fullSelBtn.dataset.bound = '1';
+    fullSelBtn.addEventListener('click', toggleAllDiscover);
+  }
+  // 导入选中
+  document.getElementById('df-import')?.addEventListener('click', () => importSelectedDiscover());
+
+  // 结果列表点击委托
+  document.getElementById('df-results')?.addEventListener('click', (e) => {
+    const item = e.target.closest('.discover-result-item');
+    if (!item) return;
+    const idx = parseInt(item.dataset.idx);
+    if (!isNaN(idx)) selectDiscoverResult(idx);
+  });
+  document.getElementById('dl-results')?.addEventListener('click', (e) => {
+    const item = e.target.closest('.discover-result-item');
+    if (!item) return;
+    const idx = parseInt(item.dataset.idx);
+    if (!isNaN(idx)) selectDiscoverResult(idx);
+  });
+
+  // 底部栏导航
+  document.getElementById('discover-go-backcheck')?.addEventListener('click', () => {
+    if (discoverSelectedIdx != null && discoverResults[discoverSelectedIdx]) {
+      discoverPreselectCompany = discoverResults[discoverSelectedIdx].company;
+    }
+    const nav = document.querySelector('[data-page="backcheck"]');
+    if (nav) nav.click();
+  });
+  document.getElementById('discover-go-send')?.addEventListener('click', () => {
+    if (discoverSelectedIdx != null && discoverResults[discoverSelectedIdx]) {
+      selectedCompanySet.add(discoverResults[discoverSelectedIdx].company);
+    }
+    const nav = document.querySelector('[data-page="email-send"]');
+    if (nav) nav.click();
+  });
+
+  // 详情面板操作按钮事件委托
+  document.getElementById('discover-detail-content')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button');
+    if (!btn || !discoverSelectedIdx || !discoverResults[discoverSelectedIdx]) return;
+    const item = discoverResults[discoverSelectedIdx];
+    if (btn.id === 'discover-btn-import') await importSingleCompany(item);
+    if (btn.id === 'discover-btn-backcheck') await startBackcheckFromDiscover(item.company);
+    if (btn.id === 'discover-btn-send') goToSend(item.company);
+    if (btn.id === 'discover-btn-deepsearch') deepSearchFromDiscover(item);
+  });
+
+  // 确保联系人数据已加载以更新底部栏
+  if (!contactsData || !contactsData.length) {
+    try { contactsData = await window.electronAPI.getContacts(); } catch {}
+  }
+  updateDiscoverBottomBar();
 }
 
 async function doDiscoverSearch() {
@@ -4014,12 +4287,17 @@ async function doDiscoverSearch() {
 
   btn.disabled = true; btn.textContent = '搜索中...';
   document.getElementById('df-results').innerHTML = `<div class="discover-spin">${lucide('refresh-cw',20,'spin')} 正在多平台搜索...</div>`;
-  document.getElementById('df-actions').style.display = 'none';
+  document.getElementById('discover-results-empty').style.display = 'none';
+  document.getElementById('discover-detail-empty').style.display = '';
+  document.getElementById('discover-detail-content').style.display = 'none';
+  discoverResults = [];
+  discoverSelectedIdx = null;
 
   try {
-    const params = new URLSearchParams({ country, industry, role, keywords, limit: '30' });
-    const r = await fetch(`http://127.0.0.1:8765/search/discover?${params}`).then(r => r.json());
+    const r = await window.electronAPI.discoverSearch({ country, industry, role, keywords, limit: '30' });
     if (!r.ok) { document.getElementById('df-results').innerHTML = '<div class="discover-spin">搜索失败</div>'; return; }
+
+    discoverResults = r.companies || [];
 
     // 统计
     const stats = document.getElementById('df-stats');
@@ -4027,9 +4305,12 @@ async function doDiscoverSearch() {
     stats.innerHTML = `找到 <b>${r.total}</b> 家公司 · ${srcLabels}`;
     stats.style.display = '';
 
+    // 计数
+    const countEl = document.getElementById('df-count');
+    if (countEl) countEl.textContent = `共 ${discoverResults.length} 条`;
+
     // 渲染
-    renderDiscoverResults('df-results', r.companies);
-    document.getElementById('df-actions').style.display = 'flex';
+    renderDiscoverResults('df-results', discoverResults);
   } catch(e) {
     document.getElementById('df-results').innerHTML = `<div class="discover-spin">网络错误: ${e.message}</div>`;
   }
@@ -4044,13 +4325,14 @@ async function doEmailLookup() {
 
   btn.disabled = true; btn.textContent = '反查中...';
   document.getElementById('dl-results').innerHTML = `<div class="discover-spin">${lucide('refresh-cw',20,'spin')} 正在查找邮箱格式...</div>`;
-  document.getElementById('dl-actions').style.display = 'none';
   document.getElementById('dl-format').style.display = 'none';
+  document.getElementById('discover-results-empty').style.display = 'none';
+  discoverResults = [];
+  discoverSelectedIdx = null;
 
   try {
     const domain = email ? email.split('@')[1] : '';
-    const params = new URLSearchParams({ company, domain });
-    const r = await fetch(`http://127.0.0.1:8765/scrape/email-pattern?${params}`).then(r => r.json());
+    const r = await window.electronAPI.discoverLookup({ company, domain });
 
     if (!r.ok) {
       document.getElementById('dl-results').innerHTML = `<div class="discover-spin">未找到相关信息</div>`;
@@ -4066,15 +4348,15 @@ async function doEmailLookup() {
 
     // 渲染结果
     if (r.people?.length) {
-      renderDiscoverResults('dl-results', r.people.map(p => ({
+      discoverResults = r.people.map(p => ({
         company: p.name, website: p.email || '', snippet: `${p.title || ''} · ${p.source || ''}`,
         source: p.source || 'inferred', confidence: p.confidence || 0.5,
         extra: { email: p.email, title: p.title }
-      })));
+      }));
+      renderDiscoverResults('dl-results', discoverResults);
     } else {
       document.getElementById('dl-results').innerHTML = '<div class="discover-spin">未找到相关人员。尝试输入公司官网邮箱格式。</div>';
     }
-    document.getElementById('dl-actions').style.display = r.people?.length ? 'flex' : 'none';
   } catch(e) {
     document.getElementById('dl-results').innerHTML = `<div class="discover-spin">网络错误: ${e.message}</div>`;
   }
@@ -4083,32 +4365,48 @@ async function doEmailLookup() {
 
 function renderDiscoverResults(containerId, companies) {
   const container = document.getElementById(containerId);
-  if (!companies?.length) { container.innerHTML = '<div class="discover-spin">无结果</div>'; return; }
+  if (!container) return;
+  const emptyEl = document.getElementById('discover-results-empty');
+
+  if (!companies?.length) {
+    container.innerHTML = '<div class="discover-spin">无结果</div>';
+    if (emptyEl) emptyEl.style.display = '';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
 
   container.innerHTML = companies.map((c, i) => {
     const badge = c.confidence >= 0.7 ? 'badge-high' : c.confidence >= 0.5 ? 'badge-mid' : 'badge-low';
     const website = c.website || c.extra?.email || '';
     const snippet = c.snippet || c.extra?.title || '';
-    return `<label class="discover-result-item">
-      <input type="checkbox" data-idx="${i}" data-name="${escapeHtml(c.company)}" data-site="${escapeHtml(website)}" data-snippet="${escapeHtml(snippet)}">
+    return `<div class="discover-result-item" data-idx="${i}">
+      <input type="checkbox" data-idx="${i}" data-name="${escapeHtml(c.company)}" data-site="${escapeHtml(website)}" data-snippet="${escapeHtml(snippet)}" onclick="event.stopPropagation()">
       <div class="discover-result-info">
         <div class="dri-name">${escapeHtml(c.company)}</div>
         <div class="dri-meta">${escapeHtml(website)} · ${escapeHtml(snippet)}</div>
       </div>
-      <span class="discover-result-badge ${badge}">${c.source} ⭐${c.confidence.toFixed(1)}</span>
-    </label>`;
+      <span class="discover-result-badge ${badge}">${c.source} ⭐${(c.confidence||0).toFixed(1)}</span>
+    </div>`;
   }).join('');
 }
 
-function toggleAll(containerId) {
-  const cbs = document.querySelectorAll(`${containerId} input[type=checkbox]`);
+function toggleAllDiscover() {
+  const container = discoverActiveTab === 'find'
+    ? document.getElementById('df-results')
+    : document.getElementById('dl-results');
+  if (!container) return;
+  const cbs = container.querySelectorAll('input[type=checkbox]');
   const all = [...cbs].every(cb => cb.checked);
   cbs.forEach(cb => { cb.checked = !all; });
 }
 
-async function importSelected(containerId) {
-  const checked = document.querySelectorAll(`${containerId} input[type=checkbox]:checked`);
-  if (!checked.length) { alert('请先勾选'); return; }
+async function importSelectedDiscover() {
+  const container = discoverActiveTab === 'find'
+    ? document.getElementById('df-results')
+    : document.getElementById('dl-results');
+  if (!container) return;
+  const checked = container.querySelectorAll('input[type=checkbox]:checked');
+  if (!checked.length) { showToast('请先勾选公司', 'warn'); return; }
 
   const clients = [...checked].map(cb => ({
     company: cb.dataset.name,
@@ -4119,7 +4417,241 @@ async function importSelected(containerId) {
   }));
 
   const result = await window.electronAPI.importContacts(clients);
-  alert(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`);
+  showToast(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`, 'ok');
+  updateDiscoverBottomBar();
+
+  // 刷新当前选中项的详情
+  if (discoverSelectedIdx != null && discoverResults[discoverSelectedIdx]) {
+    selectDiscoverResult(discoverSelectedIdx);
+  }
+}
+
+// ── 右侧详情面板 ──────────────────────────────────────────────────
+function selectDiscoverResult(idx) {
+  discoverSelectedIdx = idx;
+  // 高亮结果行
+  const activeContainer = discoverActiveTab === 'find'
+    ? document.getElementById('df-results')
+    : document.getElementById('dl-results');
+  if (activeContainer) {
+    activeContainer.querySelectorAll('.discover-result-item').forEach(el => {
+      el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
+    });
+  }
+  renderDiscoverDetail(idx);
+}
+
+async function renderDiscoverDetail(idx) {
+  const item = discoverResults[idx];
+  if (!item) return;
+
+  const emptyEl = document.getElementById('discover-detail-empty');
+  const contentEl = document.getElementById('discover-detail-content');
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (contentEl) contentEl.style.display = 'flex';
+
+  // 公司基本信息
+  document.getElementById('discover-detail-name').textContent = item.company;
+  const website = item.website || item.extra?.email || '';
+  document.getElementById('discover-detail-fields').innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">🌐 官网</span><span style="word-break:break-all">${escapeHtml(website) || '--'}</span></div>
+    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">📌 来源</span><span>${item.source} · 置信度 ${(item.confidence || 0).toFixed(1)}</span></div>
+    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">📝 摘要</span><span style="color:var(--text-secondary)">${escapeHtml(item.snippet || '--')}</span></div>
+  `;
+
+  // 查询工作流状态
+  const status = await getWorkflowStatus(item.company);
+
+  // 操作按钮
+  const actions = document.getElementById('discover-action-btns');
+  let btns = '';
+  if (!status.imported) {
+    btns += `<button id="discover-btn-import">📥 导入到联系人</button>`;
+  } else {
+    btns += `<button class="secondary" disabled>✅ 已导入 (${status.contactCount} 位联系人)</button>`;
+  }
+  if (status.imported && !status.backcheckDone && !status.backcheckActive) {
+    btns += `<button id="discover-btn-backcheck">🔬 开始背调</button>`;
+  }
+  if (status.backcheckActive) {
+    btns += `<button class="secondary" disabled>⏳ 背调进行中...</button>`;
+  }
+  if (status.backcheckDone) {
+    btns += `<button class="secondary" disabled>✅ 背调完成 ${ratingStars(status.rating)}</button>`;
+  }
+  if (status.imported && !status.isArchived) {
+    btns += `<button id="discover-btn-send" class="secondary">📧 去发送邮件</button>`;
+  }
+  if (website && !website.includes('@')) {
+    btns += `<button id="discover-btn-deepsearch" class="secondary" style="font-size:12px">🔎 查找决策人</button>`;
+  }
+  actions.innerHTML = btns;
+
+  // Pipeline
+  renderWorkflowPipeline(status);
+}
+
+async function getWorkflowStatus(companyName) {
+  let contacts = contactsData;
+  if (!contacts || !contacts.length) {
+    try { contacts = await window.electronAPI.getContacts(); } catch { contacts = []; }
+  }
+  const backcheckStatus = await window.electronAPI.getBackcheckStatus();
+  const sendHistory = (typeof contactsSendHistory !== 'undefined' ? contactsSendHistory : null)
+    || await window.electronAPI.getSendHistory().catch(() => ({}))
+    || {};
+
+  const companyContacts = contacts.filter(c => (c.company || '').trim() === (companyName || '').trim());
+  const bcSt = backcheckStatus[companyName];
+  const sendSt = sendHistory[companyName];
+
+  return {
+    imported: companyContacts.length > 0,
+    contactCount: companyContacts.length,
+    backcheckDone: bcSt?.status === 'done',
+    backcheckActive: bcSt?.status === 'researching' || bcSt?.status === 'pending',
+    rating: bcSt?.rating || 0,
+    sendStage: sendSt?.stage || null,
+    isArchived: sendSt?.stage === 'archived',
+  };
+}
+
+function renderWorkflowPipeline(status) {
+  const pipeline = document.getElementById('discover-pipeline');
+  if (!pipeline) return;
+  const steps = [
+    { key: 'discovered', label: '已发现', done: true, active: false, meta: '' },
+    { key: 'imported', label: '已导入', done: status.imported, active: false,
+      meta: status.imported ? `${status.contactCount} 位联系人` : '' },
+    { key: 'backcheck', label: '背调完成', done: status.backcheckDone, active: status.backcheckActive,
+      meta: status.backcheckDone ? ratingStars(status.rating) : (status.backcheckActive ? '进行中...' : '') },
+    { key: 'sending', label: '开发信中', done: !!status.sendStage, active: false,
+      meta: status.sendStage ? (status.isArchived ? '📦 已归档' : '阶段: ' + status.sendStage.toUpperCase()) : '' },
+  ];
+
+  pipeline.innerHTML = steps.map(step => {
+    let cls = 'pending';
+    if (step.done) cls = 'done';
+    else if (step.active) cls = 'active';
+    const dot = step.done ? '✓' : (step.active ? '●' : '○');
+    return `<div class="discover-pipeline-step ${cls}">
+      <div class="step-dot">${dot}</div>
+      <span class="step-label">${step.label}</span>
+      <span class="step-meta">${step.meta}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── 工作流操作 ────────────────────────────────────────────────────
+async function importSingleCompany(item) {
+  const client = {
+    company: item.company,
+    website: item.website || item.extra?.email || '',
+    email: (item.website || '').includes('@') ? item.website : (item.extra?.email || ''),
+    contactName: '',
+    position: item.snippet || item.extra?.title || '',
+  };
+  const result = await window.electronAPI.importContacts([client]);
+  showToast(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`, 'ok');
+
+  // 刷新联系人数据
+  try { contactsData = await window.electronAPI.getContacts(); } catch {}
+
+  // 刷新详情面板
+  if (discoverSelectedIdx != null) selectDiscoverResult(discoverSelectedIdx);
+  updateDiscoverBottomBar();
+}
+
+async function startBackcheckFromDiscover(companyName) {
+  const contacts = contactsData && contactsData.length ? contactsData : await window.electronAPI.getContacts();
+  const contact = contacts.find(c => (c.company || '').trim() === (companyName || '').trim());
+  if (!contact) { showToast('未找到联系人数据，请先导入', 'err'); return; }
+
+  showToast(`正在启动 ${companyName} 背调...`, 'ok');
+  const result = await window.electronAPI.startResearch(contact, 'deep-research');
+  if (!result.ok) { showToast(result.message || '启动失败', 'err'); return; }
+
+  // 刷新详情面板
+  if (discoverSelectedIdx != null) selectDiscoverResult(discoverSelectedIdx);
+  updateDiscoverBottomBar();
+
+  // 自动跳转背调页面
+  const nav = document.querySelector('[data-page="backcheck"]');
+  if (nav) nav.click();
+}
+
+function goToSend(companyName) {
+  // 预添加到选中集合
+  if (typeof selectedCompanySet !== 'undefined') {
+    selectedCompanySet.add(companyName);
+  }
+  const nav = document.querySelector('[data-page="email-send"]');
+  if (nav) nav.click();
+}
+
+async function deepSearchFromDiscover(item) {
+  const btn = document.getElementById('discover-btn-deepsearch');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 搜索中...`;
+
+  const website = item.website || item.extra?.email || '';
+  try {
+    const result = await window.electronAPI.deepSearchContacts(website, item.company);
+    if (result?.people?.length) {
+      const peopleList = result.people.slice(0, 8).map(p =>
+        `<div style="padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:12px">
+          <span style="font-weight:600">${escapeHtml(p.name || '未知')}</span>
+          <span style="color:var(--text-secondary)"> · ${escapeHtml(p.title || '')}</span>
+          ${p.email ? `<span style="color:var(--primary)"> · ${escapeHtml(p.email)}</span>` : ''}
+          <span style="font-size:10px;color:var(--text-secondary)"> [${p.source}]</span>
+        </div>`
+      ).join('');
+      const fields = document.getElementById('discover-detail-fields');
+      if (fields) {
+        fields.insertAdjacentHTML('beforeend',
+          `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+            <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">🔎 决策人搜索结果:</span>
+            ${peopleList}
+          </div>`);
+      }
+    } else {
+      showToast('未找到决策人信息', 'warn');
+    }
+  } catch (e) {
+    showToast('决策人搜索失败: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+  btn.textContent = '🔎 查找决策人';
+}
+
+function updateDiscoverBottomBar() {
+  const bar = document.getElementById('discover-bottom-bar');
+  const summary = document.getElementById('discover-import-summary');
+  if (!bar || !summary) return;
+
+  // 统计当前搜索结果中已导入的联系人
+  let totalContacts = 0;
+  try {
+    const names = new Set(discoverResults.map(r => (r.company || '').trim()).filter(Boolean));
+    const allContacts = contactsData || [];
+    totalContacts = allContacts.filter(c => names.has((c.company || '').trim())).length;
+  } catch {}
+
+  if (totalContacts > 0) {
+    bar.style.display = 'flex';
+    const uniqueCompanies = new Set();
+    try {
+      (contactsData || []).forEach(c => {
+        if (discoverResults.some(r => (r.company || '').trim() === (c.company || '').trim())) {
+          uniqueCompanies.add(c.company);
+        }
+      });
+    } catch {}
+    summary.textContent = `已导入 ${uniqueCompanies.size} 家公司 · ${totalContacts} 位联系人`;
+  } else {
+    bar.style.display = 'none';
+  }
 }
 
 // ===== 初始化 ========================================================

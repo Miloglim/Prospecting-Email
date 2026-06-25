@@ -26,6 +26,60 @@ function loadSearchConfig() {
 const SCRAPLING_PORT = 8765;
 let scraplingProcess = null;
 
+// ── Agnes 开发信验证 ─────────────────────────────────────────────────
+const AGNES_API_KEY = 'sk-0vA9fyvTQt4mrlYnSu92daAmZnuZt5CiyBTOZ7jLq7xhKY42';
+const AGNES_ENDPOINT = 'https://apihub.agnes-ai.com/v1/chat/completions';
+
+async function verifyEmailWithAgnes(emailBody) {
+  const checklist = [
+    '对象类型正确（代理不提本地仓库/本地团队；直客可提墨西哥本地化；未标签用通用语言）',
+    '无广告垃圾词（最高级/紧迫词/夸大承诺/价格诱饵/排名宣称/全大写/感叹号）',
+    '无空洞形容词（competitivo/eficiente），líder不超过1次且有事实支撑',
+    '无 digital/AI/平台/technology 等技术词汇',
+    '全文第二人称，不教客户做事',
+    '首段无"Somos/We are"开头',
+    'CTA是给不是要',
+    '无占位符残留[XXX]',
+    'Saludos 后无任何文字',
+    '同一封不同时出现船东名+具体运价',
+    '使用了公司资料中的真实数字',
+    '列出了2-3个权威背书',
+  ];
+
+  const prompt = `你是一个开发信质检员。对照以下清单逐条检查这封开发信。\n\n【检查清单】\n${checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\n【开发信正文】\n${emailBody}\n\n逐条回复，格式：\n1. ✅/❌ 简述（10字以内）\n2. ✅/❌ 简述\n...\n\n最后一行写总结：通过 X/12 项。`;
+
+  try {
+    const body = JSON.stringify({
+      model: 'agnes-2.0-flash',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 512,
+    });
+
+    const result = await new Promise((resolve) => {
+      const url = new URL(AGNES_ENDPOINT);
+      const opts = {
+        hostname: url.hostname, port: 443, method: 'POST', path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AGNES_API_KEY },
+        timeout: 30000, rejectUnauthorized: false,
+      };
+      const req = https.request(opts, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve({ _raw: d, _status: res.statusCode }); } }); });
+      req.on('error', (e) => resolve({ _error: e.message })); req.on('timeout', () => { req.destroy(); resolve({ _error: 'timeout' }); }); req.end(body);
+    });
+
+    if (result._error) return { ok: false, error: '网络: ' + result._error };
+    if (result._raw) return { ok: false, error: 'HTTP ' + result._status + ': ' + (result._raw || '').slice(0, 200) };
+    if (result.error) return { ok: false, error: 'API错误: ' + JSON.stringify(result.error).slice(0, 200) };
+    if (!result?.choices?.[0]?.message?.content) return { ok: false, error: 'Agnes 返回空: ' + JSON.stringify(result).slice(0, 200) };
+    const content = result.choices[0].message.content;
+    const scoreMatch = content.match(/(\d+)\/12/);
+    const passed = scoreMatch ? parseInt(scoreMatch[1]) : 0;
+    return { ok: true, passed, total: 12, details: content };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 function callScraplingAPI(endpoint) {
   return new Promise((resolve) => {
     const url = `http://127.0.0.1:${SCRAPLING_PORT}${endpoint}`;
@@ -531,6 +585,11 @@ function setupIPC() {
       return oldM ? oldM[1].trim() : '';
     }
 
+    // 读取独立开发信文件
+    const emailPath = path.join(__dirname, '..', 'reports', '客户背调-' + fname + '-email.md');
+    let emailBody = '';
+    if (fs.existsSync(emailPath)) emailBody = fs.readFileSync(emailPath, 'utf-8');
+
     return {
       website: fieldVal('官网') || fieldVal('网站') || fieldVal('Website'),
       scale: fieldVal('规模') || fieldVal('Scale'),
@@ -538,8 +597,10 @@ function setupIPC() {
       imports: fieldVal('进口特征') || fieldVal('进口'),
       contact: fieldVal('收件人') || fieldVal('To'),
       news: fieldVal('近期动态') || fieldVal('动态'),
+      country: fieldVal('国家'),
       rating,
       raw: content,
+      emailBody,
     };
   });
 
@@ -968,6 +1029,32 @@ ${enLetter}`;
     const category = (company.category || '').trim();
     const fname = sanitizeFilename(cname).trim();
     const dateStr = new Date().toISOString().slice(0, 10);
+    const isBrazil = /bra[sz]il/i.test(country);
+    const emailSection = (isBrazil
+      ? '## 开发信（葡语）\n\n' +
+        '**Subject:** [15词以内，基于背调发现的具体痛点]\n\n' +
+        '一句话自我介绍 + 点名对方一个具体情况建立关联。\n\n' +
+        '【能力展示 — 分点列出，每条加粗关键词】\n' +
+        '- **海运头程：** 使用公司资料真实数字\n' +
+        '- **关务清关：** 使用公司资料真实数字\n' +
+        '- **仓储配送：** 使用公司资料真实数字\n\n' +
+        '【信任背书 — 择2-3个相关者列出】\n' +
+        '- 认证/投资/规模等\n\n' +
+        'CTA一句，给帮助不索要。\n\n' +
+        '**Saludos**\n'
+      : '## 开发信（西语）\n\n' +
+        '**Subject:** [15词以内，基于背调发现的具体痛点]\n\n' +
+        '一句话自我介绍 + 点名对方一个具体情况建立关联。\n\n' +
+        '【能力展示 — 分点列出，每条加粗关键词】\n' +
+        '- **海运头程：** 使用公司资料真实数字\n' +
+        '- **关务清关：** 使用公司资料真实数字\n' +
+        '- **仓储配送：** 使用公司资料真实数字\n\n' +
+        '【信任背书 — 择2-3个相关者列出】\n' +
+        '- 认证/投资/规模等\n\n' +
+        'CTA一句，给帮助不索要。\n\n' +
+        '**Saludos**\n'
+    ) +
+    '【开发信规则】①禁止"Espero que este mensaje...""Somos líderes""Estimado/a"等废话开头 ②禁止空洞形容词（competitivo/eficiente）和技术词（digital/AI/平台）③禁止最高级/紧迫词/夸大承诺/价格诱饵/全大写/感叹号 ④同一封不同时出现船东名+具体运价 ⑤全文第二人称不教客户 ⑥Saludos后无任何文字 ⑦必须引用公司资料真实数字\n';
 
     // Phase 1: 搜索
     notifyBackcheck(cname, { type: 'research-progress', progress: searcher + ' 搜索...' });
@@ -1018,17 +1105,42 @@ ${enLetter}`;
     notifyBackcheck(cname, { type: 'research-progress', progress: 'DeepSeek 分析...' });
     if (!apiKey) return { ok: false, status: 'error', message: '请配置 DeepSeek API Key' };
 
-    const systemPrompt =
-      '你是YQN物流集团（主营中国↔拉美海运/空运/报关/保税仓储）的商业情报分析师。' +
-      '根据实时搜索结果，为以下拉美公司生成一份专业的货代开发价值评估报告。\n\n' +
-      '【输出格式 — 严格按此 Markdown 模板】\n\n' +
-      '# 公司名  ⭐X/5\n\n> 国家 · 品类 | 货代开发价值 ⭐X\n\n' +
-      '| 项目 | |\n|------|------|\n| 官网 | URL |\n| 国家 | |\n| 品类 | |\n| 规模 | |\n| 总部 | |\n| 业务 | 一句话描述 |\n\n' +
-      '## 深度分析\n\n（2-3段，覆盖：业务模式、供应链、是否从亚洲进口、关务复杂度）\n\n' +
-      '## 近期动态\n\n（从搜索结果提取 3-5 条，没搜到就说未找到相关信息）\n\n' +
-      '## 开发信号\n\n- ✅ A: 招标/RFQ信号\n- ✅ B: 物流/采购招聘\n- ✅ C: 从中国/亚洲进口\n- ✅ D: 关务复杂度\n- ✅ E: 扩张\n- ✅ F: 决策人可达性\n- ❌ 缺失信号\n\n🟢/🟡/🔴 评级\n\n' +
-      '## 开发信（西语/葡语 + 英语）\n\n### 西语版/葡语版\n[基于搜索结果定制切入点，约150词]\n\n### English Version\n[同上]\n\n> 📅 ' + dateStr + ' · ' + searcher + ' + DeepSeek\n\n' +
-      '【规则】① 优先使用搜索结果中的真实信息 ② 没搜到的标注⚠️待验证 ③ 不虚构 ④ 评分基于证据 ⑤ 不同公司必须有不同的分析内容';
+    const systemPrompt = '你是YQN物流集团（主营中国↔拉美海运/空运/报关/保税仓储）的商业情报分析师。' +
+      '直接输出报告，禁止任何前置寒暄、问候语、"好的"、"以下是"等废话。第一行必须是 # 标题。\n\n' +
+      '【输出模板 — 严格遵循】\n\n' +
+      '# 公司名 ⭐X/5\n\n> 国家 · 品类 | 货代开发价值 ⭐X/5\n\n' +
+      '| 项目 | 内容 |\n|------|------|\n| 官网 | URL |\n| 国家 | |\n| 品类 | |\n| 规模 | |\n| 总部 | |\n| 业务 | |\n\n' +
+      '## 深度分析\n\n2-3段，覆盖：业务模式、供应链结构、是否从亚洲/中国进口、关务复杂度。只写结论，不写推理过程。\n\n' +
+      '## 近期动态\n\n每条一行，格式：- YYYY-MM 事件简述（来源）。最多5条，搜不到写「- 未找到近期公开动态」\n\n' +
+      '## 开发信号\n\n每条一行，格式：- ✅/❌ 信号名 — 一句话证据。禁止写"未找到相关信息"这种废话，直接写- ❌ 信号名\n\n' +
+      '## 评级\n\n总分 X/5。A(+3) B(+2~3) C(+1~2) D(+1) E(+1) F(+1)，内部物流-3。一句话说明理由。\n\n' +
+      emailSection +
+      '\n> 📅 ' + dateStr + ' · ' + searcher + ' + DeepSeek\n\n' +
+      '【硬约束】' +
+      '① 直接输出报告，禁止"好的""以下是""根据搜索结果"等开场白 ' +
+      '② 评分必须用数字 ⭐X/5，禁止只写星星 ' +
+      '③ 表格 | 项目 | 内容 | 第二列必须填，未知写 ⚠️待验证 ' +
+      '④ 信号行简洁：- ✅ C: 从中国进口 — 官网显示主营亚洲货源。禁止写成"未找到相关信息"长句 ' +
+      '⑤ 开发信以真人商务口吻写，禁止出现"AI""分析报告""评估""情报"等词。正文后只写 Saludos 即结束，其后绝对不写任何文字（禁止姓名/职位/公司名/联系方式） ' +
+      '⑥ 禁止复述用户输入（如"您提供的国家为Mexico"），直接写结论 ' +
+      '⑦ 不同公司必须有不同的分析内容，禁止模板化复制 ' +
+      '⑧ 开发信只生成' + (isBrazil ? '葡语' : '西语') + '版本，不生成英语。Saludos 后无任何文字\n\n' +
+      '【公司资料 — 开发信引用以下真实数字，禁止编造】\n' +
+      'YQN Logistics：全球1500+员工、25+分公司（含墨西哥直属）、服务35000+企业、合作300+船司（COSCO/Maersk/CMA CGM/MSC等）、18个海外仓600万+sqft（含墨西哥）、覆盖200+国家、年营收近80亿元。红杉中国/Coatue投资、D轮独角兽。AEO认证。\n' +
+      '墨西哥本地：直属分公司+海外仓+清关团队（非外包）、RFC合规正清（通关3-5天、查验率<5%）、正清通过率95%+。\n' +
+      '能力：海运/空运/报关/保税仓储/全程可视化/AI订舱30分钟出预配/300+船司实时比价。\n' +
+      '发信人：' + (cfg?.sender?.name || 'Zayne') + ' | Overseas Sales · LatAm Desk | YQN Logistics\n\n' +
+      '【开发信自查清单 — 生成后逐项确认】\n' +
+      '- 对象类型正确（代理不提本地仓库/本地团队；直客可提墨西哥本地化；未标签用通用语言，不提本地也不否定）\n' +
+      '- 无广告垃圾词（最高级/紧迫词/夸大承诺/价格诱饵/排名宣称/全大写/感叹号）\n' +
+      '- 无空洞形容词（competitivo/eficiente等），líder不超过1次且有事实支撑\n' +
+      '- 无 digital/AI/平台/technology 等技术词汇\n' +
+      '- 全文第二人称，不教客户做事\n' +
+      '- 首段无"Somos/We are"（Hook说客户不说自己）\n' +
+      '- CTA是给不是要\n' +
+      '- 无占位符残留[XXX]\n' +
+      '- Saludos 后无任何文字（无姓名/职位/公司名）\n' +
+      '- 同一封不同时出现船东名+具体运价';
 
     const userPrompt = '公司名：' + cname + '\n国家：' + country + '\n品类：' + (category || '未知') +
       (searchContext ? '\n\n【实时搜索结果】\n\n' + searchContext : '\n\n（无实时搜索结果，基于你的知识分析）') +
@@ -1042,11 +1154,24 @@ ${enLetter}`;
         req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); }); req.end(body);
       });
       if (!result?.choices?.[0]?.message?.content) return { ok: false, status: 'error', message: 'DeepSeek 返回空' };
-      const report = result.choices[0].message.content;
-      const rating = parseInt((report.match(/⭐(\d)\/5/) || [])[1]) || 3;
-      const reportPath = path.join(__dirname, '..', 'reports', '客户背调-' + fname + '.md');
-      const dir = path.dirname(reportPath); if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(reportPath, report);
+      const fullText = result.choices[0].message.content;
+      const rating = parseInt((fullText.match(/⭐(\d)\/5/) || [])[1]) || 3;
+
+      // 保存完整报告（含开发信）+ 同时另存开发信独立文件给加入队列用
+      const dir = path.join(__dirname, '..', 'reports');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const reportPath = path.join(dir, '客户背调-' + fname + '.md');
+      fs.writeFileSync(reportPath, fullText);
+
+      const emailSplit = fullText.split(/\n##\s*开发信/);
+      if (emailSplit.length > 1) {
+        const emailBody = ('## 开发信' + emailSplit[1]).trim();
+        if (emailBody.length >= 20) {
+          const emailPath = path.join(dir, '客户背调-' + fname + '-email.md');
+          fs.writeFileSync(emailPath, emailBody);
+        }
+      }
       notifyBackcheck(cname, { type: 'research-progress', progress: '报告已生成' });
       return { ok: true, status: 'done', rating, message: '报告已生成' };
     } catch (e) { return { ok: false, status: 'error', message: '请求失败: ' + (e.message || '未知') }; }
@@ -1699,11 +1824,34 @@ ${enLetter}`;
         imports: extractField(content, '进口特征') || extractField(content, '进口'),
         contact: extractField(content, '收件人') || extractField(content, 'To'),
         news: extractField(content, '近期动态') || extractField(content, '动态'),
+        country: extractField(content, '国家'),
         rating: extractRating(content),
         raw: content,
       };
     } catch { return { rating: 0, raw: '' }; }
   }
+
+  // 批量更新联系人国家标签
+  ipcMain.handle('contacts:updateCountry', async (_e, companyName, newCountry) => {
+    const contactsPath = path.join(__dirname, '..', 'data', 'contacts.json');
+    try {
+      if (!fs.existsSync(contactsPath)) return { ok: false, error: '联系人文件不存在' };
+      const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+      let updated = 0;
+      for (const c of contacts) {
+        if ((c.company || '').trim() === companyName.trim()) {
+          c.country = newCountry;
+          updated++;
+        }
+      }
+      if (updated > 0) {
+        fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
+      }
+      return { ok: true, updated, total: contacts.filter(c => (c.company || '').trim() === companyName.trim()).length };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
 
   ipcMain.handle('backcheck:markDone', async (_e, companyName, rating) => {
     const status = readBackcheckStatus();
@@ -1714,6 +1862,10 @@ ${enLetter}`;
     };
     writeBackcheckStatus(status);
     return { ok: true };
+  });
+
+  ipcMain.handle('backcheck:verifyEmail', async (_e, emailBody) => {
+    return verifyEmailWithAgnes(emailBody);
   });
 
   ipcMain.handle('app:openReports', async () => {
@@ -1942,7 +2094,8 @@ ${enLetter}`;
     return contacts.filter(c =>
       c.company.toLowerCase().includes(q) ||
       (c.country || '').toLowerCase().includes(q) ||
-      (c.category || '').toLowerCase().includes(q)
+      (c.category || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q)
     );
   });
 
@@ -2377,6 +2530,17 @@ ${enLetter}`;
     return { proxy: proxy ? `${proxy.hostname}:${proxy.port}` : null, results };
   });
 
+  // ── 客户开发搜索（代理到 scrapling service）──────────────────────────
+  ipcMain.handle('discover:search', async (_e, params) => {
+    const qs = new URLSearchParams(params).toString();
+    return callScraplingAPI(`/search/discover?${qs}`);
+  });
+
+  ipcMain.handle('discover:lookup', async (_e, params) => {
+    const qs = new URLSearchParams(params).toString();
+    return callScraplingAPI(`/scrape/email-pattern?${qs}`);
+  });
+
   // ── 队列文件持久化 ────────────────────────────────────────────────
   const queueFilePath = path.join(__dirname, '..', 'data', 'email-queue.json');
 
@@ -2487,6 +2651,9 @@ async function runSendBatch() {
   const lastDateKey = log.last_date_beijing || log.last_date;
   if (lastDateKey !== todayBJT) { log.daily_count = 0; log.last_date_beijing = todayBJT; }
 
+  // 读取发送状态（含上次暂停的批次等待剩余秒数）
+  let sendState = {};
+  try { const sp = path.join(__dirname, '..', 'data', 'send-state.json'); if (fs.existsSync(sp)) sendState = JSON.parse(fs.readFileSync(sp, 'utf-8')); } catch {}
   currentSendAbort = false;
   if (!config.smtp?.host || !config.smtp?.user) {
     sendProgress({ error: 'SMTP 未配置，请在设置中填写' });
@@ -2617,11 +2784,29 @@ async function runSendBatch() {
     const BATCH_PAUSE_MIN = (config.schedule?.batch_pause_min || 150) * 1000;
     const BATCH_PAUSE_MAX = (config.schedule?.batch_pause_max || 210) * 1000;
 
-    let batchEmailCount = 0; // 按实际邮件数计，非队列项数
+    // 恢复上次暂停时未跑完的批次等待
+    if (sendState?.batchPauseRemaining > 0) {
+      const remain = sendState.batchPauseRemaining;
+      console.log(`[发信] 恢复批次暂停: 剩余 ${remain}s`);
+      sendProgress({ type: 'delay', seconds: remain, company: '恢复等待' });
+      for (let s = 0; s < remain && !isPaused && !currentSendAbort; s++) await sleep(1000);
+      if (isPaused || currentSendAbort) { await currentTransporter.close(); return; }
+    }
+
+    let batchEmailCount = 0;
     for (let i = 0; i < sendQueue.length; i++) {
-      if (currentSendAbort) break;
-      if (isPaused) break;
-      if (!testMode && log.daily_count >= maxPerDay) break;
+      if (currentSendAbort) {
+        sendProgress({ type: 'cancelled', index: i, total: sendQueue.length, message: '发送已取消' });
+        break;
+      }
+      if (isPaused) {
+        sendProgress({ type: 'paused', index: i, total: sendQueue.length });
+        break;
+      }
+      if (!testMode && log.daily_count >= maxPerDay) {
+        sendProgress({ type: 'limit', index: i, total: sendQueue.length, message: `已达每日上限 ${maxPerDay}` });
+        break;
+      }
 
       // 等待时间窗口
       while (!inWindow() && !isPaused && !testMode && !currentSendAbort) {
@@ -2710,8 +2895,18 @@ async function runSendBatch() {
         console.log(`[发信] 批量暂停: 已发 ${batchEmailCount} 封，等待 ${pauseSec}s (${Math.round(pauseSec/60)}min)`);
         sendProgress({ type: 'delay', seconds: pauseSec, company: `下批(${batchEmailCount}封后)` });
         // 分批睡眠，每秒检查是否暂停/取消
-        for (let s = 0; s < pauseSec && !isPaused && !currentSendAbort; s++) await sleep(1000);
-        if (isPaused || currentSendAbort) break;
+        let s = 0;
+        for (; s < pauseSec && !isPaused && !currentSendAbort; s++) await sleep(1000);
+        if (isPaused || currentSendAbort) {
+          // 保存剩余等待秒数
+          try {
+            const sp = path.join(__dirname, '..', 'data', 'send-state.json');
+            let st = {}; if (fs.existsSync(sp)) st = JSON.parse(fs.readFileSync(sp, 'utf-8'));
+            st.batchPauseRemaining = pauseSec - s;
+            fs.writeFileSync(sp, JSON.stringify(st, null, 2));
+          } catch {}
+          break;
+        }
         batchEmailCount = 0;
       }
     }
@@ -2719,7 +2914,11 @@ async function runSendBatch() {
     if (tray && !isPaused && !currentSendAbort && !testMode) {
       new Notification({ title: "Milogin's Prospector", body: `发送完成: 成功 ${batchSent} 封` + (batchFailed ? `, 失败 ${batchFailed} 封` : '') }).show();
     }
-    sendProgress({ type: 'complete', total: sendQueue.length, sent: batchSent, failed: batchFailed, _testMode: testMode || undefined });
+    if (!isPaused && !currentSendAbort) {
+      // 发送完成，重置状态
+      try { const sp = path.join(__dirname, '..', 'data', 'send-state.json'); fs.writeFileSync(sp, JSON.stringify({ status: 'idle' }, null, 2)); } catch {}
+      sendProgress({ type: 'complete', total: sendQueue.length, sent: batchSent, failed: batchFailed, _testMode: testMode || undefined });
+    }
     return;
   }
 
@@ -2886,7 +3085,11 @@ async function runSendBatch() {
     new Notification({ title: "Milogin's Prospector", body: `发送完成: 成功 ${batchSent} 封` + (batchFailed ? `, 失败 ${batchFailed} 封` : '') }).show();
   }
 
-  sendProgress({ type: 'complete', total: sendQueue.length, sent: batchSent, failed: batchFailed, _testMode: testMode || undefined });
+  if (!isPaused && !currentSendAbort) {
+    // 发送完成，重置状态
+    try { const sp = path.join(__dirname, '..', 'data', 'send-state.json'); fs.writeFileSync(sp, JSON.stringify({ status: 'idle' }, null, 2)); } catch {}
+    sendProgress({ type: 'complete', total: sendQueue.length, sent: batchSent, failed: batchFailed, _testMode: testMode || undefined });
+  }
 
   // 写入发信会话日志
   if (!testMode) {

@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getBackcheckDetail: (company) => ipcRenderer.invoke('backcheck:getDetail', company),
   startResearch: (company, provider) => ipcRenderer.invoke('backcheck:research', company, provider),
   markBackcheckDone: (company, rating) => ipcRenderer.invoke('backcheck:markDone', company, rating),
+  verifyEmail: (emailBody) => ipcRenderer.invoke('backcheck:verifyEmail', emailBody),
   cancelBackcheck: (company) => ipcRenderer.invoke('backcheck:cancel', company),
   onBackcheckProgress: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -34,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearBounce: (email) => ipcRenderer.invoke('contacts:clearBounce', email),
   deleteAllContacts: () => ipcRenderer.invoke('contacts:deleteAll'),
   deleteCompany: (company) => ipcRenderer.invoke('contacts:deleteCompany', company),
+  updateCompanyCountry: (company, newCountry) => ipcRenderer.invoke('contacts:updateCountry', company, newCountry),
   searchContacts: (query) => ipcRenderer.invoke('contacts:search', query),
   deepSearchContacts: (website, company) => ipcRenderer.invoke('contacts:deepSearch', website, company),
 
@@ -98,6 +100,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 网络
   checkNetwork: () => ipcRenderer.invoke('network:check'),
+
+  // 客户开发（通过 IPC 代理，安全）
+  discoverSearch: (params) => ipcRenderer.invoke('discover:search', params),
+  discoverLookup: (params) => ipcRenderer.invoke('discover:lookup', params),
 
   // 设置
   loadConfig: () => ipcRenderer.invoke('config:load'),

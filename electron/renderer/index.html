@@ -21,7 +21,7 @@
       </li>
       <li class="nav-sub" data-page="template-editor"><span class="nav-icon" data-icon="pencil"></span> 模板调整</li>
       <li class="nav-sub" data-page="signature"><span class="nav-icon" data-icon="signature"></span> 签名管理</li>
-      <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="search"></span> 模板预览</li>
+      <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="layout"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
       <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="download"></span> 退信检测</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
@@ -111,54 +111,87 @@
           <h2><span data-icon="search"></span> 背调详情</h2>
           <div id="backcheck-companies"></div>
         </div>
-        <div class="backcheck-card" id="backcheck-card">
-          <div id="network-status" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:6px;font-size:11px;background:#f5f6fa;border:1px solid var(--border)">
-            <span id="network-status-text">检查中...</span>
-            <button id="network-check-btn" style="margin-left:8px;font-size:10px;padding:2px 8px;cursor:pointer" class="secondary">重新检查</button>
+        <div class="backcheck-right">
+          <div id="network-status" style="display:none;margin-bottom:8px;padding:8px 12px;border-radius:6px;font-size:11px;background:#fff3e0;border:1px solid #ffe0b2">
+            <span id="network-status-text" style="flex:1">检查中...</span>
+            <button id="network-check-btn" style="margin-left:8px;font-size:10px;padding:2px 8px;cursor:pointer">重新检查</button>
+            <button id="network-close-btn" style="margin-left:4px;font-size:14px;padding:0 4px;cursor:pointer;line-height:1;background:none;border:none;color:#999" title="关闭">×</button>
           </div>
-          <p class="placeholder">选择左侧公司，点击「开始背调」</p>
+          <div id="backcheck-toolbar" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:10px;flex-shrink:0"></div>
+          <div id="backcheck-report-wrap" style="flex:1;overflow-y:auto;min-height:0">
+            <p class="placeholder">选择左侧公司，点击「开始背调」</p>
+          </div>
+          <span id="translate-status" style="display:none;margin-top:6px;font-size:11px;color:var(--text-secondary);text-align:center"></span>
+          <div id="deep-search-results" style="margin-top:8px;display:none"></div>
         </div>
       </div>
     </section>
 
     <!-- 🔍 客户开发 -->
     <section id="page-discover" class="page">
-      <div class="discover-layout">
+      <div class="discover-layout-v2">
         <div class="discover-tabs">
           <button class="discover-tab active" data-tab="find">🔍 客户发现</button>
           <button class="discover-tab" data-tab="lookup">📧 邮箱反查</button>
         </div>
-
-        <!-- Tab 1: 客户发现 -->
-        <div id="discover-find" class="discover-panel">
-          <div class="discover-search-bar">
-            <select id="df-country"><option value="">国家</option></select>
-            <input id="df-industry" placeholder="行业(如 auto parts)">
-            <select id="df-role"><option value="importer">进口商</option><option value="distributor">分销商</option><option value="manufacturer">制造商</option><option value="any">不限</option></select>
-            <input id="df-keywords" placeholder="额外关键词">
-            <button id="df-search">开始搜索</button>
+        <div class="discover-main">
+          <!-- 左列：搜索面板 -->
+          <div class="discover-search-col">
+            <div id="discover-find-search" class="discover-search-form">
+              <div class="form-group"><label>国家</label><select id="df-country"><option value="">选择国家</option></select></div>
+              <div class="form-group"><label>行业</label><input id="df-industry" placeholder="如 auto parts"></div>
+              <div class="form-group"><label>角色</label><select id="df-role"><option value="importer">进口商</option><option value="distributor">分销商</option><option value="manufacturer">制造商</option><option value="any">不限</option></select></div>
+              <div class="form-group"><label>关键词</label><input id="df-keywords" placeholder="额外关键词"></div>
+              <button id="df-search" style="width:100%;margin-top:4px">开始搜索</button>
+              <div id="df-stats" class="discover-stats" style="display:none"></div>
+            </div>
+            <div id="discover-lookup-search" class="discover-search-form" style="display:none">
+              <div class="form-group"><label>公司名</label><input id="dl-company" placeholder="公司名"></div>
+              <div style="text-align:center;color:var(--text-secondary);margin:8px 0;font-size:12px">或</div>
+              <div class="form-group"><label>已知邮箱</label><input id="dl-email" placeholder="name@company.com"></div>
+              <button id="dl-search" style="width:100%;margin-top:4px">开始反查</button>
+              <div id="dl-format" class="discover-stats" style="display:none"></div>
+            </div>
           </div>
-          <div id="df-stats" class="discover-stats" style="display:none"></div>
-          <div id="df-results" class="discover-results"></div>
-          <div id="df-actions" class="discover-actions" style="display:none">
-            <button id="df-selectall">全选</button>
-            <button id="df-import">导入选中到客户库</button>
+
+          <!-- 中列：结果列表 -->
+          <div class="discover-results-col">
+            <div class="discover-results-head">
+              <button id="df-selectall" class="secondary" style="font-size:11px;padding:4px 10px">全选</button>
+              <button id="df-import" class="secondary" style="font-size:11px;padding:4px 10px">导入选中</button>
+              <span id="df-count" style="font-size:11px;color:var(--text-secondary);margin-left:auto"></span>
+            </div>
+            <div id="df-results" class="discover-results"></div>
+            <div id="dl-results" class="discover-results" style="display:none"></div>
+            <p class="placeholder" id="discover-results-empty">选择国家后点击搜索</p>
+          </div>
+
+          <!-- 右列：详情/操作面板 -->
+          <div class="discover-detail-col">
+            <div id="discover-detail-empty" class="placeholder" style="height:100%;display:flex;align-items:center;justify-content:center;margin:0;border:none;border-radius:0">
+              ← 选择一家公司查看详情和可用操作
+            </div>
+            <div id="discover-detail-content" style="display:none;flex-direction:column">
+              <h3 id="discover-detail-name" style="font-size:16px;font-weight:700;color:var(--primary);margin-bottom:12px"></h3>
+              <div id="discover-detail-fields" style="font-size:13px;line-height:1.8;margin-bottom:20px"></div>
+              <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:16px">
+                <h4 style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:8px">操作</h4>
+                <div id="discover-action-btns" style="display:flex;flex-direction:column;gap:6px"></div>
+              </div>
+              <div style="border-top:1px solid var(--border);padding-top:14px">
+                <h4 style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:10px">开发进度</h4>
+                <div id="discover-pipeline" class="discover-pipeline"></div>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Tab 2: 邮箱反查 -->
-        <div id="discover-lookup" class="discover-panel" style="display:none">
-          <div class="discover-search-bar">
-            <input id="dl-company" placeholder="公司名">
-            <span style="color:var(--text-secondary)">或</span>
-            <input id="dl-email" placeholder="已知邮箱 (如 name@company.com)">
-            <button id="dl-search">开始反查</button>
-          </div>
-          <div id="dl-format" class="discover-stats" style="display:none"></div>
-          <div id="dl-results" class="discover-results"></div>
-          <div id="dl-actions" class="discover-actions" style="display:none">
-            <button id="dl-selectall">全选</button>
-            <button id="dl-import">导入选中到联系人</button>
+        <!-- 底部操作栏 -->
+        <div class="discover-bottom-bar" id="discover-bottom-bar" style="display:none">
+          <span id="discover-import-summary"></span>
+          <div style="display:flex;gap:8px">
+            <button id="discover-go-backcheck" class="secondary">去背调页面</button>
+            <button id="discover-go-send">去邮件发送</button>
           </div>
         </div>
       </div>
@@ -201,7 +234,7 @@
 
     <!-- 📝 模板预览 -->
     <section id="page-template-preview" class="page">
-      <h2><span data-icon="search"></span> 模板预览</h2>
+      <h2><span data-icon="eye"></span> 模板预览</h2>
       <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">模拟真实发送阶段的开发信组装，多次点击「重新生成」观察模板稳定性。</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <span style="font-size:11px;color:var(--text-secondary)">类型</span>
@@ -349,6 +382,7 @@
         <button id="bounce-clear-btn" class="secondary" style="font-size:11px;padding:4px 10px">清除记录</button>
         <button id="bounce-del-all-btn" class="secondary" style="font-size:11px;padding:4px 10px;color:var(--danger);display:none">一键删除全部</button>
         <span id="bounce-status" style="font-size:12px;color:var(--text-secondary)"></span>
+        <span id="bounce-countdown" style="font-size:11px;color:var(--text-secondary);margin-left:auto"></span>
       </div>
       <div id="bounce-groups"></div>
       <p class="placeholder" id="bounce-empty">点击「检查退信」扫描邮箱中的退信邮件，自动匹配联系人数据库</p>
