@@ -41,6 +41,9 @@ reports/
 dist/
 out/
 
+# 打包产物（输出到外部目录）
+product/
+
 # 系统文件
 .DS_Store
 Thumbs.db
