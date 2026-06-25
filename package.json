@@ -28,9 +28,12 @@
       "templates/**",
       "send/config.json",
       "send/signature.html",
-      "node_modules/**",
       "assets/**",
-      "package.json"
+      "package.json",
+      "node_modules/**",
+      "!node_modules/puppeteer/**",
+      "!node_modules/puppeteer-extra/**",
+      "!node_modules/puppeteer-extra-plugin-stealth/**"
     ],
     "extraResources": []
   },
