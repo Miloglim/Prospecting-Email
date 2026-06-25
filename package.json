@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win"
+    "build": "set NODE_TLS_REJECT_UNAUTHORIZED=0&& set HTTP_PROXY=&& set HTTPS_PROXY=&& electron-builder --win"
   },
   "build": {
     "appId": "com.milogin.prospecting-email",
