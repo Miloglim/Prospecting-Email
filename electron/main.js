@@ -27,10 +27,22 @@ const SCRAPLING_PORT = 8765;
 let scraplingProcess = null;
 
 // ── Agnes 开发信验证 ─────────────────────────────────────────────────
-const AGNES_API_KEY = 'sk-0vA9fyvTQt4mrlYnSu92daAmZnuZt5CiyBTOZ7jLq7xhKY42';
 const AGNES_ENDPOINT = 'https://apihub.agnes-ai.com/v1/chat/completions';
+// ponytail: 从 config 读 key，打包时 config 预配置
+function getAgnesKey() {
+  try {
+    const cfgPath = path.join(__dirname, '..', 'send', 'config.json');
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+      return cfg.verify?.agnesKey || '';
+    }
+  } catch {}
+  return '';
+}
 
 async function verifyEmailWithAgnes(emailBody) {
+  const apiKey = getAgnesKey();
+  if (!apiKey) return { ok: false, error: '未配置 Agnes API Key' };
   const checklist = [
     '对象类型正确（代理不提本地仓库/本地团队；直客可提墨西哥本地化；未标签用通用语言）',
     '无广告垃圾词（最高级/紧迫词/夸大承诺/价格诱饵/排名宣称/全大写/感叹号）',
@@ -60,7 +72,7 @@ async function verifyEmailWithAgnes(emailBody) {
       const url = new URL(AGNES_ENDPOINT);
       const opts = {
         hostname: url.hostname, port: 443, method: 'POST', path: url.pathname,
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AGNES_API_KEY },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
         timeout: 30000, rejectUnauthorized: false,
       };
       const req = https.request(opts, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve({ _raw: d, _status: res.statusCode }); } }); });
