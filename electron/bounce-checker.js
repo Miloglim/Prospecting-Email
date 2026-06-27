@@ -4,6 +4,10 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 
+// ponytail: 打包后 __dirname 在 asar 内，不能往上走
+const _IS_PKG = __dirname.includes('.asar');
+const APP_ROOT = _IS_PKG ? path.dirname(process.resourcesPath) : path.join(__dirname, '..');
+
 const BOUNCE_KW = ['undelivered','returned','failure','bounce','undeliverable',
   'delivery status','mail delivery','returned mail','message undeliverable',
   '退信','失败','退回','系统退信','无法送达','退信通知','投递失败',
@@ -213,7 +217,7 @@ function decodeMimeHeader(str) {
 }
 
 // ── 退信日志去重 ──────────────────────────────────────────────────────
-const BOUNCE_LOG_PATH = path.join(__dirname, '..', 'data', 'bounce-log.json');
+const BOUNCE_LOG_PATH = path.join(APP_ROOT, 'data', 'bounce-log.json');
 
 function dedupBounceLog(entries) {
   const seen = new Set();
@@ -281,7 +285,7 @@ function pop3Cmd(sock, cmd) {
 }
 
 // ── UID 游标 ──────────────────────────────────────────────────────────
-const CURSOR_PATH = path.join(__dirname, '..', 'data', 'bounce-check-cursor.json');
+const CURSOR_PATH = path.join(APP_ROOT, 'data', 'bounce-check-cursor.json');
 
 function readCursor() {
   try { return fs.existsSync(CURSOR_PATH) ? JSON.parse(fs.readFileSync(CURSOR_PATH, 'utf-8')) : {}; }
@@ -476,7 +480,7 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
 
 // ── 主入口 ────────────────────────────────────────────────────────────
 async function checkBounces() {
-  const configPath = path.join(__dirname, '..', 'send', 'config.json');
+  const configPath = path.join(APP_ROOT, 'send', 'config.json');
   if (!fs.existsSync(configPath)) return { ok: false, error: '配置文件不存在' };
   let config;
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return { ok: false, error: '配置文件格式错误' }; }

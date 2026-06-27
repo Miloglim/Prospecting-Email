@@ -20,6 +20,7 @@ send/bodies.json
 
 # 用户个人数据（含邮箱、姓名、手机号）
 data/contacts.json
+data/contacts.bak*
 data/signatures.json
 data/send-history.json
 data/backcheck-status.json
@@ -28,6 +29,7 @@ data/bounce-check-cursor.json
 data/send-state.json
 data/email-queue.json
 data/template-overrides.json
+data/user-templates.json
 
 # 背调报告（含邮箱、地址）
 reports/
@@ -48,6 +50,15 @@ product/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 外部工具缓存
+.serena/
+.understand-anything/
+electron/renderer/node_modules/
+
+# 运行时生成的数据
+data/send-bodies.json
+send/send-log.json.tmp
 
 # IDE
 .vscode/

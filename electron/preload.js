@@ -47,10 +47,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reloadTemplate: () => ipcRenderer.invoke('template:reload'),
   applyStageOverrides: (stages, overridesStages) => ipcRenderer.invoke('template:applyStageOverrides', stages, overridesStages),
 
+  // 用户模板
+  listUserTemplates: () => ipcRenderer.invoke('template:listUser'),
+  saveUserTemplate: (tpl) => ipcRenderer.invoke('template:saveUser', tpl),
+  deleteUserTemplate: (id) => ipcRenderer.invoke('template:deleteUser', id),
+
   // 发送
   startSend: (emails) => ipcRenderer.invoke('send:start', emails),
+  resumeSend: () => ipcRenderer.invoke('send:resume'),
   pauseSend: () => ipcRenderer.invoke('send:pause'),
   cancelSend: () => ipcRenderer.invoke('send:cancel'),
+  sendTestOne: (params) => ipcRenderer.invoke('send:testOne', params),
   getSendStatus: () => ipcRenderer.invoke('send:status'),
   onSendProgress: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -58,9 +65,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('send:progress', handler);
   },
 
-  // 翻译
-  translateReport: (companyName) => ipcRenderer.invoke('translate:report', companyName),
-  loadTranslatedReport: (companyName) => ipcRenderer.invoke('translate:loadZh', companyName),
 
   // 签名
   loadSignature: () => ipcRenderer.invoke('signature:load'),
@@ -93,10 +97,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reactivateCompany: (company) => ipcRenderer.invoke('history:reactivate', company),
 
   // 系统
+  windowMinimize: () => ipcRenderer.send('window:minimize'),
+  windowMaximize: () => ipcRenderer.send('window:maximize'),
+  windowClose: () => ipcRenderer.send('window:close'),
   minimizeToTray: () => ipcRenderer.invoke('app:minimizeToTray'),
   openReportsFolder: () => ipcRenderer.invoke('app:openReports'),
   openSendFolder: () => ipcRenderer.invoke('app:openSendFolder'),
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
+  openLogFile: () => ipcRenderer.invoke('app:openLogFile'),
 
   // 网络
   checkNetwork: () => ipcRenderer.invoke('network:check'),
@@ -108,4 +116,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 设置
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (config) => ipcRenderer.invoke('config:save', config),
+
+  // 通用设置
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('general:setAutoLaunch', enabled),
+  getAutoLaunch: () => ipcRenderer.invoke('general:getAutoLaunch'),
 });

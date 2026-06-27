@@ -1,13 +1,91 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+  <script>
+    // 同步读取主题，避免页面闪烁
+    try { var t = JSON.parse(localStorage.getItem('app-theme') || '"light"'); document.documentElement.setAttribute('data-theme', t); } catch(e) {}
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Milogin's Prospector</title>
+  <title>Milogin's Prospector.</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- ========== 启动加载层 ========== -->
+  <div id="app-loader">
+    <div class="loader-rings"><div class="loader-dot"></div></div>
+    <div class="loader-text">Prospector</div>
+  </div>
 
+  <!-- ========== 新手向导 ========== -->
+  <div id="onboarding" style="display:none">
+    <div class="ob-titlebar">
+      <button class="ob-tb-btn" onclick="window.electronAPI.windowMinimize()" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><rect y="4" width="10" height="1.5" fill="currentColor"/></svg></button>
+      <button class="ob-tb-btn" onclick="window.electronAPI.windowMaximize()" title="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" rx="1"/></svg></button>
+      <button class="ob-tb-btn ob-tb-close" onclick="window.electronAPI.windowClose()" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    </div>
+    <div class="onboarding-card">
+      <div class="onboarding-step" id="ob-step-1">
+        <div class="ob-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg></div>
+        <h2>添加您的邮箱</h2>
+        <p class="ob-desc">配置 SMTP 服务器以发送开发信</p>
+        <div class="ob-form">
+          <div class="ob-field"><label>SMTP 服务器</label><input type="text" id="ob-smtp-host" placeholder="smtp.example.com" required></div>
+          <div class="ob-field ob-inline"><div><label>端口</label><input type="number" id="ob-smtp-port" value="465"></div><div><label>加密方式</label><select id="ob-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div></div>
+          <div class="ob-field"><label>邮箱地址</label><input type="text" id="ob-smtp-user" placeholder="your@email.com" required></div>
+          <div class="ob-field"><label>密码或授权码</label><input type="password" id="ob-smtp-pass" placeholder="输入 SMTP 授权码" required></div>
+        </div>
+        <div class="ob-actions">
+          <button class="ob-btn" onclick="onboardingNext()">下一步</button>
+        </div>
+        <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
+      </div>
+      <div class="onboarding-step" id="ob-step-2" style="display:none">
+        <div class="ob-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg></div>
+        <h2>您的署名</h2>
+        <p class="ob-desc">这些信息会显示在发给客户的邮件中</p>
+        <div class="ob-form">
+          <div class="ob-field"><label>发件人名称</label><input type="text" id="ob-sender-name" placeholder="客户看到的名字，如 Zayne Jin" required></div>
+          <div class="ob-field"><label>邮件署名</label><input type="text" id="ob-sender-body" placeholder="正文落款，如 Zayne"></div>
+        </div>
+        <div class="ob-actions">
+          <button class="ob-btn secondary" onclick="onboardingBack()">上一步</button>
+          <button class="ob-btn" onclick="onboardingNext()">完成</button>
+        </div>
+        <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
+      </div>
+      <div class="onboarding-step" id="ob-step-done" style="display:none">
+        <div class="ob-logo" id="ob-logo">
+          <div class="ob-logo-mark"></div>
+          <div class="ob-logo-text">
+            <span class="ob-logo-line1">Milogin's</span>
+            <span class="ob-logo-line2">Prospector.</span>
+          </div>
+        </div>
+        <h2>一切就绪</h2>
+        <p class="ob-desc">您的邮箱已配置完成。退信检测将自动使用相同的邮箱与密码，无需额外设置。</p>
+        <div class="ob-actions">
+          <button class="ob-btn" id="ob-finish-btn" onclick="onboardingFinish()">开始使用</button>
+        </div>
+      </div>
+      <div class="ob-dots">
+        <span class="ob-dot active" data-step="1"></span>
+        <span class="ob-dot" data-step="2"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 自定义标题栏 ========== -->
+  <div id="titlebar">
+    <div class="titlebar-drag"></div>
+    <div class="titlebar-controls">
+      <button id="tb-minimize" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><rect y="4" width="10" height="1.5" fill="white"/></svg></button>
+      <button id="tb-maximize" title="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" x="0" y="0" fill="none" stroke="white" stroke-width="1.5" rx="1"/></svg></button>
+      <button id="tb-close" title="关闭"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="white" stroke-width="1.5"/></svg></button>
+    </div>
+  </div>
+
+  <div id="app-layout">
   <!-- ========== 左侧导航 ========== -->
   <nav id="sidebar">
     <div class="nav-brand"><span class="nav-subtitle">Milogin's</span><h1>Prospector .</h1></div>
@@ -15,15 +93,15 @@
       <li class="nav-item active" data-page="dashboard"><span class="nav-icon" data-icon="dashboard"></span> 仪表盘</li>
       <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
-      <li class="nav-item" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发</li>
+      <li class="nav-item" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发 <span style="font-size:10px;color:var(--text-secondary)">(开发中)</span></li>
       <li class="nav-item nav-parent">
         <span class="nav-icon" data-icon="mail"></span> 邮件工坊 <span class="nav-arrow" data-icon="chevron-down"></span>
       </li>
-      <li class="nav-sub" data-page="template-editor"><span class="nav-icon" data-icon="pencil"></span> 模板调整</li>
-      <li class="nav-sub" data-page="signature"><span class="nav-icon" data-icon="signature"></span> 签名管理</li>
-      <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="layout"></span> 模板预览</li>
+      <li class="nav-sub" data-page="template-editor"><span class="nav-icon" data-icon="file-edit"></span> 模板调整</li>
+      <li class="nav-sub" data-page="signature"><span class="nav-icon" data-icon="pencil"></span> 签名管理</li>
+      <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
-      <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="download"></span> 退信检测</li>
+      <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="alert-circle"></span> 退信检测</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
@@ -31,7 +109,7 @@
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
     </ul>
-    <div class="nav-footer"><span class="nav-version">v1.3</span></div>
+    <div class="nav-footer"><span class="nav-version">v1.1.0</span></div>
   </nav>
 
   <!-- ========== 右侧内容区 ========== -->
@@ -41,8 +119,8 @@
     <section id="page-dashboard" class="page active">
       <h2><span data-icon="dashboard"></span> 仪表盘</h2>
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-value" id="stat-sent">--</div><div class="stat-label">今日已发</div></div>
-        <div class="stat-card"><div class="stat-value" id="stat-remaining">--</div><div class="stat-label">剩余限额</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-sent">...</div><div class="stat-label">今日已发</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label">剩余限额</div></div>
         <div class="stat-card"><div class="stat-value" id="stat-queue">0</div><div class="stat-label">队列待处理</div></div>
         <div class="stat-card"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">SMTP 状态</div></div>
       </div>
@@ -51,7 +129,7 @@
     <!-- 📋 导入客户 -->
     <section id="page-clients" class="page">
       <h2><span data-icon="file-spreadsheet"></span> 导入客户</h2>
-      <div class="drop-zone" id="drop-zone">
+      <div class="placeholder drop-zone" id="drop-zone">
         <span class="drop-icon" data-icon="upload"></span>
         <span>拖入 Excel/CSV 文件，或点击选择</span>
         <input type="file" id="file-input" accept=".xlsx,.xls,.csv" hidden>
@@ -73,18 +151,15 @@
         </table>
       </div>
       <div class="pagination" id="clients-pagination" style="display:none"></div>
-      <p class="placeholder" id="clients-empty">拖入 Excel/CSV 文件导入客户表</p>
     </section>
 
     <!-- 👥 联系人 -->
     <section id="page-contacts" class="page">
       <h2><span data-icon="users"></span> 联系人</h2>
       <div class="contacts-toolbar">
-        <input type="text" id="contacts-search" placeholder="搜索公司名、国家、品类...">
-        <button id="contacts-add-btn"><span data-icon="users"></span> 添加客户</button>
-        <button id="contacts-delete-all" class="danger"><span data-icon="trash"></span> 全部删除</button>
+        <input type="text" id="contacts-search" placeholder="搜索公司名、国家或邮箱...">
+        <button id="contacts-add-btn"><span data-icon="plus"></span> 添加客户</button>
       </div>
-      <div class="contacts-stats" id="contacts-stats" style="display:none"></div>
       <div class="contacts-filter" id="contacts-filter" style="display:none">
         <button type="button" class="cf-tab active" data-filter="all">全部</button>
 	        <button type="button" class="cf-tab" data-filter="agent"><span data-icon="globe"></span> 代理</button>
@@ -93,6 +168,7 @@
 	        <button type="button" class="cf-tab" data-filter="suspicious"><span data-icon="alert-circle"></span> 待确认</button>
 	        <button type="button" class="cf-tab" data-filter="archived"><span data-icon="archive"></span> 已归档</button>
       </div>
+      <div class="contacts-summary" id="contacts-summary" style="display:none"></div>
       <div class="contacts-layout" id="contacts-layout" style="display:none">
         <div class="contacts-sidebar" id="contacts-sidebar">
           <!-- JS 渲染公司列表 -->
@@ -131,8 +207,8 @@
     <section id="page-discover" class="page">
       <div class="discover-layout-v2">
         <div class="discover-tabs">
-          <button class="discover-tab active" data-tab="find">🔍 客户发现</button>
-          <button class="discover-tab" data-tab="lookup">📧 邮箱反查</button>
+          <button class="discover-tab active" data-tab="find"><span data-icon="search"></span> 客户发现</button>
+          <button class="discover-tab" data-tab="lookup"><span data-icon="mail"></span> 邮箱反查</button>
         </div>
         <div class="discover-main">
           <!-- 左列：搜索面板 -->
@@ -214,8 +290,7 @@
     <section id="page-signature" class="page">
       <h2><span data-icon="signature"></span> 签名管理</h2>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <p style="font-size:12px;color:var(--text-secondary);margin:0">编辑 send/signature.html，保存后所有发出的邮件自动使用此签名。</p>
-        <button id="sig-open-folder" class="secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap"><span data-icon="folder-open"></span> 打开文件夹</button>
+<button id="sig-open-folder" class="secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap"><span data-icon="folder-open"></span> 打开文件夹</button>
       </div>
       <div class="sig-layout">
         <div class="sig-editor">
@@ -234,8 +309,12 @@
 
     <!-- 📝 模板预览 -->
     <section id="page-template-preview" class="page">
-      <h2><span data-icon="eye"></span> 模板预览</h2>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">模拟真实发送阶段的开发信组装，多次点击「重新生成」观察模板稳定性。</p>
+      <h2><span data-icon="mail"></span> 模板预览</h2>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px">
+        <span style="font-size:11px;color:var(--text-secondary)">模板来源</span>
+        <button class="htab tpl-source active" data-val="preset">预设库</button>
+        <button class="htab tpl-source" data-val="user">用户模板</button>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <span style="font-size:11px;color:var(--text-secondary)">类型</span>
         <button class="htab tpl-type active" data-val="agent">代理</button>
@@ -250,7 +329,7 @@
         <button class="htab tpl-stage" data-val="f2">F2</button>
         <button class="htab tpl-stage" data-val="f3">F3</button>
         <button class="htab tpl-stage" data-val="f4">F4</button>
-        <button id="tpl-regenerate" style="font-size:10px;padding:4px 12px">🔄 重新生成</button>
+        <button id="tpl-regenerate" style="font-size:10px;padding:4px 12px">重新生成</button>
       </div>
       <div id="tpl-preview-content" style="max-height:65vh;overflow-y:auto"></div>
     </section>
@@ -263,7 +342,7 @@
             <input type="text" id="send-search" placeholder="搜索公司...">
             <div class="send-stage-tabs" style="display:flex;gap:4px;margin:4px 0">
               <button class="send-stage-tab active" data-stage="active" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);background:var(--primary);color:#fff;cursor:pointer">活跃</button>
-              <button class="send-stage-tab" data-stage="archived" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer">📦 已归档</button>
+              <button class="send-stage-tab" data-stage="archived" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer">已归档</button>
             </div>
             <div class="send-side-actions">
               <button id="send-select-all" class="secondary btn-dot active" style="font-size:11px;padding:3px 8px">全选</button>
@@ -284,21 +363,21 @@
         <div class="send-body">
           <div class="send-top">
             <button id="ws-add-queue" style="font-size:12px;padding:6px 12px"><span data-icon="send"></span> 加入队列</button>
-            <span id="send-list-title" style="font-weight:600;font-size:13px">已选公司</span>
+<span id="send-list-title" style="font-weight:600;font-size:13px;margin-left:8px">已选公司</span>
           </div>
           <div class="send-company-cards" id="send-company-cards">
             <p class="placeholder" id="send-cards-empty">← 勾选左侧公司</p>
           </div>
 
-          <!-- 📊 月度报告（归档客户） -->
+          <!-- <span data-icon="bar-chart"></span> 月度报告（归档客户） -->
           <div id="monthly-report-section" style="margin-top:16px;padding:12px;background:#f8f9fb;border-radius:8px;border:1px solid var(--border);display:none">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span style="font-weight:600;font-size:13px">📊 月度报告</span>
+              <span style="font-weight:600;font-size:13px"><span data-icon="bar-chart"></span> 月度报告</span>
               <span id="monthly-archived-count" style="font-size:11px;color:var(--text-secondary)"></span>
             </div>
             <textarea id="monthly-market-context" rows="3" style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit" placeholder="市场动态（可选）&#10;例如：曼萨尼约港等泊降至3-5天，南美西航线运价回落..."></textarea>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
-              <button id="monthly-generate-btn" style="font-size:12px;padding:5px 14px">📧 生成月度报告</button>
+              <button id="monthly-generate-btn" style="font-size:12px;padding:5px 14px"><span data-icon="mail"></span> 生成月度报告</button>
             </div>
           </div>
         </div>
@@ -307,7 +386,7 @@
 
     <!-- 📤 发送队列 -->
     <section id="page-queue" class="page">
-      <h2><span data-icon="list-checks"></span> 发送队列 <span id="queue-sent-count"></span> <span id="queue-timer-title"></span> <span id="queue-test-status" style="font-size:13px;font-weight:600;color:var(--warning)"></span></h2>
+      <h2><span data-icon="list-checks"></span> 发送队列 <span id="queue-sent-count"></span> <span id="queue-timer-title"></span> <span id="queue-test-status" style="font-size:13px;font-weight:600;color:var(--warning)"></span> <button id="queue-test-send" class="secondary" style="font-size:11px;padding:3px 10px;display:none">发送测试</button> <button id="btn-live-log" class="secondary" style="font-size:11px;padding:3px 10px">实时日志</button></h2>
       <div id="queue-controls">
         <button id="queue-start"><span data-icon="chevron-right"></span> 开始发送</button>
         <button id="queue-pause" disabled><span data-icon="square"></span> 暂停</button>
@@ -316,7 +395,7 @@
         <button id="queue-fold-all" class="secondary" style="font-size:11px;padding:4px 10px">▸ 全部折叠</button>
         <div style="position:relative;display:inline-block;margin-left:auto;align-self:flex-end">
           <button id="queue-more-btn" class="secondary" style="font-size:11px;padding:3px 8px">更多 ▾</button>
-          <div id="queue-more-menu" style="display:none;position:absolute;bottom:100%;right:0;z-index:99;background:#fff;border:1px solid #d0d0d0;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12);padding:4px 0;min-width:120px;font-size:12px;white-space:nowrap">
+          <div id="queue-more-menu" style="display:none;position:absolute;top:100%;right:0;z-index:99;background:#fff;border:1px solid #d0d0d0;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12);padding:4px 0;min-width:120px;font-size:12px;white-space:nowrap">
             <div data-action="refresh" style="padding:5px 12px;cursor:pointer;color:#333">刷新分组</div>
             <div data-action="clear-done" style="padding:5px 12px;cursor:pointer;color:#333">清空已完成</div>
             <div data-action="clear-pending" style="padding:5px 12px;cursor:pointer;color:#333">清空未发送</div>
@@ -326,7 +405,7 @@
       </div>
       <div id="bounce-result" style="display:none;margin:8px 0;padding:8px 12px;border-radius:6px;font-size:12px"></div>
       <div class="progress-bar"><div class="progress-fill" id="queue-progress"></div></div>
-      <div id="queue-estimate" style="font-size:11px;color:var(--text-secondary);margin:4px 0;display:none"></div>
+      <div id="queue-estimate" style="font-size:11px;color:var(--text-secondary);padding:4px 0"></div>
       <div id="queue-list" class="queue-card-list"></div>
       <p class="placeholder" id="queue-empty">队列为空 — 从「邮件发送」勾选公司加入队列</p>
     </section>
@@ -356,9 +435,7 @@
         </span>
       </div>
       <div id="history-actions" style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
-        <button id="history-sel-all" class="htool-btn">☑ 全选</button>
-        <button id="history-sel-none" class="htool-btn">☐ 取消</button>
-        <button id="history-del-sel" class="htool-btn danger">🗑 删除选中</button>
+        <button id="history-clear-all" class="htool-btn danger"><span data-icon="trash-2"></span> 全部清除</button>
       </div>
       <div id="history-layout" class="history-split" style="display:none">
         <div class="history-list-pane">
@@ -391,132 +468,236 @@
     <!-- ⚙️ 设置 -->
     <section id="page-settings" class="page">
       <h2><span data-icon="settings"></span> 设置</h2>
-      <div class="settings-grid">
 
-        <!-- SMTP -->
-        <div class="setting-card setting-required">
-          <h3><span data-icon="mail"></span> SMTP <span class="setting-status"></span></h3>
-          <div class="form-group"><label>服务器</label><input type="text" id="cfg-smtp-host" data-required="1"></div>
-          <div class="form-group"><label>端口</label><input type="number" id="cfg-smtp-port" data-required="1"> <label style="min-width:auto;margin-left:8px">加密</label><select id="cfg-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div>
-          <div class="form-group"><label>邮箱</label><input type="text" id="cfg-smtp-user" data-required="1"></div>
-          <div class="form-group"><label>密码</label><input type="password" id="cfg-smtp-pass" data-required="1"></div>
+      <nav class="settings-nav" id="settings-nav"></nav>
+
+      <!-- ═══ 通用 ═══ -->
+      <div class="settings-section" id="sec-general">
+        <div class="settings-section-label">通用</div>
+
+        <div class="setting-card">
+          <div class="setting-card-header"><h3><span data-icon="power"></span> 启动与关闭</h3><span class="setting-status"></span></div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>关闭窗口时</label>
+              <select id="cfg-general-close-action">
+                <option value="tray">最小化到托盘</option>
+                <option value="quit">直接退出程序</option>
+              </select>
+            </div>
+            <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-general-auto-launch"> 开机自动启动</label></div>
+          </div>
         </div>
 
-        <!-- 发信设置 -->
+        <div class="setting-card">
+          <div class="setting-card-header"><h3><span data-icon="palette"></span> 外观</h3><span class="setting-status"></span></div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>主题</label>
+              <select id="cfg-general-theme">
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ 邮件发送 ═══ -->
+      <div class="settings-section" id="sec-mail">
+        <div class="settings-section-label">邮件发送</div>
+
         <div class="setting-card setting-required">
-          <h3><span data-icon="send"></span> 发信设置 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>发信名称</label><input type="text" id="cfg-sender-name" data-required="1"></div>
-          <div class="form-group"><label>发信邮箱</label><input type="text" id="cfg-sender-email" data-required="1"></div>
+          <div class="setting-card-header">
+            <h3><span data-icon="mail"></span> SMTP 服务器</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>服务器地址</label><input type="text" id="cfg-smtp-host" data-required="1" placeholder="smtp.example.com"></div>
+            <div class="form-row form-row-inline"><div><label>端口</label><input type="number" id="cfg-smtp-port" data-required="1"></div><div><label>加密方式</label><select id="cfg-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div></div>
+            <div class="form-row"><label>邮箱地址</label><input type="text" id="cfg-smtp-user" data-required="1" placeholder="your@email.com"></div>
+            <div class="form-row"><label>密码 / 授权码</label><input type="password" id="cfg-smtp-pass" data-required="1"></div>
+          </div>
         </div>
 
-        <!-- 发送规则 -->
         <div class="setting-card setting-required">
-          <h3 style="flex-wrap:nowrap"><span data-icon="clock"></span> <span style="white-space:nowrap">发送规则</span>
-            <span class="setting-status" style="margin-left:auto"></span>
-            <select id="cfg-schedule-mode" style="font-size:11px;padding:1px 2px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);cursor:pointer;flex-shrink:0;width:64px;margin-left:4px">
-              <option value="multi">多规则</option>
-              <option value="batch">均匀</option>
+          <div class="setting-card-header">
+            <h3><span data-icon="user"></span> 发信人信息</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>发件人名称</label><input type="text" id="cfg-sender-name" data-required="1" placeholder="收件人看到的发件人名称"></div>
+            <div class="form-row"><label>正文署名</label><input type="text" id="cfg-sender-body-name" placeholder="邮件正文中的自称，如 Zayne"></div>
+            <div class="form-row"><label>发信邮箱</label><input type="text" id="cfg-sender-email" data-required="1" placeholder="your@email.com"></div>
+          </div>
+        </div>
+
+        <div class="setting-card setting-required">
+          <div class="setting-card-header">
+            <h3><span data-icon="clock"></span> 发送规则</h3>
+            <select id="cfg-schedule-mode">
+              <option value="multi">模拟人工</option>
+              <option value="batch">匀速速发</option>
             </select>
-          </h3>
-          <div class="form-group"><label>每日上限</label><input type="number" id="cfg-schedule-max" placeholder="0=不限制"></div>
-          <div class="form-group"><label>发送开始</label><input type="time" id="cfg-schedule-start" data-required="1"></div>
-          <div class="form-group"><label>发送结束</label><input type="time" id="cfg-schedule-end" data-required="1"></div>
-          <!-- 多规则模式 fields -->
-          <div id="cfg-multi-fields">
-            <div class="form-group"><label>封间延迟最小</label><input type="number" id="cfg-schedule-min-delay" placeholder="30"> <span style="font-size:11px;color:var(--text-secondary)">秒（每封邮件之间的随机延迟）</span></div>
-            <div class="form-group"><label>封间延迟最大</label><input type="number" id="cfg-schedule-max-delay" placeholder="90"> <span style="font-size:11px;color:var(--text-secondary)">秒（随机抖动）</span></div>
-            <div class="form-group"><label>公司切换最小</label><input type="number" id="cfg-schedule-company-delay-min" placeholder="300"> <span style="font-size:11px;color:var(--text-secondary)">秒（换公司额外等待）</span></div>
-            <div class="form-group"><label>公司切换最大</label><input type="number" id="cfg-schedule-company-delay-max" placeholder="900"> <span style="font-size:11px;color:var(--text-secondary)">秒（随机抖动）</span></div>
-            <div class="form-group"><label>单人快速间隔</label><input type="number" id="cfg-schedule-single-min" placeholder="60"> ~ <input type="number" id="cfg-schedule-single-max" placeholder="180" style="width:70px"> <span style="font-size:11px;color:var(--text-secondary)">秒（收件人≤2的公司，默认1~3分钟）</span></div>
-            <div class="form-group"><label>每组人数上限</label><input type="number" id="cfg-schedule-group-size" placeholder="20"> <span style="font-size:11px;color:var(--text-secondary)">人/组（建队列时每组 BCC 人数，超过自动拆分）</span></div>
+            <span class="setting-status"></span>
           </div>
-          <!-- 均匀配置 fields -->
-          <div id="cfg-batch-fields" style="display:none">
-            <div class="form-group"><label>每批封数</label><input type="number" id="cfg-schedule-batch-size" placeholder="10"> <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">封/组 — 每组 BCC 人数 & 发满后暂停</div></div>
-            <div class="form-group"><label>批次暂停最小</label><input type="number" id="cfg-schedule-batch-pause-min" placeholder="150"> <span style="font-size:11px;color:var(--text-secondary)">秒（发完一批后休息）</span></div>
-            <div class="form-group"><label>批次暂停最大</label><input type="number" id="cfg-schedule-batch-pause-max" placeholder="210"> <span style="font-size:11px;color:var(--text-secondary)">秒（随机抖动，模拟人工）</span></div>
+          <div class="setting-card-body">
+            <!-- 通用 -->
+            <div class="form-row form-row-inline"><div><label>每日上限</label><input type="number" id="cfg-schedule-max" placeholder="0=不限制"><span class="input-suffix">封</span></div></div>
+            <div class="form-row form-row-inline">
+              <div><label>发送时段</label><input type="time" id="cfg-schedule-start"><span class="input-sep">~</span><span id="cfg-schedule-nextday" class="input-hint">次日</span><input type="time" id="cfg-schedule-end"></div>
+              <div><label class="checkbox-label"><input type="checkbox" id="cfg-schedule-time-toggle"> 限时发送</label></div>
+            </div>
+
+            <!-- 模拟人工 -->
+            <div id="cfg-multi-fields">
+              <div class="sub-section-label">模拟人工参数</div>
+              <div class="form-row"><label>封间延迟</label><span class="input-range"><input type="number" id="cfg-schedule-min-delay" placeholder="30"><span class="input-sep">~</span><input type="number" id="cfg-schedule-max-delay" placeholder="90"><span class="input-suffix">秒</span></span></div>
+              <div class="form-row"><label>公司切换</label><span class="input-range"><input type="number" id="cfg-schedule-company-delay-min" placeholder="300"><span class="input-sep">~</span><input type="number" id="cfg-schedule-company-delay-max" placeholder="900"><span class="input-suffix">秒</span></span></div>
+              <div class="form-row"><label>单人快发</label><span class="input-range"><input type="number" id="cfg-schedule-single-min" placeholder="60"><span class="input-sep">~</span><input type="number" id="cfg-schedule-single-max" placeholder="180"><span class="input-suffix">秒</span></span><span class="input-hint">≤2人</span></div>
+              <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" id="cfg-schedule-group-size" placeholder="20"><span class="input-suffix">人/组</span></span></div>
+            </div>
+
+            <!-- 匀速速发 -->
+            <div id="cfg-batch-fields" style="display:none">
+              <div class="sub-section-label">匀速速发参数</div>
+              <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" id="cfg-schedule-batch-size" placeholder="10"><span class="input-suffix">人/组</span></span></div>
+              <div class="form-row"><label>组间暂停</label><span class="input-range"><input type="number" id="cfg-schedule-batch-pause-min" placeholder="150"><span class="input-sep">~</span><input type="number" id="cfg-schedule-batch-pause-max" placeholder="210"><span class="input-suffix">秒</span></span><span id="cfg-batch-pause-minutes" class="input-hint"></span></div>
+            </div>
+
+            <div class="sub-section-label">模板引擎</div>
+            <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">通用</option></select></div>
+            <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">0=不轮换</span></div>
           </div>
-          <div class="form-group"><label>模板轮换间隔</label><input type="number" id="cfg-schedule-template-rotate" placeholder="50"> <span style="font-size:11px;color:var(--text-secondary)">人（同公司超过此人数，每N人自动换模板，0=不换）</span></div>
-          <div class="form-note" id="cfg-schedule-estimate" style="color:var(--text-secondary);font-size:11px;margin-top:4px"></div>
         </div>
+        <div id="cfg-schedule-estimate" class="settings-estimate"></div>
+      </div>
 
-        <!-- API 设置 -->
+      <div class="settings-section" id="sec-api">
+        <div class="settings-section-label">API 与服务</div>
+
         <div class="setting-card">
-          <h3><span data-icon="settings"></span> API <span class="setting-status"></span></h3>
-          <div class="setting-section"><h4><span data-icon="search"></span> 背调搜索</h4></div>
-          <div class="form-note">搜索：Exa AI（语义） + Tavily（新闻）<br>抓取：Jina(markdown) → cheerio(直连) → Scrapling(深度) 自动回退</div>
-          <div class="setting-section"><h4><span data-icon="search"></span> Exa AI</h4></div>
-          <div class="form-group"><label>API Key</label><input type="password" id="cfg-search-exa-key" placeholder="输入你的 Exa API Key"></div>
-          <div class="form-quick"><a href="#" class="quick-link" data-url="https://dashboard.exa.ai/"><span data-icon="external-link"></span> 获取 Exa API Key</a></div>
-          <div class="setting-section"><h4><span data-icon="search"></span> Tavily</h4></div>
-          <div class="form-group"><label>API Key</label><input type="password" id="cfg-search-tavily-key" placeholder="tvly-dev-..."></div>
-          <div class="form-note">新闻动态搜索，用于背调报告「近期动态」</div>
-          <div class="form-quick"><a href="#" class="quick-link" data-url="https://tavily.com/"><span data-icon="external-link"></span> 获取 Tavily API Key</a></div>
-          <div class="setting-section"><h4><span data-icon="search"></span> Serper (Google)</h4></div>
-          <div class="form-group"><label>API Key</label><input type="password" id="cfg-search-serper-key" placeholder="2c0e..."></div>
-          <div class="form-note">Google 搜索回退，Exa 无结果时自动启用</div>
-          <div class="form-quick"><a href="#" class="quick-link" data-url="https://serper.dev/"><span data-icon="external-link"></span> 获取 Serper API Key</a></div>
-          <div class="setting-section"><h4><span data-icon="check-circle"></span> Agnes AI（邮件验证）</h4></div>
-          <div class="form-group"><label>API Key</label><input type="password" id="cfg-agnes-key" placeholder="sk-..."></div>
-          <div class="form-note">AI 开发信质量检查，不填则跳过验证</div>
-          <div class="setting-section"><h4><span data-icon="globe"></span>翻译引擎</h4></div>
-          <div class="form-group"><label>DeepSeek API Key</label><input type="password" id="cfg-tl-deepseek-key" placeholder="sk-..."></div>
-          <div class="form-note">通过 prompt 注入翻译，自动识别西语/葡语 → 中文</div>
-          <div class="form-quick"><a href="#" class="quick-link" data-url="https://platform.deepseek.com/api-keys"><span data-icon="external-link"></span> 获取 DeepSeek API Key</a></div>
+          <div class="setting-card-header">
+            <h3><span data-icon="key"></span> API 密钥</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>Exa AI</label><span class="input-with-link"><input type="password" id="cfg-search-exa-key" placeholder="Exa API Key"><a href="#" class="api-link" data-url="https://dashboard.exa.ai/"><span data-icon="external-link"></span></a></span></div>
+            <div class="form-row"><label>Tavily</label><span class="input-with-link"><input type="password" id="cfg-search-tavily-key" placeholder="tvly-dev-..."><a href="#" class="api-link" data-url="https://tavily.com/"><span data-icon="external-link"></span></a></span></div>
+            <div class="form-row"><label>Serper</label><span class="input-with-link"><input type="password" id="cfg-search-serper-key" placeholder="Serper API Key"><a href="#" class="api-link" data-url="https://serper.dev/"><span data-icon="external-link"></span></a></span></div>
+            <div class="form-row"><label>Agnes AI</label><span class="input-with-link"><input type="password" id="cfg-agnes-key" placeholder="sk-..."><a href="#" class="api-link" data-url="https://platform.agnes-ai.com/settings/apiKeys"><span data-icon="external-link"></span></a></span></div>
+          </div>
         </div>
 
-        <!-- 飞书 -->
         <div class="setting-card">
-          <h3><span data-icon="file-spreadsheet"></span> 飞书表格 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>表格地址</label><input type="text" id="cfg-feishu-url" placeholder="粘贴飞书多维表格完整 URL"></div>
-          <div class="form-group"><label>Base</label><input type="text" id="cfg-feishu-base-extracted" readonly style="background:#f5f5f5;color:var(--text-secondary);font-size:11px"></div>
-          <div class="form-group"><label>Table</label><input type="text" id="cfg-feishu-table-extracted" readonly style="background:#f5f5f5;color:var(--text-secondary);font-size:11px"></div>
+          <div class="setting-card-header">
+            <h3><span data-icon="file-spreadsheet"></span> 飞书表格</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>表格地址</label><input type="text" id="cfg-feishu-url" placeholder="粘贴飞书多维表格完整 URL"></div>
+            <div class="form-row form-row-inline"><div><label>Base ID</label><input type="text" id="cfg-feishu-base-extracted" readonly></div><div><label>Table ID</label><input type="text" id="cfg-feishu-table-extracted" readonly></div></div>
+          </div>
         </div>
 
-        <!-- IMAP -->
         <div class="setting-card">
-          <h3><span data-icon="download"></span> 退信检查 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>服务器</label><input type="text" id="cfg-imap-host" placeholder="imap.exmail.qq.com"></div>
-          <div class="form-group"><label>端口</label><input type="number" id="cfg-imap-port" placeholder="993"></div>
-          <div class="form-group"><label>邮箱</label><input type="text" id="cfg-imap-user"></div>
-          <div class="form-group"><label>密码</label><input type="password" id="cfg-imap-pass"></div>
-          <div class="form-group"><label></label><button id="cfg-imap-test" class="secondary" style="font-size:11px;padding:4px 12px">测试连接</button><span id="cfg-imap-result" style="font-size:11px;margin-left:8px"></span></div>
+          <div class="setting-card-header">
+            <h3><span data-icon="globe"></span> 网络代理</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>HTTP 代理</label><input type="text" id="cfg-proxy-host" placeholder="127.0.0.1:7890"></div>
+          </div>
         </div>
 
-        <!-- 退信关键词 -->
         <div class="setting-card">
-          <h3><span data-icon="alert-circle"></span> 退信关键词 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>自定义关键词（一行一个，不区分大小写）</label><textarea id="cfg-bounce-keywords" rows="4" style="width:100%;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:4px;font-family:monospace" placeholder="示例：&#10;spam rejected&#10;mailbox unavailable&#10;connection refused&#10;suspended"></textarea></div>
+          <div class="setting-card-header">
+            <h3><span data-icon="search"></span> 背调筛选</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-backcheck-filter" checked> 仅显示高价值客户（≥5位联系人）</label></div>
+          </div>
         </div>
+      </div>
 
-        <!-- 代理 -->
+      <div class="settings-section" id="sec-advanced">
+        <div class="settings-section-label">高级</div>
+
         <div class="setting-card">
-          <h3><span data-icon="globe"></span> 代理 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>HTTP 代理</label><input type="text" id="cfg-proxy-host" placeholder="127.0.0.1:7890"></div>
-          <div class="form-note">用于访问境外网站（Google/Wikipedia 等）。留空则不使用代理。</div>
+          <div class="setting-card-header">
+            <h3><span data-icon="download"></span> 退信检查</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row form-row-inline"><div><label>IMAP 服务器</label><input type="text" id="cfg-imap-host" placeholder="imap.exmail.qq.com"></div><div><label>端口</label><input type="number" id="cfg-imap-port" placeholder="993"></div></div>
+            <div class="form-row form-row-inline"><div><label>邮箱</label><input type="text" id="cfg-imap-user"></div><div><label>密码</label><input type="password" id="cfg-imap-pass"></div></div>
+            <div class="form-row"><label></label><span class="form-actions"><button id="cfg-imap-test" class="secondary">测试连接</button><span id="cfg-imap-result"></span></span></div>
+          </div>
         </div>
 
-        <!-- 背调 -->
         <div class="setting-card">
-          <h3><span data-icon="search"></span> 背调 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>背调筛选</label><label style="min-width:auto;cursor:pointer"><input type="checkbox" id="cfg-backcheck-filter" checked> 仅显示高价值客户（≥5位联系人）</label></div>
-          <div class="form-note">关闭后，背调页面将显示所有联系人公司，不限人数。当前背调功能尚在完善中，可暂时关闭。</div>
+          <div class="setting-card-header">
+            <h3><span data-icon="alert-circle"></span> 退信关键词</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>关键词</label><textarea id="cfg-bounce-keywords" rows="3" placeholder="一行一个，不区分大小写&#10;spam rejected&#10;mailbox unavailable&#10;connection refused&#10;suspended"></textarea></div>
+          </div>
         </div>
 
-        <!-- 测试 -->
         <div class="setting-card">
-          <h3><span data-icon="alert-circle"></span> 测试 <span class="setting-status"></span></h3>
-          <div class="form-group"><label>测试邮箱</label><input type="text" id="cfg-test-email" placeholder="test@qq.com"></div>
-          <div class="form-group"><label>测试模式</label><label style="min-width:auto;cursor:pointer"><input type="checkbox" id="cfg-test-enabled"> 启用（跳过发送时段限制）</label></div>
-          <div class="form-note">⚠️ 正式发送仅在设定的时段内执行，开启测试模式可跳过此限制</div>
+          <div class="setting-card-header">
+            <h3><span data-icon="flask-conical"></span> 测试模式</h3>
+            <span class="setting-status"></span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row"><label>测试邮箱</label><input type="text" id="cfg-test-email" placeholder="test@example.com"></div>
+            <div class="form-row"><label>测试公司</label><input type="text" id="cfg-test-company" placeholder="用于测试邮件的公司名"></div>
+            <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-test-enabled"> 启用测试模式（跳过发送时段限制）</label></div>
+          </div>
         </div>
-
       </div>
     </section>
 
   </main>
 
+  </div><!-- #app-layout -->
+
   <script src="icons.js"></script>
-  <script src="app.js"></script>
+  <script>
+    window.S = {
+      templateLib: null, queue: [], _queueLoaded: false, unsubscribeProgress: null,
+      sendInProgress: false, _sendPaused: false, autoBounceTimer: null, nextBounceScanAt: 0,
+      clientsData: [], contactsData: [], clientsPage: 1, PAGE_SIZE: 100,
+      contactsGroupMap: new Map(), selectedContactCompany: null, contactsFilter: 'all',
+      contactsSendHistory: {}, sendCompanies: {}, sendHistory: {}, selectedCards: {},
+      selectedCompanySet: new Set(), sendStageFilter: 'active', discoverPreselectCompany: null,
+      queueIdCounter: Date.now(), sendBackcheckStatus: {},
+      historyFilters: {type:'',lang:'',country:'',stage:''}, historyCountries: [],
+      historyPage: 0, historyTotal: 0, HISTORY_PAGE_SIZE: 500, bounceRecords: [],
+      discoverResults: [], discoverSelectedIdx: null, discoverActiveTab: 'find',
+      networkStatusDismissed: false, foreignNetworkOk: true,
+      STAGES: ['cold','f1','f2','f3','f4'],
+      STAGE_LABELS: {cold:'冷开发',f1:'第1次跟进',f2:'第2次跟进',f3:'第3次跟进',f4:'第4次跟进'},
+      STAGES_SEND: ['cold','f1','f2','f3','f4','archived'],
+      STAGE_LABELS_SEND: {cold:'冷开发',f1:'F1',f2:'F2',f3:'F3',f4:'F4',archived:'已归档'},
+      STAGE_NEXT_SEND: {'':'cold',cold:'f1',f1:'f2',f2:'f3',f3:'f4',f4:'archived',archived:'archived'},
+      TYPES: {agent:'代理',direct:'直客',unlabeled:'未标签'},
+      PAIN_KEY: {agent:'agent',direct:'direct',unlabeled:'unlabeled'},
+      PROOF_KEY: {agent:'agent',direct:'direct',unlabeled:'unlabeled'},
+      EMAIL_RE: /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/,
+      loadQueue: async function() {
+        if (window.S._queueLoaded) return;
+        try {
+          const r = await window.electronAPI.loadQueue();
+          if (r.ok && r.data.length) { window.S.queue = r.data; window.S._queueLoaded = true;
+            localStorage.setItem('emailQueue', JSON.stringify(window.S.queue)); return; }
+        } catch(e) {}
+        try { const s = localStorage.getItem('emailQueue');
+          if (s) window.S.queue = JSON.parse(s); } catch(e) {}
+        window.S._queueLoaded = true;
+      }
+    };
+  </script>
+  <script type="module" src="app-v2.js"></script>
 </body>
 </html>

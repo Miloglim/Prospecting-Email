@@ -19,7 +19,7 @@ try:
     SCRAPLING_OK = True
 except ImportError:
     SCRAPLING_OK = False
-    print("[scrapling-service] ⚠️ Scrapling 未安装: pip install 'scrapling[all]' && scrapling install")
+    sys.stderr.write("[scrapling-service] Scrapling not installed - run: pip install 'scrapling[all]' && scrapling install\n")
 
 
 # ── 常量 ────────────────────────────────────────────────────────────

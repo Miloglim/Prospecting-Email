@@ -1,7 +1,7 @@
 # Prospecting Email — 公司背调 + 开发信生成工具
 
 > 拉美开发信桌面工具 (Electron v1.3)。拖入客户表 → AI 背调 → 输出双语开发信 → 自动发送。
-> 默认市场：墨西哥、巴西、智利、秘鲁、哥伦比亚、阿根廷（西语/葡语）。
+> 默认市场：墨西哥、巴西、智利、秘鲁、哥伦比亚（西语/葡语）。
 
 ## 故障排查
 
@@ -23,59 +23,49 @@
 | P0 | WebSearch | 补充搜索 | Claude Code 内置 |
 | P1 | Tavily | 新闻动态 | `tvly search --topic news "<公司名>"` |
 | P1 | LinkedIn | 决策人/招聘 | `mcporter call 'linkedin.search_people(keyword: "<公司名> procurement OR compras", limit: 10)'` |
-| P2 | Twitter | 社媒评价 | `twitter search "<公司名>" -n 10`（需先登录） |
-| P2 | Reddit | 行业讨论 | `opencli reddit search "<公司名>" -f yaml`（需安装） |
-
-## 开发价值评分
-
-**评分基于证据，不靠猜。** 信号分 A-F 六级：
-
-### 正向信号
-
-| 级别 | 信号 | 分值 | 搜什么 |
-|------|------|:--:|--------|
-| A | 招标/RFQ | +3 | `"公司名" RFQ / tender / licitación / bidding` |
-| B | 物流招聘 | +2~3 | 单个岗 +2，≥3 个同时招 +3；搜 `logistics manager / customs compliance / supply chain` |
-| C | 中国进口 | +1~2 | 有记录 +1，占比 >40% 或年 >200 票 +2 |
-| D | 关务复杂 | +1 | IMMEX / OEA / bonded warehouse / recinto fiscalizado |
-| E | 扩张中 | +1 | `expansion / new plant / investment / 扩建` |
-| F | 决策人可达 | +1 | 具名 logistics/supply chain/compras 负责人 |
-
-### 负向信号
-
-| 信号 | 分值 |
-|------|:--:|
-| 内部/自建物流网络 | -3 |
-| 超大型集团 + 无物流招聘 | -1 |
-
-### 优先级
-
-```
-A(招标) > B(多岗招聘) > C+D(高依赖+关务) > C(有进口) > E(扩张)
-```
-
-| 分 | 行动 |
-|:--:|------|
-| 1-2 | 不开发 / 观察 |
-| 3 | 可尝试 |
-| 4 | 优先开发 |
-| 5 | 立即开发 |
 
 ## 写作约束
 
 - 🈲 代理不提本地仓库/本地团队
 - 🈲 同一封不同时出现船东名 + 具体运价
 - 🈲 不对海外客户用 digital/AI/平台等技术词汇
-- 🈲 不用最高级/紧迫词/夸大承诺/价格诱饵（垃圾词黑名单见模板文件）
+- 🈲 不用最高级/紧迫词/夸大承诺/价格诱饵
 - ✅ 西语在前，英语在后
 - ✅ 第二人称，不教客户做事
 - ✅ CTA 是「给」不是「要」
+
+## 代码规范
+
+- **配置键统一 `_seconds` 后缀** — 所有时间值配置键以 `_seconds` 结尾
+- **发送引擎模块化** — `_loadConfig()` / `_buildContext()` / `_sendOne()` / `runSendBatch()`，新增功能沿用此结构
+- **渲染进程按功能域拆分** — `app.js` 超 800 行时按 shared/send/workshop/contacts/backcheck/settings 拆为 6 个 ES module（规划见 `docs/p2-renderer-split.md`）
+- **IPC 有增必查** — 加新 IPC 通道时，preload.js + main handler 双向验证
+- **config.json 无孤儿字段** — 删功能时同步清理 config。只保留 CFG_KEYS 中映射的字段
+- **路径用 config.js** — 项目根路径从 `require('./modules/config').APP_ROOT` 取，不自己推导
+- **开发模式判断** — `__dirname.includes('.asar')` 判断打包，不依赖 `process.resourcesPath`
+
+## 已知陷阱
+
+| 陷阱 | 教训 | 预防 |
+|------|------|------|
+| `confirm()` → `showConfirm()` | `await` 加在非 async 回调里 → 整个渲染进程冻结 | 改完用 `node --check` 验证语法；grep 所有调用点 |
+| logger 路径 | `process.resourcesPath` 开发模式指向 `node_modules/electron/dist` | 用 `__dirname.includes('.asar')` 判断 |
+| 配置键无 `_seconds` 后缀 | `batch_pause_min` vs `min_delay_seconds` 不一致 | 新时间配置键一律 `_seconds` |
+| 批处理/多规则混在 `runSendBatch` | 修一个模式影响另一个 | 提取 `_buildContext()` 做参数分流 |
+
+## 工作方式
+
+1. **始终启用 ponytail** — 删比加好，标准库优先，不造轮子
+2. **产品级代码** — 目标商业化。不写临时代码，加功能前先整理
+3. **有序列表 = 方案讨论** — 用户列 `1. 2. 3.` 时只设计不动代码
+4. **命名纠偏** — 回复中标注 `[用户叫法]` → 正确组件名
+5. **说人话** — 简明清晰，少用术语
 
 ## 参考文档
 
 | 文件 | 内容 |
 |------|------|
 | `docs/email-writing-rules.md` | 写作准则 + 拉美文化适配 |
-| `docs/email-standard.md` | 邮件排版规范 |
-| `docs/company-data.md` | YQN 公司数据（写信用数字来源） |
-| `templates/general-templates.md` | 15 套通用模板 + 句库 + 垃圾词黑名单 |
+| `docs/backcheck-rules.md` | 开发价值评分规则 |
+| `templates/general-templates.md` | 模板句库 + 垃圾词黑名单 |
+| `docs/p2-renderer-split.md` | 渲染进程拆分方案 |

@@ -1,22 +1,27 @@
 {
   "name": "prospecting-email-send",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
   "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
-    "start": "electron .",
-    "build": "set NODE_TLS_REJECT_UNAUTHORIZED=0&& set HTTP_PROXY=&& set HTTPS_PROXY=&& electron-builder --win"
+    "start": "electron-vite dev",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "pack": "electron-vite build && electron-builder --win"
   },
   "build": {
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
     "appId": "com.milogin.prospecting-email",
-    "productName": "Prospecting Email",
+    "productName": "Milogin's Prospector.",
     "directories": {
       "output": "../product"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -39,6 +44,7 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "cloakbrowser": "^0.4.3",
     "imap": "^0.8.19",
     "nodemailer": "^6.9.0",
     "puppeteer": "^25.1.0",
@@ -48,6 +54,9 @@
   },
   "devDependencies": {
     "electron": "^42.4.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "electron-reloader": "^1.2.3",
+    "electron-vite": "^5.0.0",
+    "vite": "^7.3.6"
   }
 }

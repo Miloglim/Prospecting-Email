@@ -17,19 +17,25 @@ function parseTemplateLibrary() {
     return null;
   }
 
-  // 通用 Hook（排除阿根廷变体 H-A*）
-  const allHooks = parseTableByPrefix(text, 'H-');
-  const hooks = allHooks.filter(h => !h.id.startsWith('H-A'));
-  const hooksAR = allHooks.filter(h => h.id.startsWith('H-A'));
+  // Hook：优先按类型拆分（HA-/HD-/HU-），无则共用 H-
+  const hooksAgent = parseTableByPrefix(text, 'HA-');
+  const hooksDirect = parseTableByPrefix(text, 'HD-');
+  const hooksUnlabeled = parseTableByPrefix(text, 'HU-');
+  const hooks = hooksAgent.length
+    ? { agent: hooksAgent, direct: hooksDirect.length ? hooksDirect : [...hooksAgent], unlabeled: hooksUnlabeled.length ? hooksUnlabeled : [...hooksAgent] }
+    : parseTableByPrefix(text, 'H-');
 
-  // CTA（排除阿根廷变体 C-A*）
-  const allCtas = parseCTAs(text);
-  const ctas = allCtas.filter(c => !c.id.startsWith('C-A'));
-  const ctasAR = allCtas.filter(c => c.id.startsWith('C-A'));
+  // CTA：同上（CA-/CD-/CU-）
+  const ctasShared = parseCTAs(text);
+  const ctasAgent = parseTableByPrefix(text, 'CA-');
+  const ctasDirect = parseTableByPrefix(text, 'CD-');
+  const ctasUnlabeled = parseTableByPrefix(text, 'CU-');
+  const ctas = ctasAgent.length
+    ? { agent: ctasAgent, direct: ctasDirect.length ? ctasDirect : [...ctasAgent], unlabeled: ctasUnlabeled.length ? ctasUnlabeled : [...ctasAgent] }
+    : ctasShared;
 
   const lib = {
     hooks,
-    hooksAR,                        // 🇦🇷 阿根廷 Hook 变体
     painPoints: {
       agent: parseTableByPrefix(text, 'PA-'),
       direct: parseTableByPrefix(text, 'PD-'),
@@ -41,7 +47,6 @@ function parseTemplateLibrary() {
       unlabeled: parseTableByPrefix(text, 'RU-'),
     },
     ctas,
-    ctasAR,                         // 🇦🇷 阿根廷 CTA 变体
     followUps: {
       f1: parseTableByPrefix(text, 'F1-'),
       f2: parseTableByPrefix(text, 'F2-'),
@@ -52,70 +57,95 @@ function parseTemplateLibrary() {
     spamWords: parseSpamWords(text),
   };
 
+  const countArr = (v) => Array.isArray(v) ? v.length : Object.values(v).reduce((s, a) => s + a.length, 0);
   const total =
-    lib.hooks.length + (lib.hooksAR?.length || 0) +
-    lib.painPoints.agent.length + lib.painPoints.direct.length + lib.painPoints.unlabeled.length +
-    lib.proofs.agent.length + lib.proofs.direct.length + lib.proofs.unlabeled.length +
-    lib.ctas.length + (lib.ctasAR?.length || 0) +
-    lib.followUps.f1.length + lib.followUps.f2.length + lib.followUps.f3.length + lib.followUps.f4.length;
+    countArr(lib.hooks) +
+    countArr(lib.painPoints.agent) + countArr(lib.painPoints.direct) + countArr(lib.painPoints.unlabeled) +
+    countArr(lib.proofs.agent) + countArr(lib.proofs.direct) + countArr(lib.proofs.unlabeled) +
+    countArr(lib.ctas) +
+    countArr(lib.followUps.f1) + countArr(lib.followUps.f2) + countArr(lib.followUps.f3) + countArr(lib.followUps.f4);
 
-  // 注入中文标签
   applyLabels(lib);
 
-  console.log(`模板库加载完成: ${total} 条句库 (含 ${lib.hooksAR?.length||0} 阿根廷Hook + ${lib.ctasAR?.length||0} 阿根廷CTA), ${Object.keys(lib.subjects).length} 套主题行`);
+  console.log(`模板库加载完成: ${total} 条句库, ${Object.keys(lib.subjects).length} 套主题行`);
   return lib;
 }
 
 // ── 中文标签映射：代号 → 可读中文 ──────────────────────────────────
 const LABEL_MAP = {
-  // Hook
-  'H-1': '破冰 · 一周顺利', 'H-2': '破冰 · 运营顺畅', 'H-3': '破冰 · 一切顺利',
-  'H-4': '破冰 · 关注市场', 'H-5': '破冰 · 路线动态', 'H-6': '破冰 · 分享信息',
-  'H-A1':'破冰🇦🇷 · 一周愉快','H-A2':'破冰🇦🇷 · 运营顺利','H-A3':'破冰🇦🇷 · 关注市场',
-  'H-A4':'破冰🇦🇷 · 路线动态','H-A5':'破冰🇦🇷 · 分享信息',
+  // Hook — Agent
+  'HA-1':'代理破冰 · 货运顺利','HA-2':'代理破冰 · 航线动态','HA-3':'代理破冰 · 舱位现状',
+  'HA-4':'代理破冰 · 运价波动','HA-5':'代理破冰 · 舱位紧张','HA-6':'代理破冰 · 资源介绍',
+  'HA-7':'代理破冰 · 船司替代','HA-8':'代理破冰 · 随意问候',
+  // Hook — Direct
+  'HD-1':'直客破冰 · 进口顺利','HD-2':'直客破冰 · 进口复杂','HD-3':'直客破冰 · 备选方案',
+  'HD-4':'直客破冰 · 海关延误','HD-5':'直客破冰 · 无忧进口','HD-6':'直客破冰 · 敏捷清关',
+  'HD-7':'直客破冰 · 法规变化','HD-8':'直客破冰 · 清关备份',
+  // Hook — Unlabeled
+  'HU-1':'通用破冰 · 一切顺利','HU-2':'通用破冰 · 市场回顾','HU-3':'通用破冰 · 贸易动态',
+  'HU-4':'通用破冰 · 分享价值','HU-5':'通用破冰 · 自我介绍','HU-6':'通用破冰 · 物流挑战',
+  'HU-7':'通用破冰 · 优化空间','HU-8':'通用破冰 · 物流差异',
   // Pain — Agent
-  'PA-1':'代理痛点 · 旺季舱位','PA-2':'代理痛点 · 运价波动','PA-3':'代理痛点 · 失去竞争力',
-  'PA-4':'代理痛点 · 紧急出货','PA-5':'代理痛点 · 船司依赖',
+  'PA-1':'代理痛点 · 旺季舱位','PA-2':'代理痛点 · 运价波动','PA-3':'代理痛点 · 竞争劣势',
+  'PA-4':'代理痛点 · 紧急出货','PA-5':'代理痛点 · 船司依赖','PA-6':'代理痛点 · 现货运价',
+  'PA-7':'代理痛点 · 关系紧张','PA-8':'代理痛点 · 选项有限',
   // Pain — Direct
   'PD-1':'直客痛点 · 清关延误','PD-2':'直客痛点 · 海关成本','PD-3':'直客痛点 · 进口不确定',
-  'PD-4':'直客痛点 · 单一渠道','PD-5':'直客痛点 · 货物滞留',
+  'PD-4':'直客痛点 · 单一渠道','PD-5':'直客痛点 · 货物滞留','PD-6':'直客痛点 · 分类问题',
+  'PD-7':'直客痛点 · 法规突变','PD-8':'直客痛点 · 港口拥堵',
   // Pain — Unlabeled
   'PU-1':'通用痛点 · 物流效率','PU-2':'通用痛点 · 运输意外','PU-3':'通用痛点 · 供应链优化',
-  'PU-4':'通用痛点 · 物流支撑',
+  'PU-4':'通用痛点 · 物流支撑','PU-5':'通用痛点 · 港口延误','PU-6':'通用痛点 · 不必要风险',
+  'PU-7':'通用痛点 · 多点故障','PU-8':'通用痛点 · 缺乏可见性',
   // Proof — Agent
   'RA-1':'代理证明 · 资质资源','RA-2':'代理证明 · 全球网络','RA-3':'代理证明 · 拉美航线',
-  'RA-4':'代理证明 · 弹性替代',
+  'RA-4':'代理证明 · 弹性替代','RA-5':'代理证明 · 快速报价','RA-6':'代理证明 · 多船司备份',
+  'RA-7':'代理证明 · 谈判赋能','RA-8':'代理证明 · 真实舱位',
   // Proof — Direct
   'RD-1':'直客证明 · 本地能力','RD-2':'直客证明 · 港口覆盖','RD-3':'直客证明 · 自主清关',
-  'RD-4':'直客证明 · 规模背书',
+  'RD-4':'直客证明 · 规模背书','RD-5':'直客证明 · 无意外清关','RD-6':'直客证明 · 24h接管',
+  'RD-7':'直客证明 · 仓关一体','RD-8':'直客证明 · 本地团队',
   // Proof — Unlabeled
   'RU-1':'通用证明 · 资质覆盖','RU-2':'通用证明 · 资源优势','RU-3':'通用证明 · 拉美航线',
-  'RU-4':'通用证明 · 灵活适配',
-  // CTA
-  'C-1':'CTA · 发资料','C-2':'CTA · 轻聊','C-3':'CTA · 分享洞察','C-4':'CTA · 留门',
-  'C-A1':'CTA🇦🇷 · 发资料','C-A2':'CTA🇦🇷 · 轻聊','C-A3':'CTA🇦🇷 · 分享洞察','C-A4':'CTA🇦🇷 · 留门',
+  'RU-4':'通用证明 · 灵活适配','RU-5':'通用证明 · 弹性扩容','RU-6':'通用证明 · 快速响应',
+  'RU-7':'通用证明 · 真实团队','RU-8':'通用证明 · 灵活服务',
+  // CTA — Agent
+  'CA-1':'代理CTA · 路线报告','CA-2':'代理CTA · 分享运价','CA-3':'代理CTA · 备用方案',
+  'CA-4':'代理CTA · 无压留门','CA-5':'代理CTA · 快速报价','CA-6':'代理CTA · 港口比价',
+  'CA-7':'代理CTA · 5分钟聊','CA-8':'代理CTA · 复杂港口',
+  // CTA — Direct
+  'CD-1':'直客CTA · 清关说明','CD-2':'直客CTA · 流程审查','CD-3':'直客CTA · 备用清关',
+  'CD-4':'直客CTA · 优化进口','CD-5':'直客CTA · 加速清关','CD-6':'直客CTA · 延误复盘',
+  'CD-7':'直客CTA · 时效分析','CD-8':'直客CTA · 简短通话',
+  // CTA — Unlabeled
+  'CU-1':'通用CTA · 分享信息','CU-2':'通用CTA · 市场数据','CU-3':'通用CTA · 无压支持',
+  'CU-4':'通用CTA · 自我介绍','CU-5':'通用CTA · 路线更新','CU-6':'通用CTA · 优化探索',
+  'CU-7':'通用CTA · 第二意见','CU-8':'通用CTA · 祝福收尾',
   // Follow-up F1
   'F1-1':'跟进1 · 新角度','F1-2':'跟进1 · 新思路','F1-3':'跟进1 · 换个视角',
+  'F1-4':'跟进1 · 收件箱满','F1-5':'跟进1 · 不同方法',
   // Follow-up F2
   'F2-1':'跟进2 · 市场变化','F2-2':'跟进2 · 环境波动','F2-3':'跟进2 · 行业格局',
+  'F2-4':'跟进2 · 运价动态','F2-5':'跟进2 · 法规机会',
   // Follow-up F3
   'F3-1':'跟进3 · 时差留门','F3-2':'跟进3 · 无压提醒','F3-3':'跟进3 · 不打扰',
+  'F3-4':'跟进3 · 时机未到','F3-5':'跟进3 · 随时响应',
   // Follow-up F4
   'F4-1':'跟进4 · 最后联系','F4-2':'跟进4 · 不越界','F4-3':'跟进4 · 转为观察',
+  'F4-4':'跟进4 · 祝福告别','F4-5':'跟进4 · 关闭序列',
 };
 
 function applyLabels(lib) {
   const apply = (arr) => { if (arr) arr.forEach(item => { item.label = LABEL_MAP[item.id] || item.id; }); };
-  apply(lib.hooks);
-  apply(lib.hooksAR);
+  const applyObj = (obj) => { if (Array.isArray(obj)) apply(obj); else if (obj) Object.values(obj).forEach(apply); };
+  applyObj(lib.hooks);
   apply(lib.painPoints?.agent);
   apply(lib.painPoints?.direct);
   apply(lib.painPoints?.unlabeled);
   apply(lib.proofs?.agent);
   apply(lib.proofs?.direct);
   apply(lib.proofs?.unlabeled);
-  apply(lib.ctas);
-  apply(lib.ctasAR);
+  applyObj(lib.ctas);
   apply(lib.followUps?.f1);
   apply(lib.followUps?.f2);
   apply(lib.followUps?.f3);
@@ -132,22 +162,6 @@ function applyOverrides(lib, overrides) {
     for (const type of Object.keys(overrides.subjects)) {
       if (lib.subjects[type]) {
         Object.assign(lib.subjects[type], overrides.subjects[type]);
-      }
-    }
-  }
-
-  // 合并 🇦🇷 阿根廷变体（按 ID 匹配逐句覆盖）
-  for (const arKey of ['hooksAR', 'ctasAR']) {
-    if (!overrides[arKey] || !overrides[arKey].length) continue;
-    if (!lib[arKey]) lib[arKey] = [];
-    const dstById = {};
-    lib[arKey].forEach(item => { dstById[item.id] = item; });
-    for (const srcItem of overrides[arKey]) {
-      if (dstById[srcItem.id]) {
-        dstById[srcItem.id].es = srcItem.es;
-        dstById[srcItem.id].pt = srcItem.pt;
-        dstById[srcItem.id].en = srcItem.en;
-        if (srcItem.type) dstById[srcItem.id].type = srcItem.type;
       }
     }
   }

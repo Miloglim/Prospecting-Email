@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prospector — 可视化组件编辑器 v3</title>
+<style>
+/* ═══════════ 项目 CSS ═══════════ */
+:root {
+  --primary: #1a1a1a; --accent: #00bfa5;
+  --bg: #f5f5f5; --card-bg: #ffffff; --text: #1a1a1a;
+  --text-secondary: #6b6b6b; --border: #e0e0e0; --input-bg: #ffffff;
+  --danger: #c62828; --radius: 8px;
+}
+[data-theme="dark"] {
+  --primary: #e0e0e0; --accent: #26a69a; --bg: #121212;
+  --card-bg: #1e1e1e; --text: #e0e0e0; --text-secondary: #9e9e9e;
+  --border: #2e2e2e; --input-bg: #262626;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; }
+
+#preview-wrap { flex:1; overflow-y:auto; position:relative; }
+#preview { padding:30px 40px; max-width:680px; }
+#preview h2 { font-size:20px; font-weight:700; margin-bottom:20px; }
+.settings-section { margin-bottom:40px; }
+.settings-section-label { font-size:13px; font-weight:700; padding-bottom:10px; margin-bottom:12px; border-bottom:1px solid var(--border); }
+.setting-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:1px; }
+.setting-card-header { padding:10px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; }
+.setting-card-header h3 { font-size:10px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.5px; }
+.setting-card-body { padding:1px 8px; }
+.form-row { display:flex; align-items:center; gap:9px; padding:7px 0; border-bottom:1px solid var(--border); min-height:46px; }
+.form-row:last-child { border-bottom:none; }
+.form-row>label { width:72px; flex-shrink:0; font-size:11px; font-weight:500; color:var(--text-secondary); text-align:right; }
+.form-row input,.form-row select { font-size:12px; padding:5px 9px; height:30px; border:1px solid var(--border); border-radius:4px; background:var(--input-bg); color:var(--text); }
+.form-row>input,.form-row>select { flex:1; min-width:0; }
+.form-row-inline { padding-left:55px; flex-wrap:wrap; }
+.form-row-inline>div { display:flex; align-items:center; gap:6px; flex:1; min-width:0; }
+.form-row-inline>div>label { width:auto; font-size:10px; color:var(--text-secondary); flex-shrink:0; }
+.form-row-inline>div input,.form-row-inline>div select { flex:1; }
+.input-range { display:inline-flex; align-items:center; gap:3px; }
+.input-range input { width:56px; flex:none!important; }
+.input-sep { font-size:11px; color:var(--text-secondary); }
+.input-suffix { font-size:10px; color:var(--text-secondary); }
+.sub-section-label { font-size:10px; font-weight:600; color:var(--text-secondary); letter-spacing:0.3px; padding:10px 0 4px; border-top:1px solid var(--border); text-transform:uppercase; }
+
+/* 选中高亮 */
+#preview * { cursor:crosshair; }
+#preview *.picked { outline:2px solid var(--accent); outline-offset:1px; }
+#preview *.hovering { outline:1px dashed rgba(0,191,165,0.4); outline-offset:0; }
+
+/* ── 侧栏 ── */
+#panel {
+  width:360px; background:var(--card-bg); border-left:1px solid var(--border);
+  display:flex; flex-direction:column; font-size:12px;
+}
+#panel-header {
+  padding:10px 16px; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:8px; flex-shrink:0;
+}
+#panel-header select { font-size:11px; }
+#panel-header .spacer { flex:1; }
+#panel-header button { font-size:10px; padding:3px 8px; border:1px solid var(--border); border-radius:3px; cursor:pointer; background:var(--card-bg); color:var(--text); }
+#panel-header button.primary { background:var(--accent); color:#fff; border:none; }
+#no-selection { padding:40px 20px; text-align:center; color:var(--text-secondary); font-size:12px; line-height:1.8; }
+#inspector { flex:1; overflow-y:auto; padding:12px 16px; }
+
+.insp-section { margin-bottom:12px; }
+.insp-section-title { font-size:10px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+.insp-tag { display:inline-block; background:var(--accent); color:#fff; font-size:10px; padding:1px 6px; border-radius:3px; margin-right:4px; }
+.insp-class { display:inline-block; background:var(--border); color:var(--text-secondary); font-size:10px; padding:1px 6px; border-radius:3px; margin-right:2px; }
+
+.slider-row { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
+.slider-row label { width:54px; font-size:10px; color:var(--text-secondary); text-align:right; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.slider-row input[type="range"] { flex:1; accent-color:var(--accent); height:4px; }
+.slider-row .s-val { width:38px; font-size:10px; text-align:center; font-family:monospace; color:var(--text); background:var(--input-bg); border:1px solid var(--border); border-radius:3px; padding:1px 2px; }
+.slider-row .s-unit { font-size:9px; color:var(--text-secondary); width:16px; }
+.slider-row .s-def { font-size:9px; color:var(--text-secondary); cursor:pointer; }
+.slider-row .s-def:hover { color:var(--accent); }
+
+#export-box { display:none; padding:12px 16px; border-top:1px solid var(--border); flex-shrink:0; }
+#export-box textarea { width:100%; height:80px; font-size:10px; font-family:monospace; border:1px solid var(--border); border-radius:4px; padding:6px; background:var(--input-bg); color:var(--text); resize:vertical; }
+#export-box .hint { font-size:10px; color:var(--text-secondary); margin-top:2px; }
+</style>
+</head>
+<body>
+
+<div id="preview-wrap">
+<div id="preview">
+  <h2>设置</h2>
+  <div class="settings-section">
+    <div class="settings-section-label">通用</div>
+    <div class="setting-card">
+      <div class="setting-card-header"><h3>启动与关闭</h3></div>
+      <div class="setting-card-body">
+        <div class="form-row"><label>关闭窗口时</label><select><option>最小化到托盘</option></select></div>
+        <div class="form-row"><label></label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1;font-size:12px"><input type="checkbox"> 开机自动启动</label></div>
+      </div>
+    </div>
+    <div class="setting-card">
+      <div class="setting-card-header"><h3>外观</h3></div>
+      <div class="setting-card-body">
+        <div class="form-row"><label>主题</label><select><option>浅色</option></select></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-section-label">邮件发送</div>
+    <div class="setting-card">
+      <div class="setting-card-header"><h3>SMTP 服务器</h3></div>
+      <div class="setting-card-body">
+        <div class="form-row"><label>服务器地址</label><input value="smtp.example.com"></div>
+        <div class="form-row form-row-inline">
+          <div><label>端口</label><input type="number" value="465"></div>
+          <div><label>加密方式</label><select><option>SSL</option></select></div>
+        </div>
+        <div class="form-row"><label>邮箱地址</label><input value="your@email.com"></div>
+        <div class="form-row"><label>密码</label><input type="password" value="12345678"></div>
+      </div>
+    </div>
+    <div class="setting-card">
+      <div class="setting-card-header"><h3>发信人信息</h3></div>
+      <div class="setting-card-body">
+        <div class="form-row"><label>发件人名称</label><input placeholder="收件人看到的名称"></div>
+        <div class="form-row"><label>正文署名</label><input placeholder="如 Zayne"></div>
+        <div class="form-row"><label>发信邮箱</label><input placeholder="your@email.com"></div>
+      </div>
+    </div>
+    <div class="setting-card">
+      <div class="setting-card-header"><h3>发送规则</h3></div>
+      <div class="setting-card-body">
+        <div class="form-row form-row-inline">
+          <div><label>每日上限</label><input type="number" value="720"><span class="input-suffix">封</span></div>
+        </div>
+        <div class="form-row form-row-inline">
+          <div><label>发送时段</label><input type="time" value="09:00"><span class="input-sep">~</span><input type="time" value="08:00"></div>
+          <div><label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px"><input type="checkbox">限时</label></div>
+        </div>
+        <div class="sub-section-label">模拟人工参数</div>
+        <div class="form-row"><label>封间延迟</label><span class="input-range"><input type="number" value="30"><span class="input-sep">~</span><input type="number" value="90"><span class="input-suffix">秒</span></span></div>
+        <div class="form-row"><label>公司切换</label><span class="input-range"><input type="number" value="300"><span class="input-sep">~</span><input type="number" value="900"><span class="input-suffix">秒</span></span></div>
+        <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" value="20"><span class="input-suffix">人/组</span></span></div>
+        <div class="sub-section-label">模板轮换</div>
+        <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" value="3"><span class="input-suffix">组/换</span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div id="panel">
+  <div id="panel-header">
+    <select id="ctrl-theme"><option value="light">浅色</option><option value="dark">深色</option></select>
+    <span class="spacer"></span>
+    <button onclick="resetAll()">重置</button>
+    <button class="primary" onclick="exportCSS()">导出 CSS</button>
+  </div>
+  <div id="no-selection">👆 点击左侧预览任意位置</div>
+  <div id="inspector"></div>
+  <div id="export-box">
+    <textarea id="export-css" readonly></textarea>
+    <div class="hint">复制替换 styles.css 对应部分</div>
+  </div>
+</div>
+
+<script>
+// ═══════════ 全局状态 ═══════════
+let $picked = null;
+const overrides = {};       // { selector: { prop: originalValue } }
+const SELECTABLE_TAGS = new Set(['DIV','SECTION','H2','H3','H4','LABEL','INPUT','SELECT','BUTTON','SPAN','NAV','HEADER']);
+const SKIP_TAGS = new Set(['HTML','BODY','SCRIPT','STYLE','OPTION']);
+
+// ═══════════ 选择逻辑 ═══════════
+const pw = document.getElementById('preview-wrap');
+
+pw.addEventListener('click', e => {
+  let el = e.target;
+  // 向上找第一个有意义的元素
+  while (el && el !== pw) {
+    if (SKIP_TAGS.has(el.tagName)) { el = null; break; }
+    if (SELECTABLE_TAGS.has(el.tagName) && el.offsetWidth > 0 && el.offsetHeight > 0) break;
+    el = el.parentElement;
+  }
+  if (!el || el === pw || el.id === 'preview') { pick(null); return; }
+  e.stopPropagation();
+  pick(el);
+});
+
+pw.addEventListener('mouseover', e => {
+  let el = e.target;
+  while (el && el !== pw) {
+    if (SELECTABLE_TAGS.has(el.tagName) && el.offsetWidth > 0 && el.offsetHeight > 0) break;
+    el = el.parentElement;
+  }
+  if (!el || el === $picked || el === pw) return;
+  document.querySelectorAll('#preview .hovering').forEach(x => x.classList.remove('hovering'));
+  if (el && el.closest('#preview')) el.classList.add('hovering');
+});
+
+pw.addEventListener('mouseout', e => {
+  let el = e.target;
+  while (el && el !== pw) {
+    if (SELECTABLE_TAGS.has(el.tagName)) break;
+    el = el.parentElement;
+  }
+  if (el) el.classList.remove('hovering');
+});
+
+function pick(el) {
+  if ($picked) $picked.classList.remove('picked');
+  document.querySelectorAll('#preview .hovering').forEach(x => x.classList.remove('hovering'));
+  $picked = el;
+  if (el) el.classList.add('picked');
+  renderInspector(el);
+}
+
+// ═══════════ 可编辑属性 ═══════════
+const NUMERIC_PROPS = [
+  { prop:'paddingTop',       label:'上内距',  min:0, max:40, step:0.5 },
+  { prop:'paddingRight',     label:'右内距',  min:0, max:60, step:0.5 },
+  { prop:'paddingBottom',    label:'下内距',  min:0, max:40, step:0.5 },
+  { prop:'paddingLeft',      label:'左内距',  min:0, max:60, step:0.5 },
+  { prop:'marginTop',        label:'上外距',  min:0, max:60, step:0.5 },
+  { prop:'marginBottom',     label:'下外距',  min:0, max:60, step:0.5 },
+  { prop:'gap',              label:'间距',    min:0, max:40, step:0.5 },
+  { prop:'fontSize',         label:'字号',    min:8, max:24, step:0.5 },
+  { prop:'width',            label:'宽度',    min:0, max:800, step:1 },
+  { prop:'minHeight',        label:'最小高',  min:0, max:100, step:1 },
+  { prop:'height',           label:'高度',    min:0, max:100, step:0.5 },
+  { prop:'borderRadius',     label:'圆角',    min:0, max:20, step:0.5 },
+  { prop:'letterSpacing',    label:'字距',    min:-1, max:5, step:0.1 },
+];
+
+function getRelevantProps(el) {
+  const s = window.getComputedStyle(el);
+  const out = [];
+  for (const np of NUMERIC_PROPS) {
+    const val = s[np.prop];
+    if (!val || val === 'normal' || val === 'auto' || val === '0px') continue;
+    // Only show if it's meaningful for this element
+    const num = parseFloat(val);
+    if (isNaN(num)) continue;
+    out.push({ ...np, val: num, unit: val.replace(/[\d.-]+/, '') || 'px' });
+  }
+  return out;
+}
+
+// ═══════════ 检查器（滑块版） ═══════════
+function renderInspector(el) {
+  const insp = document.getElementById('inspector');
+  const noselect = document.getElementById('no-selection');
+
+  if (!el) {
+    insp.innerHTML = '';
+    noselect.style.display = '';
+    return;
+  }
+  noselect.style.display = 'none';
+
+  const tag = el.tagName.toLowerCase();
+  const classes = Array.from(el.classList).filter(c => c !== 'picked' && c !== 'hovering');
+
+  let html = '';
+  html += `<div class="insp-section"><span class="insp-tag">${tag}</span>`;
+  classes.forEach(c => html += `<span class="insp-class">.${c}</span>`);
+  html += '</div>';
+
+  const props = getRelevantProps(el);
+  if (props.length === 0) {
+    html += '<div style="font-size:11px;color:var(--text-secondary)">此元素无可用数值属性</div>';
+  }
+
+  // 按类别分组
+  const groups = {};
+  props.forEach(p => {
+    const cat = p.prop.includes('padding') ? '内边距' :
+               p.prop.includes('margin') ? '外边距' :
+               p.prop.includes('font') || p.prop.includes('letter') ? '文字' :
+               p.prop.includes('gap') ? '弹性布局' :
+               p.prop.includes('height') || p.prop.includes('width') ? '尺寸' : '其他';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(p);
+  });
+
+  for (const [cat, items] of Object.entries(groups)) {
+    html += `<div class="insp-section"><div class="insp-section-title">${cat}</div>`;
+    items.forEach(p => {
+      const id = 's-' + p.prop;
+      const rangeMax = Math.max(p.max, p.val * 2);
+      html += `<div class="slider-row">
+        <label>${p.label}</label>
+        <input type="range" id="${id}" min="${p.min}" max="${rangeMax}" step="${p.step}" value="${p.val}"
+          data-prop="${p.prop}" data-unit="${p.unit}">
+        <span class="s-val" id="${id}-val">${p.val}</span>
+        <span class="s-unit">${p.unit}</span>
+        <span class="s-def" title="重置为默认" onclick="resetProp('${p.prop}', ${p.val})">↺</span>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  // 颜色
+  const bg = window.getComputedStyle(el).backgroundColor;
+  if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+    html += `<div class="insp-section"><div class="insp-section-title">颜色</div>`;
+    html += `<div class="slider-row"><label>背景色</label><input type="color" value="${rgbToHex(bg)}" onchange="setColor(this.value)"><span style="font-size:10px;color:var(--text-secondary)">${bg}</span></div>`;
+    html += '</div>';
+  }
+
+  insp.innerHTML = html;
+
+  // 绑定滑块事件
+  insp.querySelectorAll('input[type="range"]').forEach(slider => {
+    slider.addEventListener('input', () => {
+      const val = parseFloat(slider.value);
+      const prop = slider.dataset.prop;
+      const unit = slider.dataset.unit;
+      el.style[prop] = val + unit;
+      document.getElementById(slider.id + '-val').textContent = val;
+      trackOverride(getSel(el), prop, el.style[prop]);
+    });
+  });
+}
+
+function setColor(hex) {
+  if (!$picked) return;
+  $picked.style.backgroundColor = hex;
+  trackOverride(getSel($picked), 'backgroundColor', hex);
+}
+
+function rgbToHex(rgb) {
+  const m = rgb.match(/[\d.]+/g);
+  if (!m || m.length < 3) return '#000000';
+  return '#' + m.slice(0,3).map(x => parseInt(x).toString(16).padStart(2,'0')).join('');
+}
+
+function resetProp(prop, origVal) {
+  if (!$picked) return;
+  $picked.style[prop] = '';
+  const id = 's-' + prop;
+  const slider = document.getElementById(id);
+  if (slider) {
+    const newVal = parseFloat(window.getComputedStyle($picked)[prop]) || 0;
+    slider.value = newVal;
+    document.getElementById(id + '-val').textContent = newVal;
+  }
+  delete (overrides[getSel($picked)] || {})[prop];
+}
+
+// ═══════════ 工具函数 ═══════════
+function getSel(el) {
+  const tag = el.tagName.toLowerCase();
+  const cls = Array.from(el.classList).filter(c => c !== 'picked' && c !== 'hovering').join('.');
+  const id = el.id ? '#' + el.id : '';
+  return id || (cls ? tag + '.' + cls : tag);
+}
+
+function trackOverride(sel, prop, val) {
+  if (!overrides[sel]) overrides[sel] = {};
+  overrides[sel][prop] = val;
+}
+
+function resetAll() {
+  for (const key of Object.keys(overrides)) delete overrides[key];
+  document.querySelectorAll('#preview *').forEach(el => {
+    for (const np of NUMERIC_PROPS) el.style[np.prop] = '';
+    el.style.backgroundColor = '';
+  });
+  pick(null);
+  document.getElementById('export-box').style.display = 'none';
+}
+
+function exportCSS() {
+  const lines = ['/* 从可视化编辑器导出的 CSS */', ''];
+  // 合并同选择器的属性
+  const merged = {};
+  for (const [sel, props] of Object.entries(overrides)) {
+    if (!merged[sel]) merged[sel] = {};
+    Object.assign(merged[sel], props);
+  }
+  for (const [sel, props] of Object.entries(merged)) {
+    const decls = Object.entries(props).map(([p, v]) => {
+      const kebab = p.replace(/[A-Z]/g, m => '-' + m.toLowerCase());
+      return `  ${kebab}: ${v};`;
+    });
+    if (decls.length) { lines.push(`${sel} {`); lines.push(decls.join('\n')); lines.push('}'); lines.push(''); }
+  }
+  document.getElementById('export-box').style.display = 'block';
+  document.getElementById('export-css').value = lines.join('\n');
+}
+
+// ═══════════ 主题 ═══════════
+document.getElementById('ctrl-theme').addEventListener('change', e => {
+  document.documentElement.setAttribute('data-theme', e.target.value);
+});
+	// ── 方向键移动选中元素 ──
+	document.addEventListener('keydown', e => {
+	  if (e.target.tagName === 'INPUT' && (e.target.type === 'range' || e.target.type === 'text')) return;
+	  if (e.key === 'Escape') { e.preventDefault(); pick(null); return; }
+	  if (!$picked) return;
+	  const step = e.shiftKey ? 3 : 0.5;
+	  let prop, dir;
+	  switch(e.key) {
+	    case 'ArrowLeft':  e.preventDefault(); prop = 'paddingLeft';  dir = -step; break;
+	    case 'ArrowRight': e.preventDefault(); prop = 'paddingLeft';  dir = +step; break;
+	    case 'ArrowUp':    e.preventDefault(); prop = 'paddingTop';   dir = -step; break;
+	    case 'ArrowDown':  e.preventDefault(); prop = 'paddingTop';   dir = +step; break;
+	    default: return;
+	  }
+	  const s = window.getComputedStyle($picked);
+	  const unit = (s[prop] || '0px').replace(/[\d.-]+/, '') || 'px';
+	  const cur = parseFloat(s[prop]) || 0;
+	  $picked.style[prop] = Math.max(0, cur + dir) + unit;
+	  trackOverride(getSel($picked), prop, $picked.style[prop]);
+	  pick($picked);
+	});
+	</script>
+	</body>
+	</html>
