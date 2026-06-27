@@ -1,6 +1,6 @@
 # Prospecting Email — 公司背调 + 开发信生成工具
 
-> 拉美开发信桌面工具 (Electron v1.3)。拖入客户表 → AI 背调 → 输出双语开发信 → 自动发送。
+> 拉美开发信桌面工具 (Electron v1.1.0)。拖入客户表 → AI 背调 → 输出双语开发信 → 自动发送。
 > 默认市场：墨西哥、巴西、智利、秘鲁、哥伦比亚（西语/葡语）。
 
 ## 故障排查
@@ -24,25 +24,37 @@
 | P1 | Tavily | 新闻动态 | `tvly search --topic news "<公司名>"` |
 | P1 | LinkedIn | 决策人/招聘 | `mcporter call 'linkedin.search_people(keyword: "<公司名> procurement OR compras", limit: 10)'` |
 
-## 写作约束
 
-- 🈲 代理不提本地仓库/本地团队
-- 🈲 同一封不同时出现船东名 + 具体运价
-- 🈲 不对海外客户用 digital/AI/平台等技术词汇
-- 🈲 不用最高级/紧迫词/夸大承诺/价格诱饵
-- ✅ 西语在前，英语在后
-- ✅ 第二人称，不教客户做事
-- ✅ CTA 是「给」不是「要」
+## 架构基底 (v1.1.0)
+
+```
+electron/modules/
+├── core/               # 基础层 — 不依赖 Electron API
+│   ├── contract.js     # 71条 IPC 通道常量 + ok()/fail() 响应助手
+│   ├── logger.js       # 分级日志 (debug/info/warn/error)
+│   ├── config.js       # 路径常量 + 代理配置
+│   └── utils.js        # 纯函数
+├── services/           # 业务层 — 不碰 IPC，deps 参数传入
+│   ├── send-engine.js  # 发送引擎核心 (runSendBatch/_sendOne/buildContent)
+│   └── history-store.js # 发送历史持久化
+├── ipc/                # IPC 注册层 — 只做路由，调用 services
+│   └── system-ipc.js   # 仪表盘/SMTP/配置/网络/签名/队列
+├── send-ipc.js         # 发送控制 + 退信 IPC (126行，精简76%)
+├── contacts-ipc.js / backcheck-ipc.js / template-ipc.js
+renderer/modules/       # 按页面拆分，lucide 统一从 shared.js import
+```
 
 ## 代码规范
 
+- **IPC 契约优先** — 新通道先加 `contract.js` 常量 → preload.js → handler，三者双向验证
+- **响应格式统一** — 逐步迁移到 `ok(data?)` / `fail(message)`，旧格式 `{ ok: true }` 可并存
+- **日志用 `Log.xxx(ctx, msg, data)`** — 不裸调 `console.log`；`Log.error` 含完整 stack
+- **`lucide` 统一 import** — 从 `shared.js` 导入，禁止各模块自行定义
 - **配置键统一 `_seconds` 后缀** — 所有时间值配置键以 `_seconds` 结尾
-- **发送引擎模块化** — `_loadConfig()` / `_buildContext()` / `_sendOne()` / `runSendBatch()`，新增功能沿用此结构
-- **渲染进程按功能域拆分** — `app.js` 超 800 行时按 shared/send/workshop/contacts/backcheck/settings 拆为 6 个 ES module（规划见 `docs/p2-renderer-split.md`）
-- **IPC 有增必查** — 加新 IPC 通道时，preload.js + main handler 双向验证
+- **发送引擎模块化** — `_loadConfig()` / `_buildContext()` / `_sendOne()` / `runSendBatch()`
 - **config.json 无孤儿字段** — 删功能时同步清理 config。只保留 CFG_KEYS 中映射的字段
-- **路径用 config.js** — 项目根路径从 `require('./modules/config').APP_ROOT` 取，不自己推导
-- **开发模式判断** — `__dirname.includes('.asar')` 判断打包，不依赖 `process.resourcesPath`
+- **路径用 config.js** — 项目根路径从 `require('./modules/config').APP_ROOT` 取
+- **开发模式判断** — `__dirname.includes('.asar')` 判断打包
 
 ## 已知陷阱
 
@@ -61,11 +73,4 @@
 4. **命名纠偏** — 回复中标注 `[用户叫法]` → 正确组件名
 5. **说人话** — 简明清晰，少用术语
 
-## 参考文档
 
-| 文件 | 内容 |
-|------|------|
-| `docs/email-writing-rules.md` | 写作准则 + 拉美文化适配 |
-| `docs/backcheck-rules.md` | 开发价值评分规则 |
-| `templates/general-templates.md` | 模板句库 + 垃圾词黑名单 |
-| `docs/p2-renderer-split.md` | 渲染进程拆分方案 |
