@@ -2,7 +2,7 @@
   "name": "prospecting-email-send",
   "version": "1.1.0",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
-  "main": "electron/main.js",
+  "main": "dist/main/index.js",
   "type": "commonjs",
   "scripts": {
     "start": "electron-vite dev",
@@ -29,7 +29,7 @@
       "createDesktopShortcut": true
     },
     "files": [
-      "electron/**",
+      "dist/**",
       "templates/**",
       "send/config.example.json",
       "send/signature.html",
@@ -37,6 +37,12 @@
       "package.json",
       "node_modules/**"
     ],
+    "asar": {
+      "encryption": {
+        "algorithm": "aes-256-cbc",
+        "key": "bWlsb2dpbi1wcm9zcGVjdG9yLTIwMjYtc2VjcmV0LWtleS1mb3ItYXNhcg=="
+      }
+    },
     "extraResources": []
   },
   "dependencies": {
