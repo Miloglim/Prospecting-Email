@@ -115,7 +115,7 @@ function register(ipcMain) {
   // ── 发送状态 ──
   ipcMain.handle('account:status', async () => {
     const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
-    let dailyCounts = {};
+    let dailyCounts = {}, accountStates = {};
     try {
       if (fs.existsSync(logPath)) {
         const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
@@ -123,17 +123,26 @@ function register(ipcMain) {
           .toISOString().slice(0, 10);
         const logDate = log.last_date_beijing || '';
         dailyCounts = (logDate === today) ? (log.daily_counts || {}) : {};
+        accountStates = log._accountStates || {};
       }
-    } catch { /* 日志不存在或损坏，返回空计数 */ }
+    } catch { /* 日志不存在或损坏 */ }
 
+    const acctMgr = require('../services/account-manager');
     const cfg = _readConfig();
-    const accounts = (cfg.smtpAccounts || []).map(a => ({
-      id: a.id,
-      label: a.label,
-      active: a.active,
-      todaySent: dailyCounts[a.id] || 0,
-      dailyLimit: a.dailyLimit || 500,
-    }));
+    const accounts = (cfg.smtpAccounts || []).map(a => {
+      const st = accountStates[a.id] || {};
+      const fused = acctMgr.isFused(a.id, accountStates);
+      return {
+        id: a.id,
+        label: a.label,
+        active: a.active,
+        todaySent: dailyCounts[a.id] || 0,
+        dailyLimit: a.dailyLimit || 500,
+        fused,
+        failures: st.failures || 0,
+        cooldownMin: fused ? Math.round((st.cooldownMs || 0) / 60000) : 0,
+      };
+    });
     return { ok: true, data: accounts };
   });
 }

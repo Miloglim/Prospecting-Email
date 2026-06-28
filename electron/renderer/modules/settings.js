@@ -438,8 +438,17 @@ function initAccountManager() {
       listEl.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:8px">暂无账号，点击下方按钮添加</div>';
     } else {
       listEl.innerHTML = accounts.map(a => {
-        const dotClass = a.active ? 'active' : 'inactive';
-        const limitInfo = a.active ? `今日 ${a.todaySent || 0}/${a.dailyLimit || 500}` : '已停用';
+        // 圆点：熔断=橙，失败=红，通过=绿，未测试=灰，停用=暗灰
+        let dotClass = 'inactive';
+        if (a.active) {
+          if (a.fused) dotClass = 'fused';
+          else if (!a._lastTest) dotClass = 'untested';
+          else if (a._lastTest.ok) dotClass = 'active';
+          else dotClass = 'failed';
+        }
+        const limitInfo = a.fused ? `⚡ 熔断中 · 冷却 ${a.cooldownMin} 分钟`
+          : a.active ? `今日 ${a.todaySent || 0}/${a.dailyLimit || 500}`
+          : '已停用';
         return `<div class="account-item" data-id="${a.id}">
           <span class="acct-dot ${dotClass}"></span>
           <div class="acct-info">
@@ -552,9 +561,26 @@ function initAccountManager() {
     if (!account.smtp.host || !account.smtp.user) {
       showAlert('服务器地址和邮箱地址不能为空'); return;
     }
+    const btn = document.getElementById('btn-acct-save');
+    btn.disabled = true; btn.textContent = '保存中...';
     const id = document.getElementById('acct-edit-id').value;
-    if (id) await window.electronAPI.updateAccount(id, account);
-    else await window.electronAPI.addAccount(account);
+    let savedId = id;
+    if (id) {
+      await window.electronAPI.updateAccount(id, account);
+    } else {
+      const r = await window.electronAPI.addAccount(account);
+      savedId = r.data?.id || '';
+    }
+    // 保存后自动测试连通性
+    if (savedId) {
+      try {
+        const tr = await window.electronAPI.testAccount(account);
+        await window.electronAPI.updateAccount(savedId, {
+          _lastTest: { ok: tr.ok, at: new Date().toISOString(), error: tr.error || '' }
+        });
+      } catch {}
+    }
+    btn.disabled = false; btn.textContent = '保存';
     closeEditor();
     render();
   });
@@ -577,6 +603,14 @@ function initAccountManager() {
       resultEl.innerHTML = r.ok
         ? `${lucide('check-circle',12)} 连接成功`
         : `${lucide('x-circle',12)} ${escapeHtml(r.error || '连接失败')}`;
+      // 将测试结果写入已有账号（编辑模式）
+      const editId = document.getElementById('acct-edit-id').value;
+      if (editId) {
+        await window.electronAPI.updateAccount(editId, {
+          _lastTest: { ok: r.ok, at: new Date().toISOString(), error: r.error || '' }
+        });
+        render();
+      }
     } catch (e) {
       resultEl.className = 'acct-test-status fail';
       resultEl.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message)}`;

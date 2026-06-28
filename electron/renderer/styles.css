@@ -1057,6 +1057,9 @@ select option { font-size: 12px; }
 }
 .acct-dot.active { background: #4caf50; }
 .acct-dot.inactive { background: #9e9e9e; }
+.acct-dot.failed { background: #f44336; }
+.acct-dot.fused { background: #ff9800; }
+.acct-dot.untested { background: #bdbdbd; }
 
 /* 必填标记 */
 .setting-required .setting-card-header h3::after {

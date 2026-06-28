@@ -38,8 +38,29 @@ export async function loadDashboard(){
   // 账号状态
   try{
     const s=await window.electronAPI.checkSmtpStatus();
+    const as=await window.electronAPI.getAccountStatus();
     const e=document.getElementById('stat-smtp');
-    if(s.accountCount!=null){e.textContent=s.ok?`${s.activeCount}/${s.accountCount}`:'0';e.style.color=s.ok?'var(--success)':'var(--warning)'}else{e.textContent=s.ok?'已连接':'未配置';e.style.color=s.ok?'var(--success)':'var(--warning)'}
+    if(s.accountCount!=null){
+      const active=s.activeCount;
+      const total=s.accountCount;
+      const pass=s.passedCount||0;
+      const failed=s.failedCount||0;
+      const fusedCount=(as.data||[]).filter(a=>a.fused).length;
+      // 分母只在全通时变绿，其余黑色
+      const denomColor = (pass===total && failed===0 && fusedCount===0) ? '#4caf50' : 'var(--text)';
+      const sh=`<span style="color:${denomColor}">/</span>`;
+      if(active===0){
+        e.innerHTML=`<span style="color:#e65100">0</span>${sh}<span style="color:${denomColor}">${total}</span>`;
+      }else if(fusedCount>0){
+        e.innerHTML=`<span style="color:#ff9800">${active}</span>${sh}<span style="color:${denomColor}">${total}</span> <span style="color:#ff9800">⚡${fusedCount}</span>`;
+      }else if(failed>0){
+        e.innerHTML=`<span style="color:#e65100">${active}</span>${sh}<span style="color:${denomColor}">${total}</span>`;
+      }else if(pass===total&&pass>0){
+        e.innerHTML=`<span style="color:#4caf50">${active}</span>${sh}<span style="color:${denomColor}">${total}</span>`;
+      }else{
+        e.innerHTML=`<span style="color:var(--text-secondary)">${active}</span>${sh}<span style="color:${denomColor}">${total}</span>`;
+      }
+    }else{e.textContent=s.ok?'已连接':'未配置';e.style.color=s.ok?'var(--success)':'var(--warning)'}
   }catch(e){}
 
   // 发送窗口

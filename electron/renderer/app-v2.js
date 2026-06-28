@@ -58,6 +58,9 @@ initQueue();  // 队列后台并行恢复
 // ── 新手向导 ──────────────────────────────────────────────
 let _onboardingStep = 1;
 let _obTransitioning = false;
+let _shiftHeld = false;
+document.addEventListener('keydown', e => { if (e.key === 'Shift') _shiftHeld = true; });
+document.addEventListener('keyup', e => { if (e.key === 'Shift') _shiftHeld = false; });
 
 async function checkOnboarding() {
   try {
@@ -77,6 +80,11 @@ function showOnboarding() {
   ob.style.display = 'flex';
   requestAnimationFrame(() => { requestAnimationFrame(() => ob.classList.add('show')); });
 }
+
+// Shift+点击版本号 → 强制打开新手向导（调试用，正式版也可触发）
+document.getElementById('nav-version')?.addEventListener('click', function(e) {
+  if (e.shiftKey) showOnboarding();
+});
 
 function hideOnboarding() {
   const ob = document.getElementById('onboarding');
@@ -131,8 +139,8 @@ window.onboardingBack = function() {
 
 window.onboardingNext = async function() {
   if (_obTransitioning) return;
-  // 验证必填
-  if (_onboardingStep === 1) {
+  // 验证必填（Shift+点击跳过）
+  if (_onboardingStep === 1 && !_shiftHeld) {
     const required = [
       { id: 'ob-smtp-host', label: 'SMTP 服务器' },
       { id: 'ob-smtp-user', label: '邮箱地址' },
@@ -186,11 +194,21 @@ window.onboardingSkip = function() { hideOnboarding(); };
 window.onboardingFinish = async function() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
-  // 保存所有配置
-  await saveOnboardingConfig();
-  await saveGeneralConfig();
+
+  // 对所有账号进行 SMTP 连通性测试，结果写入账号
+  try {
+    const accounts = await window.electronAPI.listAccounts();
+    for (const acc of (accounts.data || [])) {
+      if (!acc.active) continue;
+      const r = await window.electronAPI.testAccount(acc);
+      await window.electronAPI.updateAccount(acc.id, {
+        _lastTest: { ok: r.ok, at: new Date().toISOString(), error: r.error || '' }
+      }).catch(() => {});
+    }
+  } catch {}
   // 立即刷新仪表盘
   loadDashboard();
+
   // 阶段1: 0.1s 后卡片淡出 + 毛玻璃呈现 (0.6s)
   setTimeout(() => ob.classList.add('finishing'), 100);
   // 阶段2: 毛玻璃完成后整体淡出 (1.5s)

@@ -53,7 +53,7 @@ function register(ipcMain, deps) {
     return _statsCache;
   });
 
-  // ── SMTP 状态（兼容旧 smtp + 新 smtpAccounts）──
+  // ── SMTP 状态（兼容旧 smtp + 新 smtpAccounts，含连通性测试结果）──
   ipcMain.handle('smtp:checkStatus', async () => {
     const cp = path.join(APP_ROOT, 'send', 'config.json');
     if (!fs.existsSync(cp)) return { ok: false, host: '未配置' };
@@ -62,10 +62,48 @@ function register(ipcMain, deps) {
       const c = JSON.parse(raw);
       // 新格式：smtpAccounts
       if (Array.isArray(c.smtpAccounts) && c.smtpAccounts.length > 0) {
-        const active = c.smtpAccounts.filter(a => a.active !== false);
-        if (!active.length) return { ok: false, host: '无活跃账号', user: '' };
+        // 读取熔断状态
+        let fusedIds = new Set();
+        try {
+          const lp = path.join(APP_ROOT, 'send', 'send-log.json');
+          if (fs.existsSync(lp)) {
+            const log = JSON.parse(await fs.promises.readFile(lp, 'utf-8'));
+            const acctMgr = require('../services/account-manager');
+            for (const a of c.smtpAccounts) {
+              if (acctMgr.isFused(a.id, log._accountStates || {})) fusedIds.add(a.id);
+            }
+          }
+        } catch {}
+
+        const enabled = c.smtpAccounts.filter(a => a.active !== false);
+        if (!enabled.length) return { ok: false, host: '无活跃账号', user: '' };
+
+        const tested = enabled.filter(a => a._lastTest);
+        const passed = tested.filter(a => a._lastTest?.ok);
+        const failed = tested.filter(a => a._lastTest && !a._lastTest.ok);
+        const untested = enabled.filter(a => !a._lastTest);
+
+        // 活跃数 = 启用 且 非熔断 且 (未测试 或 测试通过)。失败/熔断视为停用
+        const active = enabled.filter(a =>
+          !fusedIds.has(a.id) && (!a._lastTest || a._lastTest.ok !== false)
+        );
+
+        if (!active.length) {
+          const reason = fusedIds.size > 0 ? '账号异常（熔断/离线）' : '无连通账号';
+          return { ok: false, host: reason, user: '' };
+        }
         const first = active[0];
-        return { ok: true, host: first.smtp?.host || '未配置', user: first.smtp?.user || '', accountCount: c.smtpAccounts.length, activeCount: active.length };
+        return {
+          ok: passed.length > 0,
+          host: first.smtp?.host || '未配置',
+          user: first.smtp?.user || '',
+          accountCount: c.smtpAccounts.length,
+          activeCount: active.length,
+          testedCount: tested.length,
+          passedCount: passed.length,
+          failedCount: failed.length,
+          untestedCount: untested.length,
+        };
       }
       // 旧格式：smtp（兼容）
       return { ok: !!(c.smtp?.host && c.smtp?.user), host: c.smtp?.host || '未配置', user: c.smtp?.user || '' };
