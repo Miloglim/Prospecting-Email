@@ -9,7 +9,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "pack": "electron-vite build && electron-builder --win",
-    "release": "electron-vite build && electron-builder --win --publish always"
+    "release": "electron-vite build && electron-builder --win --publish always",
+    "sync-oss": "node scripts/sync-oss.js"
   },
   "build": {
     "electronDownload": {

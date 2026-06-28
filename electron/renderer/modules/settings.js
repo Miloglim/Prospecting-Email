@@ -334,24 +334,61 @@ document.getElementById('cfg-general-theme')?.addEventListener('change', (e) => 
   } catch {}
 })();
 
-window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); };
+window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); };
+
+// ── 数据导出 ──────────────────────────────────────────────────────────────
+function initExportBtn() {
+  const btn = document.getElementById('btn-export-data');
+  const result = document.getElementById('export-result');
+  if (!btn || btn._bound) return;
+  btn._bound = true;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    result.textContent = '导出中...';
+    try {
+      const r = await window.electronAPI.exportData();
+      if (r.ok) {
+        result.innerHTML = `${lucide('check-circle',12)} 已保存到桌面`;
+        result.style.color = 'var(--success)';
+      } else {
+        result.textContent = r.error || '导出失败';
+        result.style.color = 'var(--danger)';
+      }
+    } catch (e) {
+      result.textContent = '导出失败';
+      result.style.color = 'var(--danger)';
+    }
+    btn.disabled = false;
+  });
+}
 
 // ── 检查更新 ──────────────────────────────────────────────────────────────
 function initUpdateCheck() {
   const btn = document.getElementById('btn-check-update');
+  const dlBtn = document.getElementById('btn-download-update');
+  const restartBtn = document.getElementById('btn-restart-update');
   const result = document.getElementById('update-result');
+  const prog = document.getElementById('update-progress');
+  const progFill = document.getElementById('update-progress-fill');
+  const speed = document.getElementById('update-speed');
   if (!btn || !result || btn._bound) return;
   btn._bound = true;
+
+  let pendingVersion = '';
 
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     result.innerHTML = `${lucide('loader-2',12,'spin')} 检查中...`;
     result.style.color = 'var(--text-secondary)';
+    dlBtn.style.display = 'none';
+    prog.style.display = 'none';
     try {
       const r = await window.electronAPI.checkUpdate();
       if (r.ok && r.data?.version) {
-        result.innerHTML = `${lucide('download',12)} 发现新版本 <strong>v${r.data.version}</strong>，正在下载...`;
+        pendingVersion = r.data.version;
+        result.innerHTML = `${lucide('bell',12)} 发现新版本 <strong>v${r.data.version}</strong>`;
         result.style.color = 'var(--accent)';
+        dlBtn.style.display = '';
       } else {
         result.innerHTML = `${lucide('check-circle',12)} 已是最新版本`;
         result.style.color = 'var(--success)';
@@ -363,14 +400,53 @@ function initUpdateCheck() {
     btn.disabled = false;
   });
 
+  dlBtn.addEventListener('click', async () => {
+    dlBtn.disabled = true;
+    dlBtn.textContent = '下载中...';
+    prog.style.display = '';
+    progFill.style.width = '0%';
+    result.innerHTML = `${lucide('loader-2',12,'spin')} 准备下载...`;
+    try {
+      await window.electronAPI.downloadUpdate();
+    } catch (e) {
+      result.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message || '下载失败')}`;
+      result.style.color = 'var(--danger)';
+      dlBtn.style.display = 'none';
+      prog.style.display = 'none';
+    }
+  });
+
   // 监听更新事件
   window.electronAPI.onUpdateAvailable((data) => {
-    result.innerHTML = `${lucide('bell',12)} 发现新版本 <strong>v${data.version}</strong>，正在后台下载...`;
+    pendingVersion = data.version;
+    result.innerHTML = `${lucide('bell',12)} 发现新版本 <strong>v${data.version}</strong>`;
+    result.style.color = 'var(--accent)';
+    dlBtn.style.display = '';
+    prog.style.display = 'none';
+    speed.textContent = '';
+  });
+
+  // 监听下载进度（含速率）
+  window.electronAPI.onUpdateProgress((data) => {
+    progFill.style.width = data.percent + '%';
+    speed.textContent = `${data.percent}% · ${data.speedMB} MB/s · ${data.transferred}/${data.total} MB`;
+    result.innerHTML = `${lucide('download',12)} 下载中...`;
     result.style.color = 'var(--accent)';
   });
+
+  restartBtn.addEventListener('click', async () => {
+    restartBtn.disabled = true;
+    restartBtn.textContent = '重启中...';
+    await window.electronAPI.installUpdate();
+  });
+
   window.electronAPI.onUpdateDownloaded((data) => {
-    result.innerHTML = `${lucide('check-circle',12)} v${data.version} 已下载，重启后生效`;
+    result.innerHTML = `${lucide('check-circle',12)} v${data.version} 已下载`;
     result.style.color = 'var(--success)';
+    dlBtn.style.display = 'none';
+    restartBtn.style.display = '';
+    prog.style.display = 'none';
+    speed.textContent = '';
   });
 }
 

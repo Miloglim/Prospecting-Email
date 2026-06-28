@@ -100,11 +100,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 自动更新
   checkUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdateAvailable: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('update:available', handler);
     return () => ipcRenderer.removeListener('update:available', handler);
+  },
+  onUpdateProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('update:download-progress', handler);
+    return () => ipcRenderer.removeListener('update:download-progress', handler);
   },
   onUpdateDownloaded: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -154,4 +160,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleAccount: (id) => ipcRenderer.invoke('account:toggle', id),
   testAccount: (account) => ipcRenderer.invoke('account:test', account),
   getAccountStatus: () => ipcRenderer.invoke('account:status'),
+
+  // 数据导出
+  exportData: () => ipcRenderer.invoke('data:export'),
 });

@@ -555,11 +555,23 @@
               </select>
             </div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-general-auto-launch"> 开机自动启动</label></div>
+            <div class="form-row"><label>数据管理</label>
+              <button id="btn-export-data" class="secondary" style="font-size:11px;padding:5px 12px">导出数据 (xlsx)</button>
+              <span id="export-result" style="font-size:11px;margin-left:8px"></span>
+            </div>
             <div class="form-row"><label>版本更新</label>
-              <span class="form-actions">
-                <button id="btn-check-update" class="secondary">检查更新</button>
-                <span id="update-result" style="font-size:12px"></span>
-              </span>
+              <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+                <span class="form-actions" style="flex-wrap:wrap">
+                  <button id="btn-check-update" class="secondary">检查更新</button>
+                  <button id="btn-download-update" class="secondary" style="display:none">下载更新</button>
+                  <button id="btn-restart-update" class="secondary" style="display:none;color:var(--success)">重启安装</button>
+                  <span id="update-result" style="font-size:12px"></span>
+                </span>
+                <div id="update-progress" style="display:none;height:4px;background:var(--bg);border-radius:2px;overflow:hidden">
+                  <div id="update-progress-fill" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s"></div>
+                </div>
+                <div id="update-speed" style="font-size:10px;color:var(--text-secondary)"></div>
+              </div>
             </div>
           </div>
         </div>

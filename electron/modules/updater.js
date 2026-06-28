@@ -19,8 +19,8 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 小时
 function init(mainWindow) {
   _win = mainWindow;
 
-  // 自动下载更新
-  autoUpdater.autoDownload = true;
+  // 用户确认后再下载
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   // ── autoUpdater 事件 → 渲染进程 ──
@@ -34,6 +34,9 @@ function init(mainWindow) {
   autoUpdater.on('download-progress', (p) => {
     _win?.webContents.send('update:download-progress', {
       percent: Math.round(p.percent),
+      speedMB: p.bytesPerSecond ? (p.bytesPerSecond / 1024 / 1024).toFixed(1) : '0.0',
+      total: p.total ? (p.total / 1024 / 1024).toFixed(0) : '0',
+      transferred: p.transferred ? (p.transferred / 1024 / 1024).toFixed(0) : '0',
     });
   });
 
@@ -56,6 +59,15 @@ function init(mainWindow) {
         return { ok: true, data: { version: result.updateInfo.version, downloading: true } };
       }
       return { ok: true, data: null };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('update:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message };
     }

@@ -141,6 +141,69 @@ function register(ipcMain, deps) {
   ipcMain.handle('config:load', async () => loadSearchConfig());
   ipcMain.handle('config:save', async (_e, config) => { const cp = path.join(APP_ROOT, 'send', 'config.json'); const d = path.dirname(cp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(cp, JSON.stringify(config, null, 2)); return { ok: true }; });
 
+  // ── 数据导出 ──
+  ipcMain.handle('data:export', async () => {
+    const XLSX = require('xlsx');
+    const wb = XLSX.utils.book_new();
+
+    // Sheet1: 联系人
+    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
+    if (fs.existsSync(cp)) {
+      try {
+        const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+        const rows = contacts.map(c => ({
+          '公司': c.company || '', '国家': c.country || '', '分类': c.category || '',
+          '邮箱': c.email || '', '网站': c.website || '', '联系人': c.contactName || '',
+          '职位': c.position || '', '电话': c.phone || '', '客户类型': c.clientType || '',
+          '标签': (c.tags||[]).join(', ') || c.tag || '', '添加时间': (c.addedAt||'').slice(0,10),
+        }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
+      } catch {}
+    }
+
+    // Sheet2: 发送记录
+    const lp = path.join(APP_ROOT, 'send', 'send-log.json');
+    if (fs.existsSync(lp)) {
+      try {
+        const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
+        const rows = (log.sent || []).map(r => ({
+          '时间': r.time ? new Date(r.time).toISOString().slice(0,16).replace('T',' ') : '',
+          '公司': r.company || '', '收件人': r.to || '',
+          '主题': r.subject || '', '发信账号': r._accountId || '',
+          '状态': r.status === 'sent' ? '已发送' : r.status === 'failed' ? '失败' : r.status,
+          '错误信息': r.error || '', '阶段': r._stage || '',
+        }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '发送记录');
+      } catch {}
+    }
+
+    // Sheet3: 跟进状态（联系人 + 发送历史合并）
+    try {
+      let contacts = [];
+      if (fs.existsSync(cp)) contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+      const sp = path.join(APP_ROOT, 'data', 'send-history.json');
+      let history = {};
+      if (fs.existsSync(sp)) history = JSON.parse(fs.readFileSync(sp, 'utf-8'));
+      const rows = contacts.map(c => {
+        const h = history[c.company] || {};
+        return {
+          '公司': c.company || '', '邮箱': c.email || '', '国家': c.country || '',
+          '阶段': h.stage || '', '最后发送': (h.lastSent||'').slice(0,10),
+          '发送次数': h.sentCount || 0, '已退信': c.bounced ? '是' : '',
+          '已回复': c.replied ? '是' : '',
+        };
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '跟进状态');
+    } catch {}
+
+    // 保存到桌面
+    const desktop = path.join(require('os').homedir(), 'Desktop');
+    const filename = `Milogin数据导出_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const dest = path.join(desktop, filename);
+    XLSX.writeFile(wb, dest);
+    return { ok: true, data: { path: dest, filename } };
+  });
+
   // ── 回复检测 ──
   ipcMain.handle('reply:check', async () => {
     const reply = require('../services/reply-checker');
