@@ -334,7 +334,45 @@ document.getElementById('cfg-general-theme')?.addEventListener('change', (e) => 
   } catch {}
 })();
 
-window.__pageHandlers['settings'] = initSettings;
+window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); };
+
+// ── 检查更新 ──────────────────────────────────────────────────────────────
+function initUpdateCheck() {
+  const btn = document.getElementById('btn-check-update');
+  const result = document.getElementById('update-result');
+  if (!btn || !result || btn._bound) return;
+  btn._bound = true;
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    result.innerHTML = `${lucide('loader-2',12,'spin')} 检查中...`;
+    result.style.color = 'var(--text-secondary)';
+    try {
+      const r = await window.electronAPI.checkUpdate();
+      if (r.ok && r.data?.version) {
+        result.innerHTML = `${lucide('download',12)} 发现新版本 <strong>v${r.data.version}</strong>，正在下载...`;
+        result.style.color = 'var(--accent)';
+      } else {
+        result.innerHTML = `${lucide('check-circle',12)} 已是最新版本`;
+        result.style.color = 'var(--success)';
+      }
+    } catch (e) {
+      result.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message || '检查失败')}`;
+      result.style.color = 'var(--danger)';
+    }
+    btn.disabled = false;
+  });
+
+  // 监听更新事件
+  window.electronAPI.onUpdateAvailable((data) => {
+    result.innerHTML = `${lucide('bell',12)} 发现新版本 <strong>v${data.version}</strong>，正在后台下载...`;
+    result.style.color = 'var(--accent)';
+  });
+  window.electronAPI.onUpdateDownloaded((data) => {
+    result.innerHTML = `${lucide('check-circle',12)} v${data.version} 已下载，重启后生效`;
+    result.style.color = 'var(--success)';
+  });
+}
 
 // ── 右侧大纲导航 ──────────────────────────────────────────────
 const SETTINGS_NAV = [

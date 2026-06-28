@@ -206,6 +206,18 @@ function createTray() {
 }
 
 app.setAppUserModelId('com.milogin.prospecting-email');
+
+// 单实例锁：防止重复启动
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) { app.quit(); return; }
+app.on('second-instance', () => {
+  if (deps.mainWindow) {
+    if (deps.mainWindow.isMinimized()) deps.mainWindow.restore();
+    deps.mainWindow.show();
+    deps.mainWindow.focus();
+  }
+});
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   try { deps.templateLib = parseTemplateLibrary(); }

@@ -183,10 +183,13 @@ window.onboardingNext = async function() {
 });
 
 window.onboardingSkip = function() { hideOnboarding(); };
-window.onboardingFinish = function() {
+window.onboardingFinish = async function() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
-  // 立即刷新仪表盘（向导中已保存 SMTP 配置，避免仪表盘仍显示"未配置"）
+  // 保存所有配置
+  await saveOnboardingConfig();
+  await saveGeneralConfig();
+  // 立即刷新仪表盘
   loadDashboard();
   // 阶段1: 0.1s 后卡片淡出 + 毛玻璃呈现 (0.6s)
   setTimeout(() => ob.classList.add('finishing'), 100);
@@ -216,9 +219,10 @@ async function saveOnboardingConfig() {
       },
       dailyLimit: cfg.schedule?.max_per_day || 500,
     };
-    // 仅在没有账号时添加（避免重复）
+    // 检查是否已存在相同邮箱的账号
     const existing = await window.electronAPI.listAccounts();
-    if (!(existing.data || []).length) {
+    const exists = (existing.data || []).some(a => a.smtp?.user === smtpUser);
+    if (!exists) {
       await window.electronAPI.addAccount(account);
     }
   }

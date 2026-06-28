@@ -98,6 +98,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('reply:detected', handler);
   },
 
+  // 自动更新
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateAvailable: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('update:available', handler);
+    return () => ipcRenderer.removeListener('update:available', handler);
+  },
+  onUpdateDownloaded: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('update:downloaded', handler);
+    return () => ipcRenderer.removeListener('update:downloaded', handler);
+  },
+
   // 发送历史
   getSendHistory: () => ipcRenderer.invoke('history:get'),
   getSendLog: (params) => ipcRenderer.invoke('history:getLog', params),

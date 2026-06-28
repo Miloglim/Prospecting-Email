@@ -1,6 +1,6 @@
 {
   "name": "prospecting-email-send",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
   "main": "electron/main.js",
   "type": "commonjs",
@@ -33,7 +33,8 @@
       "provider": "github",
       "owner": "Miloglim",
       "repo": "Prospecting-Email",
-      "private": true
+      "private": true,
+      "token": "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"
     },
     "files": [
       "dist/**",

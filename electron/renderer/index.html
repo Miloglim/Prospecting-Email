@@ -50,7 +50,7 @@
         </div>
         <div class="ob-actions">
           <button class="ob-btn secondary" onclick="onboardingBack()">上一步</button>
-          <button class="ob-btn" onclick="onboardingNext()">完成</button>
+          <button class="ob-btn" onclick="onboardingFinish()">完成</button>
         </div>
         <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
       </div>
@@ -71,7 +71,7 @@
         </div>
         <div class="ob-actions">
           <button class="ob-btn secondary" onclick="onboardingBack()">上一步</button>
-          <button class="ob-btn" onclick="onboardingNext()">完成</button>
+          <button class="ob-btn" onclick="onboardingFinish()">完成</button>
         </div>
         <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
       </div>
@@ -132,7 +132,7 @@
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
     </ul>
-    <div class="nav-footer"><span class="nav-version" id="nav-version">v2.4.2</span></div>
+    <div class="nav-footer"><span class="nav-version" id="nav-version">v2.4.3</span></div>
   </nav>
 
   <!-- ========== 右侧内容区 ========== -->
@@ -555,6 +555,12 @@
               </select>
             </div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-general-auto-launch"> 开机自动启动</label></div>
+            <div class="form-row"><label>版本更新</label>
+              <span class="form-actions">
+                <button id="btn-check-update" class="secondary">检查更新</button>
+                <span id="update-result" style="font-size:12px"></span>
+              </span>
+            </div>
           </div>
         </div>
 
