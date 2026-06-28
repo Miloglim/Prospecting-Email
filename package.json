@@ -17,7 +17,7 @@
     "appId": "com.milogin.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
-      "output": "../product-v3"
+      "output": "../product-v4"
     },
     "win": {
       "target": "nsis",

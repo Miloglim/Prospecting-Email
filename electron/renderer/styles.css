@@ -955,12 +955,9 @@ select option { font-size: 12px; }
 }
 
 /* 模式选择 */
-#cfg-schedule-mode {
-  margin-left: auto; flex-shrink: 0;
-  font-size: 11px; padding: 3px 8px; border-radius: 4px;
-  border: 1px solid var(--border); cursor: pointer;
-  background: var(--card-bg); color: var(--text);
-}
+#cfg-schedule-mode { flex: none; width: 120px; }
+#cfg-template-mode { flex: none; width: 100px; }
+#cfg-schedule-max { flex: none; width: 80px; }
 
 /* ── 表单行 ── */
 .form-row {

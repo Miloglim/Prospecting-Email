@@ -555,13 +555,15 @@
         <div class="setting-card setting-required">
           <div class="setting-card-header">
             <h3><span data-icon="clock"></span> 发送规则</h3>
-            <select id="cfg-schedule-mode">
-              <option value="multi">模拟人工</option>
-              <option value="batch">匀速速发</option>
-            </select>
             <span class="setting-status"></span>
           </div>
           <div class="setting-card-body">
+            <!-- 模板引擎 -->
+            <div class="sub-section-label">模板引擎</div>
+            <div class="form-row"><label>发送模式</label><select id="cfg-schedule-mode"><option value="multi">模拟人工</option><option value="batch">匀速速发</option></select></div>
+            <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">通用</option></select></div>
+            <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">0=不轮换</span></div>
+
             <!-- 通用 -->
             <div class="form-row form-row-inline"><div><label>每日上限</label><input type="number" id="cfg-schedule-max" placeholder="0=不限制"><span class="input-suffix">封</span></div></div>
             <div class="form-row form-row-inline">
@@ -584,10 +586,6 @@
               <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" id="cfg-schedule-batch-size" placeholder="10"><span class="input-suffix">人/组</span></span></div>
               <div class="form-row"><label>组间暂停</label><span class="input-range"><input type="number" id="cfg-schedule-batch-pause-min" placeholder="150"><span class="input-sep">~</span><input type="number" id="cfg-schedule-batch-pause-max" placeholder="210"><span class="input-suffix">秒</span></span><span id="cfg-batch-pause-minutes" class="input-hint"></span></div>
             </div>
-
-            <div class="sub-section-label">模板引擎</div>
-            <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">通用</option></select></div>
-            <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">0=不轮换</span></div>
           </div>
         </div>
         <div id="cfg-schedule-estimate" class="settings-estimate"></div>

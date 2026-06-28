@@ -190,9 +190,11 @@ function createWindow() {
 
 function createTray() {
   const iconPath = path.join(APP_ROOT, 'assets', 'tray-icon.png');
-  let trayIcon;
-  if (fs.existsSync(iconPath)) trayIcon = path.resolve(iconPath);
-  else trayIcon = require('electron').nativeImage.createEmpty();
+  let trayIcon = nativeImage.createFromPath(iconPath);
+  if (trayIcon.isEmpty()) {
+    console.warn('[托盘] 图标加载失败:', iconPath);
+    trayIcon = nativeImage.createEmpty();
+  }
   deps.tray = new Tray(trayIcon);
   deps.tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示窗口', click: () => deps.mainWindow?.show() },
