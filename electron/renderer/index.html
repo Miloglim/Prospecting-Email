@@ -54,6 +54,27 @@
         </div>
         <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
       </div>
+      <div class="onboarding-step" id="ob-step-3" style="display:none">
+        <div class="ob-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+        <h2>通用设置</h2>
+        <p class="ob-desc">选择程序的默认行为</p>
+        <div class="ob-form">
+          <div class="ob-field"><label>关闭窗口时</label>
+            <select id="ob-close-action">
+              <option value="tray">最小化到后台托盘</option>
+              <option value="quit">直接退出程序</option>
+            </select>
+          </div>
+          <div class="ob-field"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+            <input type="checkbox" id="ob-auto-launch" style="width:auto;flex:none"> 开机自动启动
+          </label></div>
+        </div>
+        <div class="ob-actions">
+          <button class="ob-btn secondary" onclick="onboardingBack()">上一步</button>
+          <button class="ob-btn" onclick="onboardingNext()">完成</button>
+        </div>
+        <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
+      </div>
       <div class="onboarding-step" id="ob-step-done" style="display:none">
         <div class="ob-logo" id="ob-logo">
           <div class="ob-logo-mark"></div>
@@ -71,6 +92,7 @@
       <div class="ob-dots">
         <span class="ob-dot active" data-step="1"></span>
         <span class="ob-dot" data-step="2"></span>
+        <span class="ob-dot" data-step="3"></span>
       </div>
     </div>
   </div>

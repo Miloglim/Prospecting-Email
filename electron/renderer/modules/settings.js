@@ -62,6 +62,8 @@ export function loadSettingsIntoForm(config) {
     'cfg-schedule-batch-size': '12', 'cfg-schedule-batch-pause-min': '94',
     'cfg-schedule-batch-pause-max': '167',
     'cfg-schedule-batch-item-delay-min': '8', 'cfg-schedule-batch-item-delay-max': '16',
+    'cfg-general-close-action': 'tray', 'cfg-general-theme': 'light',
+    'cfg-template-mode': 'adaptive',
   };
   for (const key of CFG_KEYS) {
     const el = document.getElementById(key.id);
@@ -154,7 +156,7 @@ export async function initSettings() {
   // 模式下拉：加载 + 切换
   const modeEl = document.getElementById('cfg-schedule-mode');
   if (modeEl) {
-    modeEl.value = config?.schedule?.mode === 'batch' ? 'batch' : 'multi';
+    modeEl.value = config?.schedule?.mode || 'batch';
     modeEl.addEventListener('change', toggleScheduleMode);
     toggleScheduleMode();
   }
@@ -163,7 +165,7 @@ export async function initSettings() {
 }
 
 export function toggleScheduleMode() {
-  const mode = document.getElementById('cfg-schedule-mode')?.value || 'multi';
+  const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
   const multiFields = document.getElementById('cfg-multi-fields');
   const batchFields = document.getElementById('cfg-batch-fields');
   if (multiFields) multiFields.style.display = mode === 'multi' ? '' : 'none';
@@ -293,7 +295,7 @@ export function updateScheduleEstimate() {
   };
   const max = getNumOr('cfg-schedule-max', 500);
   if (max <= 0) { el.innerHTML = ''; return; }
-  const mode = document.getElementById('cfg-schedule-mode')?.value || 'multi';
+  const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
 
   let totalSec, detail;
   if (mode === 'batch') {

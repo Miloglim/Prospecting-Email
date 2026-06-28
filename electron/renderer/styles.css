@@ -956,8 +956,8 @@ select option { font-size: 12px; }
 
 /* 模式选择 */
 #cfg-schedule-mode {
-  margin-left: auto; flex-shrink: 0; max-width: 110px;
-  font-size: 11px; padding: 2px 6px; border-radius: 4px;
+  margin-left: auto; flex-shrink: 0;
+  font-size: 11px; padding: 3px 8px; border-radius: 4px;
   border: 1px solid var(--border); cursor: pointer;
   background: var(--card-bg); color: var(--text);
 }
@@ -1006,8 +1006,8 @@ select option { font-size: 12px; }
 .form-row-inline > div select { flex: 1; }
 
 /* 范围输入 */
-.input-range { display: inline-flex; align-items: center; gap: 3px; }
-.input-range input { width: 56px; flex: none !important; }
+.input-range { display: inline-flex; align-items: center; gap: 4px; }
+.input-range input { width: 64px; flex: none !important; padding: 5px 6px; }
 .input-sep { font-size: 11px; color: var(--text-secondary); flex: none; }
 .input-suffix { font-size: 10px; color: var(--text-secondary); white-space: nowrap; flex: none; }
 .input-hint { font-size: 10px; color: var(--text-secondary); white-space: nowrap; margin-left: 2px; }

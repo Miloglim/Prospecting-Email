@@ -7,7 +7,7 @@ const http = require('http');
 // 打包后路径判定
 const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
 const APP_ROOT = _IS_PACKAGED
-  ? path.dirname(process.resourcesPath)
+  ? process.resourcesPath
   : path.join(__dirname, '..', '..');
 
 function ensureRuntimeDirs() {

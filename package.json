@@ -2,7 +2,7 @@
   "name": "prospecting-email-send",
   "version": "1.1.0",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
-  "main": "dist/main/index.js",
+  "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "electron-vite dev",
@@ -17,7 +17,7 @@
     "appId": "com.milogin.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
-      "output": "../product-build"
+      "output": "../product-v3"
     },
     "win": {
       "target": "nsis",
@@ -30,6 +30,7 @@
     },
     "files": [
       "dist/**",
+      "electron/**",
       "templates/**",
       "send/config.example.json",
       "send/signature.html",
@@ -38,7 +39,7 @@
       "node_modules/**"
     ],
     "asar": true,
-    "extraResources": []
+    "extraResources": [{ "from": "assets", "to": "assets" }]
   },
   "dependencies": {
     "imap": "^0.8.19",

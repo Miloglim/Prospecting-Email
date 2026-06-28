@@ -61,7 +61,7 @@ function hideOnboarding() {
 }
 
 function updateObStep(instant) {
-  const steps = [1, 2].map(i => document.getElementById('ob-step-' + i));
+  const steps = [1, 2, 3].map(i => document.getElementById('ob-step-' + i));
   const done = document.getElementById('ob-step-done');
   const dots = document.querySelectorAll('.ob-dot');
 
@@ -71,7 +71,7 @@ function updateObStep(instant) {
   }
 
   // 目标步骤
-  const targetId = _onboardingStep === 3 ? 'ob-step-done' : 'ob-step-' + _onboardingStep;
+  const targetId = _onboardingStep >= 4 ? 'ob-step-done' : 'ob-step-' + _onboardingStep;
   const target = document.getElementById(targetId);
 
   // 隐藏所有，显示目标
@@ -92,7 +92,7 @@ function updateObStep(instant) {
   }
 
   // 进度条
-  const activeIdx = _onboardingStep >= 3 ? 2 : _onboardingStep;
+  const activeIdx = _onboardingStep >= 4 ? 3 : _onboardingStep;
   dots.forEach(d => d.classList.toggle('active', parseInt(d.dataset.step) <= activeIdx));
 }
 
@@ -130,6 +130,11 @@ window.onboardingNext = async function() {
   if (_onboardingStep === 2) {
     await saveOnboardingConfig();
     _onboardingStep = 3; updateObStep();
+    return;
+  }
+  if (_onboardingStep === 3) {
+    await saveGeneralConfig();
+    _onboardingStep = 4; updateObStep();
     // 触发 Logo + 标题动画
     setTimeout(() => {
       const logo = document.getElementById('ob-logo');
@@ -189,5 +194,19 @@ async function saveOnboardingConfig() {
   if (senderBody) { if (!cfg.sender) cfg.sender = {}; cfg.sender.bodyName = senderBody; }
   if (!cfg.sender?.email && smtpUser) { cfg.sender.email = smtpUser; }
 
+  try { await window.electronAPI.saveConfig(cfg); } catch {}
+}
+
+async function saveGeneralConfig() {
+  const cfg = (await window.electronAPI.loadConfig()) || {};
+  const closeAction = document.getElementById('ob-close-action')?.value || 'tray';
+  const autoLaunch = document.getElementById('ob-auto-launch')?.checked || false;
+  if (!cfg.general) cfg.general = {};
+  cfg.general.closeAction = closeAction;
+  cfg.general.autoLaunch = autoLaunch;
+  cfg.schedule = cfg.schedule || {};
+  cfg.schedule.mode = 'batch';
+  cfg.template = cfg.template || {};
+  cfg.template.mode = 'adaptive';
   try { await window.electronAPI.saveConfig(cfg); } catch {}
 }
