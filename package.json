@@ -17,11 +17,11 @@
     "appId": "com.milogin.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
-      "output": "../product-v5"
+      "output": "../product-v6"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": false,
