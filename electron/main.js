@@ -209,7 +209,9 @@ app.setAppUserModelId('com.milogin.prospecting-email');
 
 // 单实例锁：防止重复启动
 const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) { app.quit(); return; }
+if (!gotLock) {
+  app.quit();
+} else {
 app.on('second-instance', () => {
   if (deps.mainWindow) {
     if (deps.mainWindow.isMinimized()) deps.mainWindow.restore();
@@ -233,6 +235,7 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else deps.mainWindow?.show(); });
 }).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });
+} // else (gotLock)
 
 app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} try { require('./modules/services/reply-checker').cleanup(); } catch {} });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

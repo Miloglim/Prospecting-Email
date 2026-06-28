@@ -19,8 +19,9 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 小时
 function init(mainWindow) {
   _win = mainWindow;
 
-  // 配置：不自动下载，由用户决定
-  autoUpdater.autoDownload = false;
+  // 自动下载更新
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
 
   // ── autoUpdater 事件 → 渲染进程 ──
   autoUpdater.on('update-available', (info) => {
@@ -50,7 +51,11 @@ function init(mainWindow) {
   ipcMain.handle('update:check', async () => {
     try {
       const result = await autoUpdater.checkForUpdates();
-      return { ok: true, data: { version: result?.updateInfo?.version } };
+      if (result?.updateInfo?.version) {
+        // 有新版本，触发下载（autoDownload=true 时自动开始）
+        return { ok: true, data: { version: result.updateInfo.version, downloading: true } };
+      }
+      return { ok: true, data: null };
     } catch (e) {
       return { ok: false, error: e.message };
     }
