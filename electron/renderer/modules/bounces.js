@@ -27,8 +27,8 @@ export function renderBounceTable() {
     groups[key].push(r);
   }
   const groupDefs = [
-    { key: 'permanent', label: '永久', icon: '◆', color: 'var(--danger)', itemColor: '#f44336' },
-    { key: 'temporary', label: '暂时', icon: '◇', color: 'var(--warning)', itemColor: '#ff9800' },
+    { key: 'permanent', label: '永久', color: 'var(--danger)', itemColor: '#f44336' },
+    { key: 'temporary', label: '暂时', color: 'var(--warning)', itemColor: '#ff9800' },
   ];
 
   let html = '';
@@ -36,8 +36,8 @@ export function renderBounceTable() {
     const items = groups[g.key] || [];
     if (!items.length) continue;
     html += `<div class="bounce-group" style="margin-bottom:8px">`;
-    html += `<div class="bounce-group-head" style="font-size:12px;font-weight:600;color:${g.color};padding:4px 0;border-bottom:1px solid #eee;cursor:pointer;display:flex;align-items:center;gap:4px" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none';this.querySelector('.bounce-arrow').textContent=this.nextElementSibling.style.display==='none'?'▸':'▾'">`;
-    html += `<span class="bounce-arrow" style="font-size:10px;width:10px">▾</span>`;
+    html += `<div class="bounce-group-head" style="font-size:12px;font-weight:600;color:${g.color};padding:4px 0;border-bottom:1px solid #eee;cursor:pointer;display:flex;align-items:center;gap:4px" onclick="const n=this.nextElementSibling;const a=this.querySelector('.bounce-arrow');n.style.display=n.style.display==='none'?'':'none';a.innerHTML=n.style.display==='none'?'${lucide('chevron-right',10)}':'${lucide('chevron-down',10)}'">`;
+    html += `<span class="bounce-arrow" style="font-size:10px;width:10px">${lucide('chevron-down',10)}</span>`;
     html += `${g.label} (${items.length})`;
     html += `</div>`;
     html += `<div class="bounce-group-body">`;
@@ -45,7 +45,7 @@ export function renderBounceTable() {
       const r = items[i];
       const timeStr = r.date ? new Date(r.date).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
       html += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;border-bottom:1px solid #f5f5f5;overflow:hidden">`;
-      html += `<span style="color:${g.itemColor};flex-shrink:0">${g.icon}</span>`;
+      html += `<span style="color:${g.itemColor};flex-shrink:0">${g.key==='permanent'?lucide('x-circle',12):lucide('alert-triangle',12)}</span>`;
       html += `<span style="font-family:monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1">${escapeHtml(r.email || '未识别')}</span>`;
       html += `<span style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1">${escapeHtml(r.company || '')}</span>`;
       html += `<span style="color:var(--text-secondary);font-size:11px;white-space:nowrap;margin-left:auto;flex-shrink:0">${timeStr}</span>`;
@@ -125,7 +125,8 @@ export async function initBouncePage() {
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
       runBtn.innerHTML = `${lucide('refresh-cw',14,'spin')} 扫描中...`;
-      status.textContent = '正在连接邮箱...';
+      status.innerHTML = `${lucide('loader-2',12,'spin')} 正在连接邮箱...`;
+      status.style.color = 'var(--text-secondary)';
       if (groupsEl) groupsEl.innerHTML = '';
       if (empty) { empty.style.display = 'block'; empty.textContent = '正在扫描...'; }
       try {
@@ -134,7 +135,8 @@ export async function initBouncePage() {
           window.electronAPI.getContacts(),
         ]);
         if (!result.ok) {
-          status.textContent = '❌ ' + (result.error || '检查失败');
+          status.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(result.error || '检查失败')}`;
+          status.style.color = 'var(--danger)';
           runBtn.disabled = false;
           runBtn.innerHTML = `${lucide('search',14)} 检查退信`;
           return;
@@ -143,7 +145,8 @@ export async function initBouncePage() {
           S.bounceRecords = [];
           await window.electronAPI.saveBounceLog([]);
           renderBounceTable();
-          status.textContent = '✅ 未发现退信';
+          status.innerHTML = `${lucide('check-circle',12)} 未发现退信`;
+          status.style.color = 'var(--success)';
           runBtn.disabled = false;
           runBtn.innerHTML = `${lucide('search',14)} 检查退信`;
           return;
@@ -168,9 +171,11 @@ export async function initBouncePage() {
         await window.electronAPI.saveBounceLog(S.bounceRecords);
         renderBounceTable();
         const matchedCount = S.bounceRecords.filter(r => r.matched).length;
-        status.textContent = `发现 ${result.bounced.length} 封退信，${matchedCount} 个匹配联系人`;
+        status.innerHTML = `${lucide('alert-circle',12)} 发现 <strong>${result.bounced.length}</strong> 封退信，<strong>${matchedCount}</strong> 个匹配联系人`;
+        status.style.color = 'var(--warning)';
       } catch (e) {
-        status.textContent = '❌ ' + (e.message || '异常');
+        status.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message || '异常')}`;
+        status.style.color = 'var(--danger)';
       }
       runBtn.disabled = false;
       runBtn.innerHTML = `${lucide('search',14)} 检查退信`;

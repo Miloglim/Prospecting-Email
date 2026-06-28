@@ -3,11 +3,6 @@ import { lucide,showAlert,showToast,escapeHtml,initIcons,showConfirm,deepMerge }
 
 // ===== 设置 ==========================================================
 const CFG_KEYS = [
-  { id: 'cfg-smtp-host', path: 'smtp.host' },
-  { id: 'cfg-smtp-port', path: 'smtp.port' },
-  { id: 'cfg-smtp-secure', path: 'smtp.secure', isBool: true },
-  { id: 'cfg-smtp-user', path: 'smtp.user' },
-  { id: 'cfg-smtp-pass', path: 'smtp.pass' },
   { id: 'cfg-sender-name', path: 'sender.name' },
   { id: 'cfg-sender-body-name', path: 'sender.bodyName' },
   { id: 'cfg-sender-email', path: 'sender.email' },
@@ -39,14 +34,11 @@ const CFG_KEYS = [
   { id: 'cfg-test-company', path: 'test.company' },
   { id: 'cfg-test-enabled', path: 'test.enabled', isBool: true },
   { id: 'cfg-feishu-url', path: 'feishu.url' },
-  { id: 'cfg-imap-host', path: 'imap.host' },
-  { id: 'cfg-imap-port', path: 'imap.port' },
-  { id: 'cfg-imap-user', path: 'imap.user' },
-  { id: 'cfg-imap-pass', path: 'imap.pass' },
   { id: 'cfg-backcheck-filter', path: 'backcheck.filterEnabled', isBool: true },
   { id: 'cfg-general-auto-launch', path: 'general.autoLaunch', isBool: true },
   { id: 'cfg-general-close-action', path: 'general.closeAction' },
   { id: 'cfg-general-theme', path: 'general.theme' },
+  { id: 'cfg-general-loader-anim', path: 'general.loaderAnimDisabled', isBool: true },
 ];
 
 export function loadSettingsIntoForm(config) {
@@ -57,7 +49,7 @@ export function loadSettingsIntoForm(config) {
     'cfg-schedule-max': '720', 'cfg-schedule-min-delay': '8', 'cfg-schedule-max-delay': '16',
     'cfg-schedule-company-delay-min': '900', 'cfg-schedule-company-delay-max': '1200',
     'cfg-schedule-single-min': '5', 'cfg-schedule-single-max': '10',
-    'cfg-schedule-group-size': '25', 'cfg-smtp-port': '465',
+    'cfg-schedule-group-size': '25',
     'cfg-schedule-template-rotate': '3',
     'cfg-schedule-batch-size': '12', 'cfg-schedule-batch-pause-min': '94',
     'cfg-schedule-batch-pause-max': '167',
@@ -113,27 +105,6 @@ export function collectSettingsFromForm() {
     if (!config.bounce) config.bounce = {};
     config.bounce.keywords = kw;
   }
-  // IMAP 自动同步 SMTP：如果退信检查未配置，使用 SMTP 邮箱密码
-  if (config.smtp?.user && !config.imap?.user) {
-    if (!config.imap) config.imap = {};
-    config.imap.user = config.smtp.user;
-    config.imap.pass = config.smtp.pass || config.imap.pass;
-    if (!config.imap.host) {
-      config.imap.host = (config.smtp.host || '')
-        .replace(/^smtp\./i, 'imap.').replace(/^mail\./i, 'imap.');
-    }
-    if (!config.imap.port) config.imap.port = 993;
-    // 回填 UI
-    const imapUserEl = document.getElementById('cfg-imap-user');
-    const imapPassEl = document.getElementById('cfg-imap-pass');
-    const imapHostEl = document.getElementById('cfg-imap-host');
-    const imapPortEl = document.getElementById('cfg-imap-port');
-    if (imapUserEl && !imapUserEl.value) imapUserEl.value = config.imap.user;
-    if (imapPassEl && !imapPassEl.value) imapPassEl.value = config.imap.pass || '';
-    if (imapHostEl && !imapHostEl.value) imapHostEl.value = config.imap.host;
-    if (imapPortEl && !imapPortEl.value) imapPortEl.value = config.imap.port;
-  }
-
   return config;
 
   function getOrSet(obj, path, val) {
@@ -148,6 +119,11 @@ export function collectSettingsFromForm() {
 }
 
 export async function initSettings() {
+  // 所有输入框点击/聚焦时全选，键入即覆盖
+  document.querySelectorAll('#page-settings input[type="text"], #page-settings input[type="number"], #page-settings input[type="password"]').forEach(el => {
+    el.addEventListener('focus', () => el.select());
+  });
+
   const config = await window.electronAPI.loadConfig();
   if (config) loadSettingsIntoForm(config);
   toggleTimeWindow();
@@ -358,29 +334,6 @@ document.getElementById('cfg-general-theme')?.addEventListener('change', (e) => 
   } catch {}
 })();
 
-// IMAP 连接测试
-document.getElementById('cfg-imap-test')?.addEventListener('click', async () => {
-  const btn = document.getElementById('cfg-imap-test');
-  const result = document.getElementById('cfg-imap-result');
-  btn.disabled = true; btn.textContent = '连接中...';
-  result.textContent = ''; result.style.color = '';
-  const cfg = {
-    host: document.getElementById('cfg-imap-host')?.value || '',
-    port: Number(document.getElementById('cfg-imap-port')?.value) || 993,
-    user: document.getElementById('cfg-imap-user')?.value || '',
-    pass: document.getElementById('cfg-imap-pass')?.value || '',
-  };
-  try {
-    const r = await window.electronAPI.testImap(cfg);
-    result.textContent = r.ok ? '✅ ' + r.message : '❌ ' + (r.error || '连接失败');
-    result.style.color = r.ok ? 'var(--success)' : 'var(--danger)';
-  } catch (e) {
-    result.textContent = '❌ ' + e.message;
-    result.style.color = 'var(--danger)';
-  }
-  btn.disabled = false; btn.textContent = '测试连接';
-});
-
 window.__pageHandlers['settings'] = initSettings;
 
 // ── 右侧大纲导航 ──────────────────────────────────────────────
@@ -431,3 +384,189 @@ function onSettingsScroll() {
 document.addEventListener('scroll', onSettingsScroll, { passive: true });
 
 buildSettingsNav();
+initAccountManager();
+
+// ── 发信账号管理 ──────────────────────────────────────────────────────────
+function initAccountManager() {
+  const listEl = document.getElementById('account-list');
+  const modal = document.getElementById('account-modal');
+  if (!listEl || !modal) return;
+
+  // 渲染账号列表
+  async function render() {
+    const result = await window.electronAPI.listAccounts();
+    const accounts = result.data || [];
+    if (!accounts.length) {
+      listEl.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:8px">暂无账号，点击下方按钮添加</div>';
+    } else {
+      listEl.innerHTML = accounts.map(a => {
+        const dotClass = a.active ? 'active' : 'inactive';
+        const limitInfo = a.active ? `今日 ${a.todaySent || 0}/${a.dailyLimit || 500}` : '已停用';
+        return `<div class="account-item" data-id="${a.id}">
+          <span class="acct-dot ${dotClass}"></span>
+          <div class="acct-info">
+            <div class="acct-name">${escapeHtml(a.label)}</div>
+            <div class="acct-detail">${escapeHtml(a.smtp?.user)} · ${escapeHtml(a.smtp?.host)}</div>
+            <div class="acct-meta">${escapeHtml(limitInfo)}</div>
+          </div>
+          <button class="acct-action" data-action="edit" data-id="${a.id}" title="编辑">${lucide('pencil',12)}</button>
+          <button class="acct-action" data-action="toggle" data-id="${a.id}" title="${a.active?'停用':'启用'}">${a.active ? lucide('pause',12) : lucide('play',12)}</button>
+          <button class="acct-action acct-delete" data-action="delete" data-id="${a.id}" title="删除">${lucide('trash-2',12)}</button>
+        </div>`;
+      }).join('');
+    }
+    // 绑定卡片按钮事件
+    listEl.querySelectorAll('.acct-action').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const id = btn.dataset.id;
+        if (action === 'edit') openEditor(id);
+        else if (action === 'toggle') { await window.electronAPI.toggleAccount(id); render(); }
+        else if (action === 'delete') { if (await showConfirm('确定删除该账号？')) { await window.electronAPI.deleteAccount(id); render(); } }
+      });
+    });
+  }
+
+  // IMAP 自动推导
+  function autoDeriveImap(smtpHost) {
+    return (smtpHost || '')
+      .replace(/^smtp\./i, 'imap.').replace(/^mail\./i, 'imap.');
+  }
+
+  // 打开编辑框
+  async function openEditor(id) {
+    document.getElementById('acct-edit-id').value = id || '';
+    // 清空 IMAP 字段
+    ['acct-imap-host','acct-imap-port','acct-imap-user','acct-imap-pass'].forEach(f => document.getElementById(f).value = '');
+    if (id) {
+      const result = await window.electronAPI.listAccounts();
+      const acc = (result.data || []).find(a => a.id === id);
+      if (acc) {
+        document.getElementById('acct-label').value = acc.label || '';
+        document.getElementById('acct-host').value = acc.smtp?.host || '';
+        document.getElementById('acct-port').value = acc.smtp?.port || 465;
+        document.getElementById('acct-secure').value = acc.smtp?.secure !== false ? 'true' : 'false';
+        document.getElementById('acct-user').value = acc.smtp?.user || '';
+        document.getElementById('acct-pass').value = acc.smtp?.pass || '';
+        document.getElementById('acct-limit').value = acc.dailyLimit || 500;
+        document.getElementById('acct-active').checked = acc.active !== false;
+        // 已有 IMAP 配置则回填
+        if (acc.imap) {
+          document.getElementById('acct-imap-host').value = acc.imap.host || '';
+          document.getElementById('acct-imap-port').value = acc.imap.port || 993;
+          document.getElementById('acct-imap-user').value = acc.imap.user || '';
+          document.getElementById('acct-imap-pass').value = acc.imap.pass || '';
+        }
+      }
+    } else {
+      // 新账号：清空表单
+      ['acct-label','acct-host','acct-port','acct-user','acct-pass','acct-limit'].forEach(f => {
+        document.getElementById(f).value = f === 'acct-port' ? '465' : f === 'acct-limit' ? '100' : '';
+      });
+      document.getElementById('acct-secure').value = 'true';
+      document.getElementById('acct-active').checked = true;
+    }
+    const tr = document.getElementById('acct-test-result');
+    tr.className = ''; tr.innerHTML = '';
+    modal.style.display = 'flex';
+  }
+
+  function closeEditor() { modal.style.display = 'none'; }
+
+  // 收集表单
+  function collectAccount() {
+    const smtpHost = document.getElementById('acct-host').value.trim();
+    const smtpUser = document.getElementById('acct-user').value.trim();
+    const smtpPass = document.getElementById('acct-pass').value;
+    const imapHost = document.getElementById('acct-imap-host').value.trim() || autoDeriveImap(smtpHost);
+    const imapUser = document.getElementById('acct-imap-user').value.trim() || smtpUser;
+    const imapPass = document.getElementById('acct-imap-pass').value || smtpPass;
+    const imapPort = parseInt(document.getElementById('acct-imap-port').value) || 993;
+
+    const account = {
+      label: document.getElementById('acct-label').value.trim(),
+      smtp: {
+        host: smtpHost,
+        port: parseInt(document.getElementById('acct-port').value) || 465,
+        secure: document.getElementById('acct-secure').value === 'true',
+        user: smtpUser,
+        pass: smtpPass,
+      },
+      dailyLimit: parseInt(document.getElementById('acct-limit').value) || 500,
+      active: document.getElementById('acct-active').checked,
+    };
+
+    // 有 IMAP 信息时附加
+    if (imapHost) {
+      account.imap = { host: imapHost, port: imapPort, user: imapUser, pass: imapPass };
+    }
+    return account;
+  }
+
+  // 事件绑定
+  document.getElementById('btn-add-account')?.addEventListener('click', () => openEditor(null));
+  document.getElementById('btn-acct-cancel')?.addEventListener('click', closeEditor);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeEditor(); });
+
+  document.getElementById('btn-acct-save')?.addEventListener('click', async () => {
+    const account = collectAccount();
+    if (!account.smtp.host || !account.smtp.user) {
+      showAlert('服务器地址和邮箱地址不能为空'); return;
+    }
+    const id = document.getElementById('acct-edit-id').value;
+    if (id) await window.electronAPI.updateAccount(id, account);
+    else await window.electronAPI.addAccount(account);
+    closeEditor();
+    render();
+  });
+
+  document.getElementById('btn-acct-test')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('acct-test-result');
+    const btn = document.getElementById('btn-acct-test');
+    resultEl.className = 'acct-test-status';
+    resultEl.innerHTML = `${lucide('loader-2',12,'spin')} 测试中...`;
+    btn.disabled = true;
+    const account = collectAccount();
+    if (!account.smtp.host || !account.smtp.user) {
+      resultEl.className = 'acct-test-status fail';
+      resultEl.innerHTML = `${lucide('x-circle',12)} 请先填写服务器地址和邮箱`;
+      btn.disabled = false; return;
+    }
+    try {
+      const r = await window.electronAPI.testAccount(account);
+      resultEl.className = r.ok ? 'acct-test-status ok' : 'acct-test-status fail';
+      resultEl.innerHTML = r.ok
+        ? `${lucide('check-circle',12)} 连接成功`
+        : `${lucide('x-circle',12)} ${escapeHtml(r.error || '连接失败')}`;
+    } catch (e) {
+      resultEl.className = 'acct-test-status fail';
+      resultEl.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message)}`;
+    }
+    btn.disabled = false;
+  });
+
+  // SMTP 服务器变动时自动推导 IMAP 服务器
+  document.getElementById('acct-host')?.addEventListener('input', function() {
+    const imapEl = document.getElementById('acct-imap-host');
+    if (imapEl && !imapEl.dataset.manual) {
+      imapEl.value = autoDeriveImap(this.value.trim());
+      imapEl.placeholder = autoDeriveImap(this.value.trim());
+    }
+  });
+  document.getElementById('acct-imap-host')?.addEventListener('input', function() {
+    this.dataset.manual = '1'; // 用户手动修改后不再自动推导
+  });
+
+  // 账号编辑框输入框也覆盖式
+  document.querySelectorAll('#account-modal input').forEach(el => {
+    el.addEventListener('focus', () => el.select());
+  });
+
+  // 注册页面 handler：切换到设置页时刷新列表
+  const origHandler = window.__pageHandlers['settings'];
+  window.__pageHandlers['settings'] = async () => {
+    if (origHandler) await origHandler();
+    render();
+  };
+}

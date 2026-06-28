@@ -89,6 +89,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('bounce:autoDetected', handler);
   },
 
+  // 回复检测
+  checkReplies: () => ipcRenderer.invoke('reply:check'),
+  loadReplyLog: () => ipcRenderer.invoke('reply:log'),
+  onReplyDetected: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('reply:detected', handler);
+    return () => ipcRenderer.removeListener('reply:detected', handler);
+  },
+
   // 发送历史
   getSendHistory: () => ipcRenderer.invoke('history:get'),
   getSendLog: (params) => ipcRenderer.invoke('history:getLog', params),
@@ -122,4 +131,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 通用设置
   setAutoLaunch: (enabled) => ipcRenderer.invoke('general:setAutoLaunch', enabled),
   getAutoLaunch: () => ipcRenderer.invoke('general:getAutoLaunch'),
+
+  // 发信账号管理
+  listAccounts: () => ipcRenderer.invoke('account:list'),
+  addAccount: (account) => ipcRenderer.invoke('account:add', account),
+  updateAccount: (id, updates) => ipcRenderer.invoke('account:update', id, updates),
+  deleteAccount: (id) => ipcRenderer.invoke('account:delete', id),
+  toggleAccount: (id) => ipcRenderer.invoke('account:toggle', id),
+  testAccount: (account) => ipcRenderer.invoke('account:test', account),
+  getAccountStatus: () => ipcRenderer.invoke('account:status'),
 });

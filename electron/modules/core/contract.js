@@ -43,6 +43,10 @@ const CONTACTS = {
   UPDATE_BOUNCE:  'contacts:updateBounce',
   /** 清除退信标记 */
   CLEAR_BOUNCE:   'contacts:clearBounce',
+  /** 设置联系人标签（单值，向后兼容） */
+  SET_TAG:        'contacts:setTag',
+  /** 设置联系人标签（多值） */
+  SET_TAGS:       'contacts:setTags',
   /** 删除全部联系人 */
   DELETE_ALL:     'contacts:deleteAll',
   /** 按公司名删除联系人 */
@@ -206,6 +210,48 @@ const SYSTEM = {
   AUTO_LAUNCH_GET:    'general:getAutoLaunch',
 };
 
+// ── 自动更新（updater）────────────────────────────────────────────────────────
+const UPDATE = {
+  /** 发现新版本（main → renderer） */
+  AVAILABLE:            'update:available',
+  /** 下载进度（main → renderer） */
+  DOWNLOAD_PROGRESS:    'update:download-progress',
+  /** 下载完成，可安装（main → renderer） */
+  DOWNLOADED:           'update:downloaded',
+  /** 渲染进程手动检查更新 */
+  CHECK:                'update:check',
+  /** 渲染进程触发安装 */
+  INSTALL:              'update:install',
+};
+
+// ── 发信账号（account）─────────────────────────────────────────────────────────
+const ACCOUNT = {
+  /** 获取所有账号 */
+  LIST:               'account:list',
+  /** 添加账号 */
+  ADD:                'account:add',
+  /** 更新账号 */
+  UPDATE:             'account:update',
+  /** 删除账号 */
+  DELETE:             'account:delete',
+  /** 启用/停用账号 */
+  TOGGLE:             'account:toggle',
+  /** 测试账号 SMTP 连接 */
+  TEST:               'account:test',
+  /** 获取各账号发送状态统计 */
+  STATUS:             'account:status',
+};
+
+// ── 回复检测（reply）──────────────────────────────────────────────────────────
+const REPLY = {
+  /** 手动触发回复检测 */
+  CHECK:              'reply:check',
+  /** 获取回复日志 */
+  LOG:                'reply:log',
+  /** 自动检测到回复事件（main → renderer） */
+  DETECTED:           'reply:detected',
+};
+
 // ── 客户开发（discover）──────────────────────────────────────────────────────
 const DISCOVER = {
   /** 搜索潜在客户 */
@@ -239,6 +285,9 @@ const IPC = {
   QUEUE,
   BOUNCE,
   SYSTEM,
+  UPDATE,
+  ACCOUNT,
+  REPLY,
   DISCOVER,
   TABLE,
 };
@@ -439,6 +488,9 @@ module.exports = {
   QUEUE,
   BOUNCE,
   SYSTEM,
+  UPDATE,
+  ACCOUNT,
+  REPLY,
   DISCOVER,
   TABLE,
 };

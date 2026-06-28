@@ -1,4 +1,4 @@
-import { initIcons, initNavigation } from './modules/shared.js';
+import { initIcons, initNavigation, loadDashboard } from './modules/shared.js';
 import './modules/templates.js';
 import './modules/workshop.js';
 import './modules/contacts.js';
@@ -9,6 +9,7 @@ import './modules/send-history.js';
 import './modules/discover.js';
 import './modules/settings.js';
 import './modules/bounces.js';
+import './modules/replies.js';
 import { initQueue } from './modules/send-queue.js';
 
 document.getElementById('tb-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
@@ -19,16 +20,38 @@ initIcons();
 initNavigation();
 
 // 启动：仪表盘数据就绪后加载层淡出 + 主界面滑入
+// 默认最少显示 1000ms，可在设置 → 通用 → 关闭加载动画 中跳过
 (async () => {
+  const loadStart = Date.now();
   await window.__pageHandlers['dashboard']?.();
-  const loader = document.getElementById('app-loader');
-  if (loader) {
-    loader.classList.add('hidden');
-    document.body.classList.add('app-ready');
-    setTimeout(() => loader.remove(), 550);
+
+  // 读取配置：用户可选择关闭加载动画
+  let skipLoader = false;
+  try {
+    const cfg = await window.electronAPI.loadConfig();
+    if (cfg?.general?.loaderAnimDisabled) skipLoader = true;
+  } catch {}
+
+  const elapsed = Date.now() - loadStart;
+  const MIN_LOADER_MS = skipLoader ? 0 : 1000;
+  const delay = Math.max(0, MIN_LOADER_MS - elapsed);
+
+  const hideLoader = () => {
+    const loader = document.getElementById('app-loader');
+    if (loader) {
+      loader.classList.add('hidden');
+      document.body.classList.add('app-ready');
+      setTimeout(() => loader.remove(), 550);
+    }
+    // 新手向导：SMTP 未配置时自动弹出
+    setTimeout(() => checkOnboarding(), 100);
+  };
+
+  if (delay > 0) {
+    setTimeout(hideLoader, delay);
+  } else {
+    hideLoader();
   }
-  // 新手向导：SMTP 未配置时自动弹出
-  setTimeout(() => checkOnboarding(), 600);
 })();
 initQueue();  // 队列后台并行恢复
 
@@ -39,6 +62,9 @@ let _obTransitioning = false;
 async function checkOnboarding() {
   try {
     const cfg = await window.electronAPI.loadConfig();
+    // 有账号就不弹（不论是否停用）
+    if (cfg?.smtpAccounts?.length > 0) return;
+    // 旧格式兼容
     if (cfg?.smtp?.host && cfg?.smtp?.user && cfg?.smtp?.pass) return;
   } catch {}
   showOnboarding();
@@ -160,6 +186,8 @@ window.onboardingSkip = function() { hideOnboarding(); };
 window.onboardingFinish = function() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
+  // 立即刷新仪表盘（向导中已保存 SMTP 配置，避免仪表盘仍显示"未配置"）
+  loadDashboard();
   // 阶段1: 0.1s 后卡片淡出 + 毛玻璃呈现 (0.6s)
   setTimeout(() => ob.classList.add('finishing'), 100);
   // 阶段2: 毛玻璃完成后整体淡出 (1.5s)
@@ -173,18 +201,25 @@ window.onboardingFinish = function() {
 
 async function saveOnboardingConfig() {
   const cfg = (await window.electronAPI.loadConfig()) || {};
-  // SMTP
+  // SMTP：通过账号管理 API 保存
   const smtpHost = document.getElementById('ob-smtp-host')?.value.trim();
-  const smtpPort = parseInt(document.getElementById('ob-smtp-port')?.value) || 465;
-  const smtpSecure = document.getElementById('ob-smtp-secure')?.value === 'true';
   const smtpUser = document.getElementById('ob-smtp-user')?.value.trim();
-  const smtpPass = document.getElementById('ob-smtp-pass')?.value;
-  if (smtpHost) {
-    cfg.smtp = { host: smtpHost, port: smtpPort, secure: smtpSecure, user: smtpUser, pass: smtpPass };
-    // IMAP 自动同步 SMTP 邮箱密码
-    if (!cfg.imap?.host) {
-      const imapHost = smtpHost.replace(/^smtp\./, 'imap.').replace(/^mail\./, 'imap.');
-      cfg.imap = { host: imapHost, port: 993, user: smtpUser, pass: smtpPass };
+  if (smtpHost && smtpUser) {
+    const account = {
+      label: '默认账号',
+      smtp: {
+        host: smtpHost,
+        port: parseInt(document.getElementById('ob-smtp-port')?.value) || 465,
+        secure: document.getElementById('ob-smtp-secure')?.value !== 'false',
+        user: smtpUser,
+        pass: document.getElementById('ob-smtp-pass')?.value || '',
+      },
+      dailyLimit: cfg.schedule?.max_per_day || 500,
+    };
+    // 仅在没有账号时添加（避免重复）
+    const existing = await window.electronAPI.listAccounts();
+    if (!(existing.data || []).length) {
+      await window.electronAPI.addAccount(account);
     }
   }
   // 发信人

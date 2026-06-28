@@ -479,6 +479,7 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
 }
 
 // ── 主入口 ────────────────────────────────────────────────────────────
+// 遍历所有发信账号的 IMAP 收件箱，汇总退信结果
 async function checkBounces() {
   const configPath = path.join(APP_ROOT, 'send', 'config.json');
   if (!fs.existsSync(configPath)) return { ok: false, error: '配置文件不存在' };
@@ -486,13 +487,40 @@ async function checkBounces() {
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return { ok: false, error: '配置文件格式错误' }; }
   const userKw = (config.bounce?.keywords || []).map(k => k.toLowerCase().trim()).filter(Boolean);
   const effectiveKw = [...new Set([...BOUNCE_KW, ...userKw])];
-  const cfg = config.imap;
-  if (!cfg?.host || !cfg?.user || !cfg?.pass) {
-    return { ok: false, error: '邮箱未配置，请在设置中填写' };
-  }
-  const senderEmail = cfg.user || '';
   const apiKey = config.translate?.deepseek?.apiKey || '';
-  return isPop3(cfg) ? pop3Check(cfg, senderEmail, effectiveKw, apiKey) : imapCheck(cfg, senderEmail, effectiveKw, apiKey);
+
+  // 收集所有有 IMAP 配置的活跃账号
+  const accounts = config.smtpAccounts || [];
+  const imapAccounts = accounts.filter(a => a.active !== false && a.imap?.host && a.imap?.user);
+
+  // 向后兼容：旧格式全局 imap
+  if (!imapAccounts.length && config.imap?.host && config.imap?.user) {
+    const senderEmail = config.imap.user || '';
+    return isPop3(config.imap) ? pop3Check(config.imap, senderEmail, effectiveKw, apiKey) : imapCheck(config.imap, senderEmail, effectiveKw, apiKey);
+  }
+
+  if (!imapAccounts.length) {
+    return { ok: false, error: '无可用邮箱（请在账号中配置 IMAP）' };
+  }
+
+  // 遍历各账号收件箱
+  const allBounced = [];
+  let lastError = '';
+  for (const acc of imapAccounts) {
+    try {
+      const senderEmail = acc.imap.user || acc.smtp?.user || '';
+      const checkFn = isPop3(acc.imap) ? pop3Check : imapCheck;
+      const result = await checkFn(acc.imap, senderEmail, effectiveKw, apiKey);
+      if (result.ok && result.bounced?.length) {
+        allBounced.push(...result.bounced);
+      }
+      if (!result.ok) lastError = result.error || '';
+    } catch (e) {
+      console.warn(`[退信] 账号 ${acc.label || acc.imap.user} 检测异常:`, e.message);
+    }
+  }
+
+  return { ok: true, bounced: allBounced, message: allBounced.length ? `发现 ${allBounced.length} 封退信` : '未发现退信' };
 }
 
 async function testConnection(cfg) {

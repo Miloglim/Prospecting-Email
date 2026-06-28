@@ -28,6 +28,7 @@ function setupIPC() {
   require('./modules/template-ipc').register(ipcMain, deps);
   require('./modules/services/history-store').register(ipcMain);
   require('./modules/ipc/system-ipc').register(ipcMain, deps);
+  require('./modules/ipc/account-ipc').register(ipcMain);
   require('./modules/send-ipc').register(ipcMain, deps);
   _sendCleanup = require('./modules/send-ipc').cleanup;
   registerTableImportHandlers();
@@ -210,8 +211,16 @@ app.whenReady().then(async () => {
   try { deps.templateLib = parseTemplateLibrary(); }
   catch (e) { Log.error('启动', '模板加载失败', e); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
   setupIPC(); createWindow(); createTray();
+  require('./modules/updater').init(deps.mainWindow);
+
+  // 后台轮询：退信 + 回复检测
+  const { scheduleAutoBounceCheck } = require('./modules/services/send-engine');
+  const { scheduleAutoReplyCheck } = require('./modules/services/reply-checker');
+  scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
+  scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
+
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else deps.mainWindow?.show(); });
 }).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });
 
-app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} });
+app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} try { require('./modules/services/reply-checker').cleanup(); } catch {} });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

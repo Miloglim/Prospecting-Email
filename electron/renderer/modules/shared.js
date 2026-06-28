@@ -6,7 +6,83 @@ export function showModal({title,message,type='info',buttons,onClose}){return ne
 export async function showAlert(m,t){return showModal({title:'提示',message:m,type:t||'info',buttons:[{text:'确定',value:true,primary:true}]})}
 export async function showConfirm(m,o={}){const btns=[{text:o.cancelText||'取消',value:false}];if(o.skipText)btns.push({text:o.skipText,value:'skip'});btns.push({text:o.confirmText||'确定',value:true,primary:true});return showModal({title:o.title||'确认',message:m,type:o.type||'warn',buttons:btns})}
 export function showToast(msg,type){const e=document.getElementById('tmpl-toast');if(e)e.remove();const t=document.createElement('div');t.id='tmpl-toast';const c={ok:'#4caf50',warn:'#ff9800',err:'#f44336'};t.style.cssText=`position:fixed;bottom:24px;right:24px;padding:10px 20px;border-radius:6px;color:#fff;background:${c[type]||'#333'};font-size:13px;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.2)`;t.textContent=msg;document.body.appendChild(t);requestAnimationFrame(()=>{t.style.opacity='1'});setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},2000)}
-export async function loadDashboard(){try{const s=await window.electronAPI.getDashboardStats();document.getElementById('stat-sent').textContent=s.sentToday;document.getElementById('stat-remaining').textContent=s.remaining;document.getElementById('stat-queue').textContent=S.queue.filter(e=>e.status==='pending').length}catch(e){document.getElementById('stat-sent').textContent='--'}try{const s=await window.electronAPI.checkSmtpStatus();const e=document.getElementById('stat-smtp');e.textContent=s.ok?'已连接':'未配置';e.style.color=s.ok?'var(--success)':'var(--warning)'}catch(e){}}
+export async function loadDashboard(){
+  // 核心数据
+  try{
+    const s=await window.electronAPI.getDashboardStats();
+    document.getElementById('stat-sent').textContent=s.sentToday;
+    document.getElementById('stat-remaining').textContent=s.remaining;
+    document.getElementById('stat-queue').textContent=S.queue.filter(e=>e.status==='pending').length;
+    // 回复率 — 从联系人数据库统计今日回复
+    try{
+      const contacts=await window.electronAPI.getContacts();
+      const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
+      const todayReplied=contacts.filter(c=>c.replied&&(c.repliedAt||'').slice(0,10)===today).length;
+      const todaySent=s.sentToday||0;
+      document.getElementById('dash-reply-rate').textContent=todaySent>0?(todayReplied/todaySent*100).toFixed(1)+'%':'—';
+    }catch(e){document.getElementById('dash-reply-rate').textContent='—';}
+    // 退信率 — 从退信日志取今日数据
+    try{
+      const blog=await window.electronAPI.loadBounceLog();
+      const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
+      const todayBounces=(blog.data||blog||[]).filter(b=>(b.date||'').slice(0,10)===today).length;
+      const todaySent=s.sentToday||0;
+      document.getElementById('dash-bounce-rate').textContent=todaySent>0?(todayBounces/todaySent*100).toFixed(1)+'%':'—';
+    }catch(e){document.getElementById('dash-bounce-rate').textContent='—';}
+    // 进度条
+    const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;
+    document.getElementById('dash-progress-fill').style.width=Math.min(pct,100)+'%';
+    document.getElementById('dash-progress-text').textContent=sent>0?`${s.sentToday}/${s.dailyLimit}`:'等待发送';
+  }catch(e){document.getElementById('stat-sent').textContent='--'}
+
+  // 账号状态
+  try{
+    const s=await window.electronAPI.checkSmtpStatus();
+    const e=document.getElementById('stat-smtp');
+    if(s.accountCount!=null){e.textContent=s.ok?`${s.activeCount}/${s.accountCount}`:'0';e.style.color=s.ok?'var(--success)':'var(--warning)'}else{e.textContent=s.ok?'已连接':'未配置';e.style.color=s.ok?'var(--success)':'var(--warning)'}
+  }catch(e){}
+
+  // 发送窗口
+  try{
+    const cfg=await window.electronAPI.loadConfig();
+    const sc=cfg?.schedule||{};
+    const startH=sc.start_hour_beijing??19,endH=sc.end_hour_beijing??3;
+    const h=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).getHours();
+    const inWin=startH<endH?h>=startH&&h<endH:h>=startH||h<endH;
+    const el=document.getElementById('dash-window');
+    el.className='dash-metric-value small';
+    el.textContent=startH+':00 ~ '+endH+':00'+(endH<10?' (次日)':'');
+    el.style.color=inWin?'var(--success)':'var(--text-secondary)';
+  }catch(e){}
+
+  // 最近动态消息流
+  try{
+    const result=await window.electronAPI.getSendLog({limit:8,offset:0});
+    const items=(result.records||[]).slice(0,5);
+    const feed=document.getElementById('dash-feed-list');
+    if(!items.length){feed.innerHTML='<span style="font-size:12px;color:var(--text-secondary)">暂无活动</span>';}else{
+      feed.innerHTML=items.map(r=>{
+        const t=r.time?new Date(new Date(r.time).getTime()+8*3600000).toISOString().slice(11,16):'';
+        if(r.status==='failed')return`<div class="dash-feed-item"><span class="dash-feed-dot bounce"></span>${escapeHtml(r.company||'?')} 退信<span class="dash-feed-time">${t}</span></div>`;
+        if(r._stage&&r._stage!=='cold')return`<div class="dash-feed-item"><span class="dash-feed-dot reply"></span>${escapeHtml(r.company||'?')} 回复<span class="dash-feed-time">${t}</span></div>`;
+        return`<div class="dash-feed-item"><span class="dash-feed-dot sent"></span>${escapeHtml(r.company||'?')}<span class="dash-feed-time">${t}</span></div>`;
+      }).join('');
+    }
+  }catch(e){}
+}
+
+// 快捷操作按钮
+document.addEventListener('click',function(e){
+  const btn=e.target.closest('[data-nav]');
+  if(!btn)return;
+  const page=btn.dataset.nav;
+  if(page==='compose')document.querySelector('.nav-item[data-page="compose"]')?.click();
+  else document.querySelector('.nav-item[data-page="'+page+'"]')?.click();
+});
+document.getElementById('dash-bounce-check')?.addEventListener('click',function(){
+  document.querySelector('.nav-sub[data-page="bounces"]')?.click();
+  setTimeout(()=>{const b=document.getElementById('bounce-run-btn');if(b)b.click();},300);
+});
 export function initNavigation(){const n=document.querySelectorAll('.nav-item');const s=document.querySelectorAll('.nav-sub');const p=document.querySelectorAll('.page');document.querySelector('.nav-parent')?.addEventListener('click',function(e){e.stopPropagation();this.classList.toggle('open');s.forEach(s=>s.classList.toggle('show'))});[...n,...s].forEach(i=>{if(i.classList.contains('nav-parent'))return;i.addEventListener('click',()=>{n.forEach(n=>n.classList.remove('active'));s.forEach(s=>s.classList.remove('active'));i.classList.add('active');if(i.classList.contains('nav-sub'))document.querySelector('.nav-parent')?.classList.add('active');p.forEach(p=>p.classList.remove('active'));const id=i.dataset.page;document.getElementById(`page-${id}`)?.classList.add('active');window.__pageHandlers[id]?.()})})}
 export function findById(a,i){return a?.find(x=>x.id===i)}
 export function truncate(s,l){return s?.length>l?s.slice(0,l)+'...':s}

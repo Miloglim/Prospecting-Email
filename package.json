@@ -1,6 +1,6 @@
 {
   "name": "prospecting-email-send",
-  "version": "1.1.0",
+  "version": "2.4.2",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
   "main": "electron/main.js",
   "type": "commonjs",
@@ -8,7 +8,8 @@
     "start": "electron-vite dev",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "pack": "electron-vite build && electron-builder --win"
+    "pack": "electron-vite build && electron-builder --win",
+    "release": "electron-vite build && electron-builder --win --publish always"
   },
   "build": {
     "electronDownload": {
@@ -17,16 +18,22 @@
     "appId": "com.milogin.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
-      "output": "../product-v6"
+      "output": "../dist-release"
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Miloglim",
+      "repo": "Prospecting-Email",
+      "private": true
     },
     "files": [
       "dist/**",
@@ -39,9 +46,16 @@
       "node_modules/**"
     ],
     "asar": true,
-    "extraResources": [{ "from": "assets", "to": "assets" }]
+    "afterPack": "./scripts/embed-icon.js",
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ]
   },
   "dependencies": {
+    "electron-updater": "^6.6.2",
     "imap": "^0.8.19",
     "nodemailer": "^6.9.0",
     "xlsx": "^0.18.5"
@@ -51,6 +65,7 @@
     "electron-builder": "^26.15.3",
     "electron-reloader": "^1.2.3",
     "electron-vite": "^5.0.0",
+    "rcedit": "^5.0.2",
     "vite": "^7.3.6"
   }
 }

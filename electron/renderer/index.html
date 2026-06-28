@@ -124,6 +124,7 @@
       <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
       <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="alert-circle"></span> 退信检测</li>
+      <li class="nav-sub" data-page="replies"><span class="nav-icon" data-icon="mail-check"></span> 回复检测</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
@@ -131,7 +132,7 @@
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
     </ul>
-    <div class="nav-footer"><span class="nav-version">v1.1.0</span></div>
+    <div class="nav-footer"><span class="nav-version" id="nav-version">v2.4.2</span></div>
   </nav>
 
   <!-- ========== 右侧内容区 ========== -->
@@ -140,11 +141,47 @@
     <!-- 📊 仪表盘 -->
     <section id="page-dashboard" class="page active">
       <h2><span data-icon="dashboard"></span> 仪表盘</h2>
+
+      <!-- 核心数据 -->
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-value" id="stat-sent">...</div><div class="stat-label">今日已发</div></div>
         <div class="stat-card"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label">剩余限额</div></div>
         <div class="stat-card"><div class="stat-value" id="stat-queue">0</div><div class="stat-label">队列待处理</div></div>
-        <div class="stat-card"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">SMTP 状态</div></div>
+        <div class="stat-card"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">账号状态</div></div>
+      </div>
+
+      <!-- 进度 + 副指标 -->
+      <div class="dash-row">
+        <div class="dash-card dash-progress" id="dash-progress-card">
+          <div class="dash-card-label">发送进度</div>
+          <div class="dash-progress-bar"><div class="dash-progress-fill" id="dash-progress-fill"></div></div>
+          <div class="dash-progress-text" id="dash-progress-text">等待发送</div>
+        </div>
+        <div class="dash-card dash-metric">
+          <div class="dash-card-label">回复率</div>
+          <div class="dash-metric-value" id="dash-reply-rate">—</div>
+        </div>
+        <div class="dash-card dash-metric">
+          <div class="dash-card-label">退信率</div>
+          <div class="dash-metric-value" id="dash-bounce-rate">—</div>
+        </div>
+        <div class="dash-card dash-metric">
+          <div class="dash-card-label">发送窗口</div>
+          <div class="dash-metric-value" id="dash-window">—</div>
+        </div>
+      </div>
+
+      <!-- 最近动态 -->
+      <div class="dash-card dash-feed">
+        <div class="dash-card-label">最近动态</div>
+        <div id="dash-feed-list" class="dash-feed-list">暂无活动</div>
+      </div>
+
+      <!-- 快捷操作 -->
+      <div class="dash-actions">
+        <button class="secondary" data-nav="clients"><span data-icon="file-spreadsheet"></span> 导入客户</button>
+        <button class="secondary" data-nav="email-send"><span data-icon="send"></span> 开始发送</button>
+        <button class="secondary" id="dash-bounce-check"><span data-icon="alert-circle"></span> 检查退信</button>
       </div>
     </section>
 
@@ -487,6 +524,17 @@
       <p class="placeholder" id="bounce-empty">点击「检查退信」扫描邮箱中的退信邮件，自动匹配联系人数据库</p>
     </section>
 
+    <!-- 📬 回复检测 -->
+    <section id="page-replies" class="page">
+      <h2><span data-icon="message-circle"></span> 回复检测</h2>
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button id="reply-run-btn"><span data-icon="search"></span> 检查回复</button>
+        <span id="reply-status" style="font-size:12px;color:var(--text-secondary)"></span>
+      </div>
+      <div id="reply-list"></div>
+      <p class="placeholder" id="reply-empty"><span data-icon="inbox"></span> 点击「检查回复」扫描所有关联收件箱，自动匹配联系人回复</p>
+    </section>
+
     <!-- ⚙️ 设置 -->
     <section id="page-settings" class="page">
       <h2><span data-icon="settings"></span> 设置</h2>
@@ -519,6 +567,7 @@
                 <option value="dark">深色</option>
               </select>
             </div>
+            <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-general-loader-anim"> 关闭加载动画（启动直接进入）</label></div>
           </div>
         </div>
       </div>
@@ -529,14 +578,40 @@
 
         <div class="setting-card setting-required">
           <div class="setting-card-header">
-            <h3><span data-icon="mail"></span> SMTP 服务器</h3>
+            <h3><span data-icon="mail"></span> 发信账号</h3>
             <span class="setting-status"></span>
           </div>
           <div class="setting-card-body">
-            <div class="form-row"><label>服务器地址</label><input type="text" id="cfg-smtp-host" data-required="1" placeholder="smtp.example.com"></div>
-            <div class="form-row form-row-inline"><div><label>端口</label><input type="number" id="cfg-smtp-port" data-required="1"></div><div><label>加密方式</label><select id="cfg-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div></div>
-            <div class="form-row"><label>邮箱地址</label><input type="text" id="cfg-smtp-user" data-required="1" placeholder="your@email.com"></div>
-            <div class="form-row"><label>密码 / 授权码</label><input type="password" id="cfg-smtp-pass" data-required="1"></div>
+            <div id="account-list"></div>
+            <button class="secondary" id="btn-add-account">+ 添加账号</button>
+          </div>
+        </div>
+
+        <!-- 账号编辑对话框 -->
+        <div id="account-modal" class="modal-overlay" style="display:none">
+          <div class="modal-card" style="max-width:500px;max-height:90vh;overflow-y:auto">
+            <div class="modal-header">发信账号</div>
+            <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+              <input type="hidden" id="acct-edit-id">
+              <div class="form-row"><label>账号名称</label><input type="text" id="acct-label" placeholder="如：主账号、备用"></div>
+              <div class="form-row"><label>服务器地址</label><input type="text" id="acct-host" placeholder="smtp.example.com"></div>
+              <div class="form-row form-row-inline"><div><label>端口</label><input type="number" id="acct-port" value="465"></div><div><label>加密</label><select id="acct-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div></div>
+              <div class="form-row"><label>邮箱地址</label><input type="text" id="acct-user" placeholder="your@email.com"></div>
+              <div class="form-row"><label>密码 / 授权码</label><input type="password" id="acct-pass"></div>
+              <div class="form-row"><label>每日上限</label><input type="number" id="acct-limit" value="100"> 封</div>
+              <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="acct-active" checked> 启用</label></div>
+              <div style="margin-top:4px;padding-top:8px;border-top:1px solid var(--border)">
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">IMAP 收件箱（自动推导，可覆盖）</div>
+                <div class="form-row form-row-inline"><div><label>服务器</label><input type="text" id="acct-imap-host" placeholder="自动推导"></div><div><label>端口</label><input type="number" id="acct-imap-port" placeholder="993"></div></div>
+                <div class="form-row form-row-inline"><div><label>邮箱</label><input type="text" id="acct-imap-user"></div><div><label>密码</label><input type="password" id="acct-imap-pass"></div></div>
+              </div>
+              <div id="acct-test-result" style="font-size:12px;min-height:18px"></div>
+            </div>
+            <div class="modal-footer">
+              <button class="secondary" id="btn-acct-test">测试连接</button>
+              <button class="secondary" id="btn-acct-cancel">取消</button>
+              <button id="btn-acct-save">保存</button>
+            </div>
           </div>
         </div>
 
@@ -648,9 +723,7 @@
             <span class="setting-status"></span>
           </div>
           <div class="setting-card-body">
-            <div class="form-row form-row-inline"><div><label>IMAP 服务器</label><input type="text" id="cfg-imap-host" placeholder="imap.exmail.qq.com"></div><div><label>端口</label><input type="number" id="cfg-imap-port" placeholder="993"></div></div>
-            <div class="form-row form-row-inline"><div><label>邮箱</label><input type="text" id="cfg-imap-user"></div><div><label>密码</label><input type="password" id="cfg-imap-pass"></div></div>
-            <div class="form-row"><label></label><span class="form-actions"><button id="cfg-imap-test" class="secondary">测试连接</button><span id="cfg-imap-result"></span></span></div>
+            <p style="font-size:12px;color:var(--text-secondary);margin:8px 0">每个发信账号的 IMAP 收件箱已自动关联，无需单独配置。点击「检查退信」将遍历所有活跃账号。</p>
           </div>
         </div>
 

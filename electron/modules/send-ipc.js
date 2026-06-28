@@ -68,19 +68,38 @@ function register(ipcMain, deps) {
 
   // ── 测试发送单封 ──
   ipcMain.handle('send:testOne', async (_e, params) => {
-    const nodemailer = require('nodemailer');
     const configPath = path.join(APP_ROOT, 'send', 'config.json');
     if (!fs.existsSync(configPath)) return { ok: false, error: 'config.json 未找到' };
     let config; try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch (e) { return { ok: false, error: 'config.json 解析失败' }; }
-    if (process.env.SMTP_PASS) config.smtp.pass = process.env.SMTP_PASS;
     if (!config.test?.email) return { ok: false, error: '请先在设置中配置测试邮箱' };
-    if (!config.smtp?.host || !config.smtp?.user) return { ok: false, error: '请先配置 SMTP' };
+
+    // 确定用哪个账号：优先 params.accountId 匹配，其次活跃账号第一个
+    const acctMgr = require('./services/account-manager');
+    let smtpConfig;
+    const accounts = config.smtpAccounts || [];
+    if (params.accountId && accounts.length > 0) {
+      const acc = accounts.find(a => a.id === params.accountId);
+      if (!acc) return { ok: false, error: '指定账号不存在' };
+      smtpConfig = acc.smtp;
+    } else if (accounts.length > 0) {
+      const active = accounts.filter(a => a.active !== false);
+      if (!active.length) return { ok: false, error: '无活跃发信账号' };
+      smtpConfig = active[0].smtp;
+    } else if (config.smtp?.host) {
+      // 向后兼容旧格式
+      smtpConfig = config.smtp;
+      if (process.env.SMTP_PASS) smtpConfig = { ...smtpConfig, pass: process.env.SMTP_PASS };
+    } else {
+      return { ok: false, error: '请先配置 SMTP' };
+    }
+    if (process.env.SMTP_PASS) smtpConfig.pass = process.env.SMTP_PASS;
 
     const sigPath = path.join(APP_ROOT, 'send', 'signature.html');
     const signatureText = config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com';
     const signatureHtml = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '';
-    const senderAddr = config.sender?.email || 'zayne_jin@yqn.com';
-    const fromAddr = `"${config.sender?.name || 'Zayne Jin'}" <${senderAddr}>`;
+    const senderName = config.sender?.name || 'Zayne Jin';
+    const senderEmail = smtpConfig.user || config.sender?.email || 'zayne_jin@yqn.com';
+    const fromAddr = `"${senderName}" <${senderEmail}>`;
     const testCompany = config.test?.company || '测试公司';
 
     // 构建测试正文（替换公司名占位符）
@@ -91,12 +110,7 @@ function register(ipcMain, deps) {
     const { textBody, html } = engine.buildContent(body, signatureText, signatureHtml);
 
     try {
-      const transporter = nodemailer.createTransport({
-        host: config.smtp.host, port: config.smtp.port || 465, secure: config.smtp.secure !== false,
-        auth: { user: config.smtp.user, pass: config.smtp.pass || '' },
-        tls: { rejectUnauthorized: false },
-        connectionTimeout: 10000, greetingTimeout: 8000, socketTimeout: 15000,
-      });
+      const transporter = acctMgr.createTransporter({ smtp: smtpConfig });
       const subject = params.subject || `[测试] 来自 YQN — ${testCompany}`;
       const info = await transporter.sendMail({
         from: fromAddr, to: config.test.email,

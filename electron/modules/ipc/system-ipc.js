@@ -38,7 +38,14 @@ function register(ipcMain, deps) {
     try {
       if (fs.existsSync(cp)) {
         const raw = await fs.promises.readFile(cp, 'utf-8');
-        dailyLimit = JSON.parse(raw).schedule?.max_per_day || 500;
+        const config = JSON.parse(raw);
+        // 多账号：合计所有活跃账号的每日限额
+        const accounts = config.smtpAccounts || [];
+        if (accounts.length > 0) {
+          dailyLimit = accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0);
+        } else {
+          dailyLimit = config.schedule?.max_per_day || 500;
+        }
       }
     } catch {}
     _statsCache = { sentToday, dailyLimit, remaining: Math.max(0, dailyLimit - sentToday), totalSent, totalFailed, queueLength: deps.sendQueue.length };
@@ -46,8 +53,24 @@ function register(ipcMain, deps) {
     return _statsCache;
   });
 
-  // ── SMTP 状态 ──
-  ipcMain.handle('smtp:checkStatus', async () => { const cp = path.join(APP_ROOT, 'send', 'config.json'); if (!fs.existsSync(cp)) return { ok: false, host: '未配置' }; try { const raw = await fs.promises.readFile(cp, 'utf-8'); const c = JSON.parse(raw); return { ok: !!(c.smtp?.host && c.smtp?.user), host: c.smtp?.host || '未配置', user: c.smtp?.user || '' }; } catch { return { ok: false, host: '未配置' }; } });
+  // ── SMTP 状态（兼容旧 smtp + 新 smtpAccounts）──
+  ipcMain.handle('smtp:checkStatus', async () => {
+    const cp = path.join(APP_ROOT, 'send', 'config.json');
+    if (!fs.existsSync(cp)) return { ok: false, host: '未配置' };
+    try {
+      const raw = await fs.promises.readFile(cp, 'utf-8');
+      const c = JSON.parse(raw);
+      // 新格式：smtpAccounts
+      if (Array.isArray(c.smtpAccounts) && c.smtpAccounts.length > 0) {
+        const active = c.smtpAccounts.filter(a => a.active !== false);
+        if (!active.length) return { ok: false, host: '无活跃账号', user: '' };
+        const first = active[0];
+        return { ok: true, host: first.smtp?.host || '未配置', user: first.smtp?.user || '', accountCount: c.smtpAccounts.length, activeCount: active.length };
+      }
+      // 旧格式：smtp（兼容）
+      return { ok: !!(c.smtp?.host && c.smtp?.user), host: c.smtp?.host || '未配置', user: c.smtp?.user || '' };
+    } catch { return { ok: false, host: '未配置' }; }
+  });
 
   // ── 网络检查 ──
   ipcMain.handle('network:check', async () => {
@@ -79,6 +102,17 @@ function register(ipcMain, deps) {
   // ── 设置 ──
   ipcMain.handle('config:load', async () => loadSearchConfig());
   ipcMain.handle('config:save', async (_e, config) => { const cp = path.join(APP_ROOT, 'send', 'config.json'); const d = path.dirname(cp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(cp, JSON.stringify(config, null, 2)); return { ok: true }; });
+
+  // ── 回复检测 ──
+  ipcMain.handle('reply:check', async () => {
+    const reply = require('../services/reply-checker');
+    return await reply.checkReplies();
+  });
+  ipcMain.handle('reply:log', async () => {
+    const rlp = path.join(APP_ROOT, 'data', 'reply-log.json');
+    try { if (fs.existsSync(rlp)) return { ok: true, data: JSON.parse(fs.readFileSync(rlp, 'utf-8')) }; } catch { /* 文件损坏 */ }
+    return { ok: true, data: [] };
+  });
 }
 
 module.exports = { register };

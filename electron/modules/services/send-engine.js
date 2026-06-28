@@ -38,8 +38,30 @@ function _loadConfig(sendProgress) {
   const cp = path.join(APP_ROOT, 'send', 'config.json');
   if (!fs.existsSync(cp)) { sendProgress({ error: 'config.json 未找到' }); return null; }
   let config; try { config = JSON.parse(fs.readFileSync(cp, 'utf-8')); } catch (e) { sendProgress({ error: 'config.json 解析失败: ' + e.message }); return null; }
-  if (process.env.SMTP_PASS) config.smtp.pass = process.env.SMTP_PASS;
+
+  // 多账号格式
+  const accounts = config.smtpAccounts || [];
+  if (accounts.length > 0) {
+    const active = accounts.filter(a => a.active !== false);
+    if (!active.length) { sendProgress({ error: '无可用发信账号（全部已停用）' }); return null; }
+    // 环境变量覆盖密码（仅覆盖第一个匹配的账号）
+    if (process.env.SMTP_PASS) {
+      for (const a of accounts) { if (a.smtp) a.smtp.pass = process.env.SMTP_PASS; }
+    }
+    config._accounts = accounts;
+    return config;
+  }
+
+  // 向后兼容：旧格式 smtp
+  if (process.env.SMTP_PASS && config.smtp) config.smtp.pass = process.env.SMTP_PASS;
   if (!config.smtp?.host || !config.smtp?.user) { sendProgress({ error: 'SMTP 未配置' }); return null; }
+  // 临时转为单账号数组（不修改原 config）
+  config._accounts = [{
+    id: 'legacy', label: '默认账号', active: true,
+    dailyLimit: config.schedule?.max_per_day || 500,
+    smtp: { ...config.smtp },
+    imap: config.imap ? { ...config.imap } : undefined,
+  }];
   return config;
 }
 
@@ -50,14 +72,14 @@ function _buildContext(config) {
   const testMode = !!(config.test?.enabled && config.test?.email);
   const isBatch = (config.schedule?.mode || 'multi') === 'batch';
   const sc = config.schedule || {};
+  const accounts = config._accounts || [];
 
   const ctx = {
-    config, testMode, isBatch, nodemailer,
+    config, testMode, isBatch, nodemailer, accounts,
     logPath: path.join(APP_ROOT, 'send', testMode ? 'send-log-test.json' : 'send-log.json'),
     sigHtml: fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '',
     sigText: config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com',
     senderAddr: config.sender?.email || 'zayne_jin@yqn.com',
-    fromAddr: `"${config.sender?.name || 'Zayne Jin'}" <${config.sender?.email || 'zayne_jin@yqn.com'}>`,
     maxPerDay: sc.max_per_day ?? 500,
     startH: sc.start_hour_beijing ?? 19,
     endH: sc.end_hour_beijing ?? 3,
@@ -82,6 +104,13 @@ function _buildContext(config) {
   return ctx;
 }
 
+// ── 账号 from 地址 ─────────────────────────────────────────────────────────
+function _fromAddr(account) {
+  const senderName = account.label || account.smtp?.user || '';
+  const senderEmail = account.smtp?.user || '';
+  return `"${senderName}" <${senderEmail}>`;
+}
+
 // ── 正文构建：提取 send:testOne 和 _sendOne 中的重复 HTML 生成逻辑 ──────
 function buildContent(bodyText, sigText, sigHtml) {
   const sigStart = (sigText || '').split('\n')[0]?.trim();
@@ -102,7 +131,7 @@ function buildContent(bodyText, sigText, sigHtml) {
 }
 
 // ── 日志记录 ──────────────────────────────────────────────────────────────
-function _logRecord(ctx, to, company, subject, msgId, status, err) {
+function _logRecord(ctx, to, company, subject, msgId, status, err, accountId) {
   const rec = {
     index: 0, to, company: company || '', subject,
     messageId: msgId, count: 1,
@@ -110,50 +139,66 @@ function _logRecord(ctx, to, company, subject, msgId, status, err) {
     _stage: '', _lang: '', _type: 'unlabeled', _country: '',
     time: new Date().toISOString(), time_beijing: beijingToday(), status,
     _test: !!ctx.testMode,
+    _accountId: accountId || '',
   };
   if (err) rec.error = err;
   return rec;
 }
 
 // ── 发送单封 ──────────────────────────────────────────────────────────────
-// deps: { currentTransporter, currentSendAbort, isPaused }
+// deps: { currentTransporter, currentAccount, currentSendAbort, isPaused }
 async function _sendOne(ctx, email, log, deps) {
   const toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
   if (!toList.length) return { ok: false, n: 0 };
 
   const { textBody, html } = buildContent(email.body || '', ctx.sigText, ctx.sigHtml);
+  const accountId = deps.currentAccount?.id || '';
 
   const subject = ctx.testMode ? `[测试] ${email.subject}` : email.subject;
   const aTo = ctx.testMode ? (ctx.config.test?.email || ctx.senderAddr) : toList[0];
   const aBcc = ctx.testMode ? [] : toList.slice(1);
+  const fromAddr = _fromAddr(deps.currentAccount || {});
 
   try {
-    const info = await deps.currentTransporter.sendMail({ from: ctx.fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-    if (!ctx.testMode) for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent')); log.daily_count++; }
+    const info = await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
+    if (!ctx.testMode) {
+      for (const r of toList) {
+        log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent', null, accountId));
+      }
+      if (!log.daily_counts) log.daily_counts = {};
+      log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+    }
     return { ok: true, n: toList.length };
   } catch (err) {
     const em = err.message || '';
+    // 连接错误：用 account-manager 重建 transporter
     if (!deps.currentSendAbort && (em.includes('socket') || em.includes('ECONN') || em.includes('closed'))) {
       try { await deps.currentTransporter.close(); } catch {}
-      deps.currentTransporter = ctx.nodemailer.createTransport({
-        host: ctx.config.smtp.host, port: ctx.config.smtp.port || 465, secure: ctx.config.smtp.secure !== false,
-        auth: { user: ctx.config.smtp.user, pass: ctx.config.smtp.pass || '' },
-        tls: { rejectUnauthorized: false },
-        connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 30000,
-      });
+      const acctMgr = require('./account-manager');
+      if (deps.currentAccount?.smtp) {
+        deps.currentTransporter = acctMgr.createTransporter(deps.currentAccount);
+      }
       await sleep(2000);
       if (deps.currentSendAbort) return { ok: false, n: 0 };
       try {
-        const info = await deps.currentTransporter.sendMail({ from: ctx.fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-        if (!ctx.testMode) for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent')); log.daily_count++; }
+        const info = await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
+        if (!ctx.testMode) {
+          for (const r of toList) {
+            log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent', null, accountId));
+          }
+          if (!log.daily_counts) log.daily_counts = {};
+          log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+        }
         return { ok: true, n: toList.length };
       } catch (retryErr) { err = retryErr; }
     }
     const finalErr = err.message || '';
-    if (['rate limit','too many','try again','421','450','451','452'].some(k => finalErr.toLowerCase().includes(k)) && !ctx.testMode) {
-      deps.isPaused = true; return { ok: false, n: 0, fatal: true };
+    const isRateLimit = ['rate limit','too many','try again','421','450','451','452'].some(k => finalErr.toLowerCase().includes(k));
+    if (isRateLimit && !ctx.testMode) {
+      // 熔断本账号，不暂停其他账号
+      return { ok: false, n: 0, fused: true };
     }
-    if (!ctx.testMode) for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, '', 'failed', finalErr)); }
+    if (!ctx.testMode) for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, '', 'failed', finalErr, accountId)); }
     return { ok: false, n: 0 };
   }
 }
@@ -236,24 +281,38 @@ async function cancellableSleep(ms, deps) {
 }
 
 // ── 发送引擎核心 ──────────────────────────────────────────────────────────
-// deps: { sendQueue, isPaused, currentSendAbort, currentTransporter, _sendInProgress, mainWindow, tray }
+// deps: { sendQueue, isPaused, currentSendAbort, currentTransporter, currentAccount, _sendInProgress, mainWindow, tray }
 async function runSendBatch(deps, sendProgress) {
   const config = _loadConfig(sendProgress); if (!config) return;
   const ctx = _buildContext(config);
+  const acctMgr = require('./account-manager');
 
-  let log = { sent: [], daily_count: 0, last_date: '' };
-  if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch {} }
-  if ((log.last_date_beijing || log.last_date) !== beijingToday()) { log.daily_count = 0; log.last_date_beijing = beijingToday(); }
+  let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: {}, last_date: '' };
+  if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志，当日的 daily_counts 丢失但不会阻止发送 */ } }
+  if ((log.last_date_beijing || log.last_date) !== beijingToday()) {
+    log.daily_count = 0;
+    log.daily_counts = {};
+    log._accountStates = {};
+    log.last_date_beijing = beijingToday();
+  }
+  if (!log.daily_counts) log.daily_counts = {};
+  if (!log._accountStates) log._accountStates = {};
 
   deps.currentSendAbort = false;
-  deps.currentTransporter = ctx.nodemailer.createTransport({
-    host: config.smtp.host, port: config.smtp.port || 465, secure: config.smtp.secure !== false,
-    auth: { user: config.smtp.user, pass: config.smtp.pass || '' },
-    tls: { rejectUnauthorized: false },
-    connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 30000,
-  });
-  try { await deps.currentTransporter.verify().catch(() => {}); }
-  catch (e) { sendProgress({ error: 'SMTP 连接失败: ' + e.message }); return; }
+
+  // 预连所有活跃账号的 transporter（懒加载缓存）
+  const transporterCache = new Map();
+  function getTransporter(account) {
+    if (!transporterCache.has(account.id)) {
+      transporterCache.set(account.id, acctMgr.createTransporter(account));
+      console.log(`[发信] 创建 transporter: ${account.label || account.smtp?.user}`);
+    }
+    return transporterCache.get(account.id);
+  }
+
+  // 全局每日上限检查（总上限）
+  const totalLimit = ctx.maxPerDay;
+  const totalDailyCount = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || log.daily_count || 0;
 
   function inWindow() {
     const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
@@ -262,14 +321,24 @@ async function runSendBatch(deps, sendProgress) {
 
   const est = _computeEstimate(ctx, deps.sendQueue.filter(e => e.status === 'pending' || e.status === 'sending'));
   sendProgress(est);
-  console.log(`[发信] 开始 — ${est.total} 封${ctx.isBatch ? '（批处理）' : ''}，预计 ${est.estMin}分${est.estSec}秒`);
+  const accountCount = ctx.accounts.length;
+  const activeCount = ctx.accounts.filter(a => a.active !== false).length;
+  console.log(`[发信] 开始 — ${est.total} 封，${activeCount}/${accountCount} 个账号可用，预计 ${est.estMin}分${est.estSec}秒`);
 
   let sent = 0, failed = 0, batchCount = 0;
+  let lastAccountIdx = -1;
 
+  try {
   for (let i = 0; i < deps.sendQueue.length; i++) {
     if (deps.currentSendAbort) { sendProgress({ type: 'cancelled' }); break; }
     if (deps.isPaused) { sendProgress({ type: 'paused' }); break; }
-    if (!ctx.testMode && log.daily_count >= ctx.maxPerDay) { sendProgress({ type: 'limit', message: `已达每日上限 ${ctx.maxPerDay}` }); break; }
+
+    // 全局上限检查
+    if (!ctx.testMode) {
+      const currentTotal = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || 0;
+      if (currentTotal >= totalLimit) { sendProgress({ type: 'limit', message: `已达每日上限 ${totalLimit}` }); break; }
+    }
+
     while (!inWindow() && !deps.isPaused && !ctx.testMode && !deps.currentSendAbort) {
       const ok = await cancellableSleep(30000, deps); if (!ok || deps.isPaused || deps.currentSendAbort) break;
     }
@@ -278,10 +347,22 @@ async function runSendBatch(deps, sendProgress) {
     const email = deps.sendQueue[i];
     if (!email.recipients?.length && !email.to) continue;
 
+    // 轮询选择下一个可用账号（含熔断检测）
+    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates);
+    if (!picked.account) {
+      const reason = picked.reason || '无可用账号';
+      console.log(`[发信] 🛑 ${reason}`);
+      sendProgress({ error: `发送停止：${reason}` }); break;
+    }
+    const { account, idx } = picked;
+    lastAccountIdx = idx;
+    deps.currentAccount = account;
+    deps.currentTransporter = getTransporter(account);
+
     // 公司切换 + 封间延迟（仅多规则模式）
     if (!ctx.isBatch) {
       if (i > 0 && email.company !== deps.sendQueue[i - 1]?.company) {
-        if (!deps.isPaused && log.daily_count < ctx.maxPerDay && (ctx.cdMin > 0 || ctx.cdMax > 0)) {
+        if (!deps.isPaused && (ctx.cdMin > 0 || ctx.cdMax > 0)) {
           const toList = email.recipients?.length || (email.to || '').split(',').length;
           const isSingle = toList <= ctx.SINGLE;
           const dm = Math.floor(Math.random() * ((isSingle ? ctx.SD_MAX : ctx.cdMax) - (isSingle ? ctx.SD_MIN : ctx.cdMin) + 1)) + (isSingle ? ctx.SD_MIN : ctx.cdMin);
@@ -291,7 +372,7 @@ async function runSendBatch(deps, sendProgress) {
         }
       }
       // 封间延迟
-      if (i > 0 || log.daily_count > 0) {
+      if (i > 0 || totalDailyCount > 0 || sent > 0) {
         if (!await cancellableSleep(Math.floor(Math.random() * (ctx.perMax - ctx.perMin + 1)) + ctx.perMin, deps)) break;
       }
     }
@@ -299,11 +380,31 @@ async function runSendBatch(deps, sendProgress) {
     // 发送
     batchCount++;
     const result = await _sendOne(ctx, email, log, deps);
-    if (result.ok) sent += result.n; else if (result.fatal) { if (!ctx.testMode) fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); break; } else failed += result.n;
+
+    if (result.ok) {
+      sent += result.n;
+      if (!ctx.testMode) acctMgr.recordSuccess(account.id, log._accountStates);
+    } else if (result.fused) {
+      // 熔断：只标记该账号，其他账号继续发
+      if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, true);
+      console.log(`[发信] ⚡ 账号 ${account.label || account.smtp?.user} 已熔断，冷却 ${Math.round((acctMgr.FUSE_COOLDOWN_BASE)/60000)} 分钟`);
+      failed += result.n;
+    } else if (result.fatal) {
+      if (!ctx.testMode) {
+        acctMgr.recordFailure(account.id, log._accountStates, false);
+        fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2));
+      }
+      break;
+    } else {
+      failed += result.n;
+      if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
+    }
     if (!ctx.testMode) fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2));
     sendProgress(result.ok
-      ? { type: 'sent', id: email.id, index: i + 1, total: deps.sendQueue.length, company: email.company, to: email.recipients?.[0] || email.to?.split(',')[0] || '', count: result.n }
-      : { type: 'failed', id: email.id, error: '' }
+      ? { type: 'sent', id: email.id, index: i + 1, total: deps.sendQueue.length, company: email.company, to: email.recipients?.[0] || email.to?.split(',')[0] || '', count: result.n, accountLabel: account.label || account.smtp?.user }
+      : result.fused
+        ? { type: 'fused', id: email.id, accountLabel: account.label || account.smtp?.user }
+        : { type: 'failed', id: email.id, error: '' }
     );
 
     // 批次暂停
@@ -317,11 +418,18 @@ async function runSendBatch(deps, sendProgress) {
     }
   }
 
-  try { await deps.currentTransporter.close(); } catch {}
+  } catch { /* 正常退出：cancel/pause/limit/last item，不需要额外处理 */ }
+  finally {
+    // 无论正常结束、取消还是异常，清理所有 transporter
+    for (const t of transporterCache.values()) { try { await t.close(); } catch { /* 关闭失败不影响后续 */ } }
+  }
   console.log(`[发信] 完成 — 成功 ${sent} 封，失败 ${failed} 封`);
   if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: deps.sendQueue.length, sent, failed, _testMode: ctx.testMode || undefined });
   if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Prospector", body: `发送完成: 成功 ${sent} 封` }).show();
-  if (!ctx.testMode) scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
+  if (!ctx.testMode) {
+    scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
+    require('./reply-checker').scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
+  }
 }
 
 // ── 自动退信调度 ──────────────────────────────────────────────────────────
