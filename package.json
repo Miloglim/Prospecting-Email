@@ -17,7 +17,7 @@
     "appId": "com.milogin.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
-      "output": "../product"
+      "output": "../product-build"
     },
     "win": {
       "target": "nsis",
@@ -37,12 +37,7 @@
       "package.json",
       "node_modules/**"
     ],
-    "asar": {
-      "encryption": {
-        "algorithm": "aes-256-cbc",
-        "key": "bWlsb2dpbi1wcm9zcGVjdG9yLTIwMjYtc2VjcmV0LWtleS1mb3ItYXNhcg=="
-      }
-    },
+    "asar": true,
     "extraResources": []
   },
   "dependencies": {

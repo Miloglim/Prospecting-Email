@@ -6,7 +6,11 @@ export default defineConfig({
     build: {
       outDir: 'dist/main',
       rollupOptions: {
-        input: { index: resolve('electron/main.js') },
+        input: {
+          index: resolve('electron/main.js'),
+          logger: resolve('electron/logger.js'),
+          'modules/core/logger': resolve('electron/modules/core/logger.js'),
+        },
         external: ['electron', 'electron-reloader'],
       },
     },
