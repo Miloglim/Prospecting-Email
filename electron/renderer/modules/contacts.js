@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany } from './shared.js';
 
 // ===== 客户表导入 ====================================================
 const dropZone = document.getElementById('drop-zone');
@@ -296,20 +295,32 @@ export function renderContactDetail(company) {
     </div>
     <div class="contacts-detail-body">
       <table>
-        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>状态</th><th>添加时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>标签</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
-            const bouncedBadge = m.bounced
-              ? `<span title="${escapeHtml(m.bounceReason || '退信')} (${m.bounceType === 'permanent' ? '永久' : m.bounceType === 'temporary' ? '临时' : '未知'})" style="cursor:help;font-size:10px;color:${m.bounceType === 'temporary' ? 'var(--warning)' : 'var(--danger)'}">${m.bounceType === 'temporary' ? lucide('alert-triangle',10) + ' 退信' : lucide('ban',10) + ' 退信'}</span>`
-              : '';
+            // 兼容旧 tag 字段：tags 数组优先，回退到单值 tag
+	            const contactTags = (m.tags && m.tags.length) ? m.tags : (m.tag ? [m.tag] : []);
+	            const TAG_DISPLAY = {
+	              autoreply: { label: '自动回复', color: '#e6a817' },
+	              reached: { label: '已触达', color: '#22a644' },
+	              replied: { label: '有回复', color: '#3b82f6' },
+	              bounced_by_contact: { label: '退回', color: '#8b8b8b' },
+	              auto_reply: { label: '自动回复', color: '#e6a817' },
+	            };
+	            const tagsHtml = contactTags.length
+	              ? contactTags.map(t => {
+	                  const info = TAG_DISPLAY[t] || { label: t, color: 'var(--text-secondary)' };
+	                  return `<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:${info.color}18;color:${info.color};white-space:nowrap" title="右键切换标签">${info.label}</span>`;
+	                }).join(' ')
+	              : `<span style="font-size:10px;color:var(--text-secondary)">—</span>`;
             return `
-            <tr style="${m.bounced ? 'opacity:.5' : ''}">
+            <tr data-contact-id="${m.id}" style="${m.bounced ? 'opacity:.5' : ''}">
               <td>${escapeHtml(m.country)}</td>
               <td>${escapeHtml(m.category)}</td>
               <td>${escapeHtml(m.email)}</td>
-              <td>${bouncedBadge}</td>
+              <td>${tagsHtml}</td>
               <td>${formatDate(m.addedAt)}</td>
-              <td>${m.bounced ? `<button class="btn-clear-bounce" data-email="${escapeHtml(m.email)}" style="font-size:10px;padding:2px 6px">清除</button>` : `<button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button>`}</td>
+              <td><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
             </tr>
           `}).join('')}
         </tbody>
@@ -420,6 +431,80 @@ export function renderContactDetail(company) {
       await window.electronAPI.reactivateCompany(company);
       S.contactsSendHistory = await window.electronAPI.getSendHistory() || {};
       renderContactsList();
+    });
+  }
+
+  // 右键标签菜单（多选切换）
+  const tagTable = detail.querySelector('tbody');
+  if (tagTable) {
+    tagTable.addEventListener('contextmenu', async (e) => {
+      const row = e.target.closest('tr[data-contact-id]');
+      if (!row) return;
+      e.preventDefault();
+      const contactId = row.dataset.contactId;
+      const contact = members.find(m => m.id === contactId);
+      if (!contact) return;
+
+      document.getElementById('ctx-menu')?.remove();
+      const menu = document.createElement('div');
+      menu.id = 'ctx-menu';
+      menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:180px;font-size:12px';
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
+
+      // 当前标签（兼容新旧字段），单选：只取第一个有效标签
+      const currentTags = (contact.tags && contact.tags.length) ? contact.tags : (contact.tag ? [contact.tag] : []);
+      const currentTag = currentTags[0] || '';
+      const TAG_OPTIONS = [
+        { val: 'autoreply', label: '自动回复', color: '#e6a817' },
+        { val: 'replied', label: '有回复', color: '#3b82f6' },
+        { val: 'reached', label: '已触达', color: '#22a644' },
+      ];
+
+      // 生成单选菜单项
+      const tagItems = TAG_OPTIONS.map(t => {
+        const isActive = currentTag === t.val;
+        const check = isActive ? '✓' : '';
+        return `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:8px;color:${t.color};${isActive ? 'font-weight:600' : ''}" data-action="select" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${check} ${t.label}</div>`;
+      }).join('');
+
+      menu.innerHTML = tagItems +
+        `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
+        `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:var(--text-secondary)" data-action="clear" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
+
+      // 点击选中单个标签（再次点击同一标签则取消）
+      menu.querySelectorAll('[data-action="select"]').forEach(item => {
+        item.addEventListener('click', async () => {
+          const tagVal = item.dataset.tag;
+          const newTags = currentTag === tagVal ? [] : [tagVal];
+          menu.remove();
+          await window.electronAPI.setContactTags(contactId, newTags);
+          // 更新内存
+          contact.tags = newTags;
+          contact.tag = newTags[0] || '';  // 兼容旧字段
+          // 刷新详情
+          const newMembers = S.contactsGroupMap.get(company) || [];
+          const idx = newMembers.findIndex(m => m.id === contactId);
+          if (idx >= 0) { newMembers[idx].tags = newTags; newMembers[idx].tag = newTags[0] || ''; }
+          renderContactDetail(company);
+        });
+      });
+
+      // 清除全部标签
+      menu.querySelector('[data-action="clear"]').addEventListener('click', async () => {
+        menu.remove();
+        await window.electronAPI.setContactTags(contactId, []);
+        contact.tags = [];
+        contact.tag = '';
+        const newMembers = S.contactsGroupMap.get(company) || [];
+        const idx = newMembers.findIndex(m => m.id === contactId);
+        if (idx >= 0) { newMembers[idx].tags = []; newMembers[idx].tag = ''; }
+        renderContactDetail(company);
+      });
+
+      document.body.appendChild(menu);
+      const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
     });
   }
 }

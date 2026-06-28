@@ -96,7 +96,7 @@ const PLACEHOLDER_NAMES = /^(公司提供|未命名|未知|N\/A|暂无|-|\.+|\s*
 function markSuspicious(company) {
   const raw = (company || '').trim();
   if (!raw || PLACEHOLDER_NAMES.test(raw)) {
-    return { company: (raw || '未命名') + ' ⚠️ 待确认', _suspicious: true };
+    return { company: raw || '未命名', _suspicious: true };
   }
   return { company: raw, _suspicious: false };
 }

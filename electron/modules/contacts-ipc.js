@@ -4,6 +4,22 @@ const fs = require('fs');
 const { APP_ROOT } = require('./config');
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
 const { callScraplingAPI } = require('./scrapling');
+const { getCompanyMeta, deleteCompanyMeta } = require('./services/company-store');
+
+// 预定义标签（contacts:setTags 可传的合法值）
+const PREDEFINED_TAGS = ['autoreply', 'reached', 'replied', 'bounced_by_contact'];
+
+// 旧 tag 字符串 → 新 tags 数组迁移（就地修改）
+function _migrateTags(contact) {
+  if (Array.isArray(contact.tags)) return;           // 已是数组，无需迁移
+  if (typeof contact.tag === 'string' && contact.tag) {
+    contact.tags = [contact.tag];
+  } else {
+    contact.tags = [];
+  }
+  // 保留 tag 字段供渲染层向后兼容（取 tags 首元素或空字符串）
+  contact.tag = contact.tags[0] || '';
+}
 
 function register(ipcMain, deps) {
   const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
@@ -46,10 +62,27 @@ function register(ipcMain, deps) {
     const contacts = readContacts();
     let changed = false;
     for (const c of contacts) {
-      const newType = classifyClient(c.company, c.category);
-      if (c.clientType !== newType) {
-        c.clientType = newType;
+      // 旧数据迁移：tag 字符串 → tags 数组
+      if (!Array.isArray(c.tags)) {
+        _migrateTags(c);
         changed = true;
+      }
+
+      // 公司级元数据：手动设置了类型的公司，跳过自动分类
+      const meta = getCompanyMeta(c.company);
+      if (meta._manualType) {
+        // 手动类型优先，不重新运行 classifyClient
+        if (c.clientType !== meta.clientType) {
+          c.clientType = meta.clientType;
+          changed = true;
+        }
+      } else {
+        // 没有手动标记，运行自动分类
+        const newType = classifyClient(c.company, c.category);
+        if (c.clientType !== newType) {
+          c.clientType = newType;
+          changed = true;
+        }
       }
     }
     if (changed) writeContacts(contacts);
@@ -76,6 +109,7 @@ function register(ipcMain, deps) {
         email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
         contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
         clientType: c.clientType || classifyClient(c.company, c.category),
+        tags: [], tag: '',  // 新联系人默认空标签
         _suspicious, addedAt: new Date().toISOString(),
       });
       existingKeys.add(key);
@@ -127,6 +161,7 @@ function register(ipcMain, deps) {
 
     // 级联清理公司状态
     removeFromSendHistory(company, emails);
+    deleteCompanyMeta(company);  // 清理公司元数据
     const bsp = path.join(APP_ROOT, 'data', 'backcheck-status.json');
     try {
       if (fs.existsSync(bsp)) {
@@ -164,6 +199,31 @@ function register(ipcMain, deps) {
         c.bounced = false; c.bounceType = ''; c.bounceReason = ''; c.bouncedAt = '';
       }
     }
+    writeContacts(contacts);
+    return { ok: true };
+  });
+
+  // 旧 API：单值标签（向后兼容，内部转为数组）
+  ipcMain.handle('contacts:setTag', async (_e, id, tag) => {
+    contactsCache = null;
+    const contacts = readContacts();
+    const c = contacts.find(x => x.id === id);
+    if (!c) return { ok: false, error: '联系人不存在' };
+    const tagStr = tag || '';
+    c.tag = tagStr;
+    c.tags = tagStr ? [tagStr] : [];  // 同步写入数组
+    writeContacts(contacts);
+    return { ok: true };
+  });
+
+  // 多标签设置（新 API）
+  ipcMain.handle('contacts:setTags', async (_e, id, tags) => {
+    contactsCache = null;
+    const contacts = readContacts();
+    const c = contacts.find(x => x.id === id);
+    if (!c) return { ok: false, error: '联系人不存在' };
+    c.tags = Array.isArray(tags) ? [...tags] : [];
+    c.tag = c.tags[0] || '';  // 向后兼容：同步更新单值字段
     writeContacts(contacts);
     return { ok: true };
   });

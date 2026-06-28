@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,ratingStars,initIcons } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,ratingStars,initIcons } from './shared.js';
 
 // ===== 客户开发 ======================================================
 

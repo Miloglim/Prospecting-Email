@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag } from './shared.js';
 import { randomPick, assembleEmail, assembleMonthlyReport, generateMonthlyReports, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 
@@ -564,8 +563,10 @@ async function addToQueue() {
     if (!members.length) continue;
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
+    const reachedMembers = members.filter(m => (m.tags || []).includes('reached') || m.tag === 'reached'); // 已触达不入队
+    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact')); // 被联系人退回也跳过
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m));
+    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if (!stage || stage === 'cold') needReset.push({ name, count: members.length });
@@ -593,9 +594,11 @@ async function addToQueue() {
     if (!card) continue;
     const members = S.sendCompanies[name] || [];
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
+    const reachedMembers = members.filter(m => (m.tags || []).includes('reached') || m.tag === 'reached');
+    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m));
+    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
 
     if (!activeMembers.length && members.length > 0) {
       if (bouncedMembers.length) {

@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showToast,escapeHtml,formatDate,daysSince,renderPagination,statusLabel,initIcons,showConfirm,showAlert,clientTypeTag } from './shared.js';
+import { lucide,showToast,escapeHtml,formatDate,daysSince,renderPagination,statusLabel,initIcons,showConfirm,showAlert,clientTypeTag } from './shared.js';
 
 // ===== 发送总览 ======================================================
 

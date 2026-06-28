@@ -9,6 +9,7 @@ if (!process.env.VITE_DEV_SERVER_URL) {
   } catch {}
 }
 require('./logger');
+const { Log } = require('./modules/core/logger');
 const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -26,6 +27,8 @@ function setupIPC() {
   require('./modules/contacts-ipc').register(ipcMain, deps);
   require('./modules/backcheck-ipc').register(ipcMain, deps);
   require('./modules/template-ipc').register(ipcMain, deps);
+  require('./modules/services/history-store').register(ipcMain);
+  require('./modules/ipc/system-ipc').register(ipcMain, deps);
   require('./modules/send-ipc').register(ipcMain, deps);
   _sendCleanup = require('./modules/send-ipc').cleanup;
   registerTableImportHandlers();
@@ -204,11 +207,11 @@ app.setAppUserModelId('com.milogin.prospecting-email');
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   try { deps.templateLib = parseTemplateLibrary(); }
-  catch (e) { console.error('模板加载失败:', e.message); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
+  catch (e) { Log.error('启动', '模板加载失败', e); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
   setupIPC(); createWindow(); createTray();
   // startScraplingService(); // 公司策略锁了 Python，暂时关闭
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else deps.mainWindow?.show(); });
-}).catch((err) => { console.error('启动失败:', err); app.quit(); });
+}).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });
 
 app.on('before-quit', () => { deps.isQuitting = true; try { stopScraplingService(); } catch {} try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

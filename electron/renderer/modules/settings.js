@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showToast,escapeHtml,initIcons,showConfirm,deepMerge } from './shared.js';
+import { lucide,showAlert,showToast,escapeHtml,initIcons,showConfirm,deepMerge } from './shared.js';
 
 // ===== 设置 ==========================================================
 const CFG_KEYS = [

@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showToast,escapeHtml,formatDate,initIcons,showConfirm } from './shared.js';
+import { lucide,showToast,escapeHtml,formatDate,initIcons,showConfirm } from './shared.js';
 
 // ===== 退信检测页 ====================================================
 

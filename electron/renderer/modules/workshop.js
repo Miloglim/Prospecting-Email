@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,populateSelect,initIcons,showModal } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,populateSelect,initIcons,showModal } from './shared.js';
 import { assembleEmail } from './templates.js';
 
 // ===== 模板编辑器 =====================================================

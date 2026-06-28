@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { escapeHtml,showToast,showAlert,showConfirm } from './shared.js';
+import { lucide,escapeHtml,showToast,showAlert,showConfirm } from './shared.js';
 import { saveQueue, renderQueue } from './send-queue.js';
 
 export function matchUserTemplates(templates, type, stage, lang, mode) {

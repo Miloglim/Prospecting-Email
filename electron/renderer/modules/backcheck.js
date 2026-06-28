@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany } from './shared.js';
 
 // ===== 背调详情 ======================================================
 

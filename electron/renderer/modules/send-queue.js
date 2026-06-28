@@ -1,6 +1,5 @@
 const S = window.S;
-const lucide = (n,s,c) => window.lucide?.(n,s,c)||"";
-import { showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
 import { randomPick, assembleEmail } from './templates.js';
 
 // ===== 发送队列 =======================================================
@@ -123,6 +122,20 @@ export async function renderQueue() {
   };
   const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
 
+  // 聚合各公司的联系人标签（用于队列卡片展示）
+  const companyTagMap = {};
+  const TAG_LABEL = { autoreply: '自动回复', reached: '已触达', replied: '有回复', bounced_by_contact: '退回' };
+  const TAG_COLOR = { autoreply: '#e6a817', reached: '#22a644', replied: '#3b82f6', bounced_by_contact: '#8b8b8b' };
+  try {
+    const contacts = S.contactsData || await window.electronAPI.getContacts();
+    for (const c of contacts) {
+      const name = c.company || '未命名';
+      if (!companyTagMap[name]) companyTagMap[name] = new Set();
+      const tags = (c.tags && c.tags.length) ? c.tags : (c.tag ? [c.tag] : []);
+      for (const t of tags) companyTagMap[name].add(t);
+    }
+  } catch {}
+
   const cardHtml = (e) => {
     const count = e.recipients?.length || (e.to?.split(',')?.length || 1);
     const stageHtml = e._stage
@@ -133,7 +146,16 @@ export async function renderQueue() {
     const tplLabel = typeLabelMap[e._type] || '通用模板';
     const ctry = e._country ? `<span>${escapeHtml(e._country)}</span>` : '';
     const langTag = e._lang ? `<span>${escapeHtml(e._lang).toUpperCase()}</span>` : '';
-    const tagsArr = [tt, ctry, langTag, `<span>${count}人</span>`, `<span>${tplLabel}</span>`].filter(Boolean);
+    // 联系人标签徽章
+    const contactTagSet = companyTagMap[e.company];
+    const contactTagBadges = contactTagSet && contactTagSet.size
+      ? [...contactTagSet].map(t => {
+          const label = TAG_LABEL[t] || t;
+          const color = TAG_COLOR[t] || 'var(--text-secondary)';
+          return `<span style="font-size:10px;padding:0 5px;border-radius:8px;background:${color}18;color:${color};white-space:nowrap">${label}</span>`;
+        }).join(' ')
+      : '';
+    const tagsArr = [tt, ctry, langTag, `<span>${count}人</span>`, `<span>${tplLabel}</span>`, contactTagBadges].filter(Boolean);
     const tagsHtml = tagsArr.length ? `<div class="qc-tags">${tagsArr.join(' · ')}</div>` : '';
     const retryBtn = e.status === 'failed'
       ? `<button class="qc-retry" data-id="${e.id}">${lucide('refresh-cw',12)} 重发</button>`
