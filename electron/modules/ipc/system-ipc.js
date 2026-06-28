@@ -63,6 +63,14 @@ function register(ipcMain, deps) {
   ipcMain.handle('discover:search', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
   ipcMain.handle('discover:lookup', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
 
+  // ── 系统功能 ──
+  const { app, shell } = require('electron');
+  ipcMain.handle('app:minimizeToTray', async () => { deps.mainWindow?.hide(); return true; });
+  ipcMain.handle('app:openReports', async () => shell.openPath(path.join(APP_ROOT, 'reports')));
+  ipcMain.handle('app:openSendFolder', async () => shell.openPath(path.join(APP_ROOT, 'send')));
+  ipcMain.handle('app:openExternal', async (_e, url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
+  ipcMain.handle('app:openLogFile', async () => shell.openPath(path.join(APP_ROOT, 'logs')));
+
   // ── 签名 ──
   const sfp = path.join(APP_ROOT, 'send', 'signature.html');
   ipcMain.handle('signature:load', async () => { try { if (fs.existsSync(sfp)) return { ok: true, html: fs.readFileSync(sfp, 'utf-8') }; } catch {} return { ok: true, html: '<div style="font-family:Arial"><p><strong>Zayne Jin</strong></p></div>' }; });

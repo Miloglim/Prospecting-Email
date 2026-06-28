@@ -264,7 +264,7 @@ function register(ipcMain, deps) {
       linkedinClient.searchPeople(`${searchName} compras OR importación OR importação OR comprador`).catch(() => []),
     ]);
 
-    const seenNames = new Set(websitePeople.map(p => p.name.toLowerCase()));
+    const seenNames = new Set();
     const linkedinPeople = [...linkedin1, ...linkedin2].filter(p => {
       const key = p.name.toLowerCase();
       if (seenNames.has(key)) return false;
@@ -288,7 +288,7 @@ function register(ipcMain, deps) {
 
     return {
       ok: true,
-      company_info: scrapeResult?.company_info || {},
+      company_info: {},
       people: allPeople,
       stats: {
         total: allPeople.length,
