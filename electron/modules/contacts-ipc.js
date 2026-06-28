@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('./config');
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
-const { callScraplingAPI } = require('./scrapling');
 const { getCompanyMeta, deleteCompanyMeta } = require('./services/company-store');
 
 // 预定义标签（contacts:setTags 可传的合法值）
@@ -260,13 +259,11 @@ function register(ipcMain, deps) {
     const linkedinClient = require('../linkedin-client');
     const searchName = companyName || '';
 
-    const [scrapeResult, linkedin1, linkedin2] = await Promise.all([
-      callScraplingAPI(`/scrape/contacts?url=${encodeURIComponent(website)}&company=${encodeURIComponent(searchName)}`),
+    const [linkedin1, linkedin2] = await Promise.all([
       linkedinClient.searchPeople(`${searchName} supply chain OR logistics OR procurement OR buyer`).catch(() => []),
       linkedinClient.searchPeople(`${searchName} compras OR importación OR importação OR comprador`).catch(() => []),
     ]);
 
-    const websitePeople = (scrapeResult?.people || []).map(p => ({ ...p, source: 'website' }));
     const seenNames = new Set(websitePeople.map(p => p.name.toLowerCase()));
     const linkedinPeople = [...linkedin1, ...linkedin2].filter(p => {
       const key = p.name.toLowerCase();
@@ -275,7 +272,7 @@ function register(ipcMain, deps) {
       return true;
     });
 
-    const allPeople = [...websitePeople, ...linkedinPeople];
+    const allPeople = [...linkedinPeople];
     const LOGISTICS_KW = ['supply chain', 'logistics', 'procurement', 'compras', 'buyer',
       'import', 'export', 'customs', 'shipping', 'freight', 'logística', 'adquisiciones',
       'importación', 'exportación', 'comprador', 'suprimentos', 'supply', 'purchasing', 'sourcing'];
@@ -297,7 +294,7 @@ function register(ipcMain, deps) {
         total: allPeople.length,
         logistics: allPeople.filter(p => p.department === 'logistics').length,
         management: allPeople.filter(p => p.department === 'management').length,
-        from_website: websitePeople.length,
+
         from_linkedin: linkedinPeople.length,
       },
     };

@@ -1,60 +1,46 @@
 {
   "smtp": {
-    "host": "smtp.mxhichina.com",
+    "host": "smtp.example.com",
     "port": 465,
     "secure": true,
-    "user": "zayne_jin@yqn.com",
-    "pass": "使用环境变量 SMTP_PASS 设置，或在此填入密码"
+    "user": "your@email.com",
+    "pass": "在此填入 SMTP 密码或授权码"
   },
   "sender": {
-    "name": "金颖哲 Zayne Jin",
-    "email": "zayne_jin@yqn.com"
-  },
-  "signature": {
-    "text": "金颖哲 Zayne Jin | Overseas Sales · LatAm Desk\nYQN Logistics Technology Group\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com",
-    "html": "<div style=\"font-family:Arial,sans-serif;color:#333;border-top:1px solid #ddd;padding-top:12px;margin-top:16px\">\n  <p style=\"margin:0 0 4px 0;font-size:14px\"><strong>金颖哲 Zayne Jin</strong></p>\n  <p style=\"margin:0 0 4px 0;font-size:13px;color:#666\">Overseas Sales · LatAm Desk</p>\n  <p style=\"margin:0 0 8px 0;font-size:13px;color:#666\">YQN Logistics Technology Group</p>\n  <p style=\"margin:0;font-size:12px;color:#999\">\n    📧 zayne_jin@yqn.com &nbsp;|&nbsp; 📱 +86 18487665870 &nbsp;|&nbsp; 🌐 <a href=\"https://www.yqn.com\" style=\"color:#1a73e8\">www.yqn.com</a>\n  </p>\n</div>",
-    "imageUrl": ""
+    "name": "在此填入您的姓名",
+    "email": "your@email.com"
   },
   "schedule": {
     "mode": "multi",
     "max_per_day": 500,
-    "start_hour_beijing": 19,
-    "end_hour_beijing": 3,
+    "start_hour_beijing": 9,
+    "end_hour_beijing": 8,
     "min_delay_seconds": 30,
     "max_delay_seconds": 90,
     "company_delay_min_seconds": 300,
     "company_delay_max_seconds": 900,
-    "single_recip_delay_min": 60,
-    "single_recip_delay_max": 180,
-    "template_rotate_interval": 50,
+    "single_recip_delay_min_seconds": 60,
+    "single_recip_delay_max_seconds": 180,
+    "group_size": 20,
     "batch_size": 10,
-    "batch_pause_min": 150,
-    "batch_pause_max": 210,
-    "batch_size": 20,
-    "batch_pause_seconds": 600
-  },
-  "tracking": {
-    "file": "send-log.json",
-    "bounce_check_days": 3
+    "batch_pause_min_seconds": 150,
+    "batch_pause_max_seconds": 210,
+    "template_rotate_groups": 3,
+    "time_window_enabled": false
   },
   "search": {
-    "apiKey": "在此填入 Tavily API Key → https://tavily.com"
+    "exaKey": "Exa API Key → https://dashboard.exa.ai/",
+    "apiKey": "Tavily API Key → https://tavily.com/",
+    "serperKey": "Serper API Key → https://serper.dev/"
+  },
+  "verify": {
+    "agnesKey": "Agnes AI Key → https://platform.agnes-ai.com/"
   },
   "test": {
     "email": "",
     "enabled": false
   },
   "backcheck": {
-    "filterEnabled": true
-  },
-  "translate": {
-    "youdao": {
-      "appKey": "有道 App Key → https://ai.youdao.com",
-      "appSecret": "有道 App Secret"
-    },
-    "baidu": {
-      "appId": "百度翻译 App ID → https://fanyi-api.baidu.com",
-      "key": "百度翻译 Key"
-    }
+    "filterEnabled": false
   }
 }

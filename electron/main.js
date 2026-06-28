@@ -4,7 +4,7 @@ if (!process.env.VITE_DEV_SERVER_URL) {
   try {
     require('electron-reloader')(module, {
       watchRenderer: true,
-      ignore: ['data/**', 'send/**', 'logs/**', 'reports/**', 'scrapling-service/**'],
+      ignore: ['data/**', 'send/**', 'logs/**', 'reports/**'],
     });
   } catch {}
 }
@@ -20,7 +20,6 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 const deps = { mainWindow: null, tray: null, isQuitting: false, templateLib: null, sendQueue: [], isPaused: false, currentSendAbort: false, currentTransporter: null };
 const { parseTemplateLibrary } = require('./template-engine');
-const { startScraplingService, stopScraplingService } = require('./modules/scrapling');
 
 let _sendCleanup = null;
 function setupIPC() {
@@ -197,7 +196,7 @@ function createTray() {
   deps.tray = new Tray(trayIcon);
   deps.tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示窗口', click: () => deps.mainWindow?.show() },
-    { label: '退出', click: () => { deps.isQuitting = true; stopScraplingService(); try { require('./linkedin-client').stop(); } catch {} app.quit(); } },
+    { label: '退出', click: () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} app.quit(); } },
   ]));
   deps.tray.setToolTip("Milogin's Prospector.");
   deps.tray.on('double-click', () => deps.mainWindow?.show());
@@ -209,9 +208,8 @@ app.whenReady().then(async () => {
   try { deps.templateLib = parseTemplateLibrary(); }
   catch (e) { Log.error('启动', '模板加载失败', e); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
   setupIPC(); createWindow(); createTray();
-  // startScraplingService(); // 公司策略锁了 Python，暂时关闭
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else deps.mainWindow?.show(); });
 }).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });
 
-app.on('before-quit', () => { deps.isQuitting = true; try { stopScraplingService(); } catch {} try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} });
+app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

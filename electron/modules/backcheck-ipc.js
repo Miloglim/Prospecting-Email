@@ -2,33 +2,12 @@
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
-const cheerio = require('cheerio');
 const { APP_ROOT, loadSearchConfig, createRequest } = require('./config');
 const { sanitizeFilename } = require('./utils');
 const { autoRate } = require('./auto-rate');
-const { callScraplingAPI } = require('./scrapling');
 const { verifyEmailWithAgnes } = require('./agnes-verify');
 
-// 浏览器引擎：CloakBrowser 优先，降级 puppeteer-extra+stealth
-let _browserCache = null;
-function getBrowser() {
-  if (_browserCache !== null) return _browserCache;
-  // 1. CloakBrowser（C++ 源码级反检测，通过率最高）
-  try {
-    const { chromium } = require('cloakbrowser');
-    _browserCache = { engine: 'cloakbrowser', launch: () => chromium.launch({ headless: true, args: ['--no-sandbox'] }) };
-    console.log('[浏览器] CloakBrowser 就绪');
-    return _browserCache;
-  } catch {}
-  // 2. Puppeteer + Stealth（JS 层反检测，降级方案）
-  try {
-    const p = require('puppeteer-extra');
-    p.use(require('puppeteer-extra-plugin-stealth')());
-    _browserCache = { engine: 'puppeteer', launch: () => p.launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled'] }) };
-    console.log('[浏览器] Puppeteer+Stealth 就绪（降级）');
-    return _browserCache;
-  } catch (e) { _browserCache = false; console.log('[浏览器] 不可用，搜索已禁用'); return null; }
-}
+
 
 function register(ipcMain, deps) {
 
@@ -54,76 +33,9 @@ function register(ipcMain, deps) {
     return fs.existsSync(rp) ? rp : null;
   }
 
-  // ── 官网爬虫 ──
-  async function crawlWebsite(url) {
-    if (!url || !url.startsWith('http')) return '';
-    const skip = ['linkedin.com', 'twitter.com', 'facebook.com', 'instagram.com', 'youtube.com', 'tiktok.com'];
-    try { if (skip.some(d => new URL(url).hostname.toLowerCase().includes(d))) return ''; } catch { return ''; }
-    return new Promise((resolve) => {
-      const u = new URL(url);
-      const opts = { hostname: u.hostname, path: u.pathname + u.search, method: 'GET', timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Accept': 'text/html' } };
-      const req = createRequest(opts);
-      req.on('response', (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) { crawlWebsite(res.headers.location).then(resolve); return; }
-        let data = ''; res.on('data', c => data += c);
-        res.on('end', () => {
-          try {
-            const $ = cheerio.load(data);
-            $('script, style, nav, footer, iframe, noscript, [aria-hidden="true"]').remove();
-            const sections = [];
-            const metaDesc = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || '';
-            if (metaDesc) sections.push(`**简介:** ${metaDesc.trim()}`);
-            const seen = new Set();
-            $('h1, h2, h3, h4').each((_, h) => {
-              const t = $(h).text().trim();
-              if (!t || t.length < 3 || t.length > 80 || /^(menu|search|cart|login|sign|subscribe|follow|share|home)$/i.test(t)) return;
-              if (seen.has(t.toLowerCase())) return; seen.add(t.toLowerCase());
-              let c = '', el = $(h).next(), n = 0;
-              while (el.length && n < 6) { const tx = el.text().trim(); if (tx && tx.length > 15) { c += tx + ' '; n++; } el = el.next(); }
-              if (c) sections.push(`**${t}:** ${c.trim().slice(0, 300)}`);
-            });
-            if (sections.length < 2) { $('script, style').remove(); const raw = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 2500); if (raw.length > 100) sections.push(raw); }
-            resolve(sections.join('\n').slice(0, 2500));
-          } catch { resolve(data.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000)); }
-        });
-      });
-      req.on('error', () => resolve(''));
-      req.on('timeout', () => { req.destroy(); resolve(''); });
-    });
-  }
 
-  // ── DDG 搜索 ──
-  async function ddgSearch(cname) {
-    let browser;
-    try {
-      const br = getBrowser(); if (!br) return '';
-      browser = await br.launch({ headless: true, args: ['--no-sandbox', '--proxy-server=127.0.0.1:7890'], timeout: 30000 });
-      const page = await browser.newPage();
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-      await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent('"' + cname + '"')}&ia=web`, { waitUntil: 'networkidle2', timeout: 25000 });
-      await new Promise(r => setTimeout(r, 2000));
-      if (await page.evaluate(() => document.body.innerText.includes('No results found'))) {
-        await page.goto(`https://duckduckgo.com/?q=${encodeURIComponent(cname)}&ia=web`, { waitUntil: 'networkidle2', timeout: 20000 });
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      const results = await page.evaluate(() => {
-        const items = []; const skip = ['linkedin.', 'facebook.', 'twitter.', 'instagram.', 'youtube.', 'wikipedia.', 'duckduckgo.', 'apple.', 'reddit.', 'google.']; const seen = new Set();
-        document.querySelectorAll('a[href^="http"]').forEach(a => {
-          const href = a.href || ''; const text = (a.textContent || '').trim().replace(/\\s+/g, ' ');
-          if (text.length < 10 || href.length < 30) return;
-          if (a.closest('nav') || a.closest('footer') || a.closest('header')) return;
-          try { const host = new URL(href).hostname; if (skip.some(d => host.includes(d))) return; const k = host; if (seen.has(k)) return; seen.add(k); items.push({ title: text.slice(0, 100), link: href, host }); } catch {}
-        });
-        return items.slice(0, 8);
-      });
-      await browser.close();
-      const foundUrl = results.length > 0 ? (() => { try { return new URL(results[0].link).origin; } catch { return ''; } })() : '';
-      return { foundUrl, snippets: results.map(r => `- **${r.title}**: ${r.host}`).join('\n') };
-    } catch (e) {
-      if (browser) try { await browser.close(); } catch {}
-      return { foundUrl: '', snippets: '', error: e.message };
-    }
-  }
+
+
 
   // ── DeepSeek 通用搜索引擎 ──
   async function searchThenDeepSeek(cname, company, searcher) {
@@ -240,30 +152,6 @@ function register(ipcMain, deps) {
   }
 
   const searchProviders = {
-    'scrapling': {
-      name: 'Scrapling 智能抓取',
-      research: async (cname, company) => {
-        notifyBackcheck(cname, { type: 'research-progress', progress: '搜索公司信息...' });
-        const sr = await callScraplingAPI(`/search/web?q=${encodeURIComponent(cname)}&n=8`);
-        let url = sr?.foundUrl || (company.website?.startsWith('http') ? company.website : '');
-        let wt = '';
-        if (url) { notifyBackcheck(cname, { type: 'research-progress', progress: '抓取官网...' });
-          try { const wr = await callScraplingAPI(`/scrape/website?url=${encodeURIComponent(url)}&stealth=true&max_chars=3000`);
-            if (wr?.ok) { const p = []; if (wr.meta_desc) p.push(`**简介:** ${wr.meta_desc}`); if (wr.text) p.push(wr.text); wt = p.join('\n'); } } catch {} }
-        return buildReport(cname, company, sr?.snippets || '', wt, url, 'Scrapling 智能抓取');
-      }
-    },
-    'ddg-crawl': {
-      name: 'DDG + 官网',
-      research: async (cname, company) => {
-        notifyBackcheck(cname, { type: 'research-progress', progress: 'DDG 搜索中...' });
-        const ddg = await ddgSearch(cname);
-        let url = ddg.foundUrl, wt = '';
-        if (!url && company.website?.startsWith('http')) { try { if (!new URL(company.website).hostname.includes('linkedin.com')) url = company.website; } catch {} }
-        if (url) { notifyBackcheck(cname, { type: 'research-progress', progress: '抓取官网...' }); try { wt = await crawlWebsite(url); } catch {} }
-        return buildReport(cname, company, ddg.snippets || '', wt, url, 'DDG + 官网爬虫');
-      }
-    },
     'serper-deepseek': { name: 'Google 搜索', research: async (c, co) => searchThenDeepSeek(c, co, 'serper') },
     'tavily-deepseek': { name: 'Tavily 搜索', research: async (c, co) => searchThenDeepSeek(c, co, 'tavily') },
     'deep-research': { name: 'Exa 搜索', research: async (c, co) => searchThenDeepSeek(c, co, 'exa') },

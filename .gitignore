@@ -16,8 +16,6 @@ send/send-log.json
 send/send-log-test.json
 send/session-log.json
 send/send-batch.json
-send/bodies.json
-
 # 用户个人数据（含邮箱、姓名、手机号）
 data/contacts.json
 data/contacts.bak*

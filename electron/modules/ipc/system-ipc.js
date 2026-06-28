@@ -6,7 +6,6 @@ const fs = require('fs');
 const { shell } = require('electron');
 const { APP_ROOT, loadSearchConfig, createRequest, getProxyConfig } = require('../config');
 const { beijingToday, beijingDateFromISO } = require('../utils');
-const { callScraplingAPI } = require('../scrapling');
 
 // ── 仪表盘缓存 ──
 let _statsCache = null;
@@ -60,22 +59,9 @@ function register(ipcMain, deps) {
     return { proxy: proxy ? `${proxy.hostname}:${proxy.port}` : null, results };
   });
 
-  // ── 客户开发 ──
-  ipcMain.handle('discover:search', async (_e, params) => callScraplingAPI(`/search/discover?${new URLSearchParams(params).toString()}`));
-  ipcMain.handle('discover:lookup', async (_e, params) => callScraplingAPI(`/scrape/email-pattern?${new URLSearchParams(params).toString()}`));
-
-  // ── 应用操作 ──
-  ipcMain.handle('app:minimizeToTray', async () => deps.mainWindow?.hide());
-  ipcMain.handle('app:openReports', async () => { const d = path.join(APP_ROOT, 'reports'); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); shell.openPath(d); });
-  ipcMain.handle('app:openSendFolder', async () => { const d = path.join(APP_ROOT, 'send'); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); shell.openPath(d); });
-  ipcMain.handle('app:openExternal', async (_e, url) => { if (!url?.startsWith('https://')) return { ok: false }; await shell.openExternal(url); return { ok: true }; });
-  ipcMain.handle('app:openLogFile', async () => {
-    const { logDir } = require('../../logger');
-    const d = new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai', hour12: false });
-    const [dp] = d.split(', '); const [m, day, y] = dp.split('/');
-    const p = path.join(logDir, `app-${y}-${m.padStart(2,'0')}-${day.padStart(2,'0')}.log`);
-    shell.openPath(p);
-  });
+  // ── 客户开发（需 Python 环境，当前暂不可用） ──
+  ipcMain.handle('discover:search', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
+  ipcMain.handle('discover:lookup', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
 
   // ── 签名 ──
   const sfp = path.join(APP_ROOT, 'send', 'signature.html');
