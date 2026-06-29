@@ -1,5 +1,5 @@
 const S = window.S;
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,populateSelect,initIcons,showModal } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,populateSelect,initIcons,showModal,formatDate } from './shared.js';
 import { assembleEmail } from './templates.js';
 
 // ===== 模板编辑器 =====================================================
@@ -160,7 +160,7 @@ export function buildTree() {
   const tree = document.getElementById('tmpl-tree');
   if (!tree) return;
 
-  let html = '<ul class="tmpl-tree-list">';
+  let html = '';
 
   // 主题行（独立项）
   html += `<li class="tn-top-item"><div class="tn-label" data-node="subjects">主题行</div></li>`;
@@ -183,31 +183,32 @@ export function buildTree() {
   html += `<li class="tn-divider"></li>`;
   html += `<li class="tn-leaf"><div class="tn-label" data-node="spam">${lucide('alert-circle',14)} 垃圾词黑名单</div></li>`;
 
-  html += '</ul>';
   tree.innerHTML = html;
 
-  // 点击事件
-  tree.querySelectorAll('.tn-label').forEach(el => {
-    el.addEventListener('click', (e) => {
-      e.stopPropagation();
+  // ponytail: 事件委托 — 绑定在 tree 上，innerHTML 重建后仍然有效
+  if (!tree._delegated) {
+    tree._delegated = true;
+    tree.addEventListener('click', (e) => {
+      const el = e.target.closest('.tn-label');
+      if (!el) return;
 
-      // 点击的是文件夹标题 → 折叠/展开
+      // 文件夹标题 → 折叠/展开
       const folder = el.closest('.tn-folder');
       if (folder && el === folder.querySelector(':scope > .tn-label')) {
         folder.classList.toggle('open');
         return;
       }
 
-      // 点击的是编辑项 → 高亮并显示编辑器
+      // 编辑项 → 高亮并显示编辑器
       tree.querySelectorAll('.tn-label.active').forEach(a => a.classList.remove('active'));
       el.classList.add('active');
       const node = el.dataset.node;
       if (node === 'subjects') showSubjectEditor();
       else if (node === 'spam') showSpamEditor();
-      else if (node === 'userTemplates') showUserTemplateList();
+      else if (node === 'userTemplates') { try { showUserTemplateList(); } catch(err) { console.error('用户模板列表加载失败:', err); } }
       else showStageEditor(node);
     });
-  });
+  }
 }
 
 export function showSubjectEditor() {
@@ -332,6 +333,10 @@ const USER_TEMPLATE_LANGS = { es: 'ES', pt: 'PT', general: '通用' };
 
 export async function showUserTemplateList() {
   const panel = document.getElementById('tmpl-edit');
+  if (!panel) return;
+  // ponytail: 立即渲染骨架，避免异步期间面板无反应
+  panel.innerHTML = '<h3>用户模板</h3><p style="color:var(--text-secondary);font-size:12px;padding:12px">加载中...</p>';
+  try {
   const templates = await window.electronAPI.listUserTemplates().catch(() => []);
 
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -379,6 +384,7 @@ export async function showUserTemplateList() {
       showUserTemplateList(); // 刷新列表
     });
   });
+  } catch(e) { console.error('showUserTemplateList 异常:', e); }
 }
 
 export function showUserTemplateEditor(tpl) {
@@ -422,13 +428,12 @@ export function showUserTemplateEditor(tpl) {
       body: document.getElementById('ut-body')?.value || '',
     };
     if (!data.name.trim()) { await showAlert('请输入模板名称'); return; }
-    const result = await window.electronAPI.saveUserTemplate(data);
-    if (result.ok) {
-      showToast('模板已保存', 'ok');
-      showUserTemplateList();
-    } else {
-      showToast('保存失败', 'err');
-    }
+    try {
+      const result = await window.electronAPI.saveUserTemplate(data);
+      if (result.ok) showToast('模板已保存', 'ok');
+      else showToast('保存失败', 'err');
+    } catch (e) { showToast('保存异常: ' + (e.message || '未知'), 'err'); }
+    showUserTemplateList(); // ponytail: 无论成功失败都退回列表
   });
 
   // 删除
@@ -466,7 +471,7 @@ document.getElementById('sig-open-folder')?.addEventListener('click', () => {
 document.getElementById('sig-save')?.addEventListener('click', async () => {
   const html = document.getElementById('sig-content')?.innerHTML || '';
   const result = await window.electronAPI.saveSignature(html);
-  await showAlert(result.ok ? '✅ 签名已保存到 send/signature.html' : '❌ 保存失败');
+  if (result.ok) showToast('签名已保存', 'ok'); else showToast('签名保存失败', 'err');
 });
 
 

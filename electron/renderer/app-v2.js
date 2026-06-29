@@ -1,4 +1,5 @@
 import { initIcons, initNavigation, loadDashboard } from './modules/shared.js';
+import { init as initDashboardEditor, syncCards } from './modules/dashboard-editor.js';
 import './modules/templates.js';
 import './modules/workshop.js';
 import './modules/contacts.js';
@@ -54,6 +55,7 @@ initNavigation();
   }
 })();
 initQueue();  // 队列后台并行恢复
+setTimeout(() => initDashboardEditor(), 200);  // 等 DOM 稳定后初始化布局编辑器
 
 // ── 新手向导 ──────────────────────────────────────────────
 let _onboardingStep = 1;
@@ -222,9 +224,21 @@ window.onboardingFinish = async function() {
 
 async function saveOnboardingConfig() {
   const cfg = (await window.electronAPI.loadConfig()) || {};
-  // SMTP：通过账号管理 API 保存
+  // ponytail: 先 saveConfig 再 addAccount，避免 saveConfig 用旧 cfg 覆盖 addAccount 刚写入的 smtpAccounts
+  // 两者操作同一个文件 send/config.json
   const smtpHost = document.getElementById('ob-smtp-host')?.value.trim();
   const smtpUser = document.getElementById('ob-smtp-user')?.value.trim();
+
+  // 发信人（先存，不依赖 smtpAccounts）
+  const senderName = document.getElementById('ob-sender-name')?.value.trim();
+  const senderBody = document.getElementById('ob-sender-body')?.value.trim();
+  if (senderName) { if (!cfg.sender) cfg.sender = {}; cfg.sender.name = senderName; }
+  if (senderBody) { if (!cfg.sender) cfg.sender = {}; cfg.sender.bodyName = senderBody; }
+  if (!cfg.sender?.email && smtpUser) { cfg.sender.email = smtpUser; }
+
+  try { await window.electronAPI.saveConfig(cfg); } catch {}
+
+  // SMTP：在 saveConfig 之后保存账号，避免被覆盖
   if (smtpHost && smtpUser) {
     const account = {
       label: '默认账号',
@@ -244,14 +258,6 @@ async function saveOnboardingConfig() {
       await window.electronAPI.addAccount(account);
     }
   }
-  // 发信人
-  const senderName = document.getElementById('ob-sender-name')?.value.trim();
-  const senderBody = document.getElementById('ob-sender-body')?.value.trim();
-  if (senderName) { if (!cfg.sender) cfg.sender = {}; cfg.sender.name = senderName; }
-  if (senderBody) { if (!cfg.sender) cfg.sender = {}; cfg.sender.bodyName = senderBody; }
-  if (!cfg.sender?.email && smtpUser) { cfg.sender.email = smtpUser; }
-
-  try { await window.electronAPI.saveConfig(cfg); } catch {}
 }
 
 async function saveGeneralConfig() {

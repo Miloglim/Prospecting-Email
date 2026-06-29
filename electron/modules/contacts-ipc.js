@@ -300,6 +300,30 @@ function register(ipcMain, deps) {
     };
   });
 
+  // ── AI 客户分类 ──────────────────────────────────────────────────────────
+  ipcMain.handle('contacts:classifyAI', async () => {
+    const cfgPath = path.join(APP_ROOT, 'send', 'config.json');
+    let apiKey = '';
+    try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch {}
+    if (!apiKey) return { ok: false, error: '请先配置 DeepSeek API Key' };
+
+    const { classifyClientAI } = require('./classify-client');
+    const contacts = readContacts();
+    const unlabeled = contacts.filter(c => c.clientType === 'unlabeled');
+    if (!unlabeled.length) return { ok: true, updated: 0, message: '所有联系人已分类' };
+
+    let updated = 0;
+    for (const c of unlabeled) {
+      const newType = await classifyClientAI(c.company, c.category, apiKey);
+      if (newType !== 'unlabeled' && newType !== c.clientType) {
+        c.clientType = newType;
+        updated++;
+      }
+    }
+    if (updated > 0) writeContacts(contacts);
+    return { ok: true, updated, total: unlabeled.length };
+  });
+
   // 暴露内部方法给其他模块使用
   return { readContacts, writeContacts, contactsPath };
 }

@@ -74,7 +74,7 @@ export async function loadBackcheck() {
     const ratingText = (st?.status === 'done' && st.rating) ? ratingStars(st.rating) : '';
     const subParts = [tagHtml, ctry].filter(Boolean);
     return `<div class="backcheck-company" data-company="${escapeHtml(company)}">
-      <div class="bc-main"><input type="checkbox" class="bc-checkbox" data-company="${escapeHtml(company)}" style="width:11px;height:11px;flex-shrink:0;margin:0" onclick="event.stopPropagation()"><span class="bc-name${vipClass}">${escapeHtml(company)}</span><span class="bc-badge">${badge}</span><span class="bc-count">${members.length}人</span></div>
+      <div class="bc-main"><input type="checkbox" class="bc-checkbox" data-company="${escapeHtml(company)}" style="width:16px;height:16px;flex-shrink:0;margin:0;cursor:pointer" onclick="event.stopPropagation()"><span class="bc-name${vipClass}">${escapeHtml(company)}</span><span class="bc-badge">${badge}</span><span class="bc-count">${members.length}人</span></div>
       ${ratingText ? `<div class="bc-sub">${ratingText}</div>` : ''}
       <div class="bc-sub">${subParts.join(' · ')}</div>
     </div>`;
@@ -94,8 +94,17 @@ export async function loadBackcheck() {
     const cbs = container.querySelectorAll('.bc-checkbox:checked');
     const list = cbs.length ? [...cbs] : container.querySelectorAll('.bc-checkbox');
     if (!list.length) return;
-    if (!await showConfirm(`即将对 ${list.length} 家公司启动背调，确认？`)) return;
+    // ponytail: 跳过已完成/进行中的公司
+    const toResearch = [];
     for (const cb of list) {
+      const cname = cb.dataset.company;
+      const st = S.backcheckStatus[cname];
+      if (st?.status === 'done' || st?.status === 'researching') continue;
+      toResearch.push(cb);
+    }
+    if (!toResearch.length) { showToast('所选公司均已完成或正在背调', 'info'); return; }
+    if (!await showConfirm(`即将对 ${toResearch.length} 家公司启动背调（已跳过 ${list.length - toResearch.length} 家已完成/进行中），确认？`)) return;
+    for (const cb of toResearch) {
       const cname = cb.dataset.company;
       const contact = S.contactsData.find(c => (c.company || '').trim() === cname);
       if (!contact) continue;

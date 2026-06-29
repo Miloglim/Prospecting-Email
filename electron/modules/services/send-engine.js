@@ -16,6 +16,30 @@ let _delayTotal = 0;
 // ── 自动退信定时器 ──
 let _autoBounceTimer = null;
 
+// ── 联系人标签回写：发送成功后标记 _sentBy / _sentAccount / _sentAt ─────
+const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
+
+function _tagContacts(emails, accountId, accountLabel) {
+  try {
+    if (!fs.existsSync(contactsPath)) return;
+    const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+    const now = new Date().toISOString();
+    let changed = false;
+    for (const addr of emails) {
+      const key = addr.toLowerCase().trim();
+      for (const c of contacts) {
+        if ((c.email || '').toLowerCase().trim() === key) {
+          c._sentBy = accountId;
+          c._sentAccount = accountLabel || '';
+          c._sentAt = now;
+          changed = true;
+        }
+      }
+    }
+    if (changed) fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
+  } catch { /* 联系人文件锁或损坏，静默跳过 */ }
+}
+
 // ── 正文存储（供 _logRecord 使用）─────────────────────────────────────────
 const bodiesPath = path.join(APP_ROOT, 'data', 'send-bodies.json');
 
@@ -44,7 +68,7 @@ function _loadConfig(sendProgress) {
   if (accounts.length > 0) {
     const active = accounts.filter(a => a.active !== false);
     if (!active.length) { sendProgress({ error: '无可用发信账号（全部已停用）' }); return null; }
-    // 环境变量覆盖密码（仅覆盖第一个匹配的账号）
+    // 环境变量覆盖密码
     if (process.env.SMTP_PASS) {
       for (const a of accounts) { if (a.smtp) a.smtp.pass = process.env.SMTP_PASS; }
     }
@@ -55,7 +79,6 @@ function _loadConfig(sendProgress) {
   // 向后兼容：旧格式 smtp
   if (process.env.SMTP_PASS && config.smtp) config.smtp.pass = process.env.SMTP_PASS;
   if (!config.smtp?.host || !config.smtp?.user) { sendProgress({ error: 'SMTP 未配置' }); return null; }
-  // 临时转为单账号数组（不修改原 config）
   config._accounts = [{
     id: 'legacy', label: '默认账号', active: true,
     dailyLimit: config.schedule?.max_per_day || 500,
@@ -74,8 +97,10 @@ function _buildContext(config) {
   const sc = config.schedule || {};
   const accounts = config._accounts || [];
 
+  const dryRun = !!(config.test?.dryRun); // ponytail: 发信阻隔 — 流程完整但不真实发送
+
   const ctx = {
-    config, testMode, isBatch, nodemailer, accounts,
+    config, testMode, dryRun, isBatch, nodemailer, accounts,
     logPath: path.join(APP_ROOT, 'send', testMode ? 'send-log-test.json' : 'send-log.json'),
     sigHtml: fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '',
     sigText: config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com',
@@ -84,22 +109,17 @@ function _buildContext(config) {
     startH: sc.start_hour_beijing ?? 19,
     endH: sc.end_hour_beijing ?? 3,
     SINGLE: sc.single_recip_threshold ?? 2,
-    // 封间延迟
-    perMin: isBatch
-      ? (sc.batch_item_delay_min ?? sc.min_delay_seconds ?? 30) * 1000
-      : (sc.min_delay_seconds ?? 30) * 1000,
-    perMax: isBatch
-      ? (sc.batch_item_delay_max ?? sc.max_delay_seconds ?? 90) * 1000
-      : (sc.max_delay_seconds ?? 90) * 1000,
+    // 封间延迟：批处理模式无封间延迟（BCC 批量），仅模拟人工模式使用
+    perMin: isBatch ? 0 : (sc.min_delay_seconds || 30) * 1000,
+    perMax: isBatch ? 0 : (sc.max_delay_seconds || 90) * 1000,
     // 公司切换延迟
     cdMin: (sc.company_delay_min_seconds ?? 300) * 1000,
     cdMax: (sc.company_delay_max_seconds ?? 900) * 1000,
     SD_MIN: (sc.single_recip_delay_min_seconds ?? 60) * 1000,
     SD_MAX: (sc.single_recip_delay_max_seconds ?? 180) * 1000,
-    // 批处理参数
-    batchSize: sc.batch_size || 10,
-    batchPauseMin: (sc.batch_pause_min_seconds ?? 150) * 1000,
-    batchPauseMax: (sc.batch_pause_max_seconds ?? 210) * 1000,
+    // 批处理参数：组间间隔（每发一组后暂停），非"每N封停一次"
+    groupIntervalMin: (sc.batch_pause_min_seconds ?? 150) * 1000,
+    groupIntervalMax: (sc.batch_pause_max_seconds ?? 210) * 1000,
   };
   return ctx;
 }
@@ -111,11 +131,14 @@ function _fromAddr(account) {
   return `"${senderName}" <${senderEmail}>`;
 }
 
-// ── 正文构建：提取 send:testOne 和 _sendOne 中的重复 HTML 生成逻辑 ──────
+// ── 正文构建 ────────────────────────────────────────────────────────────
 function buildContent(bodyText, sigText, sigHtml) {
+  // ponytail: 模板已自带结尾语（Saludos/Atentamente/Regards等），不再追加签名
+  const SIG_PATTERNS = /(Saludos|Atentamente|Cordialmente|Un saludo|Best regards|Sincerely|Atenciosamente|Cordialement|Respectfully)[\s,]*$/im;
   const sigStart = (sigText || '').split('\n')[0]?.trim();
   const hasSig = sigStart && bodyText.trimEnd().includes(sigStart);
-  const textBody = hasSig ? bodyText : (bodyText + '\n--\n' + sigText);
+  const hasValediction = SIG_PATTERNS.test(bodyText.trimEnd());
+  const textBody = (hasSig || hasValediction) ? bodyText : (bodyText + '\n--\n' + sigText);
   const lines = bodyText.split('\n'), htmlLines = [];
   let first = true;
   for (const line of lines) {
@@ -131,12 +154,17 @@ function buildContent(bodyText, sigText, sigHtml) {
 }
 
 // ── 日志记录 ──────────────────────────────────────────────────────────────
-function _logRecord(ctx, to, company, subject, msgId, status, err, accountId) {
+function _logRecord(ctx, to, company, subject, bodyText, bodyId, msgId, status, err, accountId, emailMeta) {
   const rec = {
     index: 0, to, company: company || '', subject,
     messageId: msgId, count: 1,
-    bodyId: saveBody(''),
-    _stage: '', _lang: '', _type: 'unlabeled', _country: '',
+    bodyId: bodyId || saveBody(bodyText || ''),
+    _stage: emailMeta?._stage || '',
+    _lang: emailMeta?._lang || '',
+    _type: emailMeta?._type || 'unlabeled',
+    _country: emailMeta?._country || '',
+    _tplInfo: emailMeta?._tplInfo || '',
+    _batchLabel: emailMeta?._batchLabel || '',
     time: new Date().toISOString(), time_beijing: beijingToday(), status,
     _test: !!ctx.testMode,
     _accountId: accountId || '',
@@ -146,7 +174,6 @@ function _logRecord(ctx, to, company, subject, msgId, status, err, accountId) {
 }
 
 // ── 发送单封 ──────────────────────────────────────────────────────────────
-// deps: { currentTransporter, currentAccount, currentSendAbort, isPaused }
 async function _sendOne(ctx, email, log, deps) {
   const toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
   if (!toList.length) return { ok: false, n: 0 };
@@ -158,20 +185,26 @@ async function _sendOne(ctx, email, log, deps) {
   const aTo = ctx.testMode ? (ctx.config.test?.email || ctx.senderAddr) : toList[0];
   const aBcc = ctx.testMode ? [] : toList.slice(1);
   const fromAddr = _fromAddr(deps.currentAccount || {});
+  // ponytail: 同一次发送共用 bodyId，避免每人一条重复正文
+  const sharedBodyId = saveBody(email.body || textBody);
 
   try {
-    const info = await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-    if (!ctx.testMode) {
-      for (const r of toList) {
-        log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent', null, accountId));
-      }
-      if (!log.daily_counts) log.daily_counts = {};
-      log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+    // ponytail: 发信阻隔 — Dry Run 模式：流程完整但不真实发送
+    const info = ctx.dryRun
+      ? { messageId: '<dry-run-' + Date.now().toString(36) + '@milogin>', dryRun: true }
+      : await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
+    for (const r of toList) {
+      // ponytail: 只存模板正文（不含签名），签名由显示层从 signature.html 加载
+      log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email));
     }
+    if (!log.daily_counts) log.daily_counts = {};
+    log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+    log.daily_count = (log.daily_count || 0) + toList.length; // ponytail: 同步总量，兼容 send:status 读取
+    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
     return { ok: true, n: toList.length };
   } catch (err) {
     const em = err.message || '';
-    // 连接错误：用 account-manager 重建 transporter
+    // 连接错误：重建 transporter 重试一次
     if (!deps.currentSendAbort && (em.includes('socket') || em.includes('ECONN') || em.includes('closed'))) {
       try { await deps.currentTransporter.close(); } catch {}
       const acctMgr = require('./account-manager');
@@ -181,24 +214,25 @@ async function _sendOne(ctx, email, log, deps) {
       await sleep(2000);
       if (deps.currentSendAbort) return { ok: false, n: 0 };
       try {
-        const info = await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-        if (!ctx.testMode) {
-          for (const r of toList) {
-            log.sent.push(_logRecord(ctx, r, email.company, subject, info.messageId, 'sent', null, accountId));
-          }
-          if (!log.daily_counts) log.daily_counts = {};
-          log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+        const info = ctx.dryRun
+          ? { messageId: '<dry-run-retry-' + Date.now().toString(36) + '@milogin>', dryRun: true }
+          : await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
+        for (const r of toList) {
+          log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email));
         }
+        if (!log.daily_counts) log.daily_counts = {};
+        log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
+        log.daily_count = (log.daily_count || 0) + toList.length;
+        _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
         return { ok: true, n: toList.length };
       } catch (retryErr) { err = retryErr; }
     }
     const finalErr = err.message || '';
     const isRateLimit = ['rate limit','too many','try again','421','450','451','452'].some(k => finalErr.toLowerCase().includes(k));
     if (isRateLimit && !ctx.testMode) {
-      // 熔断本账号，不暂停其他账号
       return { ok: false, n: 0, fused: true };
     }
-    if (!ctx.testMode) for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, '', 'failed', finalErr, accountId)); }
+    for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, '', 'failed', finalErr, accountId, email)); }
     return { ok: false, n: 0 };
   }
 }
@@ -208,17 +242,20 @@ function _computeEstimate(ctx, pendingItems) {
   const companies = new Set(pendingItems.map(e => e.company).filter(Boolean));
   let totalSec = 0;
   if (ctx.isBatch) {
-    // 均匀模式：无封间延迟，仅批次间暂停
-    const bAvg = Math.round((ctx.batchPauseMin + ctx.batchPauseMax) / 2000);
-    totalSec = Math.max(0, Math.ceil(pendingItems.length / ctx.batchSize) - 1) * bAvg;
-  } else {
-    const avgDelay = Math.round((ctx.perMin + ctx.perMax) / 2000);
+    // 匀速速发：每组之间组间间隔 + 公司切换延迟
+    const giAvg = Math.round((ctx.groupIntervalMin + ctx.groupIntervalMax) / 2000);
+    totalSec = Math.max(0, pendingItems.length - 1) * giAvg;
     const cdAvg = Math.round((ctx.cdMin + ctx.cdMax) / 2000);
-    totalSec = pendingItems.length * avgDelay + Math.max(0, companies.size - 1) * cdAvg;
+    totalSec += Math.max(0, companies.size - 1) * cdAvg;
+  } else {
+    // 模拟人工：封间延迟 + 公司切换延迟
+    const perDelayAvg = Math.round((ctx.perMin + ctx.perMax) / 2000);
+    const cdAvg = Math.round((ctx.cdMin + ctx.cdMax) / 2000);
+    totalSec = pendingItems.length * perDelayAvg + Math.max(0, companies.size - 1) * cdAvg;
   }
   return {
     type: 'estimate', total: pendingItems.length,
-    avgDelay: ctx.isBatch ? 0 : Math.round((ctx.perMin + ctx.perMax) / 2000),
+    avgDelay: ctx.isBatch ? Math.round((ctx.groupIntervalMin + ctx.groupIntervalMax) / 2000) : Math.round((ctx.perMin + ctx.perMax) / 2000),
     companyDelayMin: Math.round(ctx.cdMin / 1000), companyDelayMax: Math.round(ctx.cdMax / 1000),
     estMin: Math.floor(totalSec / 60), estSec: totalSec % 60,
     _mode: ctx.isBatch ? 'batch' : 'multi',
@@ -233,7 +270,6 @@ function _clearDelay() {
   _delayTotal = 0;
 }
 
-// 暂停：清除定时器，保留剩余时间，但不 resolve（循环原地冻结）
 function pauseDelay() {
   if (!_delayTimer) return;
   clearTimeout(_delayTimer);
@@ -242,11 +278,10 @@ function pauseDelay() {
   if (_delayTotal < 0) _delayTotal = 0;
 }
 
-// 恢复：用剩余时间重建定时器
 function resumeDelay() {
-  if (_delayTimer) return;                     // 已有活跃定时器，跳过
-  if (!_delayResolve) return;                  // 无等待中的 Promise
-  if (_delayTotal <= 0) {                      // 延迟已耗尽，立刻完成
+  if (_delayTimer) return;
+  if (!_delayResolve) return;
+  if (_delayTotal <= 0) {
     const r = _delayResolve;
     _delayResolve = null;
     r(true);
@@ -281,14 +316,13 @@ async function cancellableSleep(ms, deps) {
 }
 
 // ── 发送引擎核心 ──────────────────────────────────────────────────────────
-// deps: { sendQueue, isPaused, currentSendAbort, currentTransporter, currentAccount, _sendInProgress, mainWindow, tray }
 async function runSendBatch(deps, sendProgress) {
   const config = _loadConfig(sendProgress); if (!config) return;
   const ctx = _buildContext(config);
   const acctMgr = require('./account-manager');
 
   let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: {}, last_date: '' };
-  if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志，当日的 daily_counts 丢失但不会阻止发送 */ } }
+  if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志 */ } }
   if ((log.last_date_beijing || log.last_date) !== beijingToday()) {
     log.daily_count = 0;
     log.daily_counts = {};
@@ -310,9 +344,19 @@ async function runSendBatch(deps, sendProgress) {
     return transporterCache.get(account.id);
   }
 
-  // 全局每日上限检查（总上限）
   const totalLimit = ctx.maxPerDay;
   const totalDailyCount = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || log.daily_count || 0;
+
+  // ponytail: 加载联系人账号标签，供 pickNextAccount 复用原账号
+  let contactAccountMap = {};
+  try {
+    if (fs.existsSync(contactsPath)) {
+      const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+      for (const c of contacts) {
+        if (c._sentBy && c.email) contactAccountMap[c.email.toLowerCase().trim()] = c._sentBy;
+      }
+    }
+  } catch {}
 
   function inWindow() {
     const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
@@ -323,13 +367,15 @@ async function runSendBatch(deps, sendProgress) {
   sendProgress(est);
   const accountCount = ctx.accounts.length;
   const activeCount = ctx.accounts.filter(a => a.active !== false).length;
-  console.log(`[发信] 开始 — ${est.total} 封，${activeCount}/${accountCount} 个账号可用，预计 ${est.estMin}分${est.estSec}秒`);
+  console.log(`[发信] 开始 — ${est.total} 封，${activeCount}/${accountCount} 个账号可用，预计 ${est.estMin}分${est.estSec}秒${ctx.dryRun ? ' [DRY RUN]' : ''}${ctx.testMode ? ' [测试]' : ''}`);
 
-  let sent = 0, failed = 0, batchCount = 0;
+  let sent = 0, failed = 0;
   let lastAccountIdx = -1;
+  // ponytail: 快照队列长度，防止并发推入导致循环无限增长
+  const queueLen = deps.sendQueue.length;
 
   try {
-  for (let i = 0; i < deps.sendQueue.length; i++) {
+  for (let i = 0; i < queueLen; i++) {
     if (deps.currentSendAbort) { sendProgress({ type: 'cancelled' }); break; }
     if (deps.isPaused) { sendProgress({ type: 'paused' }); break; }
 
@@ -348,7 +394,10 @@ async function runSendBatch(deps, sendProgress) {
     if (!email.recipients?.length && !email.to) continue;
 
     // 轮询选择下一个可用账号（含熔断检测）
-    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates);
+    // 取第一个收件人的历史账号作为优先项
+    const firstRcpt = (email.recipients?.[0] || (email.to || '').split(',')[0] || '').toLowerCase().trim();
+    const prefId = contactAccountMap[firstRcpt] || '';
+    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates, prefId);
     if (!picked.account) {
       const reason = picked.reason || '无可用账号';
       console.log(`[发信] 🛑 ${reason}`);
@@ -359,72 +408,61 @@ async function runSendBatch(deps, sendProgress) {
     deps.currentAccount = account;
     deps.currentTransporter = getTransporter(account);
 
-    // 公司切换 + 封间延迟（仅多规则模式）
-    if (!ctx.isBatch) {
-      if (i > 0 && email.company !== deps.sendQueue[i - 1]?.company) {
-        if (!deps.isPaused && (ctx.cdMin > 0 || ctx.cdMax > 0)) {
-          const toList = email.recipients?.length || (email.to || '').split(',').length;
-          const isSingle = toList <= ctx.SINGLE;
-          const dm = Math.floor(Math.random() * ((isSingle ? ctx.SD_MAX : ctx.cdMax) - (isSingle ? ctx.SD_MIN : ctx.cdMin) + 1)) + (isSingle ? ctx.SD_MIN : ctx.cdMin);
-          console.log(`[发信] 🏢 切换公司 → ${email.company}，暂停 ${Math.round(dm/1000)}s (${isSingle?'单人':'多人'})`);
-          sendProgress({ type: 'delay', seconds: Math.round(dm/1000), company: email.company });
-          if (!await cancellableSleep(dm, deps)) break;
-        }
-      }
-      // 封间延迟
-      if (i > 0 || totalDailyCount > 0 || sent > 0) {
-        if (!await cancellableSleep(Math.floor(Math.random() * (ctx.perMax - ctx.perMin + 1)) + ctx.perMin, deps)) break;
-      }
+    // 公司切换延迟（两模式通用）
+    if (i > 0 && email.company !== deps.sendQueue[i - 1]?.company) {
+      const dm = Math.floor(Math.random() * (ctx.cdMax - ctx.cdMin + 1)) + ctx.cdMin;
+      console.log(`[发信] 🏢 切换公司 → ${email.company}，暂停 ${Math.round(dm/1000)}s`);
+      sendProgress({ type: 'delay', seconds: Math.round(dm/1000), company: email.company });
+      if (!await cancellableSleep(dm, deps)) break;
+    }
+
+    // 封间延迟（仅模拟人工模式）
+    if (!ctx.isBatch && (i > 0 || totalDailyCount > 0 || sent > 0)) {
+      if (!await cancellableSleep(Math.floor(Math.random() * (ctx.perMax - ctx.perMin + 1)) + ctx.perMin, deps)) break;
     }
 
     // 发送
-    batchCount++;
     const result = await _sendOne(ctx, email, log, deps);
 
     if (result.ok) {
       sent += result.n;
       if (!ctx.testMode) acctMgr.recordSuccess(account.id, log._accountStates);
     } else if (result.fused) {
-      // 熔断：只标记该账号，其他账号继续发
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, true);
-      console.log(`[发信] ⚡ 账号 ${account.label || account.smtp?.user} 已熔断，冷却 ${Math.round((acctMgr.FUSE_COOLDOWN_BASE)/60000)} 分钟`);
+      console.log(`[发信] ⚡ 账号 ${account.label || account.smtp?.user} 已熔断`);
       failed += result.n;
     } else if (result.fatal) {
-      if (!ctx.testMode) {
-        acctMgr.recordFailure(account.id, log._accountStates, false);
-        fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2));
-      }
+      if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
+      try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch {}
       break;
     } else {
       failed += result.n;
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
     }
-    if (!ctx.testMode) fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2));
+    try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch {}
     sendProgress(result.ok
-      ? { type: 'sent', id: email.id, index: i + 1, total: deps.sendQueue.length, company: email.company, to: email.recipients?.[0] || email.to?.split(',')[0] || '', count: result.n, accountLabel: account.label || account.smtp?.user }
+      ? { type: 'sent', id: email.id, index: i + 1, total: queueLen, company: email.company, to: (email.recipients || [email.to]).join(','), count: result.n, accountLabel: account.label || account.smtp?.user }
       : result.fused
         ? { type: 'fused', id: email.id, accountLabel: account.label || account.smtp?.user }
-        : { type: 'failed', id: email.id, error: '' }
+        : { type: 'failed', id: email.id, to: (email.recipients || [email.to]).join(','), error: '' }
     );
 
-    // 批次暂停
-    if (ctx.isBatch && batchCount >= ctx.batchSize) {
-      const bp = Math.floor(Math.random() * (ctx.batchPauseMax - ctx.batchPauseMin + 1)) + ctx.batchPauseMin;
-      const bpSec = Math.round(bp / 1000);
-      console.log(`[发信] ⏸ 批次暂停 ${bpSec}s (${sent} 封已发，${deps.sendQueue.length - i - 1} 封待发)`);
-      sendProgress({ type: 'delay', seconds: bpSec, company: `批次暂停(${batchCount}封后)` });
-      if (!await cancellableSleep(bp, deps)) break;
-      batchCount = 0;
+    // 组间间隔（仅批处理（匀速速发）模式，每组之间暂停）
+    if (ctx.isBatch && i < queueLen - 1) {
+      const gi = Math.floor(Math.random() * (ctx.groupIntervalMax - ctx.groupIntervalMin + 1)) + ctx.groupIntervalMin;
+      const giSec = Math.round(gi / 1000);
+      console.log(`[发信] ⏸ 组间间隔 ${giSec}s (${i + 1}/${queueLen} 组完成)`);
+      sendProgress({ type: 'delay', seconds: giSec, company: `组间间隔(${i + 1}/${queueLen}组)` });
+      if (!await cancellableSleep(gi, deps)) break;
     }
   }
 
-  } catch { /* 正常退出：cancel/pause/limit/last item，不需要额外处理 */ }
+  } catch (e) { console.error('[发信] 循环异常:', e.message || e); }
   finally {
-    // 无论正常结束、取消还是异常，清理所有 transporter
     for (const t of transporterCache.values()) { try { await t.close(); } catch { /* 关闭失败不影响后续 */ } }
   }
   console.log(`[发信] 完成 — 成功 ${sent} 封，失败 ${failed} 封`);
-  if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: deps.sendQueue.length, sent, failed, _testMode: ctx.testMode || undefined });
+  if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: queueLen, sent, failed, _testMode: ctx.testMode || undefined });
   if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Prospector", body: `发送完成: 成功 ${sent} 封` }).show();
   if (!ctx.testMode) {
     scheduleAutoBounceCheck(deps.mainWindow, deps.tray);

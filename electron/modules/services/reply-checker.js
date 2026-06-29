@@ -62,10 +62,9 @@ function imapCheckReplies(imapCfg, knownRecipients, senderEmail) {
 
     imap.once('ready', () => {
       imap.openBox('INBOX', false, () => {
-        // 扫描最近 7 天的邮件
+        // 扫描最近 7 天的邮件 — 直接传 Date 对象，node-imap 不接受 DD-MM-YYYY 字符串
         const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-        const sinceStr = since.toISOString().slice(0, 10).split('-').reverse().join('-');
-        imap.search([['SINCE', sinceStr]], (err, results) => {
+        imap.search([['SINCE', since]], (err, results) => {
           if (err || !results?.length) { imap.end(); return resolve({ ok: true, replies: [] }); }
 
           const last50 = results.slice(-50);

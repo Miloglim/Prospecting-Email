@@ -57,6 +57,7 @@ function register(ipcMain) {
 
     cfg.smtpAccounts.push(newAccount);
     _writeConfig(cfg);
+    console.log(`[账号] 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
     return { ok: true, data: newAccount };
   });
 

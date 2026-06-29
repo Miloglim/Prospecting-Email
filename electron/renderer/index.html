@@ -9,6 +9,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Milogin's Prospector.</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="modules/dashboard-editor.css">
 </head>
 <body>
   <!-- ========== 启动加载层 ========== -->
@@ -140,49 +141,59 @@
 
     <!-- 📊 仪表盘 -->
     <section id="page-dashboard" class="page active">
-      <h2><span data-icon="dashboard"></span> 仪表盘</h2>
+      <h2><span data-icon="dashboard"></span> 仪表盘
+        <button id="dash-edit-toggle" class="dash-edit-btn" title="编辑布局" style="margin-left:12px;font-size:11px;padding:3px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text-secondary);cursor:pointer">编辑布局</button>
+      </h2>
 
+      <div id="dash-canvas">
       <!-- 核心数据 -->
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-value" id="stat-sent">...</div><div class="stat-label">今日已发</div></div>
-        <div class="stat-card"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label">剩余限额</div></div>
-        <div class="stat-card"><div class="stat-value" id="stat-queue">0</div><div class="stat-label">队列待处理</div></div>
-        <div class="stat-card"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">账号状态</div></div>
+        <div class="stat-card" data-card-id="stat-sent"><div class="stat-value" id="stat-sent">...</div><div class="stat-label">今日已发</div></div>
+        <div class="stat-card" data-card-id="stat-remaining"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label">剩余限额</div></div>
+        <div class="stat-card" data-card-id="stat-queue"><div class="stat-value" id="stat-queue">0</div><div class="stat-label">队列待处理</div></div>
+        <div class="stat-card" data-card-id="stat-smtp"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">账号状态</div></div>
       </div>
 
       <!-- 进度 + 副指标 -->
       <div class="dash-row">
-        <div class="dash-card dash-progress" id="dash-progress-card">
+        <div class="dash-card dash-progress" data-card-id="dash-progress">
           <div class="dash-card-label">发送进度</div>
           <div class="dash-progress-bar"><div class="dash-progress-fill" id="dash-progress-fill"></div></div>
           <div class="dash-progress-text" id="dash-progress-text">等待发送</div>
         </div>
-        <div class="dash-card dash-metric">
+        <div class="dash-card dash-metric" data-card-id="dash-reply-rate">
           <div class="dash-card-label">回复率</div>
           <div class="dash-metric-value" id="dash-reply-rate">—</div>
         </div>
-        <div class="dash-card dash-metric">
+        <div class="dash-card dash-metric" data-card-id="dash-bounce-rate">
           <div class="dash-card-label">退信率</div>
           <div class="dash-metric-value" id="dash-bounce-rate">—</div>
         </div>
-        <div class="dash-card dash-metric">
+        <div class="dash-card dash-metric" data-card-id="dash-window">
           <div class="dash-card-label">发送窗口</div>
           <div class="dash-metric-value" id="dash-window">—</div>
         </div>
       </div>
 
-      <!-- 最近动态 -->
-      <div class="dash-card dash-feed">
-        <div class="dash-card-label">最近动态</div>
-        <div id="dash-feed-list" class="dash-feed-list">暂无活动</div>
+      <!-- 今日新增 + 最近动态 -->
+      <div class="dash-row">
+        <div class="dash-card dash-metric" data-card-id="stat-new">
+          <div class="dash-card-label">今日新增</div>
+          <div class="dash-metric-value" id="stat-new">—</div>
+        </div>
+        <div class="dash-card dash-feed" data-card-id="dash-feed">
+          <div class="dash-card-label">最近动态</div>
+          <div id="dash-feed-list" class="dash-feed-list">暂无活动</div>
+        </div>
       </div>
 
       <!-- 快捷操作 -->
-      <div class="dash-actions">
+      <div class="dash-actions" data-card-id="dash-actions" data-fixed="true">
         <button class="secondary" data-nav="clients"><span data-icon="file-spreadsheet"></span> 导入客户</button>
         <button class="secondary" data-nav="email-send"><span data-icon="send"></span> 开始发送</button>
         <button class="secondary" id="dash-bounce-check"><span data-icon="alert-circle"></span> 检查退信</button>
       </div>
+      </div><!-- #dash-canvas -->
     </section>
 
     <!-- 📋 导入客户 -->
@@ -218,12 +229,15 @@
       <div class="contacts-toolbar">
         <input type="text" id="contacts-search" placeholder="搜索公司名、国家或邮箱...">
         <button id="contacts-add-btn"><span data-icon="plus"></span> 添加客户</button>
+        <button id="contacts-ai-classify-btn" class="secondary" style="font-size:12px;padding:4px 12px"><span data-icon="sparkles"></span> AI 分类</button>
       </div>
       <div class="contacts-filter" id="contacts-filter" style="display:none">
         <button type="button" class="cf-tab active" data-filter="all">全部</button>
 	        <button type="button" class="cf-tab" data-filter="agent"><span data-icon="globe"></span> 代理</button>
 	        <button type="button" class="cf-tab" data-filter="direct"><span data-icon="building"></span> 直客</button>
 	        <button type="button" class="cf-tab" data-filter="unlabeled"><span data-icon="help-circle"></span> 未标签</button>
+        <button type="button" class="cf-tab" data-filter="sent"><span data-icon="send"></span> 已发送</button>
+        <button type="button" class="cf-tab" data-filter="unsent"><span data-icon="mail"></span> 未发送</button>
 	        <button type="button" class="cf-tab" data-filter="suspicious"><span data-icon="alert-circle"></span> 待确认</button>
 	        <button type="button" class="cf-tab" data-filter="archived"><span data-icon="archive"></span> 已归档</button>
       </div>
@@ -654,7 +668,7 @@
             <!-- 模板引擎 -->
             <div class="sub-section-label">模板引擎</div>
             <div class="form-row"><label>发送模式</label><select id="cfg-schedule-mode"><option value="multi">模拟人工</option><option value="batch">匀速速发</option></select></div>
-            <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">通用</option></select></div>
+            <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">用户模板</option></select></div>
             <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">0=不轮换</span></div>
 
             <!-- 通用 -->
@@ -764,6 +778,17 @@
             <div class="form-row"><label>测试邮箱</label><input type="text" id="cfg-test-email" placeholder="test@example.com"></div>
             <div class="form-row"><label>测试公司</label><input type="text" id="cfg-test-company" placeholder="用于测试邮件的公司名"></div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-test-enabled"> 启用测试模式（跳过发送时段限制）</label></div>
+            <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-dry-run"> 发信阻隔（流程完整但不实际发送，独立于测试模式）</label></div>
+          </div>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-card-header">
+            <h3><span data-icon="trash-2"></span> 数据管理</h3>
+          </div>
+          <div class="setting-card-body">
+            <p style="font-size:12px;color:var(--text-secondary);margin:8px 0">清除所有已导入的联系人数据，此操作不可撤销。</p>
+            <button id="btn-clear-contacts" class="danger" style="font-size:12px;padding:6px 16px">清除所有联系人</button>
           </div>
         </div>
       </div>

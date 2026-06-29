@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearBounce: (email) => ipcRenderer.invoke('contacts:clearBounce', email),
   setContactTag: (id, tag) => ipcRenderer.invoke('contacts:setTag', id, tag),
   setContactTags: (id, tags) => ipcRenderer.invoke('contacts:setTags', id, tags),
+  classifyContactsAI: () => ipcRenderer.invoke('contacts:classifyAI'),
   deleteAllContacts: () => ipcRenderer.invoke('contacts:deleteAll'),
   deleteCompany: (company) => ipcRenderer.invoke('contacts:deleteCompany', company),
   updateCompanyCountry: (company, newCountry) => ipcRenderer.invoke('contacts:updateCountry', company, newCountry),

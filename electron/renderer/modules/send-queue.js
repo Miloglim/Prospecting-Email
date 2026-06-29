@@ -206,7 +206,7 @@ export async function renderQueue() {
   // 正在发送的提示条
   if (activeCompany && S.sendInProgress) {
     html += `<div class="queue-current-bar" id="queue-current-bar">
-      <span class="cur-dot"></span> 正在发送：${escapeHtml(activeCompany)}
+      <span class="cur-dot"></span> 正在发送：${escapeHtml(activeCompany)}${S._currentAccountLabel ? ` · ${escapeHtml(S._currentAccountLabel)}` : ''}
     </div>`;
   }
 
@@ -385,6 +385,8 @@ export async function startSend() {
 
   S.unsubscribeProgress = await window.electronAPI.onSendProgress((data) => {
     if (data.type === 'sent') {
+      // 记录当前发送账号
+      if (data.accountLabel) S._currentAccountLabel = data.accountLabel;
       const item = S.queue.find(e => e.id === data.id);
       if (item) {
         if (!item._recipientStatus) {

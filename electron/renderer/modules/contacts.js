@@ -164,6 +164,10 @@ export function renderContactsList(filtered) {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
   } else if (S.contactsFilter === 'suspicious') {
     data = data.filter(c => c._suspicious === true);
+  } else if (S.contactsFilter === 'sent') {
+    data = data.filter(c => !!c._sentBy);
+  } else if (S.contactsFilter === 'unsent') {
+    data = data.filter(c => !c._sentBy);
   } else if (S.contactsFilter !== 'all') {
     data = data.filter(c => (c.clientType || 'unlabeled') === S.contactsFilter);
   }
@@ -205,7 +209,7 @@ export function renderContactsList(filtered) {
   }
 
   if (!data.length) {
-    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户 — 客户发完 F4 后自动归档' : S.contactsFilter === 'suspicious' ? '暂无待确认公司 — 导入数据中未检测到异常公司名' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
+    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter === 'suspicious' ? '暂无待确认公司' : S.contactsFilter === 'sent' ? '暂无已发送联系人 — 发送完成后自动标记' : S.contactsFilter === 'unsent' ? '全部已发送' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
     if (layout) layout.style.display = 'none';
     if (statsBar) statsBar.style.display = 'none';
     if (filterBar) filterBar.style.display = 'flex';
@@ -295,7 +299,7 @@ export function renderContactDetail(company) {
     </div>
     <div class="contacts-detail-body">
       <table>
-        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>标签</th><th>添加时间</th><th>操作</th></tr></thead>
+        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>发信账号</th><th>标签</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
             // 兼容旧 tag 字段：tags 数组优先，回退到单值 tag
@@ -318,6 +322,7 @@ export function renderContactDetail(company) {
               <td>${escapeHtml(m.country)}</td>
               <td>${escapeHtml(m.category)}</td>
               <td>${escapeHtml(m.email)}</td>
+              <td style="font-size:11px;color:var(--text-secondary)">${m._sentAccount ? escapeHtml(m._sentAccount) + ' · ' + (m._sentAt||'').slice(0,10) : '—'}</td>
               <td>${tagsHtml}</td>
               <td>${formatDate(m.addedAt)}</td>
               <td><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
@@ -564,6 +569,18 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
       showToast(`已添加 ${company}`, 'ok');
     },
   });
+});
+// ── AI 分类按钮 ──────────────────────────────────────────────────────────
+document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('contacts-ai-classify-btn');
+  btn.disabled = true; btn.textContent = 'AI 分类中...';
+  try {
+    const r = await window.electronAPI.classifyContactsAI();
+    if (r.ok) { S.contactsData = await window.electronAPI.getContacts(); renderContactsList(); showToast(`AI 分类完成: ${r.updated}/${r.total} 个重新分类`, 'ok'); }
+    else showToast(r.error || 'AI 分类失败', 'err');
+  } catch (e) { showToast('AI 分类异常', 'err'); }
+  btn.disabled = false; btn.textContent = 'AI 分类';
+  renderContactsList();
 });
 window.__pageHandlers['contacts'] = loadContacts;
 window.__pageHandlers['clients'] = renderClientsTable;

@@ -25,6 +25,10 @@ function init(mainWindow) {
 
   // ── autoUpdater 事件 → 渲染进程 ──
   autoUpdater.on('update-available', (info) => {
+    // ponytail: 过滤同版本重检（私有仓库可能误报）
+    const currentVersion = require('electron').app.getVersion();
+    const remoteVersion = (info.version || '').replace(/^v/i, '');
+    if (remoteVersion === currentVersion) return;
     _win?.webContents.send('update:available', {
       version: info.version,
       releaseDate: info.releaseDate,
@@ -52,15 +56,29 @@ function init(mainWindow) {
 
   // ── IPC：渲染进程可手动触发 ──
   ipcMain.handle('update:check', async () => {
+    // ponytail: 私有仓库需 GH_TOKEN，未配置时提前告知
+    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+      return { ok: false, error: '未配置 GitHub Token（私有仓库认证需要 GH_TOKEN 环境变量）' };
+    }
     try {
+      const currentVersion = require('electron').app.getVersion();
       const result = await autoUpdater.checkForUpdates();
       if (result?.updateInfo?.version) {
-        // 有新版本，触发下载（autoDownload=true 时自动开始）
-        return { ok: true, data: { version: result.updateInfo.version, downloading: true } };
+        const remoteVersion = result.updateInfo.version.replace(/^v/i, '');
+        // 版本相同 → 无更新
+        if (remoteVersion === currentVersion) {
+          return { ok: true, data: null, currentVersion };
+        }
+        // 有新版本但 autoDownload=false，不下自动下载，仅通知
+        return { ok: true, data: { version: result.updateInfo.version, available: true }, currentVersion };
       }
-      return { ok: true, data: null };
+      return { ok: true, data: null, currentVersion };
     } catch (e) {
-      return { ok: false, error: e.message };
+      const msg = e.message || '';
+      if (msg.includes('404') || msg.includes('Not Found')) {
+        return { ok: false, error: '仓库未找到，请检查 GH_TOKEN 是否有 repo 权限' };
+      }
+      return { ok: false, error: msg || '检查失败' };
     }
   });
 

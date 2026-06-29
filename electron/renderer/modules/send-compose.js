@@ -471,7 +471,7 @@ export async function renderSelectedCards() {
   // ponytail: 加载用户模板和配置
   let userTemplates = [];
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  const sendMode = config?.template?.mode || 'adaptive';
+  const tplMode = config?.template?.mode || 'adaptive';
   try { userTemplates = await window.electronAPI.listUserTemplates(); } catch {}
 
   for (const name of selected) {
@@ -482,10 +482,15 @@ export async function renderSelectedCards() {
       const stage = hist?.stage || 'cold';
       const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
       const usedSentences = hist?.usedSentences || [];
-      const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang, sendMode);
-      if (matchedTpls.length) {
-        const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
-        S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl };
+      // ponytail: 仅「用户模板」模式使用用户模板，「自适应」始终用预设库
+      if (tplMode === 'general') {
+        const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang);
+        if (matchedTpls.length) {
+          const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
+          S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl };
+        } else {
+          S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' };
+        }
       } else {
         S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' };
       }
@@ -632,7 +637,7 @@ async function addToQueue() {
       body = (ut.body || '').replace(/\{\{company\}\}/g, companyDisplay);
     } else {
       const subjects = S.templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
-      baseSubject = subjects[lang] ?? subjects.es ?? '';
+      baseSubject = subjects[lang] || subjects.es || subjects.en || '';  // ponytail: || 而非 ?? — 空字符串也需要回退
     }
 
     const totalGroups = Math.ceil(valid.length / GROUP_SIZE);
@@ -645,15 +650,8 @@ async function addToQueue() {
       let groupTpl = null;
 
       if (useUserTpl) {
-        if (g > 0 && rotateGroups > 0 && groupsOnTpl >= rotateGroups) {
-          currentTpl = randomPick(card.type, stage, []);
-          groupsOnTpl = 0;
-        }
-        if (g > 0) {
-          groupTpl = currentTpl;
-          body = assembleEmail(lang, groupTpl.hook, groupTpl.pain, groupTpl.proof, groupTpl.cta, groupTpl.followup, stage, card.type, config?.sender?.bodyName);
-        }
-        groupsOnTpl++;
+        // ponytail: 用户模板不轮换 — 用户写什么就发什么，所有组共用同一正文
+        groupTpl = currentTpl;
       } else {
         // 预设模板：按组轮换
         if (g > 0 && rotateGroups > 0 && groupsOnTpl >= rotateGroups) {

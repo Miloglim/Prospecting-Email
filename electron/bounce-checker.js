@@ -4,9 +4,8 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 
-// ponytail: 打包后 __dirname 在 asar 内，不能往上走
-const _IS_PKG = __dirname.includes('.asar');
-const APP_ROOT = _IS_PKG ? path.dirname(process.resourcesPath) : path.join(__dirname, '..');
+// ponytail: APP_ROOT 统一从 config.js 引，避免自算路径在打包模式下偏移
+const { APP_ROOT } = require('./modules/config');
 
 const BOUNCE_KW = ['undelivered','returned','failure','bounce','undeliverable',
   'delivery status','mail delivery','returned mail','message undeliverable',

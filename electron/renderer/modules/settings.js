@@ -33,6 +33,7 @@ const CFG_KEYS = [
   { id: 'cfg-test-email', path: 'test.email' },
   { id: 'cfg-test-company', path: 'test.company' },
   { id: 'cfg-test-enabled', path: 'test.enabled', isBool: true },
+  { id: 'cfg-dry-run', path: 'test.dryRun', isBool: true },
   { id: 'cfg-feishu-url', path: 'feishu.url' },
   { id: 'cfg-backcheck-filter', path: 'backcheck.filterEnabled', isBool: true },
   { id: 'cfg-general-auto-launch', path: 'general.autoLaunch', isBool: true },
@@ -334,7 +335,7 @@ document.getElementById('cfg-general-theme')?.addEventListener('change', (e) => 
   } catch {}
 })();
 
-window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); };
+window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); initClearContactsBtn(); };
 
 // ── 数据导出 ──────────────────────────────────────────────────────────────
 function initExportBtn() {
@@ -359,6 +360,20 @@ function initExportBtn() {
       result.style.color = 'var(--danger)';
     }
     btn.disabled = false;
+  });
+}
+
+// ── 一键清除联系人 ──────────────────────────────────────────────────────────
+function initClearContactsBtn() {
+  const btn = document.getElementById('btn-clear-contacts');
+  if (!btn || btn._bound) return;
+  btn._bound = true;
+  btn.addEventListener('click', async () => {
+    const contacts = await window.electronAPI.getContacts();
+    if (!contacts.length) { showToast('联系人列表已为空', 'info'); return; }
+    if (!await showConfirm(`确定清除全部 ${contacts.length} 个联系人？此操作不可撤销。`)) return;
+    await window.electronAPI.deleteAllContacts();
+    showToast(`已清除 ${contacts.length} 个联系人`, 'ok');
   });
 }
 
@@ -390,7 +405,7 @@ function initUpdateCheck() {
         result.style.color = 'var(--accent)';
         dlBtn.style.display = '';
       } else {
-        result.innerHTML = `${lucide('check-circle',12)} 已是最新版本`;
+        result.innerHTML = `${lucide('check-circle',12)} 已是最新版本${r.currentVersion ? ' (v' + escapeHtml(r.currentVersion) + ')' : ''}`;
         result.style.color = 'var(--success)';
       }
     } catch (e) {
@@ -711,10 +726,13 @@ function initAccountManager() {
     el.addEventListener('focus', () => el.select());
   });
 
-  // 注册页面 handler：切换到设置页时刷新列表
+  // 注册页面 handler：切换到设置页时刷新列表 + 确保按钮事件绑定
   const origHandler = window.__pageHandlers['settings'];
   window.__pageHandlers['settings'] = async () => {
     if (origHandler) await origHandler();
+    // ponytail: 每次切到设置页重新绑定添加按钮，防止模块加载时序导致漏绑
+    const addBtn = document.getElementById('btn-add-account');
+    if (addBtn && !addBtn._bound) { addBtn._bound = true; addBtn.addEventListener('click', () => openEditor(null)); }
     render();
   };
 }

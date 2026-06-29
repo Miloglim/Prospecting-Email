@@ -1,0 +1,113 @@
+/* ── 仪表盘编辑模式 ────────────────────────────────────────── */
+
+/* 编辑模式容器 */
+#page-dashboard.dash-editing #dash-canvas {
+  position: relative;
+  min-height: 600px;
+}
+
+/* 网格背景 */
+#page-dashboard.dash-editing #dash-canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    repeating-linear-gradient(to right, rgba(128,128,128,0.08) 0px, rgba(128,128,128,0.08) 1px, transparent 1px, transparent 5px),
+    repeating-linear-gradient(to bottom, rgba(128,128,128,0.08) 0px, rgba(128,128,128,0.08) 1px, transparent 1px, transparent 5px);
+}
+
+/* 卡片通用 */
+[data-card-id] { overflow: hidden; }
+[data-card-id="dash-feed"] { overflow-y: auto; }
+
+/* 编辑模式下的卡片 */
+#page-dashboard.dash-editing [data-card-id]:not([data-fixed]) {
+  cursor: grab;
+  transition: box-shadow 0.15s;
+  user-select: none;
+}
+#page-dashboard.dash-editing [data-card-id]:not([data-fixed]):hover {
+  box-shadow: 0 0 0 2px var(--accent), 0 4px 16px rgba(0,0,0,0.1);
+}
+#page-dashboard.dash-editing [data-card-id].dash-card-dragging {
+  cursor: grabbing;
+  z-index: 100;
+  opacity: 0.92;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+}
+
+/* 卡片占位 */
+.dash-card-ghost {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(0,191,165,0.06);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 缩放手柄 */
+.dash-resize-handle {
+  position: absolute;
+  z-index: 10;
+  background: transparent;
+}
+.dash-resize-handle::after {
+  content: '';
+  position: absolute;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+#page-dashboard.dash-editing [data-card-id]:hover .dash-resize-handle::after {
+  opacity: 1;
+}
+
+/* 四角 */
+.dash-resize-handle.nw, .dash-resize-handle.ne,
+.dash-resize-handle.sw, .dash-resize-handle.se {
+  width: 12px; height: 12px;
+}
+.dash-resize-handle.nw { top: -6px; left: -6px; cursor: nw-resize; }
+.dash-resize-handle.ne { top: -6px; right: -6px; cursor: ne-resize; }
+.dash-resize-handle.sw { bottom: -6px; left: -6px; cursor: sw-resize; }
+.dash-resize-handle.se { bottom: -6px; right: -6px; cursor: se-resize; }
+.dash-resize-handle.nw::after, .dash-resize-handle.ne::after,
+.dash-resize-handle.sw::after, .dash-resize-handle.se::after {
+  width: 8px; height: 8px;
+  top: 2px; left: 2px;
+}
+
+/* 四边中点 */
+.dash-resize-handle.n, .dash-resize-handle.s {
+  left: 6px; right: 6px; height: 12px;
+}
+.dash-resize-handle.n { top: -6px; cursor: n-resize; }
+.dash-resize-handle.s { bottom: -6px; cursor: s-resize; }
+.dash-resize-handle.n::after, .dash-resize-handle.s::after {
+  height: 4px; left: 4px; right: 4px; top: 4px;
+}
+.dash-resize-handle.e, .dash-resize-handle.w {
+  top: 6px; bottom: 6px; width: 12px;
+}
+.dash-resize-handle.e { right: -6px; cursor: e-resize; }
+.dash-resize-handle.w { left: -6px; cursor: w-resize; }
+.dash-resize-handle.e::after, .dash-resize-handle.w::after {
+  width: 4px; top: 4px; bottom: 4px; left: 4px;
+}
+
+/* 对齐辅助线 */
+.dash-guide-line {
+  position: absolute;
+  pointer-events: none;
+  z-index: 200;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+/* 编辑按钮 */
+.dash-edit-btn:hover { color: var(--accent) !important; border-color: var(--accent) !important; }
+.dash-edit-btn.active { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }

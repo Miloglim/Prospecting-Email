@@ -81,10 +81,27 @@ export async function renderHistoryTable() {
       const timeStr = r0.time ? new Date(new Date(r0.time).getTime() + 8*3600000).toISOString().slice(0, 16).replace('T', ' ') : '';
       const stageLbl = { cold:'冷开发',f1:'F1',f2:'F2',f3:'F3',f4:'F4',archived:'已归档',monthly:'月度' }[r0._stage] || '';
       const allIdx = items.map(r => r.index).join('|');
-      return `<div class="history-item" data-idx="${allIdx}" data-bodyid="${escapeHtml(r0.bodyId || '')}"
+      // ponytail: 按 bodyId 去重 — 同一队列项的收件人共享正文，合并为一条
+      const deduped = new Map();
+      items.forEach(r => {
+        const key = r.bodyId || r.index;
+        if (!deduped.has(key)) {
+          deduped.set(key, {
+            subject: r.subject || '',
+            bodyId: r.bodyId || '',
+            time: r.time || '',
+            idx: r.index,
+            _tplInfo: r._tplInfo || '',
+            _batchLabel: r._batchLabel || '',
+          });
+        }
+      });
+      const groupsData = [...deduped.values()];
+      return `<div class="history-item" data-idx="${allIdx}"
+            data-groups="${escapeHtml(JSON.stringify(groupsData))}"
             data-to="${escapeHtml(recipientsStr)}" data-company="${escapeHtml(company)}"
             data-subject="${escapeHtml(r0.subject || '')}" data-stage="${escapeHtml(stageLbl)}"
-            data-tags="${escapeHtml(tags.join(' · ') || '—')}" data-status="${r0.status === 'sent' ? lucide('check-circle',11) + ' 已发送' : lucide('x-circle',11) + ' 失败'}"
+            data-tags="${escapeHtml(tags.join(' · ') || '—')}" data-status="${escapeHtml(r0.status === 'sent' ? '已发送' : '失败')}"
             data-time="${escapeHtml(timeStr)}">
         <input type="checkbox" class="hi-check" data-idx="${allIdx}" onclick="event.stopPropagation()">
         <div style="flex:1;min-width:0">
@@ -154,13 +171,50 @@ export async function showPreview(d) {
     }
     return h.join('\n') + '\n<br>\n' + sigHtml;
   }
+
+  // ponytail: 解析多组数据，支持组间切换
+  let groups = [];
+  try { groups = JSON.parse(d.groups || '[]'); } catch {}
+  const hasGroups = groups.length > 1;
   const recipients = (d.to || '').split(',').map(s => s.trim()).filter(Boolean);
+
+  // 渲染当前组的函数
+  async function renderGroupBody(g) {
+    const bodyEl = document.getElementById('hp-body-content');
+    const subjEl = document.getElementById('hp-subject');
+    const metaEl = document.getElementById('hp-meta');
+    if (subjEl) subjEl.textContent = g.subject || '无主题';
+    if (metaEl) {
+      const t = g.time ? new Date(new Date(g.time).getTime() + 8*3600000).toISOString().slice(0,16).replace('T',' ') : '';
+      const tplLabel = g._tplInfo && g._tplInfo.startsWith('user:') ? '用户模板' : (g._tplInfo || '');
+      metaEl.innerHTML = `<span>🕐 ${escapeHtml(t || '—')}</span>${tplLabel ? '<span>· ' + escapeHtml(tplLabel) + '</span>' : ''}`;
+    }
+    // 高亮当前组按钮
+    preview.querySelectorAll('.hp-group-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.idx === String(g.idx));
+    });
+    if (bodyEl && g.bodyId) {
+      bodyEl.innerHTML = '<span style="color:var(--text-secondary)">加载中...</span>';
+      try {
+        const body = await window.electronAPI.getSendBody(g.bodyId);
+        bodyEl.innerHTML = body ? textToHtml(body) : '<span style="color:var(--text-secondary)">(无正文)</span>';
+      } catch { bodyEl.textContent = '(加载失败)'; }
+    } else if (bodyEl) {
+      bodyEl.innerHTML = '<span style="color:var(--text-secondary)">(无邮件正文)</span>';
+    }
+  }
+
   preview.innerHTML =
     `<div class="hp-box">
-      <div class="hp-box-head">${lucide('mail',14)} 发送信息</div>
+      <div class="hp-box-head">${lucide('mail',14)} 发送信息 · ${escapeHtml(d.company || '')}</div>
       <div class="hp-box-body">
-        <div style="font-size:13px;font-weight:600;margin-bottom:4px">${escapeHtml(d.subject || '无主题')}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--text-secondary);margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:600;flex:1" id="hp-subject">${escapeHtml(d.subject || '无主题')}</div>
+        </div>
+        ${hasGroups ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px" id="hp-group-selector">
+          ${groups.map((g, i) => `<button class="hp-group-btn${i === 0 ? ' active' : ''}" data-idx="${g.idx}" style="font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);cursor:pointer">组${i + 1}${g._batchLabel ? ' ' + escapeHtml(g._batchLabel) : ''}</button>`).join('')}
+        </div>` : ''}
+        <div style="display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--text-secondary);margin-bottom:4px" id="hp-meta">
           <span>🕐 ${escapeHtml(d.time || '—')}</span>
           <span>${d.tags || '—'}</span>
           <span>${d.stage || '—'} · ${d.status || ''}</span>
@@ -170,18 +224,27 @@ export async function showPreview(d) {
       </div>
     </div>
     <div class="hp-box" style="flex:1;display:flex;flex-direction:column">
-      <div class="hp-box-head">${lucide('mail',14)} 信件内容</div>
+      <div class="hp-box-head">${lucide('mail',14)} 信件内容${hasGroups ? ' <span style="font-weight:400;font-size:10px;color:var(--text-secondary)">— 点击上方组按钮切换</span>' : ''}</div>
       <div class="hp-box-body" style="flex:1;overflow-y:auto">
         <div class="hp-body" id="hp-body-content">${d.bodyid ? '<span style="color:var(--text-secondary)">加载中...</span>' : '<span style="color:var(--text-secondary)">(无邮件正文)</span>'}</div>
       </div>
     </div>`;
-  if (d.bodyid) {
-    try {
-      const body = await window.electronAPI.getSendBody(d.bodyid);
-      const bodyEl = document.getElementById('hp-body-content');
-      if (bodyEl) bodyEl.innerHTML = body ? textToHtml(body) : '<span style="color:var(--text-secondary)">(无正文)</span>';
-    } catch { const bodyEl = document.getElementById('hp-body-content'); if (bodyEl) bodyEl.textContent = '(加载失败)'; }
+
+  // 加载第一组内容
+  if (groups.length) await renderGroupBody(groups[0]);
+  else if (d.bodyid) {
+    // 兼容旧数据（无 groups 字段）
+    await renderGroupBody({ subject: d.subject, bodyId: d.bodyid, time: d.time, idx: 0 });
   }
+
+  // 绑定组切换事件
+  preview.querySelectorAll('.hp-group-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      const g = groups.find(x => x.idx === idx);
+      if (g) renderGroupBody(g);
+    });
+  });
 }
 
 export function debounceHistorySearch() {

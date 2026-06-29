@@ -103,4 +103,35 @@ function markSuspicious(company) {
 
 const EMAIL_RE = /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/;
 
-module.exports = { classifyClient, markSuspicious, EMAIL_RE };
+// ── AI 客户分类：通过 DeepSeek API 识别代理/直客/未标签 ─────────────────
+// ponytail: 关键词兜底 + AI 增强，AI 不可用时静默降级
+async function classifyClientAI(company, category, apiKey) {
+  if (!apiKey) return classifyClient(company, category);
+  const text = `公司名: ${company || ''}\n品类: ${category || ''}`;
+  try {
+    const body = JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'system', content: '你是外贸物流客户分类专家。给定公司名和品类，判断该公司属于：agent（货代/物流服务商）、direct（直客/制造商/品牌商/进出口商）还是 unlabeled（无法判断）。只返回一个词：agent、direct 或 unlabeled。' },
+        { role: 'user', content: text },
+      ],
+      temperature: 0, max_tokens: 10,
+    });
+    const result = await new Promise((resolve) => {
+      const https = require('https');
+      const req = https.request({
+        hostname: 'api.deepseek.com', port: 443, method: 'POST', path: '/v1/chat/completions',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        timeout: 10000, rejectUnauthorized: false,
+      }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.end(body);
+    });
+    const answer = (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
+    if (answer === 'agent' || answer === 'direct' || answer === 'unlabeled') return answer;
+  } catch { /* AI 不可用静默降级 */ }
+  return classifyClient(company, category);
+}
+
+module.exports = { classifyClient, classifyClientAI, markSuspicious, EMAIL_RE };

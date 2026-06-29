@@ -2,18 +2,14 @@ const S = window.S;
 import { lucide,escapeHtml,showToast,showAlert,showConfirm } from './shared.js';
 import { saveQueue, renderQueue } from './send-queue.js';
 
-export function matchUserTemplates(templates, type, stage, lang, mode) {
+export function matchUserTemplates(templates, type, stage, lang) {
   if (!templates?.length) return [];
-  if (mode === 'general') {
-    return templates.filter(t => t.type === 'general' || t.stage === 'general' || t.lang === 'general');
-  }
-  // 自适应：优先精确匹配，其次通用兜底
-  const exact = templates.filter(t =>
+  // 精确匹配 + general 兜底
+  return templates.filter(t =>
     (t.type === type || t.type === 'general') &&
     (t.stage === stage || t.stage === 'general') &&
     (t.lang === lang || t.lang === 'general')
   );
-  return exact;
 }
 
 export function randomPick(type, stage, usedSentences) {

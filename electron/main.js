@@ -66,6 +66,22 @@ function registerTableImportHandlers() {
       if (ext === '.csv') { let text = fs.readFileSync(filePath, 'utf-8'); if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); wb = XLSX.read(text, { type: 'string', codepage: 65001 }); }
       else wb = XLSX.readFile(filePath, { type: 'file', codepage: 65001 });
       const sheet = wb.Sheets[wb.SheetNames[0]];
+      // ponytail: 合并单元格处理 — 将左上角值填充到合并区域内所有单元格
+      if (sheet['!merges']) {
+        for (const merge of sheet['!merges']) {
+          const { s, e } = merge; // s: start {c,r}, e: end {c,r}
+          const srcAddr = XLSX.utils.encode_cell({ c: s.c, r: s.r });
+          const srcVal = sheet[srcAddr];
+          if (srcVal === undefined) continue;
+          for (let R = s.r; R <= e.r; R++) {
+            for (let C = s.c; C <= e.c; C++) {
+              if (R === s.r && C === s.c) continue; // 跳过源格
+              const addr = XLSX.utils.encode_cell({ c: C, r: R });
+              if (sheet[addr] === undefined) sheet[addr] = srcVal;
+            }
+          }
+        }
+      }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const getStr = (obj, ...keys) => { for (const k of keys) { const v = obj[k]; if (v !== undefined && v !== null && String(v).trim()) return String(v).trim(); } return ''; };
       const clients = rows.map(r => ({

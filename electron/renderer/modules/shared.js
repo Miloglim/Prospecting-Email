@@ -20,7 +20,11 @@ export async function loadDashboard(){
       const todayReplied=contacts.filter(c=>c.replied&&(c.repliedAt||'').slice(0,10)===today).length;
       const todaySent=s.sentToday||0;
       document.getElementById('dash-reply-rate').textContent=todaySent>0?(todayReplied/todaySent*100).toFixed(1)+'%':'—';
-    }catch(e){document.getElementById('dash-reply-rate').textContent='—';}
+      // 今日新增线索
+      const todayNew=contacts.filter(c=>(c.addedAt||'').slice(0,10)===today);
+      const newCompanies=new Set(todayNew.map(c=>c.company).filter(Boolean)).size;
+      document.getElementById('stat-new').textContent=todayNew.length?`${todayNew.length}人 / ${newCompanies}家`:'—';
+    }catch(e){document.getElementById('dash-reply-rate').textContent='—';document.getElementById('stat-new').textContent='—';}
     // 退信率 — 从退信日志取今日数据
     try{
       const blog=await window.electronAPI.loadBounceLog();
@@ -122,4 +126,4 @@ export async function checkNetworkStatus(){try{const r=await window.electronAPI.
 export function clientTypeTag(t){var m={};m.agent=lucide('globe',12)+' 代理';m.direct=lucide('building',12)+' 直客';m.unlabeled='';m.agent='<span class="ctype-tag ctype-agent">'+m.agent+'</span>';m.direct='<span class="ctype-tag ctype-direct">'+m.direct+'</span>';return m[t]||''}
 export function groupByCompany(data){const g={};for(const c of data){const k=c.company||'未命名';if(!g[k])g[k]=[];g[k].push(c)}return Object.entries(g).sort((a,b)=>a[0].localeCompare(b[0]))}
 window.addEventListener('error',(e)=>{const m=`JS错误: ${e.message} (${e.filename}:${e.lineno})`;console.error(m,e.error);const b=document.createElement('div');b.style.cssText='position:fixed;top:0;left:0;right:0;background:#f44336;color:#fff;padding:8px 16px;font-size:12px;z-index:99999';b.textContent=m;document.body.prepend(b)});
-window.__pageHandlers['dashboard'] = loadDashboard;
+window.__pageHandlers['dashboard'] = async () => { await loadDashboard(); try { const { syncCards } = await import('./dashboard-editor.js'); syncCards(); } catch {} };
