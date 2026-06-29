@@ -1,5 +1,6 @@
 // ── 账号管理 IPC ────────────────────────────────────────────────────────────
 // 只做路由：读取/保存配置 + 调用 account-manager 业务逻辑
+const { Log } = require('../core/logger');
 
 const path = require('path');
 const fs = require('fs');
@@ -29,7 +30,7 @@ function register(ipcMain) {
   const result = acct.migrateFromLegacy(config);
   if (result.migrated) {
     _writeConfig(result.config);
-    console.log('[账号] 旧 SMTP 配置已自动迁移到多账号');
+    Log.info('账号', '旧 SMTP 配置已自动迁移到多账号');
   }
 
   // ── 列表 ──
@@ -57,7 +58,7 @@ function register(ipcMain) {
 
     cfg.smtpAccounts.push(newAccount);
     _writeConfig(cfg);
-    console.log(`[账号] 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
+    Log.info('账号', ` 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
     return { ok: true, data: newAccount };
   });
 

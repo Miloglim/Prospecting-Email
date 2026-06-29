@@ -1,5 +1,6 @@
 // ── 回复检测模块 ────────────────────────────────────────────────────────────
 // 遍历所有活跃账号的 IMAP 收件箱，匹配已发邮件的回复
+const { Log } = require('../core/logger');
 // 复用 bounce-checker.js 的 IMAP 连接模式，无需新依赖
 
 const path = require('path');
@@ -182,7 +183,7 @@ async function checkReplies() {
         allReplies.push(...result.replies);
       }
     } catch (e) {
-      console.warn(`[回复] 账号 ${acc.label || senderEmail} 检测异常:`, e.message);
+      Log.warn('回复', ` 账号 ${acc.label || senderEmail} 检测异常:`, e.message);
     }
   }
 
@@ -242,7 +243,7 @@ function scheduleAutoReplyCheck(mainWindow, tray) {
 
       const applied = applyReplies(result.replies);
       if (applied.matched > 0) {
-        console.log(`[回复] 标记 ${applied.matched} 个联系人`);
+        Log.info('回复', ` 标记 ${applied.matched} 个联系人`);
         if (tray) {
           const { Notification } = require('electron');
           new Notification({ title: '📬 回复检测', body: `发现 ${result.replies.length} 条回复，已标记 ${applied.matched} 个联系人` }).show();

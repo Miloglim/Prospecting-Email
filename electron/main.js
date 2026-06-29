@@ -209,7 +209,7 @@ function createTray() {
   const iconPath = path.join(APP_ROOT, 'assets', 'tray-icon.png');
   let trayIcon = nativeImage.createFromPath(iconPath);
   if (trayIcon.isEmpty()) {
-    console.warn('[托盘] 图标加载失败:', iconPath);
+    Log.warn('托盘', ' 图标加载失败:', iconPath);
     trayIcon = nativeImage.createEmpty();
   }
   deps.tray = new Tray(trayIcon);

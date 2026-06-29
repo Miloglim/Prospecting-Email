@@ -10,6 +10,7 @@
 
 const { autoUpdater } = require('electron-updater');
 const { ipcMain } = require('electron');
+const { Log } = require('./core/logger');
 
 let _win = null;
 let _checkTimer = null;

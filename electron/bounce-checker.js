@@ -3,6 +3,7 @@ const tls = require('tls');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const { Log } = require('./modules/core/logger');
 
 // ponytail: APP_ROOT 统一从 config.js 引，避免自算路径在打包模式下偏移
 const { APP_ROOT } = require('./modules/config');
@@ -515,7 +516,7 @@ async function checkBounces() {
       }
       if (!result.ok) lastError = result.error || '';
     } catch (e) {
-      console.warn(`[退信] 账号 ${acc.label || acc.imap.user} 检测异常:`, e.message);
+      Log.warn('退信', ` 账号 ${acc.label || acc.imap.user} 检测异常:`, e.message);
     }
   }
 
