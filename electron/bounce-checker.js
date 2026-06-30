@@ -11,7 +11,7 @@ const BOUNCE_KW = ['undelivered','returned','failure','bounce','undeliverable',
   'delivery status','mail delivery','returned mail','message undeliverable',
   '退信','失败','退回','系统退信','无法送达','退信通知','投递失败',
   '邮件被退回','未送达','发送失败','拒收','不存在','not found',
-  'user unknown','mailbox full','recipient rejected','address rejected'];
+  'user unknown','mailbox full','recipient rejected','address rejected','no-reply'];
 
 // ── 退信原因分类 ──────────────────────────────────────────────────────
 function classifyBounce(subject, bodySnippet) {
@@ -509,11 +509,15 @@ async function checkBounces() {
     try {
       const senderEmail = acc.imap.user || acc.smtp?.user || '';
       const checkFn = isPop3(acc.imap) ? pop3Check : imapCheck;
+      console.log(`[退信] 检查 ${acc.label || senderEmail} (${acc.imap.host}:${acc.imap.port})...`);
       const result = await checkFn(acc.imap, senderEmail, effectiveKw, apiKey);
-      if (result.ok && result.bounced?.length) {
-        allBounced.push(...result.bounced);
+      if (result.ok) {
+        console.log(`[退信] ${acc.label || senderEmail}: ${result.bounced?.length || 0} 封退信`);
+        if (result.bounced?.length) allBounced.push(...result.bounced);
+      } else {
+        console.warn(`[退信] ${acc.label || senderEmail} 失败:`, result.error || '未知错误');
+        lastError = result.error || '';
       }
-      if (!result.ok) lastError = result.error || '';
     } catch (e) {
       console.warn(`[退信] 账号 ${acc.label || acc.imap.user} 检测异常:`, e.message);
     }

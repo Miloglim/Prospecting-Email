@@ -716,7 +716,7 @@ async function addToQueue() {
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const sendMode = config.schedule?.mode || 'multi';
   const GROUP_SIZE = sendMode === 'batch' ? (config.schedule?.batch_size || 10) : (config.schedule?.group_size || 20);
-  let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, reactivatedCount = 0;
+  let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, reactivatedCount = 0;
 
   const needReset = [];
   for (const name of selected) {
@@ -759,9 +759,22 @@ async function addToQueue() {
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
+    // 已在队列中（未发/发送中）的联系人，防重复添加
+    const queuedEmails = new Set();
+    S.queue.forEach(q => {
+      if (q.status === 'pending' || q.status === 'sending') {
+        (q.recipients || []).forEach(r => queuedEmails.add(r.toLowerCase().trim()));
+      }
+    });
+    const alreadyQueued = members.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
+    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !alreadyQueued.includes(m));
+    if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
 
     if (!activeMembers.length && members.length > 0) {
+      if (alreadyQueued.length === members.length) {
+        skippedQueued += 0; // already counted above
+        continue;
+      }
       if (bouncedMembers.length) {
         await showAlert(`' + lucide('alert-triangle',12) + ' ${name} 所有联系人已退信（${members.length} 人），跳过`);
         skippedDupOrBounced += members.length;
@@ -793,13 +806,13 @@ async function addToQueue() {
       body = (ut.body || '').replace(/\{\{company\}\}/g, companyDisplay);
     } else {
       const subjects = S.templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
-      baseSubject = subjects[lang] || subjects.es || subjects.en || '';  // ponytail: || 而非 ?? — 空字符串也需要回退
+      baseSubject = (subjects[lang] || subjects.es || subjects.en || '').replace(/\{\{company\}\}/g, companyDisplay);
     }
 
     const totalGroups = Math.ceil(valid.length / GROUP_SIZE);
     const rotateGroups = (config.schedule?.template_rotate_groups > 0 ? config.schedule.template_rotate_groups : 3);
-    let currentTpl = card.template;   // 当前模板
-    let groupsOnTpl = 0;             // 当前模板已覆盖组数
+    let currentTpl = null;
+    let groupsOnTpl = rotateGroups; // 首组即触发随机
 
     for (let g = 0; g < totalGroups; g++) {
       const groupEmails = valid.slice(g * GROUP_SIZE, (g + 1) * GROUP_SIZE);
@@ -807,10 +820,11 @@ async function addToQueue() {
 
       if (useUserTpl) {
         // ponytail: 用户模板不轮换 — 用户写什么就发什么，所有组共用同一正文
+        if (!currentTpl) currentTpl = card.template;
         groupTpl = currentTpl;
       } else {
-        // 预设模板：按组轮换
-        if (g > 0 && rotateGroups > 0 && groupsOnTpl >= rotateGroups) {
+        // 预设模板：每 rotateGroups 组随机换一次
+        if (groupsOnTpl >= rotateGroups) {
           currentTpl = randomPick(card.type, stage, []);
           groupsOnTpl = 0;
         }
@@ -826,7 +840,7 @@ async function addToQueue() {
         _stage: stage, _type: card.type, _lang: card.lang, _country: members[0]?.country || '',
         _tplInfo: useUserTpl ? `user:${card._userTemplate?.id}` : [groupTpl?.hook?.id, groupTpl?.pain?.id, groupTpl?.proof?.id, groupTpl?.cta?.id, groupTpl?.followup?.id].filter(Boolean).join('·'),
         _templateSource: card._templateSource || 'preset',
-        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : '预设模板',
+        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : '',
         _groupOf: totalGroups > 1 ? name : undefined, _groupSeq: totalGroups > 1 ? g : undefined, _groupTotal: totalGroups > 1 ? totalGroups : undefined,
         _batchLabel: batchLabel,
         _recipientStatus: groupEmails.map(e => ({ email: e, status: 'pending' })),
@@ -838,13 +852,17 @@ async function addToQueue() {
     const reasons = [];
     if (skippedNoEmail) reasons.push(`${skippedNoEmail} 家无邮箱`);
     if (skippedInvalidEmail) reasons.push(`${skippedInvalidEmail} 家邮箱格式无效`);
+    if (skippedQueued) reasons.push(`${skippedQueued} 人已在队列中`);
     if (skippedDupOrBounced) reasons.push(`${skippedDupOrBounced} 家已退信/已发送`);
     return await showAlert(`所选公司无法加入队列：${reasons.join('，')}`);
   }
   if (reactivatedCount > 0) showToast(lucide('refresh-cw',12) + ` ${reactivatedCount} 个联系人已重置，${needReset.length} 家公司可重新发送`, 'ok');
+  if (skippedQueued > 0) showToast(`已自动跳过 ${skippedQueued} 个已在队列中的联系人`, 'warn');
   if (skippedDupOrBounced > 0) showToast(`已自动跳过 ${skippedDupOrBounced} 个已退信/已发送联系人`, 'warn');
   saveQueue();
   document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
+  // 清空选择，防止二次添加
+  CS.clearSelection();
   // 跳转到发送队列
   const queueNav = document.querySelector('[data-page="queue"]');
   if (queueNav) queueNav.click();

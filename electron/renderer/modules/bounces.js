@@ -19,16 +19,17 @@ export function renderBounceTable() {
   if (empty) empty.style.display = 'none';
   if (status) status.textContent = `共 ${S.bounceRecords.length} 条（${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}）`;
 
-  // 分组（只显示已匹配联系人的退信，unknown 归入临时）
-  const groups = { permanent: [], temporary: [] };
+  // 分组：已匹配→永久/暂时，未匹配→单独一组
+  const groups = { permanent: [], temporary: [], unmatched: [] };
   for (const r of S.bounceRecords) {
-    if (!r.matched) continue;
+    if (!r.matched) { groups.unmatched.push(r); continue; }
     const key = r.type === 'permanent' ? 'permanent' : 'temporary';
     groups[key].push(r);
   }
   const groupDefs = [
     { key: 'permanent', label: '永久', color: 'var(--danger)', itemColor: '#f44336' },
     { key: 'temporary', label: '暂时', color: 'var(--warning)', itemColor: '#ff9800' },
+    { key: 'unmatched', label: '未匹配', color: '#f57c00', itemColor: '#f57c00' },
   ];
 
   let html = '';
@@ -46,8 +47,8 @@ export function renderBounceTable() {
       const timeStr = r.date ? new Date(r.date).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
       html += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;border-bottom:1px solid #f5f5f5;overflow:hidden">`;
       html += `<span style="color:${g.itemColor};flex-shrink:0">${g.key==='permanent'?lucide('x-circle',12):lucide('alert-triangle',12)}</span>`;
-      html += `<span style="font-family:monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1">${escapeHtml(r.email || '未识别')}</span>`;
-      html += `<span style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1">${escapeHtml(r.company || '')}</span>`;
+      html += `<span style="font-family:monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;color:${g.key==='unmatched'?'#f57c00':'inherit'}">${escapeHtml(r.email || '未识别')}</span>`;
+      html += `<span style="color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1">${escapeHtml(r.company || (g.key==='unmatched'?'未匹配联系人':''))}</span>`;
       html += `<span style="color:var(--text-secondary);font-size:11px;white-space:nowrap;margin-left:auto;flex-shrink:0">${timeStr}</span>`;
       html += `<span style="font-size:10px;color:${g.itemColor};white-space:nowrap;flex-shrink:0">${g.label}</span>`;
       html += `<span class="bounce-del-btn" data-email="${escapeHtml(r.email)}" data-idx="${i}" data-group="${g.key}" style="cursor:pointer;color:var(--danger);font-size:11px;flex-shrink:0;padding:0 4px" title="删除联系人">✕</span>`;
@@ -75,9 +76,9 @@ export function renderBounceTable() {
   // 一键删除按钮
   const delAllBtn = document.getElementById('bounce-del-all-btn');
   if (delAllBtn) {
-    const matchedCount = S.bounceRecords.filter(r => r.matched).length;
-    delAllBtn.style.display = matchedCount > 0 ? '' : 'none';
-    if (matchedCount > 0) delAllBtn.textContent = `一键删除全部 (${matchedCount})`;
+    const totalCount = S.bounceRecords.length;
+    delAllBtn.style.display = totalCount > 0 ? '' : 'none';
+    if (totalCount > 0) delAllBtn.textContent = `一键删除全部 (${totalCount})`;
   }
 }
 
@@ -171,7 +172,8 @@ export async function initBouncePage() {
         await window.electronAPI.saveBounceLog(S.bounceRecords);
         renderBounceTable();
         const matchedCount = S.bounceRecords.filter(r => r.matched).length;
-        status.innerHTML = `${lucide('alert-circle',12)} 发现 <strong>${result.bounced.length}</strong> 封退信，<strong>${matchedCount}</strong> 个匹配联系人`;
+        const unmatchedCount = S.bounceRecords.length - matchedCount;
+        status.innerHTML = `${lucide('alert-circle',12)} 发现 <strong>${S.bounceRecords.length}</strong> 封退信，<strong>${matchedCount}</strong> 匹配` + (unmatchedCount > 0 ? ` · <span style="color:#f57c00">${unmatchedCount} 未匹配</span>` : '');
         status.style.color = 'var(--warning)';
       } catch (e) {
         status.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message || '异常')}`;

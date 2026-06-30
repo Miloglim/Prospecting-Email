@@ -44,7 +44,7 @@ export async function loadDashboard(){
     // 进度条
     const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;
     document.getElementById('dash-progress-fill').style.width=Math.min(pct,100)+'%';
-    document.getElementById('dash-progress-text').textContent=sent>0?`${s.sentToday}/${s.dailyLimit}`:'等待发送';
+    document.getElementById('dash-progress-text').textContent=s.sentToday>0?`${s.sentToday}/${s.dailyLimit}`:'等待发送';
   }catch(e){document.getElementById('stat-sent').textContent='--'}
 
   // 账号状态

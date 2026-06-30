@@ -73,7 +73,10 @@ export async function renderHistoryTable() {
       if (r0._country) tags.push(escapeHtml(r0._country));
       if (r0._lang) tags.push(escapeHtml(r0._lang).toUpperCase());
       const tplMap = { agent:'代理模板', direct:'直客模板', unlabeled:'通用模板' };
-      tags.push(lucide('file-text',11) + ' ' + (tplMap[r0._type] || '通用模板'));
+      const tplTag = r0._templateSource === 'user'
+        ? (r0._templateLabel || '用户模板')
+        : (tplMap[r0._type] || '通用模板');
+      tags.push(lucide('file-text',11) + ' ' + tplTag);
       if (r0._test) tags.push(lucide('flask-conical',11) + ' 测试');
       // 收集去重收件人
       const allTo = [...new Set(items.map(r => r.to).filter(Boolean))];
@@ -91,6 +94,7 @@ export async function renderHistoryTable() {
             bodyId: r.bodyId || '',
             time: r.time || '',
             idx: r.index,
+            _type: r._type || '',
             _tplInfo: r._tplInfo || '',
             _templateSource: r._templateSource || '',
             _templateLabel: r._templateLabel || '',
@@ -189,8 +193,12 @@ export async function showPreview(d) {
     if (metaEl) {
       const t = g.time ? new Date(new Date(g.time).getTime() + 8*3600000).toISOString().slice(0,16).replace('T',' ') : '';
       let tplLabel = g._templateLabel || '';
+      if (!tplLabel && g._templateSource !== 'user') {
+        const tplMap = { agent:'代理模板', direct:'直客模板', unlabeled:'通用模板' };
+        tplLabel = tplMap[g._type] || '';
+      }
       if (!tplLabel && g._tplInfo) {
-        tplLabel = g._tplInfo.startsWith('user:') ? '用户模板' : g._tplInfo;
+        tplLabel = g._tplInfo.startsWith('user:') ? '用户模板' : '';
       }
       metaEl.innerHTML = `<span>🕐 ${escapeHtml(t || '—')}</span>${tplLabel ? '<span>· ' + escapeHtml(tplLabel) + '</span>' : ''}`;
     }

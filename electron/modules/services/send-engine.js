@@ -191,8 +191,17 @@ function _logRecord(ctx, to, company, subject, bodyText, bodyId, msgId, status, 
 
 // ── 发送单封 ──────────────────────────────────────────────────────────────
 async function _sendOne(ctx, email, log, deps) {
-  const toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
+  let toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
   if (!toList.length) return { ok: false, n: 0 };
+
+  // ponytail: 过滤已发送收件人，防止中断恢复后重复发信
+  const alreadySent = new Set(
+    (email._recipientStatus || [])
+      .filter(r => r.status === 'sent')
+      .map(r => r.email.toLowerCase().trim())
+  );
+  toList = toList.filter(addr => !alreadySent.has(addr.toLowerCase().trim()));
+  if (!toList.length) return { ok: true, n: 0, skipped: true };
 
   const { textBody, html } = buildContent(email.body || '', ctx.sigText, ctx.sigHtml);
   const accountId = deps.currentAccount?.id || '';
@@ -440,7 +449,9 @@ async function runSendBatch(deps, sendProgress) {
     // 发送
     const result = await _sendOne(ctx, email, log, deps);
 
-    if (result.ok) {
+    if (result.skipped) {
+      // 全部已发：不发进度、不扣配额
+    } else if (result.ok) {
       sent += result.n;
       if (!ctx.testMode) acctMgr.recordSuccess(account.id, log._accountStates);
     } else if (result.fused) {
@@ -456,11 +467,13 @@ async function runSendBatch(deps, sendProgress) {
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
     }
     try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch {}
-    sendProgress(result.ok
-      ? { type: 'sent', id: email.id, index: i + 1, total: queueLen, company: email.company, to: (email.recipients || [email.to]).join(','), count: result.n, accountLabel: account.label || account.smtp?.user }
-      : result.fused
-        ? { type: 'fused', id: email.id, accountLabel: account.label || account.smtp?.user }
-        : { type: 'failed', id: email.id, to: (email.recipients || [email.to]).join(','), error: '' }
+    sendProgress(result.skipped
+      ? { type: 'skipped', id: email.id }
+      : result.ok
+        ? { type: 'sent', id: email.id, index: i + 1, total: queueLen, company: email.company, to: (email.recipients || [email.to]).join(','), count: result.n, accountLabel: account.label || account.smtp?.user }
+        : result.fused
+          ? { type: 'fused', id: email.id, accountLabel: account.label || account.smtp?.user }
+          : { type: 'failed', id: email.id, to: (email.recipients || [email.to]).join(','), error: '' }
     );
 
     // 组间间隔（仅批处理（匀速速发）模式，每组之间暂停）

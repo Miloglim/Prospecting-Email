@@ -27,6 +27,7 @@ const CFG_KEYS = [
   { id: 'cfg-search-tavily-key', path: 'search.apiKey' },
   { id: 'cfg-search-serper-key', path: 'search.serperKey' },
   { id: 'cfg-agnes-key', path: 'verify.agnesKey' },
+  { id: 'cfg-deepseek-key', path: 'translate.deepseek.apiKey' },
   { id: 'cfg-proxy-host', path: 'proxy.host' },
   { id: 'cfg-test-email', path: 'test.email' },
   { id: 'cfg-test-company', path: 'test.company' },

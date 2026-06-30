@@ -135,6 +135,110 @@ function imapCheckReplies(imapCfg, knownRecipients, senderEmail) {
   });
 }
 
+// ── POP3 检测 ─────────────────────────────────────────────────────────────
+function isPop3(cfg) {
+  const h = (cfg.host || '').toLowerCase();
+  return cfg.port === 995 || h.includes('pop');
+}
+
+// ── POP3 客户端（精简，复用 bounce-checker 模式）─────────────────────────
+const tls = require('tls');
+function pop3Connect(host, port) {
+  return new Promise((resolve, reject) => {
+    const sock = tls.connect({ host, port, rejectUnauthorized: false }, () => resolve(sock));
+    sock.on('error', reject);
+    setTimeout(() => { sock.destroy(); reject(new Error('连接超时')); }, 20000);
+  });
+}
+function pop3ReadLine(sock, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读行超时')); }, timeoutMs || 15000);
+    const onData = (d) => {
+      buf += d.toString();
+      const rn = buf.indexOf('\r\n'), n = buf.indexOf('\n');
+      const end = rn >= 0 ? rn : n;
+      if (end >= 0) { clearTimeout(timer); sock.removeListener('data', onData); resolve(buf.slice(0, end).trim()); }
+    };
+    sock.on('data', onData);
+  });
+}
+function pop3ReadMulti(sock, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时')); }, timeoutMs || 15000);
+    const onData = (d) => {
+      buf += d.toString();
+      if (/\r?\n\.\r?\n/.test(buf)) {
+        clearTimeout(timer); sock.removeListener('data', onData);
+        const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/);
+        resolve(lines.length > 1 && /^[+-]/.test(lines[0]) ? lines.slice(1) : lines);
+      }
+    };
+    sock.on('data', onData);
+  });
+}
+function pop3Cmd(sock, cmd) {
+  sock.write(cmd + '\r\n');
+  if (cmd === 'QUIT') return Promise.resolve([]);
+  if (/^(LIST|TOP|UIDL|RETR)/i.test(cmd)) return pop3ReadMulti(sock);
+  return pop3ReadLine(sock).then(line => [line]);
+}
+
+// ── POP3 回复扫描 ─────────────────────────────────────────────────────────
+async function pop3CheckReplies(cfg, knownRecipients, senderEmail) {
+  const sock = await pop3Connect(cfg.host, cfg.port || 995);
+  const replies = [];
+  try {
+    await pop3ReadLine(sock, 15000);
+    await pop3Cmd(sock, `USER ${cfg.user}`);
+    await pop3Cmd(sock, `PASS ${cfg.pass}`);
+    const statRes = await pop3Cmd(sock, 'STAT');
+    const total = parseInt((statRes[0] || '').split(' ')[1]) || 0;
+    if (!total) { sock.write('QUIT\r\n'); sock.end(); return { ok: true, replies: [] }; }
+
+    const uidlRes = await pop3Cmd(sock, 'UIDL');
+    const uidMap = {};
+    for (const line of uidlRes) {
+      const parts = line.split(/\s+/);
+      if (parts.length >= 2 && /^\d+$/.test(parts[0])) uidMap[parseInt(parts[0])] = parts[1];
+    }
+    const ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 30);
+    const recipientSet = new Set(knownRecipients.map(r => r.toLowerCase().trim()));
+
+    for (const n of ids) {
+      try {
+        const raw = await pop3Cmd(sock, `TOP ${n} 100`);
+        let headerEnd = raw.findIndex(l => l.trim() === '');
+        if (headerEnd < 0) headerEnd = raw.length;
+        const headers = raw.slice(0, headerEnd);
+        const bodyLines = raw.slice(headerEnd + 1);
+        let subject = '', date = '', from = '';
+        for (const h of headers) {
+          const hl = h.toLowerCase();
+          if (hl.startsWith('subject:')) subject = h.slice(8).trim();
+          if (hl.startsWith('date:')) date = h.slice(5).trim();
+          if (hl.startsWith('from:')) from = h.slice(5).trim();
+        }
+        const decoded = decodeMimeHeader(subject);
+        if (isExcluded(decoded)) continue;
+
+        const fromEmail = (from.match(/<(.+?)>/) || [])[1] || from.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[0] || '';
+        if (!fromEmail || !recipientSet.has(fromEmail.toLowerCase().trim())) continue;
+
+        const bodyText = bodyLines.join(' ').slice(0, 500).trim();
+        replies.push({ from: fromEmail, subject: decoded, date, inReplyTo: '', snippet: bodyText });
+      } catch { continue; }
+    }
+    sock.write('QUIT\r\n');
+    sock.end();
+    return { ok: true, replies };
+  } catch (e) {
+    try { sock.end(); } catch {}
+    return { ok: false, error: 'POP3 失败: ' + (e.message || String(e)) };
+  }
+}
+
 // ── 主入口 ──────────────────────────────────────────────────────────────────
 async function checkReplies() {
   const configPath = path.join(APP_ROOT, 'send', 'config.json');
@@ -171,13 +275,16 @@ async function checkReplies() {
     : config.imap?.host ? [{ imap: config.imap, label: '默认', smtp: { user: config.imap.user } }]
     : [];
 
-  if (!checkAccounts.length) return { ok: false, error: '无可用邮箱（请在账号中配置 IMAP）' };
+  if (!checkAccounts.length) return { ok: false, error: '无可用邮箱（请在账号中配置 IMAP/POP3 收件箱）' };
 
   const allReplies = [];
   for (const acc of checkAccounts) {
     const senderEmail = acc.imap?.user || acc.smtp?.user || '';
     try {
-      const result = await imapCheckReplies(acc.imap, [...knownRecipients], senderEmail);
+      const isPop = isPop3(acc.imap);
+      const result = isPop
+        ? await pop3CheckReplies(acc.imap, [...knownRecipients], senderEmail)
+        : await imapCheckReplies(acc.imap, [...knownRecipients], senderEmail);
       if (result.ok && result.replies?.length) {
         result.replies.forEach(r => { r._accountLabel = acc.label || senderEmail; });
         allReplies.push(...result.replies);

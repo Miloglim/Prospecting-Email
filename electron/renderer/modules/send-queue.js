@@ -3,6 +3,20 @@ import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,d
 import { randomPick, assembleEmail } from './templates.js';
 
 // ===== 发送队列 =======================================================
+
+// ponytail: 将 sending → 回退并重算队列项状态（暂停/限流/卡住/错误共用）
+function _rollbackSendingStatus(e) {
+  if (e._recipientStatus) {
+    e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
+    const sentN = e._recipientStatus.filter(r => r.status === 'sent').length;
+    const failN = e._recipientStatus.filter(r => r.status === 'failed').length;
+    const total = e._recipientStatus.length;
+    e.status = sentN === total ? 'sent' : failN === total ? 'failed' : 'pending';
+  } else {
+    e.status = 'pending';
+  }
+}
+
 export function saveQueue() {
   const json = JSON.stringify(S.queue);
   localStorage.setItem('emailQueue', json);
@@ -146,7 +160,7 @@ export async function renderQueue() {
     const tplLabel = e._templateLabel || typeLabelMap[e._type] || '通用模板';
     const tplSourceTag = e._templateSource === 'user'
       ? `<span style="font-weight:600;color:var(--primary)">${escapeHtml(tplLabel)}</span>`
-      : `<span style="color:var(--text-secondary)">预设模板</span>`;
+      : `<span style="color:var(--text-secondary)">${escapeHtml(tplLabel)}</span>`;
     const ctry = e._country ? `<span>${escapeHtml(e._country)}</span>` : '';
     const langTag = e._lang ? `<span>${escapeHtml(e._lang).toUpperCase()}</span>` : '';
     // 联系人标签徽章
@@ -165,6 +179,15 @@ export async function renderQueue() {
       : '';
     const gLabel = e._groupTotal > 1 ? `<span style="font-size:10px;color:var(--text-secondary);margin-left:4px">(${e._groupSeq + 1}/${e._groupTotal})</span>` : '';
     const rs = e._recipientStatus || e.recipients?.map(r => ({ email: r, status: 'pending' })) || [];
+    // 部分发送进度（不展开也能看到）
+    const sentCount = rs.filter(r => r.status === 'sent').length;
+    const failCount = rs.filter(r => r.status === 'failed').length;
+    const totalCount = rs.length;
+    const partialHint = (sentCount > 0 || failCount > 0) && (sentCount + failCount) < totalCount
+      ? `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0;display:flex;align-items:center;gap:4px">
+          ${lucide('users',12)} ${sentCount}/${totalCount} 已发${failCount > 0 ? ` · ${failCount} 失败` : ''}
+        </div>`
+      : '';
     const detailRows = rs.map(r => {
       const err = r._error ? ` <span style="font-size:10px;color:var(--danger)">${escapeHtml(r._error)}</span>` : '';
       return `<div class="qc-recipient ${r.status}"><span>${statusIcon(r.status)}</span><span style="font-family:monospace;flex:1">${escapeHtml(r.email)}</span>${err}</div>`;
@@ -182,6 +205,7 @@ export async function renderQueue() {
       <div class="qc-body">
         <div class="qc-to">To: ${escapeHtml(e.recipients?.[0] || e.to?.split(',')[0] || '')}${count > 1 ? ` <span style="font-size:10px">+\u2060${count - 1} 位</span>` : ''}</div>
         <div class="qc-subject" title="${escapeHtml(e.subject)}">${escapeHtml(e.subject)}</div>
+        ${partialHint}
       </div>
       <div class="qc-footer">
         ${tagsHtml}
@@ -404,6 +428,15 @@ export async function startSend() {
         if (item._recipientStatus.every(r => r.status === 'sent')) item.status = 'sent';
         else item.status = 'sending';
       }
+    } else if (data.type === 'skipped') {
+      // 引擎检测到全部已发，跳过：直接标记为 sent 并推进
+      const item = S.queue.find(e => e.id === data.id);
+      if (item) {
+        if (item._recipientStatus) {
+          item._recipientStatus.forEach(r => { if (r.status !== 'sent' && r.status !== 'failed') r.status = 'sent'; });
+        }
+        item.status = 'sent';
+      }
     } else if (data.type === 'failed') {
       const item = S.queue.find(e => e.id === data.id);
       if (item) {
@@ -480,11 +513,8 @@ export async function startSend() {
       const el = document.getElementById('queue-estimate');
       if (el) { el.style.display = 'block'; el.textContent = `发送被限流！${data.error || ''} 发送已自动暂停，请等待后手动恢复。`; el.style.color = 'var(--danger)'; }
       S.sendInProgress = false;
-      // 将所有 sending 状态回退为 pending，避免卡住
-      S.queue.forEach(e => {
-        if (e.status === 'sending') e.status = 'pending';
-        if (e._recipientStatus) e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
-      });
+      // 将 sending 回退，保留已发送的部分进度
+      S.queue.forEach(e => { if (e.status === 'sending') _rollbackSendingStatus(e); });
       document.getElementById('queue-start').disabled = false;
       document.getElementById('queue-pause').disabled = true;
       document.getElementById('queue-cancel').disabled = false;
@@ -553,7 +583,7 @@ export async function startSend() {
       document.getElementById('queue-cancel').disabled = false;
     }
     // 每完成一个队列项，推进下一个 pending → sending（仅聚焦当前任务）
-    if (S.sendInProgress && (data.type === 'sent' || data.type === 'failed')) {
+    if (S.sendInProgress && (data.type === 'sent' || data.type === 'failed' || data.type === 'skipped')) {
       const nextP = S.queue.find(e => e.status === 'pending');
       if (nextP) {
         nextP.status = 'sending';
@@ -577,22 +607,16 @@ export async function startSend() {
       const stuck = S.queue.filter(e => e.status === 'sending');
       if (stuck.length && !S.sendInProgress) {
         console.log('🔄 修复卡住的发送项:', stuck.length);
-        stuck.forEach(e => {
-          e.status = 'pending';
-          if (e._recipientStatus) e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
-        });
+        stuck.forEach(e => _rollbackSendingStatus(e));
         saveQueue();
         renderQueue();
       }
     }, 1000);
   }
-  // 错误时回退
+  // 错误时回退，保留已发送的部分进度
   if (result?.error) {
     S.sendInProgress = false;
-    pending.forEach(e => {
-      if (e.status === 'sending') e.status = 'pending';
-      if (e._recipientStatus) e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
-    });
+    pending.forEach(e => { if (e.status === 'sending') _rollbackSendingStatus(e); });
     document.getElementById('queue-start').disabled = false;
     document.getElementById('queue-pause').disabled = true;
     document.getElementById('queue-cancel').disabled = false;
@@ -608,11 +632,8 @@ document.getElementById('queue-pause')?.addEventListener('click', async () => {
   S.sendInProgress = false;
   const startBtn = document.getElementById('queue-start');
   if (startBtn) startBtn.innerHTML = '<span data-icon="chevron-right"></span> 继续发送';
-  // 将当前 sending 项恢复为 pending
-  S.queue.forEach(e => {
-    if (e.status === 'sending') e.status = 'pending';
-    if (e._recipientStatus) e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
-  });
+  // 暂停：仅回退正在发送中（实际未发出）的收件人，保留已发送的部分进度
+  S.queue.forEach(e => { if (e.status === 'sending') _rollbackSendingStatus(e); });
   saveQueue();
   document.getElementById('queue-start').disabled = false;
   document.getElementById('queue-pause').disabled = true;
@@ -796,7 +817,8 @@ export async function doQueueRefresh() {
     }
     if (!baseSubject) {
       const subjects = S.templateLib.subjects?.[t] || { es: '' };
-      baseSubject = subjects[lang] ?? subjects.es ?? '';
+      const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
+      baseSubject = (subjects[lang] ?? subjects.es ?? '').replace(/\{\{company\}\}/g, companyDisplay);
     }
 
     for (let g = 0; g < groups; g++) {
@@ -810,7 +832,7 @@ export async function doQueueRefresh() {
         body = (userTpl.body || '').replace(/\{\{company\}\}/g, companyDisplay);
         tplInfo = `user:${userTpl.id}`;
       } else {
-        // 预设库拼装（用户模板多组时后续组也走这里）
+        // 预设库拼装：每组随机选，不追踪重复
         const picked = randomPick(t, stage, []);
         body = assembleEmail(lang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, stage, t, config?.sender?.bodyName);
         tplInfo = [picked.hook?.id, picked.pain?.id, picked.proof?.id, picked.cta?.id, picked.followup?.id].filter(Boolean).join('·');

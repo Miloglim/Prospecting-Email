@@ -240,7 +240,39 @@
 
 ---
 
-## 二、广告词 & 垃圾词黑名单
+---
+
+## 二、邮件主题行
+
+> 三语预设主题，`{{company}}` 自动替换为公司名。
+
+### 3.1 代理
+
+| 语言 | 主题行 |
+|------|--------|
+| 西语 | Propuesta logística — {{company}} |
+| 葡语 | Proposta logística — {{company}} |
+| 英语 | Logistics proposal — {{company}} |
+
+### 3.2 直客
+
+| 语言 | 主题行 |
+|------|--------|
+| 西语 | Solución aduanal — {{company}} |
+| 葡语 | Solução aduaneira — {{company}} |
+| 英语 | Customs solution — {{company}} |
+
+### 3.3 未标签
+
+| 语言 | 主题行 |
+|------|--------|
+| 西语 | Consulta logística — {{company}} |
+| 葡语 | Consulta logística — {{company}} |
+| 英语 | Logistics inquiry — {{company}} |
+
+---
+
+## 三、广告词 & 垃圾词黑名单
 
 ### 2.1 硬禁止（触发即不合格）
 
