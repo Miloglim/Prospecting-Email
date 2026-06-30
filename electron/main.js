@@ -238,8 +238,7 @@ app.on('second-instance', () => {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
-  try { deps.templateLib = parseTemplateLibrary(); }
-      Log.info("系统", "模板库加载: " + (Object.keys(deps.templateLib?.subjects||{}).length) + "套主题行");
+  try { deps.templateLib = parseTemplateLibrary(); Log.info("系统", "模板库加载: " + (Object.keys(deps.templateLib?.subjects||{}).length) + "套主题行"); }
   catch (e) { Log.error('启动', '模板加载失败', e); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
   setupIPC(); createWindow(); createTray();
   require('./modules/updater').init(deps.mainWindow);
