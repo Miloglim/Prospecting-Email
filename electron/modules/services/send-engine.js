@@ -399,6 +399,26 @@ async function runSendBatch(deps, sendProgress) {
   // ponytail: 快照队列长度，防止并发推入导致循环无限增长
   const queueLen = deps.sendQueue.length;
 
+  // ponytail: 恢复上次未完成的组间间隔（防重启跳过倒计时）
+  try {
+    const statePath = path.join(APP_ROOT, 'data', 'send-state.json');
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+      if (state.pendingDelaySec > 0 && state.delayStartedAt) {
+        const elapsed = Math.floor((Date.now() - state.delayStartedAt) / 1000);
+        const remain = Math.max(0, state.pendingDelaySec - elapsed);
+        if (remain > 3) { // 剩余不足 3 秒就算了
+          Log.info("发信", "恢复组间间隔 " + remain + "s (剩余)");
+          sendProgress({ type: 'delay', seconds: remain, company: '恢复组间间隔' });
+          await cancellableSleep(remain * 1000, deps);
+          if (deps.isPaused || deps.currentSendAbort) return;
+        }
+      }
+    }
+  } catch {}
+  // 清除间隔状态
+  try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ status: 'sending' })); } catch {}
+
   try {
   for (let i = 0; i < queueLen; i++) {
     if (deps.currentSendAbort) { sendProgress({ type: 'cancelled' }); break; }
@@ -481,6 +501,8 @@ async function runSendBatch(deps, sendProgress) {
       const gi = Math.floor(Math.random() * (ctx.groupIntervalMax - ctx.groupIntervalMin + 1)) + ctx.groupIntervalMin;
       const giSec = Math.round(gi / 1000);
       Log.info("发信", "组间间隔 " + giSec + "s (" + (i+1) + "/" + queueLen + "组)");
+      // ponytail: 持久化间隔状态，防重启跳过倒计时
+      try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ pendingDelaySec: giSec, delayStartedAt: Date.now(), status: 'delaying' })); } catch {}
       sendProgress({ type: 'delay', seconds: giSec, company: `组间间隔(${i + 1}/${queueLen}组)` });
       if (!await cancellableSleep(gi, deps)) break;
     }

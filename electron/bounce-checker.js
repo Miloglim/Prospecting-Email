@@ -409,8 +409,17 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
         const since = `${d.getDate()}-${months[d.getMonth()]}-${d.getFullYear()}`;
         // 客户端过滤：只拉最近邮件，本地匹配关键词，避免 IMAP 超长 OR 树
         imap.search([['SINCE', since]], async (err, results) => {
-          if (err || !results.length) { imap.end(); return resolve({ ok: true, bounced: [], message: '未发现退信' }); }
-          const recentIds = results.slice(-50);
+          // 部分 IMAP 服务器（如国内企业邮）不支持 SINCE，降级为全量搜索
+          if (err || !results?.length) {
+            imap.search([['ALL']], async (err2, allResults) => {
+              if (err2 || !allResults?.length) { imap.end(); return resolve({ ok: true, bounced: [], message: '未发现退信' }); }
+              processResults(allResults.slice(-200));
+            });
+            return;
+          }
+          processResults(results.slice(-200));
+        });
+        function processResults(recentIds) {
           const fetch = imap.fetch(recentIds, {
             bodies: ['HEADER.FIELDS (SUBJECT DATE X-FAILED-RECIPIENTS)', 'TEXT'],
             struct: true
@@ -434,8 +443,9 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
             for (const { headers, body } of messages) {
               const subj = (headers.match(/Subject: (.+)/i) || [])[1] || '';
               const decodedSubj = decodeMimeHeader(subj).trim();
-              // 本地关键词匹配
-              if (!effectiveKw.some(kw => decodedSubj.toLowerCase().includes(kw.toLowerCase()))) continue;
+              // 本地关键词匹配（标题 + 正文前 500 字）
+              const bodySnippet2 = body.slice(0, 500);
+              if (!effectiveKw.some(kw => decodedSubj.toLowerCase().includes(kw.toLowerCase()) || bodySnippet2.toLowerCase().includes(kw.toLowerCase()))) continue;
               const date = (headers.match(/Date: (.+)/i) || [])[1] || '';
               const bodyLines = body.split(/\r?\n/);
               const headerLines = headers.split(/\r?\n/);
@@ -469,7 +479,7 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
             if (bounced.length) appendBounceLog(bounced);
             resolve({ ok: true, bounced, message: bounced.length ? `发现 ${bounced.length} 封退信` : '未发现退信' });
           });
-        });
+        }
       });
     });
     imap.once('error', (e) => resolve({ ok: false, error: 'IMAP 失败: ' + (e.message || e) }));
@@ -488,9 +498,18 @@ async function checkBounces() {
   const effectiveKw = [...new Set([...BOUNCE_KW, ...userKw])];
   const apiKey = config.translate?.deepseek?.apiKey || '';
 
-  // 收集所有有 IMAP 配置的活跃账号
+  // 收集所有活跃账号，无 IMAP 则从 SMTP 自动推导
   const accounts = config.smtpAccounts || [];
-  const imapAccounts = accounts.filter(a => a.active !== false && a.imap?.host && a.imap?.user);
+  const imapAccounts = accounts
+    .filter(a => a.active !== false)
+    .map(a => {
+      if (a.imap?.host && a.imap?.user) return a;
+      // 自动推导：smtp.xxx.com → imap.xxx.com，同用户同密码
+      const host = (a.smtp?.host || '').replace(/^smtp\./i, 'imap.')
+        .replace(/^mail\./i, 'imap.');
+      return { ...a, imap: { host, port: 993, user: a.smtp?.user || '', pass: a.smtp?.pass || '', tls: true } };
+    })
+    .filter(a => a.imap?.host && a.imap?.user);
 
   // 向后兼容：旧格式全局 imap
   if (!imapAccounts.length && config.imap?.host && config.imap?.user) {
