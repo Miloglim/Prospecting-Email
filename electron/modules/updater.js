@@ -56,10 +56,6 @@ function init(mainWindow) {
 
   // ── IPC：渲染进程可手动触发 ──
   ipcMain.handle('update:check', async () => {
-    // ponytail: 私有仓库需 GH_TOKEN，未配置时提前告知
-    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
-      return { ok: false, error: '未配置 GitHub Token（私有仓库认证需要 GH_TOKEN 环境变量）' };
-    }
     try {
       const currentVersion = require('electron').app.getVersion();
       const result = await autoUpdater.checkForUpdates();

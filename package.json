@@ -33,8 +33,7 @@
     "publish": {
       "provider": "github",
       "owner": "Miloglim",
-      "repo": "Prospecting-Email",
-      "private": true
+      "repo": "Prospecting-Email"
     },
     "files": [
       "dist/**",
