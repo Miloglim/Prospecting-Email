@@ -58,8 +58,7 @@ function register(ipcMain) {
 
     cfg.smtpAccounts.push(newAccount);
     _writeConfig(cfg);
-    Log.info("账号", "删除: " + id);
-    console.log(`[账号] 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
+    Log.info("账号", "添加: " + newAccount.smtp?.user + " @" + newAccount.smtp?.host + " (" + newAccount.id + ")");
     return { ok: true, data: newAccount };
   });
 
@@ -78,7 +77,7 @@ function register(ipcMain) {
       imap: updates.imap ? { ...existing.imap, ...updates.imap } : existing.imap,
     };
     _writeConfig(cfg);
-    Log.info("账号", "删除: " + id);
+    Log.info("账号", "更新: " + id);
     return { ok: true, data: cfg.smtpAccounts[idx] };
   });
 
@@ -102,7 +101,6 @@ function register(ipcMain) {
     if (!acc) return { ok: false, error: '账号不存在' };
     acc.active = !acc.active; Log.info("账号", (acc.active ? "启用: " : "停用: ") + id);
     _writeConfig(cfg);
-    Log.info("账号", "删除: " + id);
     return { ok: true, data: acc };
   });
 
