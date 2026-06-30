@@ -439,6 +439,7 @@
               <button id="send-deselect-all" class="secondary btn-dot" style="font-size:11px;padding:3px 8px">取消</button>
               <button id="send-fill-limit" class="secondary btn-dot" style="font-size:11px;padding:3px 8px">填充</button>
               <select id="send-fill-stage" style="font-size:11px;padding:2px 4px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;width:70px">
+                <option value="">全部</option>
                 <option value="cold">冷开发</option>
                 <option value="f1">F1</option>
                 <option value="f2">F2</option>
@@ -449,6 +450,7 @@
             </div>
           </div>
           <div class="send-side-list" id="send-company-list"></div>
+          <div class="send-ctx-menu" id="send-ctx-menu" style="display:none"></div>
         </div>
         <div class="send-body">
           <div class="send-top">

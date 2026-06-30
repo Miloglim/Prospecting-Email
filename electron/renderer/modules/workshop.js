@@ -408,8 +408,8 @@ export function showUserTemplateEditor(tpl) {
       </div>
     </div>
     <div class="form-group"><label>主题 <span style="color:var(--danger)">*</span></label><input type="text" id="ut-subject" value="${escapeHtml(tpl.subject)}" placeholder="邮件主题，可选用 {{company}}"></div>
-    <div class="form-group"><label>正文 <span style="color:var(--danger)">*</span></label><textarea id="ut-body" rows="14" style="width:100%;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:Arial,sans-serif;line-height:1.6" placeholder="在此粘贴或输入邮件正文...">${escapeHtml(tpl.body)}</textarea></div>
-    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>，发信时自动替换为客户公司名。支持粘贴富文本但仅保留纯文字格式。</p>
+    <div class="form-group"><label>正文 <span style="color:var(--danger)">*</span></label><div id="ut-body" contenteditable="true" style="width:100%;min-height:280px;max-height:500px;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;overflow-y:auto;font-family:Arial,sans-serif;line-height:1.6;background:var(--surface);outline:none" placeholder="在此粘贴或输入邮件正文...">${tpl.body}</div></div>
+    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>，发信时自动替换为客户公司名。支持加粗、斜体、列表等富文本格式，粘贴时保留格式。</p>
 
     <div style="display:flex;gap:8px;margin-top:12px">
       <button id="btn-ut-save" style="font-size:13px;padding:6px 20px">💾 保存</button>
@@ -426,7 +426,7 @@ export function showUserTemplateEditor(tpl) {
       stage: document.getElementById('ut-stage')?.value || '',
       lang: document.getElementById('ut-lang')?.value || '',
       subject: document.getElementById('ut-subject')?.value.trim() || '',
-      body: document.getElementById('ut-body')?.value || '',
+      body: document.getElementById('ut-body')?.innerHTML || '',
     };
     // 逐项检查空值
     const emptyFields = [];
@@ -435,7 +435,10 @@ export function showUserTemplateEditor(tpl) {
     if (!data.stage) emptyFields.push('开发阶段');
     if (!data.lang) emptyFields.push('语言');
     if (!data.subject) emptyFields.push('主题');
-    if (!data.body.trim()) emptyFields.push('正文');
+    // 正文用 textContent 判空（HTML 标签不算内容）
+    const bodyEl = document.getElementById('ut-body');
+    const bodyText = bodyEl?.textContent?.trim() || '';
+    if (!bodyText) emptyFields.push('正文');
     if (emptyFields.length) { await showAlert('请填写：' + emptyFields.join('、')); return; }
     try {
       const result = await window.electronAPI.saveUserTemplate(data);
@@ -455,6 +458,7 @@ export function showUserTemplateEditor(tpl) {
 
   // 取消
   document.getElementById('btn-ut-cancel')?.addEventListener('click', () => showUserTemplateList());
+
 }
 
 export async function initSignature() {

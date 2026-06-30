@@ -55,6 +55,7 @@ renderer/modules/       # 按页面拆分，lucide 统一从 shared.js import
 - **config.json 无孤儿字段** — 删功能时同步清理 config。只保留 CFG_KEYS 中映射的字段
 - **路径用 config.js** — 项目根路径从 `require('./modules/config').APP_ROOT` 取
 - **开发模式判断** — `__dirname.includes('.asar')` 判断打包
+- **状态聚合入口** — 同领域多字段状态（如公司选择/筛选/模板分配）必须通过单一模块（如 `company-state.js`）写入，禁止多文件直接操作 S.* 变量。读取随意，写入必须走聚合入口。
 
 ## 已知陷阱
 

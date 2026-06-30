@@ -258,7 +258,7 @@ document.querySelectorAll('.setting-required input[data-required]').forEach(el =
 });
 
 // 预计发送时长（设置页灰字，双模式）
-export function updateScheduleEstimate() {
+export async function updateScheduleEstimate() {
   const el = document.getElementById('cfg-schedule-estimate');
   if (!el) return;
   // getNumOr: 区分「用户填0」和「留空」— 留空用默认值，0 就是 0
@@ -268,11 +268,13 @@ export function updateScheduleEstimate() {
     const v = Number(input.value);
     return isNaN(v) ? fallback : v;
   };
-  const max = 500;  // ponytail: 多账号模式，每日上限由各账号独立配置
+  // 从仪表盘取实际剩余额度
+  let max = 500;
+  try { const stats = await window.electronAPI.getDashboardStats(); max = stats.remaining || 0; } catch {}
   if (max <= 0) { el.innerHTML = ''; return; }
   const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
 
-  let totalSec, detail;
+  let totalSec;
   if (mode === 'batch') {
     const batchSize = getNumOr('cfg-schedule-batch-size', 10);
     const pauseMin = getNumOr('cfg-schedule-batch-pause-min', 150);
@@ -280,7 +282,6 @@ export function updateScheduleEstimate() {
     const avgPause = (pauseMin + pauseMax) / 2;
     const batches = Math.ceil(max / batchSize);
     totalSec = Math.round((batches - 1) * avgPause);
-    detail = `${batches} 批 × ${batchSize} 封，批间暂停 ${pauseMin}~${pauseMax}s`;
   } else {
     const avgItemDelay = (getNumOr('cfg-schedule-min-delay', 10) + getNumOr('cfg-schedule-max-delay', 15)) / 2;
     const singleMin = getNumOr('cfg-schedule-single-min', 60);
@@ -288,14 +289,14 @@ export function updateScheduleEstimate() {
     const avgSingleDelay = (singleMin + singleMax) / 2;
     const companies = Math.ceil(max / 2);
     totalSec = Math.round(max * avgItemDelay + (companies - 1) * avgSingleDelay);
-    detail = `${companies} 家公司（按每公司 2 人），切换间 ${singleMin}s~${singleMax}s`;
   }
 
   if (totalSec <= 0) { el.innerHTML = ''; return; }
   const h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60);
   const timeStr = h > 0 ? `${h} 时 ${m} 分` : `${m} 分`;
+  const perMin = totalSec > 0 ? Math.round(max / (totalSec / 60)) : 0;
   const perHour = totalSec > 0 ? Math.round(max / (totalSec / 3600)) : 0;
-  el.innerHTML = `满额 ${max} 封 ≈ <strong>${timeStr}</strong> · 约 <strong>${perHour} 封/时</strong> <span style="color:#999">（${detail}）</span>`;
+  el.innerHTML = `剩余 ${max} 封 ≈ <strong>${timeStr}</strong> · 约 <strong>${perMin} 封/分</strong> - <strong>${perHour} 封/时</strong>`;
 }
 ['cfg-schedule-mode','cfg-schedule-min-delay','cfg-schedule-max-delay','cfg-schedule-company-delay-min','cfg-schedule-company-delay-max','cfg-schedule-group-size','cfg-schedule-single-min','cfg-schedule-single-max','cfg-schedule-batch-size','cfg-schedule-batch-pause-min','cfg-schedule-batch-pause-max'].forEach(id => {
   const el = document.getElementById(id);

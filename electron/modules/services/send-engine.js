@@ -137,6 +137,19 @@ function buildContent(bodyText, sigText, sigHtml) {
   // ponytail: 模板已自带结尾语（Saludos/Atentamente/Regards等），不再追加签名
   const SIG_PATTERNS = /(Saludos|Atentamente|Cordialmente|Un saludo|Best regards|Sincerely|Atenciosamente|Cordialement|Respectfully)[\s,]*$/im;
   const sigStart = (sigText || '').split('\n')[0]?.trim();
+
+  // 检测是否为 HTML 正文（用户模板 contenteditable 保留格式）
+  const isHtml = /<[a-z][\s\S]*>/i.test(bodyText);
+  if (isHtml) {
+    const plainText = bodyText.replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
+    const hasValediction = SIG_PATTERNS.test(plainText);
+    const hasSig = sigStart && bodyText.includes(sigStart);
+    const textBody = (hasSig || hasValediction) ? plainText : (plainText + '\n--\n' + sigText);
+    const html = (hasSig || hasValediction) ? bodyText : (bodyText + '<br>\n' + sigHtml);
+    return { textBody, html, hasSig: hasSig || hasValediction };
+  }
+
+  // 纯文本正文：原有逻辑
   const hasSig = sigStart && bodyText.trimEnd().includes(sigStart);
   const hasValediction = SIG_PATTERNS.test(bodyText.trimEnd());
   const textBody = (hasSig || hasValediction) ? bodyText : (bodyText + '\n--\n' + sigText);

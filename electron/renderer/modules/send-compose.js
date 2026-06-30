@@ -2,6 +2,7 @@ const S = window.S;
 import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag } from './shared.js';
 import { randomPick, assembleEmail, assembleMonthlyReport, generateMonthlyReports, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
+import CS from './company-state.js';
 
 // ===== 邮件发送 ======================================================
 
@@ -15,28 +16,28 @@ export async function initEmailSend() {
     renderCompanyList(e.target.value.toLowerCase());
   });
   document.getElementById('send-select-all')?.addEventListener('click', () => {
-    if (S.sendStageFilter === 'archived') {
-      S.selectedCompanySet.clear();
+    CS.clearSelection();
+    if (CS.getFilter() === 'archived') {
       document.querySelectorAll('#send-company-list .send-company-item.archived').forEach(el => {
-        if (el.dataset.company) S.selectedCompanySet.add(el.dataset.company);
+        if (el.dataset.company) CS.select(el.dataset.company);
       });
     } else {
       document.querySelectorAll('.sc-check').forEach(cb => {
         cb.checked = true;
-        if (cb.dataset.company) S.selectedCompanySet.add(cb.dataset.company);
+        if (cb.dataset.company) CS.select(cb.dataset.company);
       });
     }
     updateSelectedCount();
   });
   document.getElementById('send-deselect-all')?.addEventListener('click', () => {
-    S.selectedCompanySet.clear();
+    CS.clearSelection();
     document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
     updateSelectedCount();
   });
   document.getElementById('send-fill-limit')?.addEventListener('click', async () => {
-    S.selectedCompanySet.clear();
+    CS.clearSelection();
     document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
-    const stage = document.getElementById('send-fill-stage')?.value || 'cold';
+    const stage = document.getElementById('send-fill-stage')?.value;
     let limit = 500;
     try { const stats = await window.electronAPI.getDashboardStats(); limit = stats.remaining || 500; } catch {}
     let total = 0;
@@ -49,17 +50,17 @@ export async function initEmailSend() {
     for (const el of sorted) {
       const name = el.dataset.company;
       if (!name) continue;
-      if ((S.sendHistory[name]?.stage || 'cold') !== stage) continue;
+      if (stage && (S.sendHistory[name]?.stage || 'cold') !== stage) continue;
       const count = (S.sendCompanies[name] || []).length;
       if (total + count > limit && total > 0) continue;
-      S.selectedCompanySet.add(name);
+      CS.select(name);
       const cb = el.querySelector('.sc-check');
       if (cb) cb.checked = true;
       total += count;
     }
     updateSelectedCount();
-    const stageLabel = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' }[stage] || stage;
-    showToast(`[${stageLabel}] 已填充 ${S.selectedCompanySet.size} 家 · ${total} 人（剩余额度 ${limit}）`, 'ok');
+    const stageLabel = stage ? ({ cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' }[stage] || stage) : '全部阶段';
+    showToast(`[${stageLabel}] 已填充 ${CS.getSelected().size} 家 · ${total} 人（剩余额度 ${limit}）`, 'ok');
   });
   // 阶段筛选标签
   document.querySelectorAll('.send-stage-tab').forEach(tab => {
@@ -72,12 +73,148 @@ export async function initEmailSend() {
       tab.classList.add('active');
       tab.style.background = 'var(--primary)';
       tab.style.color = '#fff';
-      S.sendStageFilter = tab.dataset.stage;
-      S.selectedCompanySet.clear();
+      CS.setFilterAndClear(tab.dataset.stage);
+      const stageSel = document.getElementById('send-fill-stage');
+      if (stageSel) stageSel.value = '';
       renderCompanyList(document.getElementById('send-search')?.value || '');
     });
   });
+  // 阶段下拉同步筛选列表
+  document.getElementById('send-fill-stage')?.addEventListener('change', () => {
+    CS.setFilterAndClear(document.getElementById('send-fill-stage')?.value || 'active');
+    renderCompanyList(document.getElementById('send-search')?.value || '');
+    document.querySelectorAll('.send-stage-tab').forEach(t => {
+      t.style.background = 'var(--bg)';
+      t.style.color = 'var(--text-secondary)';
+      t.classList.remove('active');
+    });
+  });
   await loadSendContacts();
+  // 预加载用户模板供右键菜单使用
+  try { S._userTemplates = await window.electronAPI.listUserTemplates(); } catch { S._userTemplates = []; }
+
+  // 右键菜单：公司模板覆盖（右侧已选公司卡片）
+  const ctxMenu = document.getElementById('send-ctx-menu');
+  document.getElementById('send-company-cards')?.addEventListener('contextmenu', (e) => {
+    const card = e.target.closest('.sc-card');
+    if (!card || !card.dataset.company) return;
+    e.preventDefault();
+    const name = card.dataset.company;
+    showSendContextMenu(name, e.clientX, e.clientY);
+  });
+  document.addEventListener('click', (e) => {
+    if (ctxMenu && !ctxMenu.contains(e.target)) hideSendContextMenu();
+  });
+}
+
+function showSendContextMenu(companyName, x, y) {
+  const ctxMenu = document.getElementById('send-ctx-menu');
+  if (!ctxMenu) return;
+  const members = S.sendCompanies[companyName] || [];
+  const ctype = members[0]?.clientType || 'unlabeled';
+  const hist = S.sendHistory[companyName];
+  const stage = hist?.stage || 'cold';
+  const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+  const card = S.selectedCards[companyName];
+  const isUserTpl = card?._templateSource === 'user';
+  const curTplName = isUserTpl ? card._userTemplate?.name : '预设模板';
+  const curTplId = isUserTpl ? card._userTemplate?.id : '';
+
+  const userTemplates = S._userTemplates || [];
+  const matched = matchUserTemplates(userTemplates, ctype, stage, lang);
+
+  let html = `<div class="ctx-current">当前：${escapeHtml(curTplName)}</div>`;
+  html += `<div class="ctx-item${!isUserTpl ? ' active' : ''}" data-action="auto-preset">自动匹配（预设模板）</div>`;
+  if (matched.length) {
+    html += `<div class="ctx-item${isUserTpl && !curTplId ? ' active' : ''}" data-action="auto-user">自动匹配（用户模板）</div>`;
+  }
+  if (matched.length) {
+    html += '<div class="ctx-sep"></div>';
+    for (const tpl of matched) {
+      const active = isUserTpl && curTplId === tpl.id;
+      html += `<div class="ctx-item${active ? ' active' : ''}" data-action="pick" data-tpl-id="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name || tpl.id)}</div>`;
+    }
+  }
+
+  ctxMenu.innerHTML = html;
+  // 确保菜单不超出视口
+  const maxX = window.innerWidth - 220;
+  const maxY = window.innerHeight - 200;
+  ctxMenu.style.left = Math.min(x, maxX) + 'px';
+  ctxMenu.style.top = Math.min(y, maxY) + 'px';
+  ctxMenu.style.display = 'block';
+  ctxMenu._companyName = companyName;
+  ctxMenu._ctype = ctype;
+  ctxMenu._stage = stage;
+  ctxMenu._lang = lang;
+
+  // 菜单项点击
+  ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const action = el.dataset.action;
+      const tplId = el.dataset.tplId;
+      applyTemplateOverride(ctxMenu._companyName, ctxMenu._ctype, ctxMenu._stage, ctxMenu._lang, action, tplId);
+      hideSendContextMenu();
+    });
+  });
+}
+
+function hideSendContextMenu() {
+  const ctxMenu = document.getElementById('send-ctx-menu');
+  if (ctxMenu) ctxMenu.style.display = 'none';
+}
+
+function applyTemplateOverride(name, ctype, stage, lang, action, tplId) {
+  const members = S.sendCompanies[name] || [];
+  const usedSentences = S.sendHistory[name]?.usedSentences || [];
+  const userTemplates = S._userTemplates || [];
+
+  if (action === 'auto-preset') {
+    CS.setCard(name, {
+      type: ctype, stage, lang,
+      template: randomPick(ctype, stage, usedSentences),
+      _templateSource: 'preset',
+    });
+  } else if (action === 'auto-user') {
+    const matched = matchUserTemplates(userTemplates, ctype, stage, lang);
+    if (matched.length) {
+      const picked = matched[Math.floor(Math.random() * matched.length)];
+      CS.setCard(name, {
+        type: ctype, stage, lang,
+        template: randomPick(ctype, stage, usedSentences),
+        _templateSource: 'user', _userTemplate: picked,
+      });
+    }
+  } else if (action === 'pick' && tplId) {
+    const tpl = userTemplates.find(t => t.id === tplId);
+    if (tpl) {
+      CS.setCard(name, {
+        type: ctype, stage, lang,
+        template: randomPick(ctype, stage, usedSentences),
+        _templateSource: 'user', _userTemplate: tpl,
+      });
+    }
+  }
+
+  // 确保公司被选中
+  CS.select(name);
+  const cb = document.querySelector(`.sc-check[data-company="${CSS.escape(name)}"]`);
+  if (cb) cb.checked = true;
+
+  // 同步队列中该公司已有条目的模板信息
+  const card = CS.getCard(name);
+  if (card) {
+    for (const q of S.queue) {
+      if (q.company !== name) continue;
+      q._tplInfo = card._templateSource === 'user' ? `user:${card._userTemplate?.id || ''}` : q._tplInfo;
+      q._templateSource = card._templateSource;
+    }
+    saveQueue();
+  }
+
+  // 刷新右侧卡片
+  updateSelectedCount();
+  renderSelectedCards();
 }
 
 
@@ -220,7 +357,9 @@ export function renderCompanyList(filter) {
 
   let visible;
   if (S.sendStageFilter === 'archived') { visible = archivedList; }
-  else { visible = activeList; }
+  else if (S.sendStageFilter && S.sendStageFilter !== 'active') {
+    visible = activeList.filter(([name]) => (S.sendHistory[name]?.stage || 'cold') === S.sendStageFilter);
+  } else { visible = activeList; }
 
   const archTab = document.querySelector('.send-stage-tab[data-stage="archived"]');
   if (archTab) archTab.textContent = `已归档 (${archivedList.length})`;
@@ -326,7 +465,7 @@ export function renderCompanyList(filter) {
         btn.disabled = true; btn.textContent = '⏳';
         await window.electronAPI.reactivateCompany(company);
         S.sendHistory = await window.electronAPI.getSendHistory() || {};
-        S.sendStageFilter = 'active';
+        CS.setFilter('active');
         document.querySelectorAll('.send-stage-tab').forEach(t => {
           t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
         });
@@ -352,8 +491,8 @@ export function renderCompanyList(filter) {
       if (cb) {
         cb.addEventListener('change', (e) => {
           const name = e.target.dataset.company;
-          if (e.target.checked) S.selectedCompanySet.add(name);
-          else S.selectedCompanySet.delete(name);
+          if (e.target.checked) CS.select(name);
+          else CS.deselect(name);
           updateSelectedCount();
         });
       }
@@ -378,8 +517,8 @@ export function renderCompanyList(filter) {
       // 前端先行：立即清除选中和缓存，刷新列表
       const names = [...selected];
       for (const company of names) {
-        S.selectedCompanySet.delete(company);
-        delete S.selectedCards[company];
+        CS.deselect(company);
+        CS.removeCard(company);
       }
       renderCompanyList(document.getElementById('send-search')?.value || '');
       updateMonthlyReportSection();
@@ -432,8 +571,7 @@ export function updateSelectedCount() {
             await window.electronAPI.reactivateCompany(name).catch(() => {});
           }
           S.sendHistory = await window.electronAPI.getSendHistory() || {};
-          S.selectedCompanySet.clear();
-          S.sendStageFilter = 'active';
+          CS.setFilterAndClear('active');
           document.querySelectorAll('.send-stage-tab').forEach(t => {
             t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
           });
@@ -487,18 +625,16 @@ export async function renderSelectedCards() {
         const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang);
         if (matchedTpls.length) {
           const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
-          S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl };
+          CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl });
         } else {
-          S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' };
+          CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
         }
       } else {
-        S.selectedCards[name] = { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' };
+        CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
       }
     }
   }
-  for (const name of Object.keys(S.selectedCards)) {
-    if (!selected.includes(name)) delete S.selectedCards[name];
-  }
+  CS.pruneCards(selected);
   if (container) {
     container.innerHTML = selected.map(name => {
       const card = S.selectedCards[name];
@@ -530,7 +666,7 @@ export async function renderSelectedCards() {
         daysStr2,
         startedStr,
       ].filter(Boolean).join(' · ');
-      return `<div class="sc-card">
+      return `<div class="sc-card" data-company="${escapeHtml(name)}">
         <div class="sc-card-header">
           <strong>${escapeHtml(name)}</strong>
           <span class="sc-stage">${S.STAGE_LABELS_SEND[card.stage]} → ${nextLabel}</span>
@@ -542,7 +678,7 @@ export async function renderSelectedCards() {
     container.querySelectorAll('.sc-card-remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        S.selectedCompanySet.delete(btn.dataset.company);
+        CS.deselect(btn.dataset.company);
         // 同步取消左侧勾选
         const cb = document.querySelector(`.sc-check[data-company="${CSS.escape(btn.dataset.company)}"]`);
         if (cb) cb.checked = false;
