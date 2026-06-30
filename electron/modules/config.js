@@ -3,14 +3,40 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
+const { app } = require('electron');
 
 // 打包后路径判定
 const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
+// 生产环境用 userData（C:\Users\<name>\AppData\Roaming\prospecting-email-send），安装更新不丢数据
 const APP_ROOT = _IS_PACKAGED
-  ? process.resourcesPath
+  ? app.getPath('userData')
   : path.join(__dirname, '..', '..');
 
+// 首次切换时迁移旧数据（resources/ → userData）
+function _migrateIfNeeded() {
+  if (!_IS_PACKAGED) return;
+  const oldRoot = process.resourcesPath;
+  if (oldRoot === APP_ROOT) return; // 新旧相同，无需迁移
+  const dirs = ['logs', 'data', 'send', 'reports'];
+  for (const d of dirs) {
+    const oldDir = path.join(oldRoot, d);
+    const newDir = path.join(APP_ROOT, d);
+    if (!fs.existsSync(oldDir)) continue;
+    try { fs.mkdirSync(newDir, { recursive: true }); } catch {}
+    try {
+      const files = fs.readdirSync(oldDir);
+      for (const f of files) {
+        const oldPath = path.join(oldDir, f);
+        const newPath = path.join(newDir, f);
+        if (fs.existsSync(newPath)) continue; // 已存在不覆盖
+        try { fs.copyFileSync(oldPath, newPath); } catch {}
+      }
+    } catch {}
+  }
+}
+
 function ensureRuntimeDirs() {
+  _migrateIfNeeded();
   const dirs = ['logs', 'data', 'send', 'reports'];
   for (const d of dirs) {
     const p = path.join(APP_ROOT, d);

@@ -34,8 +34,7 @@
       "provider": "github",
       "owner": "Miloglim",
       "repo": "Prospecting-Email",
-      "private": true,
-      "token": "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"
+      "private": true
     },
     "files": [
       "dist/**",
