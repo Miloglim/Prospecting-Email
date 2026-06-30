@@ -299,7 +299,7 @@ export function renderContactDetail(company) {
     </div>
     <div class="contacts-detail-body">
       <table>
-        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>发信账号</th><th>标签</th><th>操作</th></tr></thead>
+        <thead><tr><th>国家</th><th>品类</th><th>邮箱</th><th>发信账号</th><th>标签</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
             // 兼容旧 tag 字段：tags 数组优先，回退到单值 tag
@@ -324,6 +324,7 @@ export function renderContactDetail(company) {
               <td>${escapeHtml(m.email)}</td>
               <td style="font-size:11px;color:var(--text-secondary)">${m._sentAccount ? escapeHtml(m._sentAccount) + ' · ' + (m._sentAt||'').slice(0,10) : '—'}</td>
               <td>${tagsHtml}</td>
+              <td>${formatDate(m.addedAt)}</td>
               <td><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
             </tr>
           `}).join('')}
