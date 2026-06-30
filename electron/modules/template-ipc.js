@@ -32,9 +32,10 @@ function register(ipcMain, deps) {
   ipcMain.handle('template:getLibrary', async () => {
     if (!deps.templateLib) {
       deps.templateLib = parseTemplateLibrary();
-      const overrides = readOverrides();
-      if (deps.templateLib && overrides) applyOverrides(deps.templateLib, overrides);
     }
+    // ponytail: 每次请求重新应用覆盖层，确保用户修改即时生效
+    const overrides = readOverrides();
+    if (deps.templateLib && overrides) applyOverrides(deps.templateLib, overrides);
     return deps.templateLib;
   });
 

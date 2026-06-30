@@ -5,7 +5,6 @@ import { lucide,showAlert,showToast,escapeHtml,initIcons,showConfirm,deepMerge }
 const CFG_KEYS = [
   { id: 'cfg-sender-name', path: 'sender.name' },
   { id: 'cfg-sender-body-name', path: 'sender.bodyName' },
-  { id: 'cfg-schedule-max', path: 'schedule.max_per_day' },
   { id: 'cfg-schedule-start', path: 'schedule.start_hour_beijing', isTime: true },
   { id: 'cfg-schedule-end', path: 'schedule.end_hour_beijing', isTime: true },
   { id: 'cfg-schedule-time-toggle', path: 'schedule.time_window_enabled', isBool: true },
@@ -46,7 +45,7 @@ export function loadSettingsIntoForm(config) {
   // 关键字段默认值（防止空值被错误保存）
   const DEFAULTS = {
     'cfg-schedule-start': '09:00', 'cfg-schedule-end': '08:00',
-    'cfg-schedule-max': '720', 'cfg-schedule-min-delay': '8', 'cfg-schedule-max-delay': '16',
+    'cfg-schedule-min-delay': '8', 'cfg-schedule-max-delay': '16',
     'cfg-schedule-company-delay-min': '900', 'cfg-schedule-company-delay-max': '1200',
     'cfg-schedule-single-min': '5', 'cfg-schedule-single-max': '10',
     'cfg-schedule-group-size': '25',
@@ -269,7 +268,7 @@ export function updateScheduleEstimate() {
     const v = Number(input.value);
     return isNaN(v) ? fallback : v;
   };
-  const max = getNumOr('cfg-schedule-max', 500);
+  const max = 500;  // ponytail: 多账号模式，每日上限由各账号独立配置
   if (max <= 0) { el.innerHTML = ''; return; }
   const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
 
@@ -298,7 +297,7 @@ export function updateScheduleEstimate() {
   const perHour = totalSec > 0 ? Math.round(max / (totalSec / 3600)) : 0;
   el.innerHTML = `满额 ${max} 封 ≈ <strong>${timeStr}</strong> · 约 <strong>${perHour} 封/时</strong> <span style="color:#999">（${detail}）</span>`;
 }
-['cfg-schedule-mode','cfg-schedule-max','cfg-schedule-min-delay','cfg-schedule-max-delay','cfg-schedule-company-delay-min','cfg-schedule-company-delay-max','cfg-schedule-group-size','cfg-schedule-single-min','cfg-schedule-single-max','cfg-schedule-batch-size','cfg-schedule-batch-pause-min','cfg-schedule-batch-pause-max'].forEach(id => {
+['cfg-schedule-mode','cfg-schedule-min-delay','cfg-schedule-max-delay','cfg-schedule-company-delay-min','cfg-schedule-company-delay-max','cfg-schedule-group-size','cfg-schedule-single-min','cfg-schedule-single-max','cfg-schedule-batch-size','cfg-schedule-batch-pause-min','cfg-schedule-batch-pause-max'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener(id === 'cfg-schedule-mode' ? 'change' : 'input', updateScheduleEstimate);
 });

@@ -104,7 +104,7 @@ export function runQualityCheck(panel, spamWords, limits) {
 
 export async function initTemplateEditor() {
   try {
-    if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+    S.templateLib = await window.electronAPI.getTemplateLibrary();  // ponytail: 每次进入都重新加载，确保覆盖层生效
     if (!S.templateLib || !S.templateLib.hooks) {
       document.getElementById('tmpl-tree').innerHTML = '<p style="color:var(--danger);padding:12px">模板加载失败，请重启应用</p>';
       return;
