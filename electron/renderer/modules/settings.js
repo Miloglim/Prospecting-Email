@@ -655,26 +655,31 @@ function initAccountManager() {
     }
     const btn = document.getElementById('btn-acct-save');
     btn.disabled = true; btn.textContent = '保存中...';
-    const id = document.getElementById('acct-edit-id').value;
-    let savedId = id;
-    if (id) {
-      await window.electronAPI.updateAccount(id, account);
-    } else {
-      const r = await window.electronAPI.addAccount(account);
-      savedId = r.data?.id || '';
+    try {
+      const id = document.getElementById('acct-edit-id').value;
+      let savedId = id;
+      if (id) {
+        await window.electronAPI.updateAccount(id, account);
+      } else {
+        const r = await window.electronAPI.addAccount(account);
+        savedId = r.data?.id || '';
+      }
+      // 保存后自动测试连通性
+      if (savedId) {
+        try {
+          const tr = await window.electronAPI.testAccount(account);
+          await window.electronAPI.updateAccount(savedId, {
+            _lastTest: { ok: tr.ok, at: new Date().toISOString(), error: tr.error || '' }
+          });
+        } catch {}
+      }
+      closeEditor();
+      render();
+    } catch (e) {
+      showAlert('保存失败: ' + (e.message || '未知错误'));
+    } finally {
+      btn.disabled = false; btn.textContent = '保存';
     }
-    // 保存后自动测试连通性
-    if (savedId) {
-      try {
-        const tr = await window.electronAPI.testAccount(account);
-        await window.electronAPI.updateAccount(savedId, {
-          _lastTest: { ok: tr.ok, at: new Date().toISOString(), error: tr.error || '' }
-        });
-      } catch {}
-    }
-    btn.disabled = false; btn.textContent = '保存';
-    closeEditor();
-    render();
   });
 
   document.getElementById('btn-acct-test')?.addEventListener('click', async () => {

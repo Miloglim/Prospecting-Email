@@ -106,7 +106,7 @@ function _buildContext(config) {
     sigHtml: fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '',
     sigText: config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com',
     senderAddr: config.sender?.email || 'zayne_jin@yqn.com',
-    maxPerDay: sc.max_per_day ?? 500,
+    maxPerDay: accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0),
     startH: sc.start_hour_beijing ?? 19,
     endH: sc.end_hour_beijing ?? 3,
     SINGLE: sc.single_recip_threshold ?? 2,
@@ -126,10 +126,10 @@ function _buildContext(config) {
 }
 
 // ── 账号 from 地址 ─────────────────────────────────────────────────────────
-function _fromAddr(account) {
-  const senderName = account.label || account.smtp?.user || '';
+function _fromAddr(account, senderName) {
+  const name = senderName || account.label || account.smtp?.user || '';
   const senderEmail = account.smtp?.user || '';
-  return `"${senderName}" <${senderEmail}>`;
+  return `"${name}" <${senderEmail}>`;
 }
 
 // ── 正文构建 ────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ async function _sendOne(ctx, email, log, deps) {
   const subject = ctx.testMode ? `[测试] ${email.subject}` : email.subject;
   const aTo = ctx.testMode ? (ctx.config.test?.email || ctx.senderAddr) : toList[0];
   const aBcc = ctx.testMode ? [] : toList.slice(1);
-  const fromAddr = _fromAddr(deps.currentAccount || {});
+  const fromAddr = _fromAddr(deps.currentAccount || {}, ctx.config?.sender?.name);
   // ponytail: 同一次发送共用 bodyId，避免每人一条重复正文
   const sharedBodyId = saveBody(email.body || textBody);
 

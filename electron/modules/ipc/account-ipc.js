@@ -5,6 +5,7 @@ const { Log } = require("../core/logger");
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('../config');
+const { beijingToday } = require('../utils');
 const acct = require('../services/account-manager');
 
 const CONFIG_PATH = path.join(APP_ROOT, 'send', 'config.json');
@@ -36,7 +37,19 @@ function register(ipcMain) {
   // ── 列表 ──
   ipcMain.handle('account:list', async () => {
     const cfg = _readConfig();
-    return { ok: true, data: cfg.smtpAccounts || [] };
+    const accounts = cfg.smtpAccounts || [];
+    // 合并今日已发计数
+    const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
+    let dailyCounts = {};
+    try {
+      if (fs.existsSync(logPath)) {
+        const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+        if ((log.last_date_beijing || '') === beijingToday()) {
+          dailyCounts = log.daily_counts || {};
+        }
+      }
+    } catch {}
+    return { ok: true, data: accounts.map(a => ({ ...a, todaySent: dailyCounts[a.id] || 0 })) };
   });
 
   // ── 添加 ──
@@ -123,8 +136,7 @@ function register(ipcMain) {
     try {
       if (fs.existsSync(logPath)) {
         const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-        const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
-          .toISOString().slice(0, 10);
+        const today = beijingToday();
         const logDate = log.last_date_beijing || '';
         dailyCounts = (logDate === today) ? (log.daily_counts || {}) : {};
         accountStates = log._accountStates || {};

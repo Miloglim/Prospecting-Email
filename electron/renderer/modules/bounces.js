@@ -62,7 +62,6 @@ export function renderBounceTable() {
     groupsEl.querySelectorAll('.bounce-del-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const email = btn.dataset.email;
-        if (!await showConfirm(`删除联系人 ${email}？`)) return;
         const contacts = await window.electronAPI.getContacts();
         const contact = contacts.find(c => (c.email || '').toLowerCase().trim() === email.toLowerCase().trim());
         if (contact?.id) await window.electronAPI.deleteContact(contact.id);
@@ -193,18 +192,28 @@ export async function initBouncePage() {
     const delAllBtn = document.getElementById('bounce-del-all-btn');
     delAllBtn?.addEventListener('click', async () => {
       const matched = S.bounceRecords.filter(r => r.matched);
-      if (!matched.length) return;
-      if (!await showConfirm(`确定删除全部 ${matched.length} 个退信联系人？此操作不可恢复。`)) return;
-      const contacts = await window.electronAPI.getContacts();
+      const total = S.bounceRecords.length;
+      const unmatched = total - matched.length;
+      let msg = `确定删除全部 ${total} 条退信记录？`;
+      if (matched.length) msg += `\n其中 ${matched.length} 个已匹配联系人将被删除。`;
+      if (unmatched) msg += `\n${unmatched} 条未匹配记录将被清除。`;
+      msg += `\n此操作不可恢复。`;
+      if (!await showConfirm(msg)) return;
       let deleted = 0;
-      for (const r of matched) {
-        const contact = contacts.find(c => (c.email || '').toLowerCase().trim() === (r.email || '').toLowerCase().trim());
-        if (contact?.id) { await window.electronAPI.deleteContact(contact.id); deleted++; }
+      if (matched.length) {
+        const contacts = await window.electronAPI.getContacts();
+        for (const r of matched) {
+          const contact = contacts.find(c => (c.email || '').toLowerCase().trim() === (r.email || '').toLowerCase().trim());
+          if (contact?.id) { await window.electronAPI.deleteContact(contact.id); deleted++; }
+        }
       }
       S.bounceRecords = [];
       await window.electronAPI.saveBounceLog([]);
       renderBounceTable();
-      showToast(`已删除 ${deleted} 个退信联系人`, 'ok');
+      const parts = [];
+      if (deleted) parts.push(`删除 ${deleted} 个联系人`);
+      if (unmatched) parts.push(`清除 ${unmatched} 条未匹配记录`);
+      showToast(parts.join('，') || '已清空退信记录', 'ok');
     });
   }
 }
