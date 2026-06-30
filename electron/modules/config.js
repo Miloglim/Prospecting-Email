@@ -7,9 +7,13 @@ const { app } = require('electron');
 
 // 打包后路径判定
 const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
-// 生产环境用 userData（C:\Users\<name>\AppData\Roaming\prospecting-email-send），安装更新不丢数据
+// 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\prospecting-email-send
 const APP_ROOT = _IS_PACKAGED
   ? app.getPath('userData')
+  : path.join(__dirname, '..', '..');
+// 应用资源路径（打包后的静态文件，如图标/模板）：不随更新清除
+const RESOURCES_ROOT = _IS_PACKAGED
+  ? process.resourcesPath
   : path.join(__dirname, '..', '..');
 
 // 首次切换时迁移旧数据（resources/ → userData）
@@ -96,7 +100,7 @@ function createRequest(options) {
 }
 
 module.exports = {
-  APP_ROOT, _IS_PACKAGED,
+  APP_ROOT, RESOURCES_ROOT, _IS_PACKAGED,
   ensureRuntimeDirs, loadSearchConfig,
   getProxyConfig, proxyTlsConnect, createRequest,
 };

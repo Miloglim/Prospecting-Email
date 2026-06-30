@@ -443,7 +443,8 @@ function initUpdateCheck() {
   // 监听下载进度（含速率）
   window.electronAPI.onUpdateProgress((data) => {
     progFill.style.width = data.percent + '%';
-    speed.textContent = `${data.percent}% · ${data.speedMB} MB/s · ${data.transferred}/${data.total} MB`;
+    const sizeInfo = data.total ? `${data.transferred}/${data.total} MB` : `${data.transferred} MB`;
+    speed.textContent = `${data.percent}% · ${data.speedMB} MB/s · ${sizeInfo}`;
     result.innerHTML = `${lucide('download',12)} 下载中...`;
     result.style.color = 'var(--accent)';
   });

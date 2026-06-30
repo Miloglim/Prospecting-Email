@@ -13,7 +13,7 @@ const { Log } = require('./modules/core/logger');
 const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { APP_ROOT, ensureRuntimeDirs } = require('./modules/config');
+const { APP_ROOT, RESOURCES_ROOT, ensureRuntimeDirs } = require('./modules/config');
 ensureRuntimeDirs();
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
@@ -169,7 +169,7 @@ function createWindow() {
   const preloadPath = __dirname.includes('dist')
     ? path.join(__dirname, '../preload/index.js')
     : path.join(__dirname, 'preload.js');
-  const appIcon = nativeImage.createFromPath(path.join(APP_ROOT, 'assets', 'icon.png'));
+  const appIcon = nativeImage.createFromPath(path.join(RESOURCES_ROOT, 'assets', 'icon.png'));
   deps.mainWindow = new BrowserWindow({
     width: 1280, height: 800, minWidth: 1024, minHeight: 680, title: "Milogin's Prospector.",
     icon: appIcon,
@@ -206,7 +206,7 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(APP_ROOT, 'assets', 'tray-icon.png');
+  const iconPath = path.join(RESOURCES_ROOT, 'assets', 'tray-icon.png');
   let trayIcon = nativeImage.createFromPath(iconPath);
   if (trayIcon.isEmpty()) {
     Log.warn("系统", "托盘图标加载失败: " + iconPath);

@@ -19,6 +19,22 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 小时
 function init(mainWindow) {
   _win = mainWindow;
 
+  // 代理支持：读取 send/config.json 中的代理设置
+  try {
+    const path = require('path');
+    const fs = require('fs');
+    const cp = path.join(require('./config').APP_ROOT, 'send', 'config.json');
+    if (fs.existsSync(cp)) {
+      const cfg = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+      const proxyHost = cfg?.proxy?.host;
+      if (proxyHost) {
+        process.env.HTTP_PROXY = 'http://' + proxyHost;
+        process.env.HTTPS_PROXY = 'http://' + proxyHost;
+        console.log('[更新] 使用代理:', proxyHost);
+      }
+    }
+  } catch {}
+
   // 用户确认后再下载
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -36,11 +52,15 @@ function init(mainWindow) {
   });
 
   autoUpdater.on('download-progress', (p) => {
+    const percent = Math.round(p.percent || 0);
+    const speed = p.bytesPerSecond ? (p.bytesPerSecond / 1024 / 1024).toFixed(1) : '—';
+    const totalMB = p.total ? (p.total / 1024 / 1024).toFixed(1) : null;
+    const doneMB = p.transferred ? (p.transferred / 1024 / 1024).toFixed(1) : '0.0';
     _win?.webContents.send('update:download-progress', {
-      percent: Math.round(p.percent),
-      speedMB: p.bytesPerSecond ? (p.bytesPerSecond / 1024 / 1024).toFixed(1) : '0.0',
-      total: p.total ? (p.total / 1024 / 1024).toFixed(0) : '0',
-      transferred: p.transferred ? (p.transferred / 1024 / 1024).toFixed(0) : '0',
+      percent,
+      speedMB: speed,
+      total: totalMB,
+      transferred: doneMB,
     });
   });
 
