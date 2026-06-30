@@ -5,8 +5,8 @@
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('../config');
-const { Log } = require('../core/logger');
 const { beijingToday, beijingDateFromISO, sleep } = require('../utils');
+const { Log } = require('../core/logger');
 
 // ── 内部状态：可中断延迟管理 ──
 let _delayResolve = null;
@@ -340,7 +340,7 @@ async function runSendBatch(deps, sendProgress) {
   function getTransporter(account) {
     if (!transporterCache.has(account.id)) {
       transporterCache.set(account.id, acctMgr.createTransporter(account));
-      Log.info('发信', ` 创建 transporter: ${account.label || account.smtp?.user}`);
+      console.log(`[发信] 创建 transporter: ${account.label || account.smtp?.user}`);
     }
     return transporterCache.get(account.id);
   }
@@ -368,7 +368,7 @@ async function runSendBatch(deps, sendProgress) {
   sendProgress(est);
   const accountCount = ctx.accounts.length;
   const activeCount = ctx.accounts.filter(a => a.active !== false).length;
-  Log.info('发信', ` 开始 — ${est.total} 封，${activeCount}/${accountCount} 个账号可用，预计 ${est.estMin}分${est.estSec}秒${ctx.dryRun ? ' [DRY RUN]' : ''}${ctx.testMode ? ' [测试]' : ''}`);
+  Log.info("发信", "开始: " + est.total + "封, " + activeCount + "/" + accountCount + "个账号, 预计" + est.estMin + "分" + est.estSec + "秒" + (ctx.dryRun ? " [DRY RUN]" : "") + (ctx.testMode ? " [测试]" : ""));
 
   let sent = 0, failed = 0;
   let lastAccountIdx = -1;
@@ -401,7 +401,7 @@ async function runSendBatch(deps, sendProgress) {
     const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates, prefId);
     if (!picked.account) {
       const reason = picked.reason || '无可用账号';
-      Log.info('发信', ` 🛑 ${reason}`);
+      Log.warn("发信", "停止: " + reason);
       sendProgress({ error: `发送停止：${reason}` }); break;
     }
     const { account, idx } = picked;
@@ -412,7 +412,7 @@ async function runSendBatch(deps, sendProgress) {
     // 公司切换延迟（两模式通用）
     if (i > 0 && email.company !== deps.sendQueue[i - 1]?.company) {
       const dm = Math.floor(Math.random() * (ctx.cdMax - ctx.cdMin + 1)) + ctx.cdMin;
-      Log.info('发信', ` 🏢 切换公司 → ${email.company}，暂停 ${Math.round(dm/1000)}s`);
+      Log.info("发信", "切换公司: " + email.company + ", 暂停" + Math.round(dm/1000) + "s");
       sendProgress({ type: 'delay', seconds: Math.round(dm/1000), company: email.company });
       if (!await cancellableSleep(dm, deps)) break;
     }
@@ -430,7 +430,7 @@ async function runSendBatch(deps, sendProgress) {
       if (!ctx.testMode) acctMgr.recordSuccess(account.id, log._accountStates);
     } else if (result.fused) {
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, true);
-      Log.info('发信', ` ⚡ 账号 ${account.label || account.smtp?.user} 已熔断`);
+      console.log(`[发信] ⚡ 账号 ${account.label || account.smtp?.user} 已熔断`);
       failed += result.n;
     } else if (result.fatal) {
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
@@ -452,17 +452,17 @@ async function runSendBatch(deps, sendProgress) {
     if (ctx.isBatch && i < queueLen - 1) {
       const gi = Math.floor(Math.random() * (ctx.groupIntervalMax - ctx.groupIntervalMin + 1)) + ctx.groupIntervalMin;
       const giSec = Math.round(gi / 1000);
-      Log.info('发信', ` ⏸ 组间间隔 ${giSec}s (${i + 1}/${queueLen} 组完成)`);
+      Log.info("发信", "组间间隔 " + giSec + "s (" + (i+1) + "/" + queueLen + "组)");
       sendProgress({ type: 'delay', seconds: giSec, company: `组间间隔(${i + 1}/${queueLen}组)` });
       if (!await cancellableSleep(gi, deps)) break;
     }
   }
 
-  } catch (e) { console.error('[发信] 循环异常:', e.message || e); }
+  } catch (e) { Log.error("发信", "循环异常", e); }
   finally {
     for (const t of transporterCache.values()) { try { await t.close(); } catch { /* 关闭失败不影响后续 */ } }
   }
-  Log.info('发信', ` 完成 — 成功 ${sent} 封，失败 ${failed} 封`);
+  Log.info("发信", "完成: 成功" + sent + "封, 失败" + failed + "封");
   if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: queueLen, sent, failed, _testMode: ctx.testMode || undefined });
   if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Prospector", body: `发送完成: 成功 ${sent} 封` }).show();
   if (!ctx.testMode) {
@@ -476,7 +476,7 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
   clearTimeout(_autoBounceTimer);
   _autoBounceTimer = setTimeout(async () => {
     try {
-      console.log('[退信] 自动检测启动...');
+      Log.info("退信", "自动检测启动");
       const { checkBounces } = require('../../bounce-checker');
       const result = await checkBounces();
       if (!result.ok || !result.bounced?.length) return;
@@ -492,7 +492,7 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
         if (tray) new (require('electron').Notification)({ title: '📨 退信检测', body: `发现 ${result.bounced.length} 封退信，已标记 ${matched} 个联系人` }).show();
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bounce:autoDetected', { count: result.bounced.length, matched });
       }
-    } catch (e) { console.error('[退信] 自动退信检测异常:', e.message); }
+    } catch (e) { Log.error("退信", "自动检测异常", e); }
   }, 10 * 60 * 1000);
 }
 

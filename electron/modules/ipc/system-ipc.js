@@ -2,6 +2,7 @@
 // 从 send-ipc.js 拆分：仪表盘、SMTP 状态、配置、应用操作、网络、签名、队列、客户开发
 
 const path = require('path');
+const { Log } = require("../core/logger");
 const fs = require('fs');
 const { shell } = require('electron');
 const { APP_ROOT, loadSearchConfig, createRequest, getProxyConfig } = require('../config');

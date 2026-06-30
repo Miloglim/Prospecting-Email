@@ -2,6 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('./config');
+const { Log } = require("../core/logger");
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
 const { getCompanyMeta, deleteCompanyMeta } = require('./services/company-store');
 
@@ -115,6 +116,7 @@ function register(ipcMain, deps) {
       added++;
     }
     writeContacts(existing);
+  Log.info("联系人", "导入: +" + added + " 新增, " + skipped + " 跳过, " + invalidEmail + " 无效邮箱, 总计" + existing.length);
     return { total: existing.length, added, skipped, invalidEmail };
   });
 
@@ -146,6 +148,7 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('contacts:deleteAll', async () => {
+    Log.warn("联系人", "全部清除");
     writeContacts([]);
     return { ok: true };
   });
@@ -170,6 +173,7 @@ function register(ipcMain, deps) {
       }
     } catch {}
 
+    Log.info("联系人", "删除公司: " + company + ", " + (before - contacts.length) + "人");
     return { ok: true, deleted: before - contacts.length };
   });
 

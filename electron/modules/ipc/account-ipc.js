@@ -1,7 +1,7 @@
 // ── 账号管理 IPC ────────────────────────────────────────────────────────────
 // 只做路由：读取/保存配置 + 调用 account-manager 业务逻辑
-const { Log } = require('../core/logger');
 
+const { Log } = require("../core/logger");
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('../config');
@@ -30,7 +30,7 @@ function register(ipcMain) {
   const result = acct.migrateFromLegacy(config);
   if (result.migrated) {
     _writeConfig(result.config);
-    Log.info('账号', '旧 SMTP 配置已自动迁移到多账号');
+    Log.info("账号", "旧SMTP配置已迁移到多账号");
   }
 
   // ── 列表 ──
@@ -58,7 +58,8 @@ function register(ipcMain) {
 
     cfg.smtpAccounts.push(newAccount);
     _writeConfig(cfg);
-    Log.info('账号', ` 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
+    Log.info("账号", "删除: " + id);
+    console.log(`[账号] 添加: ${newAccount.smtp?.user} @ ${newAccount.smtp?.host} (${newAccount.id})`);
     return { ok: true, data: newAccount };
   });
 
@@ -77,6 +78,7 @@ function register(ipcMain) {
       imap: updates.imap ? { ...existing.imap, ...updates.imap } : existing.imap,
     };
     _writeConfig(cfg);
+    Log.info("账号", "删除: " + id);
     return { ok: true, data: cfg.smtpAccounts[idx] };
   });
 
@@ -89,6 +91,7 @@ function register(ipcMain) {
     }
     cfg.smtpAccounts = accounts.filter(a => a.id !== id);
     _writeConfig(cfg);
+    Log.info("账号", "删除: " + id);
     return { ok: true };
   });
 
@@ -97,8 +100,9 @@ function register(ipcMain) {
     const cfg = _readConfig();
     const acc = (cfg.smtpAccounts || []).find(a => a.id === id);
     if (!acc) return { ok: false, error: '账号不存在' };
-    acc.active = !acc.active;
+    acc.active = !acc.active; Log.info("账号", (acc.active ? "启用: " : "停用: ") + id);
     _writeConfig(cfg);
+    Log.info("账号", "删除: " + id);
     return { ok: true, data: acc };
   });
 

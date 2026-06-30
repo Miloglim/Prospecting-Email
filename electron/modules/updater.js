@@ -10,7 +10,6 @@
 
 const { autoUpdater } = require('electron-updater');
 const { ipcMain } = require('electron');
-const { Log } = require('./core/logger');
 
 let _win = null;
 let _checkTimer = null;
@@ -52,7 +51,7 @@ function init(mainWindow) {
   });
 
   autoUpdater.on('error', (err) => {
-    console.warn('[更新] 检查失败:', err.message);
+    Log.warn("更新", "检查失败: " + err.message);
   });
 
   // ── IPC：渲染进程可手动触发 ──

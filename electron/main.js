@@ -209,7 +209,7 @@ function createTray() {
   const iconPath = path.join(APP_ROOT, 'assets', 'tray-icon.png');
   let trayIcon = nativeImage.createFromPath(iconPath);
   if (trayIcon.isEmpty()) {
-    Log.warn('托盘', ' 图标加载失败:', iconPath);
+    Log.warn("系统", "托盘图标加载失败: " + iconPath);
     trayIcon = nativeImage.createEmpty();
   }
   deps.tray = new Tray(trayIcon);
@@ -239,9 +239,11 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   try { deps.templateLib = parseTemplateLibrary(); }
+      Log.info("系统", "模板库加载: " + (Object.keys(deps.templateLib?.subjects||{}).length) + "套主题行");
   catch (e) { Log.error('启动', '模板加载失败', e); deps.templateLib = { hooks:[],painPoints:{},proofs:{},ctas:[],followUps:{},subjects:{},spamWords:{es:[],en:[]} }; }
   setupIPC(); createWindow(); createTray();
   require('./modules/updater').init(deps.mainWindow);
+  Log.info("系统", "应用启动完成");
 
   // 后台轮询：退信 + 回复检测
   const { scheduleAutoBounceCheck } = require('./modules/services/send-engine');
