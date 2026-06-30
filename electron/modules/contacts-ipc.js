@@ -2,7 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('./config');
-const { Log } = require("../core/logger");
+const { Log } = require("./core/logger");
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
 const { getCompanyMeta, deleteCompanyMeta } = require('./services/company-store');
 
