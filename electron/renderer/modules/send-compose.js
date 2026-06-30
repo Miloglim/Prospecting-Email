@@ -718,6 +718,13 @@ async function addToQueue() {
   const GROUP_SIZE = sendMode === 'batch' ? (config.schedule?.batch_size || 10) : (config.schedule?.group_size || 20);
   let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, reactivatedCount = 0;
 
+  // 拉最新 contacts.json，确保 _sentBy 是最新的（内存快照可能过期）
+  const freshContacts = await window.electronAPI.getContacts();
+  const sentByEmails = new Set();
+  for (const c of freshContacts) {
+    if (c._sentBy && c.email) sentByEmails.add(c.email.toLowerCase().trim());
+  }
+
   const needReset = [];
   for (const name of selected) {
     const members = S.sendCompanies[name] || [];
@@ -727,7 +734,8 @@ async function addToQueue() {
     const reachedMembers = members.filter(m => (m.tags || []).includes('reached') || m.tag === 'reached'); // 已触达不入队
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact')); // 被联系人退回也跳过
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
+    const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
+    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if (!stage || stage === 'cold') needReset.push({ name, count: members.length });
@@ -759,6 +767,8 @@ async function addToQueue() {
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
+    // 已通过 _sentBy 标记的联系人（实时拉取 contacts.json，不受内存快照过期影响）
+    const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
     // 已在队列中（未发/发送中）的联系人，防重复添加
     const queuedEmails = new Set();
     S.queue.forEach(q => {
@@ -767,8 +777,9 @@ async function addToQueue() {
       }
     });
     const alreadyQueued = members.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !alreadyQueued.includes(m));
+    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !alreadyQueued.includes(m));
     if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
+    if (taggedSent.length) skippedDupOrBounced += taggedSent.length;
 
     if (!activeMembers.length && members.length > 0) {
       if (alreadyQueued.length === members.length) {

@@ -57,6 +57,69 @@ initNavigation();
 initQueue();  // 队列后台并行恢复
 setTimeout(() => initDashboardEditor(), 200);  // 等 DOM 稳定后初始化布局编辑器
 
+// ── 全局更新检测 + 右下角通知卡片 ──────────────────────────────
+(function initUpdateToast() {
+  const toast = document.getElementById('update-toast');
+  const title = document.getElementById('update-toast-title');
+  const body = document.getElementById('update-toast-body');
+  const dlBtn = document.getElementById('update-toast-dl');
+  const laterBtn = document.getElementById('update-toast-later');
+  const dismiss = document.getElementById('update-toast-dismiss');
+  const prog = document.getElementById('update-toast-progress');
+  const progFill = document.getElementById('update-toast-progress-fill');
+  if (!toast || !dlBtn) return;
+
+  let pendingVersion = '';
+
+  // 监听新版本
+  window.electronAPI.onUpdateAvailable((data) => {
+    pendingVersion = data.version || '';
+    title.textContent = '发现新版本';
+    body.textContent = `v${pendingVersion} 已发布，是否立即更新？`;
+    dlBtn.textContent = '下载更新';
+    dlBtn.style.display = '';
+    laterBtn.style.display = '';
+    dlBtn.disabled = false;
+    prog.style.display = 'none';
+    toast.style.display = 'block';
+  });
+
+  // 下载进度
+  window.electronAPI.onUpdateProgress((data) => {
+    prog.style.display = '';
+    progFill.style.width = Math.min(100, data.percent || 0) + '%';
+    body.textContent = `下载中 ${data.percent || 0}% · ${data.speedMB || '—'} MB/s`;
+    dlBtn.textContent = '下载中...';
+    dlBtn.disabled = true;
+  });
+
+  // 下载完成
+  window.electronAPI.onUpdateDownloaded((data) => {
+    title.textContent = '更新就绪';
+    body.textContent = `v${data.version || pendingVersion} 已下载，重启后生效`;
+    dlBtn.textContent = '重启安装';
+    dlBtn.style.display = '';
+    dlBtn.disabled = false;
+    laterBtn.style.display = 'none';
+    prog.style.display = 'none';
+    dlBtn.onclick = () => window.electronAPI.installUpdate();
+  });
+
+  // 下载
+  dlBtn.addEventListener('click', () => {
+    window.electronAPI.downloadUpdate().catch(() => {
+      body.textContent = '下载失败，请稍后重试';
+      dlBtn.textContent = '重试';
+      dlBtn.disabled = false;
+    });
+  });
+
+  // 稍后/关闭
+  function hideToast() { toast.style.display = 'none'; }
+  laterBtn.addEventListener('click', hideToast);
+  dismiss.addEventListener('click', hideToast);
+})();
+
 // ── 新手向导 ──────────────────────────────────────────────
 let _onboardingStep = 1;
 let _obTransitioning = false;

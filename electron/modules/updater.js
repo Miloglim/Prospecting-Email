@@ -109,7 +109,7 @@ function init(mainWindow) {
 
   ipcMain.handle('update:install', async () => {
     try {
-      autoUpdater.quitAndInstall();
+      autoUpdater.quitAndInstall(true, true); // 静默安装 + 自动重启
       return { ok: true };
     } catch (e) {
       return { ok: false, error: e.message };

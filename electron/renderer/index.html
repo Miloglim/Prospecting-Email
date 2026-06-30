@@ -861,6 +861,25 @@
       }
     };
   </script>
+  <!-- 更新通知卡片 -->
+  <div id="update-toast" style="display:none;position:fixed;bottom:24px;right:24px;z-index:9999;background:var(--card-bg,#1e1e1e);border:1px solid var(--border);border-radius:10px;padding:16px 20px;min-width:280px;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,.4);animation:toastIn .35s ease">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:16px">⬇️</span>
+      <span style="font-weight:600;font-size:13px" id="update-toast-title">发现新版本</span>
+      <span style="font-size:11px;color:var(--accent);margin-left:auto;cursor:pointer" id="update-toast-dismiss">✕</span>
+    </div>
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px" id="update-toast-body"></div>
+    <div id="update-toast-progress" style="display:none;height:3px;background:var(--bg);border-radius:2px;margin-bottom:10px">
+      <div id="update-toast-progress-fill" style="height:100%;background:var(--accent);width:0%;border-radius:2px;transition:width .3s"></div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button id="update-toast-dl" style="flex:1;padding:6px 0;font-size:11px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-weight:600">下载更新</button>
+      <button id="update-toast-later" style="flex:1;padding:6px 0;font-size:11px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer">稍后</button>
+    </div>
+  </div>
+  <style>
+    @keyframes toastIn { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+  </style>
   <script type="module" src="app-v2.js"></script>
 </body>
 </html>
