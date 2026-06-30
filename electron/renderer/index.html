@@ -31,10 +31,10 @@
         <h2>添加您的邮箱</h2>
         <p class="ob-desc">配置 SMTP 服务器以发送开发信</p>
         <div class="ob-form">
-          <div class="ob-field"><label>SMTP 服务器</label><input type="text" id="ob-smtp-host" placeholder="smtp.example.com" required></div>
+          <div class="ob-field"><label>SMTP 服务器</label><input type="text" id="ob-smtp-host" value="smtp.mxhichina.com" placeholder="smtp.mxhichina.com" required></div>
           <div class="ob-field ob-inline"><div><label>端口</label><input type="number" id="ob-smtp-port" value="465"></div><div><label>加密方式</label><select id="ob-smtp-secure"><option value="true">SSL</option><option value="false">STARTTLS</option></select></div></div>
           <div class="ob-field"><label>邮箱地址</label><input type="text" id="ob-smtp-user" placeholder="your@email.com" required></div>
-          <div class="ob-field"><label>密码或授权码</label><input type="password" id="ob-smtp-pass" placeholder="输入 SMTP 授权码" required></div>
+          <div class="ob-field"><label>密码或授权码</label><input type="password" id="ob-smtp-pass" placeholder="请输入密码" required></div>
         </div>
         <div class="ob-actions">
           <button class="ob-btn" onclick="onboardingNext()">下一步</button>
@@ -85,7 +85,7 @@
           </div>
         </div>
         <h2>一切就绪</h2>
-        <p class="ob-desc">您的邮箱已配置完成。退信检测将自动使用相同的邮箱与密码，无需额外设置。</p>
+        <p class="ob-desc">您的邮箱已配置完成，退信检测将自动使用相同的邮箱与密码，无需额外设置。</p>
         <div class="ob-actions">
           <button class="ob-btn" id="ob-finish-btn" onclick="onboardingFinish()">开始使用</button>
         </div>
@@ -655,7 +655,6 @@
           <div class="setting-card-body">
             <div class="form-row"><label>发件人名称</label><input type="text" id="cfg-sender-name" data-required="1" placeholder="收件人看到的发件人名称"></div>
             <div class="form-row"><label>正文署名</label><input type="text" id="cfg-sender-body-name" placeholder="邮件正文中的自称，如 Zayne"></div>
-            <div class="form-row"><label>发信邮箱</label><input type="text" id="cfg-sender-email" data-required="1" placeholder="your@email.com"></div>
           </div>
         </div>
 
@@ -669,7 +668,7 @@
             <div class="sub-section-label">模板引擎</div>
             <div class="form-row"><label>发送模式</label><select id="cfg-schedule-mode"><option value="multi">模拟人工</option><option value="batch">匀速速发</option></select></div>
             <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">用户模板</option></select></div>
-            <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">0=不轮换</span></div>
+            <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">同一公司内模板定组轮换，0=不轮换</span></div>
 
             <!-- 通用 -->
             <div class="form-row form-row-inline"><div><label>每日上限</label><input type="number" id="cfg-schedule-max" placeholder="0=不限制"><span class="input-suffix">封</span></div></div>

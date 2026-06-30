@@ -390,29 +390,30 @@ export async function showUserTemplateList() {
 export function showUserTemplateEditor(tpl) {
   const panel = document.getElementById('tmpl-edit');
   const isNew = !tpl;
-  tpl = tpl || { name: '', type: 'unlabeled', stage: 'cold', lang: 'es', subject: '', body: '' };
+  const isEdit = !!tpl;
+  tpl = tpl || { name: '', type: '', stage: '', lang: '', subject: '', body: '' };
 
   panel.innerHTML = `
-    <h3 style="margin-bottom:12px">${isNew ? '新建用户模板' : '编辑：' + escapeHtml(tpl.name)}</h3>
-    <div class="form-group"><label>模板名称</label><input type="text" id="ut-name" value="${escapeHtml(tpl.name)}" placeholder="如：阿根廷直客冷开发"></div>
+    <h3 style="margin-bottom:12px">${isEdit ? '编辑：' + escapeHtml(tpl.name) : '新建用户模板'}</h3>
+    <div class="form-group"><label>模板名称 <span style="color:var(--danger)">*</span></label><input type="text" id="ut-name" value="${escapeHtml(tpl.name)}" placeholder="如：阿根廷直客冷开发"></div>
     <div style="display:flex;gap:12px">
-      <div class="form-group" style="flex:1"><label>客户类型</label>
-        <select id="ut-type">${Object.entries(USER_TEMPLATE_TYPES).map(([k,v]) => `<option value="${k}"${tpl.type===k?' selected':''}>${v}</option>`).join('')}</select>
+      <div class="form-group" style="flex:1"><label>客户类型 <span style="color:var(--danger)">*</span></label>
+        <select id="ut-type"><option value="">— 请选择 —</option>${Object.entries(USER_TEMPLATE_TYPES).map(([k,v]) => `<option value="${k}"${tpl.type===k?' selected':''}>${v}</option>`).join('')}</select>
       </div>
-      <div class="form-group" style="flex:1"><label>开发阶段</label>
-        <select id="ut-stage">${Object.entries(USER_TEMPLATE_STAGES).map(([k,v]) => `<option value="${k}"${tpl.stage===k?' selected':''}>${v}</option>`).join('')}</select>
+      <div class="form-group" style="flex:1"><label>开发阶段 <span style="color:var(--danger)">*</span></label>
+        <select id="ut-stage"><option value="">— 请选择 —</option>${Object.entries(USER_TEMPLATE_STAGES).map(([k,v]) => `<option value="${k}"${tpl.stage===k?' selected':''}>${v}</option>`).join('')}</select>
       </div>
-      <div class="form-group" style="flex:1"><label>语言</label>
-        <select id="ut-lang">${Object.entries(USER_TEMPLATE_LANGS).map(([k,v]) => `<option value="${k}"${tpl.lang===k?' selected':''}>${v}</option>`).join('')}</select>
+      <div class="form-group" style="flex:1"><label>语言 <span style="color:var(--danger)">*</span></label>
+        <select id="ut-lang"><option value="">— 请选择 —</option>${Object.entries(USER_TEMPLATE_LANGS).map(([k,v]) => `<option value="${k}"${tpl.lang===k?' selected':''}>${v}</option>`).join('')}</select>
       </div>
     </div>
-    <div class="form-group"><label>主题</label><input type="text" id="ut-subject" value="${escapeHtml(tpl.subject)}" placeholder="邮件主题，可选用 {{company}}"></div>
-    <div class="form-group"><label>正文</label><textarea id="ut-body" rows="14" style="width:100%;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:Arial,sans-serif;line-height:1.6">${escapeHtml(tpl.body)}</textarea></div>
-    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>，发信时自动替换为客户公司名。不写则用固定正文。</p>
+    <div class="form-group"><label>主题 <span style="color:var(--danger)">*</span></label><input type="text" id="ut-subject" value="${escapeHtml(tpl.subject)}" placeholder="邮件主题，可选用 {{company}}"></div>
+    <div class="form-group"><label>正文 <span style="color:var(--danger)">*</span></label><textarea id="ut-body" rows="14" style="width:100%;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:Arial,sans-serif;line-height:1.6" placeholder="在此粘贴或输入邮件正文...">${escapeHtml(tpl.body)}</textarea></div>
+    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>，发信时自动替换为客户公司名。支持粘贴富文本但仅保留纯文字格式。</p>
 
     <div style="display:flex;gap:8px;margin-top:12px">
       <button id="btn-ut-save" style="font-size:13px;padding:6px 20px">💾 保存</button>
-      ${isNew ? '' : '<button id="btn-ut-delete" class="danger" style="font-size:13px;padding:6px 20px">' + lucide('trash-2',12) + ' 删除</button>'}
+      ${isEdit ? '<button id="btn-ut-delete" class="danger" style="font-size:13px;padding:6px 20px">' + lucide('trash-2',12) + ' 删除</button>' : ''}
       <button id="btn-ut-cancel" class="secondary" style="font-size:13px;padding:6px 20px">取消</button>
     </div>`;
 
@@ -420,20 +421,28 @@ export function showUserTemplateEditor(tpl) {
   document.getElementById('btn-ut-save')?.addEventListener('click', async () => {
     const data = {
       id: tpl.id || null,
-      name: document.getElementById('ut-name')?.value || '',
-      type: document.getElementById('ut-type')?.value || 'unlabeled',
-      stage: document.getElementById('ut-stage')?.value || 'cold',
-      lang: document.getElementById('ut-lang')?.value || 'es',
-      subject: document.getElementById('ut-subject')?.value || '',
+      name: document.getElementById('ut-name')?.value.trim() || '',
+      type: document.getElementById('ut-type')?.value || '',
+      stage: document.getElementById('ut-stage')?.value || '',
+      lang: document.getElementById('ut-lang')?.value || '',
+      subject: document.getElementById('ut-subject')?.value.trim() || '',
       body: document.getElementById('ut-body')?.value || '',
     };
-    if (!data.name.trim()) { await showAlert('请输入模板名称'); return; }
+    // 逐项检查空值
+    const emptyFields = [];
+    if (!data.name) emptyFields.push('模板名称');
+    if (!data.type) emptyFields.push('客户类型');
+    if (!data.stage) emptyFields.push('开发阶段');
+    if (!data.lang) emptyFields.push('语言');
+    if (!data.subject) emptyFields.push('主题');
+    if (!data.body.trim()) emptyFields.push('正文');
+    if (emptyFields.length) { await showAlert('请填写：' + emptyFields.join('、')); return; }
     try {
       const result = await window.electronAPI.saveUserTemplate(data);
       if (result.ok) showToast('模板已保存', 'ok');
       else showToast('保存失败', 'err');
     } catch (e) { showToast('保存异常: ' + (e.message || '未知'), 'err'); }
-    showUserTemplateList(); // ponytail: 无论成功失败都退回列表
+    showUserTemplateList();
   });
 
   // 删除

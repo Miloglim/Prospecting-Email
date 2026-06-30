@@ -5,7 +5,6 @@ import { lucide,showAlert,showToast,escapeHtml,initIcons,showConfirm,deepMerge }
 const CFG_KEYS = [
   { id: 'cfg-sender-name', path: 'sender.name' },
   { id: 'cfg-sender-body-name', path: 'sender.bodyName' },
-  { id: 'cfg-sender-email', path: 'sender.email' },
   { id: 'cfg-schedule-max', path: 'schedule.max_per_day' },
   { id: 'cfg-schedule-start', path: 'schedule.start_hour_beijing', isTime: true },
   { id: 'cfg-schedule-end', path: 'schedule.end_hour_beijing', isTime: true },
