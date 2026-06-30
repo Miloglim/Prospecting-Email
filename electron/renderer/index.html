@@ -77,7 +77,6 @@
         <button class="ob-skip" onclick="onboardingSkip()">跳过，稍后设置</button>
       </div>
       <div class="onboarding-step" id="ob-step-4" style="display:none">
-        <div class="ob-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
         <h2>你希望用的是</h2>
         <p class="ob-desc">选择模板策略，后续可在设置中更改</p>
         <div class="ob-form" style="display:flex;gap:12px;justify-content:center">
@@ -772,21 +771,12 @@
 
         <div class="setting-card">
           <div class="setting-card-header">
-            <h3><span data-icon="download"></span> 退信检查</h3>
-            <span class="setting-status"></span>
-          </div>
-          <div class="setting-card-body">
-            <p style="font-size:12px;color:var(--text-secondary);margin:8px 0">每个发信账号的 IMAP 收件箱已自动关联，无需单独配置。点击「检查退信」将遍历所有活跃账号。</p>
-          </div>
-        </div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
             <h3><span data-icon="alert-circle"></span> 退信关键词</h3>
             <span class="setting-status"></span>
           </div>
           <div class="setting-card-body">
-            <div class="form-row"><label>关键词</label><textarea id="cfg-bounce-keywords" rows="3" placeholder="一行一个，不区分大小写&#10;spam rejected&#10;mailbox unavailable&#10;connection refused&#10;suspended"></textarea></div>
+            <div class="form-row"><label>关键词</label><textarea id="cfg-bounce-keywords" rows="3" placeholder="一行一个，不区分大小写"></textarea></div>
+            <p style="font-size:10px;color:var(--text-secondary);margin:4px 0 0">例如: spam rejected / mailbox unavailable / 拒收 / 退信</p>
           </div>
         </div>
 
