@@ -61,6 +61,7 @@ setTimeout(() => initDashboardEditor(), 200);  // 等 DOM 稳定后初始化布�
 let _onboardingStep = 1;
 let _obTransitioning = false;
 let _shiftHeld = false;
+let _obTemplateChoice = 'adaptive';  // 默认自适应
 document.addEventListener('keydown', e => { if (e.key === 'Shift') _shiftHeld = true; });
 document.addEventListener('keyup', e => { if (e.key === 'Shift') _shiftHeld = false; });
 
@@ -97,7 +98,7 @@ function hideOnboarding() {
 }
 
 function updateObStep(instant) {
-  const steps = [1, 2, 3].map(i => document.getElementById('ob-step-' + i));
+  const steps = [1, 2, 3, 4].map(i => document.getElementById('ob-step-' + i));
   const done = document.getElementById('ob-step-done');
   const dots = document.querySelectorAll('.ob-dot');
 
@@ -107,7 +108,7 @@ function updateObStep(instant) {
   }
 
   // 目标步骤
-  const targetId = _onboardingStep >= 4 ? 'ob-step-done' : 'ob-step-' + _onboardingStep;
+  const targetId = _onboardingStep >= 5 ? 'ob-step-done' : 'ob-step-' + _onboardingStep;
   const target = document.getElementById(targetId);
 
   // 隐藏所有，显示目标
@@ -128,7 +129,7 @@ function updateObStep(instant) {
   }
 
   // 进度条
-  const activeIdx = _onboardingStep >= 4 ? 3 : _onboardingStep;
+  const activeIdx = _onboardingStep >= 5 ? 4 : _onboardingStep;
   dots.forEach(d => d.classList.toggle('active', parseInt(d.dataset.step) <= activeIdx));
 }
 
@@ -171,6 +172,20 @@ window.onboardingNext = async function() {
   if (_onboardingStep === 3) {
     await saveGeneralConfig();
     _onboardingStep = 4; updateObStep();
+    // 默认高亮自适应卡片
+    setTimeout(() => {
+      const card = document.getElementById('ob-tpl-adaptive');
+      if (card) card.style.borderColor = 'var(--accent)';
+    }, 50);
+    return;
+  }
+  if (_onboardingStep === 4) {
+    // 保存模板选择
+    const cfg = (await window.electronAPI.loadConfig()) || {};
+    if (!cfg.template) cfg.template = {};
+    cfg.template.mode = _obTemplateChoice;
+    try { await window.electronAPI.saveConfig(cfg); } catch {}
+    _onboardingStep = 5; updateObStep();
     // 触发 Logo + 标题动画
     setTimeout(() => {
       const logo = document.getElementById('ob-logo');
@@ -193,6 +208,15 @@ window.onboardingNext = async function() {
 });
 
 window.onboardingSkip = function() { hideOnboarding(); };
+// 模板选择卡片点击高亮
+['ob-tpl-adaptive','ob-tpl-user'].forEach(id => {
+  document.getElementById(id)?.addEventListener('click', function() {
+    _obTemplateChoice = id === 'ob-tpl-adaptive' ? 'adaptive' : 'general';
+    document.querySelectorAll('.ob-choice-card').forEach(c => c.style.borderColor = 'var(--border)');
+    this.style.borderColor = 'var(--accent)';
+  });
+});
+
 window.onboardingFinish = async function() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
@@ -269,7 +293,5 @@ async function saveGeneralConfig() {
   cfg.general.autoLaunch = autoLaunch;
   cfg.schedule = cfg.schedule || {};
   cfg.schedule.mode = 'batch';
-  cfg.template = cfg.template || {};
-  cfg.template.mode = 'adaptive';
   try { await window.electronAPI.saveConfig(cfg); } catch {}
 }

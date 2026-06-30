@@ -183,6 +183,7 @@
 }
 .ob-dot { width: 24px; height: 2px; border-radius: 1px; background: var(--border); transition: background 0.25s ease; }
 .ob-dot.active { background: var(--text); }
+.ob-choice-card:hover { border-color: var(--accent) !important; background: rgba(0,191,165,0.03); }
 
 /* 步骤滑入动画（translateX，Win11 风格） */
 .onboarding-step {
