@@ -986,8 +986,8 @@ select option { font-size: 12px; }
 /* 新手教程卡片 */
 .tut-overlay {
   display: none; position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.5); justify-content: center; align-items: center;
-  animation: tutFadeIn .35s ease;
+  background: rgba(0,0,0,0.15); justify-content: center; align-items: flex-start;
+  padding-top: 80px; pointer-events: none;
 }
 @keyframes tutFadeIn {
   from { opacity: 0; }
@@ -996,7 +996,7 @@ select option { font-size: 12px; }
 .tut-card {
   background: #fff; border-radius: 12px; padding: 8px 32px 28px;
   max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-  text-align: center; position: relative;
+  text-align: center; position: relative; pointer-events: auto;
   animation: tutSlideUp .4s ease;
 }
 @keyframes tutSlideUp {
@@ -1004,7 +1004,7 @@ select option { font-size: 12px; }
   to { transform: translateY(0); opacity: 1; }
 }
 .tut-handle {
-  display: flex; justify-content: center; gap: 4px; padding: 10px 0 6px;
+  display: flex; justify-content: center; padding: 10px 0 6px;
   cursor: grab; user-select: none;
 }
 .tut-handle span {
