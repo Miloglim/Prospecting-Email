@@ -115,6 +115,24 @@
     </div>
   </div>
 
+  <!-- 新手教程卡片 -->
+  <div id="tutorial-overlay" class="tut-overlay">
+    <div id="tutorial-card" class="tut-card">
+      <div class="tut-handle" id="tut-handle">
+        <span></span><span></span><span></span>
+      </div>
+      <h2>开始你的第一次发信</h2>
+      <div class="tut-steps">
+        <div class="tut-step"><span class="tut-num">1</span> 仪表盘 → 点击 <strong>导入客户</strong> 按钮</div>
+        <div class="tut-step"><span class="tut-num">2</span> 模板工坊 → <strong>模板调整</strong> 生成自己的邮件模板</div>
+        <div class="tut-step"><span class="tut-num">3</span> 模板工坊 → <strong>签名管理</strong> 保存自己的签名</div>
+        <div class="tut-step"><span class="tut-num">4</span> 邮件发送 → 选择公司 <strong>加入队列</strong></div>
+        <div class="tut-step"><span class="tut-num">5</span> 开始发送</div>
+      </div>
+      <button id="tutorial-dismiss" class="tut-dismiss">开始使用</button>
+    </div>
+  </div>
+
   <!-- ========== 自定义标题栏 ========== -->
   <div id="titlebar">
     <div class="titlebar-drag"></div>
@@ -142,7 +160,7 @@
       <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
       <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="alert-circle"></span> 退信检测</li>
-      <li class="nav-sub" data-page="replies"><span class="nav-icon" data-icon="mail-check"></span> 回复检测</li>
+      <li class="nav-sub" data-page="replies"><span class="nav-icon" data-icon="reply"></span> 回复检测</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
@@ -150,7 +168,7 @@
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
     </ul>
-    <div class="nav-footer"><span class="nav-version" id="nav-version">v2.5.2</span></div>
+    <div class="nav-footer"><span class="nav-version" id="nav-version">—</span></div>
   </nav>
 
   <!-- ========== 右侧内容区 ========== -->
@@ -454,9 +472,10 @@
         </div>
         <div class="send-body">
           <div class="send-top">
-            <button id="ws-add-queue" style="font-size:12px;padding:6px 12px"><span data-icon="send"></span> 加入队列</button>
+            <button id="ws-add-queue" style="font-size:12px;padding:6px 12px"><span data-icon="send"></span> 加入队列</button> <select id="send-tpl-mode" style="width:80px;font-size:11px;padding:2px 6px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;margin-left:8px"><option value="adaptive">自适应</option><option value="general">用户模板</option></select>
 <span id="send-list-title" style="font-weight:600;font-size:13px;margin-left:8px">已选公司</span>
           </div>
+          <p style="font-size:10px;color:var(--text-secondary);margin:2px 0 0 0">对公司卡片右键可指定发送模板</p>
           <div class="send-company-cards" id="send-company-cards">
             <p class="placeholder" id="send-cards-empty">← 勾选左侧公司</p>
           </div>

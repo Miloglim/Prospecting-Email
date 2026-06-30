@@ -92,6 +92,8 @@ export async function renderHistoryTable() {
             time: r.time || '',
             idx: r.index,
             _tplInfo: r._tplInfo || '',
+            _templateSource: r._templateSource || '',
+            _templateLabel: r._templateLabel || '',
             _batchLabel: r._batchLabel || '',
           });
         }
@@ -186,7 +188,10 @@ export async function showPreview(d) {
     if (subjEl) subjEl.textContent = g.subject || '无主题';
     if (metaEl) {
       const t = g.time ? new Date(new Date(g.time).getTime() + 8*3600000).toISOString().slice(0,16).replace('T',' ') : '';
-      const tplLabel = g._tplInfo && g._tplInfo.startsWith('user:') ? '用户模板' : (g._tplInfo || '');
+      let tplLabel = g._templateLabel || '';
+      if (!tplLabel && g._tplInfo) {
+        tplLabel = g._tplInfo.startsWith('user:') ? '用户模板' : g._tplInfo;
+      }
       metaEl.innerHTML = `<span>🕐 ${escapeHtml(t || '—')}</span>${tplLabel ? '<span>· ' + escapeHtml(tplLabel) + '</span>' : ''}`;
     }
     // 高亮当前组按钮

@@ -143,7 +143,10 @@ export async function renderQueue() {
       : '';
     const failInfo = e._error ? `<div style="font-size:10px;color:var(--danger);margin-top:2px">${escapeHtml(e._error)}</div>` : '';
     const tt = clientTypeTag(e._type);
-    const tplLabel = typeLabelMap[e._type] || '通用模板';
+    const tplLabel = e._templateLabel || typeLabelMap[e._type] || '通用模板';
+    const tplSourceTag = e._templateSource === 'user'
+      ? `<span style="font-weight:600;color:var(--primary)">${escapeHtml(tplLabel)}</span>`
+      : `<span style="color:var(--text-secondary)">预设模板</span>`;
     const ctry = e._country ? `<span>${escapeHtml(e._country)}</span>` : '';
     const langTag = e._lang ? `<span>${escapeHtml(e._lang).toUpperCase()}</span>` : '';
     // 联系人标签徽章
@@ -155,7 +158,7 @@ export async function renderQueue() {
           return `<span style="font-size:10px;padding:0 5px;border-radius:8px;background:${color}18;color:${color};white-space:nowrap">${label}</span>`;
         }).join(' ')
       : '';
-    const tagsArr = [tt, ctry, langTag, `<span>${count}人</span>`, `<span>${tplLabel}</span>`, contactTagBadges].filter(Boolean);
+    const tagsArr = [tt, ctry, langTag, `<span>${count}人</span>`, tplSourceTag, contactTagBadges].filter(Boolean);
     const tagsHtml = tagsArr.length ? `<div class="qc-tags">${tagsArr.join(' · ')}</div>` : '';
     const retryBtn = e.status === 'failed'
       ? `<button class="qc-retry" data-id="${e.id}">${lucide('refresh-cw',12)} 重发</button>`

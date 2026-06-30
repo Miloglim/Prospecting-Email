@@ -6,7 +6,15 @@ export function showModal({title,message,type='info',buttons,onClose}){return ne
 export async function showAlert(m,t){return showModal({title:'提示',message:m,type:t||'info',buttons:[{text:'确定',value:true,primary:true}]})}
 export async function showConfirm(m,o={}){const btns=[{text:o.cancelText||'取消',value:false}];if(o.skipText)btns.push({text:o.skipText,value:'skip'});btns.push({text:o.confirmText||'确定',value:true,primary:true});return showModal({title:o.title||'确认',message:m,type:o.type||'warn',buttons:btns})}
 export function showToast(msg,type){const e=document.getElementById('tmpl-toast');if(e)e.remove();const t=document.createElement('div');t.id='tmpl-toast';const c={ok:'#4caf50',warn:'#ff9800',err:'#f44336'};t.style.cssText=`position:fixed;bottom:24px;right:24px;padding:10px 20px;border-radius:6px;color:#fff;background:${c[type]||'#333'};font-size:13px;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;box-shadow:0 4px 12px rgba(0,0,0,.2)`;t.textContent=msg;document.body.appendChild(t);requestAnimationFrame(()=>{t.style.opacity='1'});setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},2000)}
+// 设置版本号（一次性）
+let _versionSet = false;
+async function initVersion() {
+  if (_versionSet) return;
+  try { const v = await window.electronAPI.getAppVersion(); const el = document.getElementById('nav-version'); if (el) el.textContent = 'v' + v; _versionSet = true; } catch {}
+}
+
 export async function loadDashboard(){
+  initVersion();
   // 核心数据
   try{
     const s=await window.electronAPI.getDashboardStats();

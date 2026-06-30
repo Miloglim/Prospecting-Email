@@ -113,9 +113,9 @@ function _buildContext(config) {
     // 封间延迟：批处理模式无封间延迟（BCC 批量），仅模拟人工模式使用
     perMin: isBatch ? 0 : (sc.min_delay_seconds || 30) * 1000,
     perMax: isBatch ? 0 : (sc.max_delay_seconds || 90) * 1000,
-    // 公司切换延迟
-    cdMin: (sc.company_delay_min_seconds ?? 300) * 1000,
-    cdMax: (sc.company_delay_max_seconds ?? 900) * 1000,
+    // 公司切换延迟（仅模拟人工模式；批处理模式由组间间隔控制节奏）
+    cdMin: isBatch ? 0 : (sc.company_delay_min_seconds ?? 300) * 1000,
+    cdMax: isBatch ? 0 : (sc.company_delay_max_seconds ?? 900) * 1000,
     SD_MIN: (sc.single_recip_delay_min_seconds ?? 60) * 1000,
     SD_MAX: (sc.single_recip_delay_max_seconds ?? 180) * 1000,
     // 批处理参数：组间间隔（每发一组后暂停），非"每N封停一次"
@@ -178,6 +178,8 @@ function _logRecord(ctx, to, company, subject, bodyText, bodyId, msgId, status, 
     _type: emailMeta?._type || 'unlabeled',
     _country: emailMeta?._country || '',
     _tplInfo: emailMeta?._tplInfo || '',
+    _templateSource: emailMeta?._templateSource || '',
+    _templateLabel: emailMeta?._templateLabel || '',
     _batchLabel: emailMeta?._batchLabel || '',
     time: new Date().toISOString(), time_beijing: beijingToday(), status,
     _test: !!ctx.testMode,

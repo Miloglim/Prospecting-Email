@@ -54,6 +54,9 @@ function register(ipcMain, deps) {
     return _statsCache;
   });
 
+  // 应用版本号
+  ipcMain.handle('app:getVersion', async () => require('electron').app.getVersion());
+
   // ── SMTP 状态（兼容旧 smtp + 新 smtpAccounts，含连通性测试结果）──
   ipcMain.handle('smtp:checkStatus', async () => {
     const cp = path.join(APP_ROOT, 'send', 'config.json');

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 仪表盘
   getDashboardStats: () => ipcRenderer.invoke('dashboard:getStats'),
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   checkSmtpStatus: () => ipcRenderer.invoke('smtp:checkStatus'),
 
   // 客户表

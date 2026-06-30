@@ -243,6 +243,37 @@ window.onboardingFinish = async function() {
   setTimeout(() => {
     ob.style.display = 'none';
     ob.classList.remove('finishing', 'fadeout', 'show');
+    // 弹出新手教程（可拖动）
+    const overlay = document.getElementById('tutorial-overlay');
+    const card = document.getElementById('tutorial-card');
+    if (overlay && card) {
+      overlay.style.display = 'flex';
+      document.getElementById('tutorial-dismiss')?.addEventListener('click', () => {
+        overlay.style.display = 'none';
+      });
+      // 拖拽
+      const handle = document.getElementById('tut-handle');
+      if (handle) {
+        let dragging = false, startX, startY, origX, origY;
+        handle.addEventListener('mousedown', (e) => {
+          dragging = true; startX = e.clientX; startY = e.clientY;
+          const r = card.getBoundingClientRect();
+          origX = r.left; origY = r.top;
+          card.style.transition = 'none';
+          e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+          if (!dragging) return;
+          card.style.position = 'fixed';
+          card.style.left = (origX + e.clientX - startX) + 'px';
+          card.style.top = (origY + e.clientY - startY) + 'px';
+          card.style.transform = 'none';
+        });
+        window.addEventListener('mouseup', () => {
+          if (dragging) { dragging = false; card.style.transition = ''; }
+        });
+      }
+    }
   }, 2500);
 };
 

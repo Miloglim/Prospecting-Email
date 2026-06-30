@@ -9,6 +9,26 @@ import CS from './company-state.js';
 
 export async function initEmailSend() {
   if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+  // 模板模式选择 — 与设置页同步
+  const tplModeSel = document.getElementById('send-tpl-mode');
+  const cfgModeSel = document.getElementById('cfg-template-mode');
+  if (tplModeSel) {
+    const config = await window.electronAPI.loadConfig().catch(() => ({}));
+    const mode = config?.template?.mode || 'adaptive';
+    tplModeSel.value = mode;
+    tplModeSel.addEventListener('change', async () => {
+      const cfg = await window.electronAPI.loadConfig().catch(() => ({}));
+      if (!cfg.template) cfg.template = {};
+      cfg.template.mode = tplModeSel.value;
+      await window.electronAPI.saveConfig(cfg);
+      // 同步设置页
+      if (cfgModeSel) cfgModeSel.value = tplModeSel.value;
+    });
+    // 设置页变化也同步过来
+    if (cfgModeSel) {
+      cfgModeSel.addEventListener('change', () => { tplModeSel.value = cfgModeSel.value; });
+    }
+  }
   document.getElementById('ws-add-queue').addEventListener('click', addToQueue);
   document.getElementById('monthly-generate-btn')?.addEventListener('click', generateMonthlyReports);
   // 搜索 & 选择工具
@@ -609,7 +629,7 @@ export async function renderSelectedCards() {
   // ponytail: 加载用户模板和配置
   let userTemplates = [];
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  const tplMode = config?.template?.mode || 'adaptive';
+  const tplMode = document.getElementById('send-tpl-mode')?.value || config?.template?.mode || 'adaptive';
   try { userTemplates = await window.electronAPI.listUserTemplates(); } catch {}
 
   for (const name of selected) {
@@ -806,6 +826,7 @@ async function addToQueue() {
         _stage: stage, _type: card.type, _lang: card.lang, _country: members[0]?.country || '',
         _tplInfo: useUserTpl ? `user:${card._userTemplate?.id}` : [groupTpl?.hook?.id, groupTpl?.pain?.id, groupTpl?.proof?.id, groupTpl?.cta?.id, groupTpl?.followup?.id].filter(Boolean).join('·'),
         _templateSource: card._templateSource || 'preset',
+        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : '预设模板',
         _groupOf: totalGroups > 1 ? name : undefined, _groupSeq: totalGroups > 1 ? g : undefined, _groupTotal: totalGroups > 1 ? totalGroups : undefined,
         _batchLabel: batchLabel,
         _recipientStatus: groupEmails.map(e => ({ email: e, status: 'pending' })),
