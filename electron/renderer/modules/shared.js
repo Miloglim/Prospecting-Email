@@ -37,7 +37,12 @@ export async function loadDashboard(){
     try{
       const blog=await window.electronAPI.loadBounceLog();
       const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
-      const todayBounces=(blog.data||blog||[]).filter(b=>(b.date||'').slice(0,10)===today).length;
+      const records=blog.data||blog||[];
+      // 兼容邮件头日期格式：尝试解析后转为 YYYY-MM-DD
+      const todayBounces=records.filter(b=>{
+        if(!b.date) return false;
+        try{const d=new Date(b.date);if(isNaN(d.getTime())) return false;return d.toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'})===today;}catch{return false;}
+      }).length;
       const todaySent=s.sentToday||0;
       document.getElementById('dash-bounce-rate').textContent=todaySent>0?(todayBounces/todaySent*100).toFixed(1)+'%':'—';
     }catch(e){document.getElementById('dash-bounce-rate').textContent='—';}
