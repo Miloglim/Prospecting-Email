@@ -120,7 +120,8 @@ export function collectSettingsFromForm() {
 
 export async function initSettings() {
   // 强制关闭可能残留的编辑弹窗，防止透明模态层卡死按钮
-  document.getElementById('account-editor-modal').style.display = 'none';
+  const modal = document.getElementById('account-modal');
+  if (modal) modal.style.display = 'none';
   // 所有输入框点击/聚焦时全选，键入即覆盖
   document.querySelectorAll('#page-settings input[type="text"], #page-settings input[type="number"], #page-settings input[type="password"]').forEach(el => {
     el.addEventListener('focus', () => el.select());
