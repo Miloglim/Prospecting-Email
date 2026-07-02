@@ -398,12 +398,12 @@ async function runSendBatch(deps, sendProgress) {
 
   let sent = 0, failed = 0;
   let lastAccountIdx = -1;
-  // 速率熔断：5 秒内 >= 2 组成功发送 → 强制暂停
-  let rapidSendCount = 0;
+  // 速率熔断：5 秒内累计发送 >= batchSize×2 人 → 强制暂停（给正常连发留余量）
+  let rapidRecipCount = 0;
   let lastRapidTime = 0;
   const RAPID_WINDOW_MS = 5000;
-  const RAPID_THRESHOLD = 2;
   const MELTDOWN_COOLDOWN_SEC = 30;
+  const RAPID_LIMIT = ctx.batchSize * 2;
   // ponytail: 快照队列长度，防止并发推入导致循环无限增长
   const queueLen = deps.sendQueue.length;
   // ponytail: 小公司累计发送人数 — 满 batchSize 才触发组间间隔
@@ -495,17 +495,17 @@ async function runSendBatch(deps, sendProgress) {
       if (!ctx.dryRun && !ctx.testMode) {
         const now = Date.now();
         if (now - lastRapidTime < RAPID_WINDOW_MS) {
-          rapidSendCount++;
+          rapidRecipCount += result.n || 0;
         } else {
-          rapidSendCount = 1;
+          rapidRecipCount = result.n || 0;
         }
         lastRapidTime = now;
-        if (rapidSendCount >= RAPID_THRESHOLD) {
-          Log.warn("发信", `速率熔断: ${RAPID_WINDOW_MS/1000}秒内发送${rapidSendCount}组, 强制暂停${MELTDOWN_COOLDOWN_SEC}秒`);
+        if (rapidRecipCount >= RAPID_LIMIT) {
+          Log.warn("发信", `速率熔断: ${RAPID_WINDOW_MS/1000}秒内发送${rapidRecipCount}人, 强制暂停${MELTDOWN_COOLDOWN_SEC}秒`);
           try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ meltdownUntil: Date.now() + MELTDOWN_COOLDOWN_SEC * 1000, status: 'meltdown' })); } catch { /* 熔断状态文件写入失败不阻塞暂停 */ }
-          sendProgress({ type: 'ratelimit', error: `发送过快！${RAPID_WINDOW_MS/1000}秒内连发${rapidSendCount}组，已强制暂停${MELTDOWN_COOLDOWN_SEC}秒` });
+          sendProgress({ type: 'ratelimit', error: `发送过快！${RAPID_WINDOW_MS/1000}秒内连发${rapidRecipCount}人，已强制暂停${MELTDOWN_COOLDOWN_SEC}秒` });
           deps.isPaused = true;
-          rapidSendCount = 0;
+          rapidRecipCount = 0;
           break;
         }
       }
