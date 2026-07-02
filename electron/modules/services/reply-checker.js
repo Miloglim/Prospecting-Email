@@ -6,7 +6,7 @@ const fs = require('fs');
 const https = require('https');
 const { APP_ROOT } = require('../config');
 const { Log } = require("../core/logger");
-const { API } = require('./core/contract');
+const { API } = require('../core/contract');
 
 // ── 自动回复关键词 ────────────────────────────────────────────────────────
 const AUTO_REPLY_KW = [
