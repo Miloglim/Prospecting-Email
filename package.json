@@ -10,7 +10,7 @@
     "build": "electron-vite build",
     "pack": "electron-vite build && electron-builder --win",
     "build-only": "electron-vite build && electron-builder --win --publish never",
-    "release": "electron-vite build && electron-builder --win --publish always",
+    "ship": "electron-vite build && electron-builder --win --publish always",
     "sync-oss": "node scripts/sync-oss.js"
   },
   "build": {
