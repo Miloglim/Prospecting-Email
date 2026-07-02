@@ -116,15 +116,22 @@ function extractBouncedAddress(headers, bodyLines, senderEmail) {
   return '';
 }
 
-// ── AI 提取被退回邮箱（Agnes）— 支持多收件人 ────────────────────────────
+// ── AI 提取被退回邮箱（Agnes）— 读完完整邮件，支持多收件人/连排/分栏 ─────
 async function aiExtractAddresses(markdownBody, apiKey) {
   if (!apiKey) return [];
   const answer = await aiAsk(
-    '从退信内容中提取所有被退回的收件人邮箱。直接返回邮箱列表，用逗号分隔。不要返回其他内容。排除系统地址（no-reply、postmaster、mailer-daemon）。如果找不到，返回 NONE。',
-    markdownBody.slice(0, 2000), 300, apiKey
+    '从退信邮件中提取所有被退回的邮箱地址。注意：多个邮箱可能连在一起（如 a@x.comb@y.com）或分行列出。请逐个拆分并返回，用逗号分隔。排除系统地址（no-reply、postmaster、mailer-daemon）。找不到返回 NONE。',
+    markdownBody.slice(0, 4000), 500, apiKey
   );
   if (!answer || answer === 'NONE') return [];
-  return answer.split(/[,;\s\n]+/).map(e => e.trim().toLowerCase()).filter(e => EMAIL_RE.test(e));
+  // 拆分合并的邮箱（a@x.comb@y.com → a@x.com, b@y.com）
+  const parts = answer.split(/[,;\s\n]+/).filter(Boolean);
+  const emails = [];
+  for (const p of parts) {
+    const found = p.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+    if (found) emails.push(...found);
+  }
+  return [...new Set(emails.map(e => e.toLowerCase().trim()))].filter(e => EMAIL_RE.test(e));
 }
 
 // ── AI 退信分类（Agnes）─────────────────────────────────────────────────
@@ -342,10 +349,10 @@ async function pop3Check(cfg, senderEmail, effectiveKw, apiKey) {
       .sort((a, b) => b - a);
     if (!newIds.length) {
       // 全部是新的（首次运行或游标丢失），扫最近 50 封
-      newIds = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 50);
+      newIds = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 20);
     }
     // 取最近 50 封新邮件
-    newIds = newIds.slice(0, 50);
+    newIds = newIds.slice(0, 20);
 
     // 反向扫描（从新到旧）
     let newUid = lastUid;
@@ -369,7 +376,7 @@ async function pop3Check(cfg, senderEmail, effectiveKw, apiKey) {
         if (effectiveKw.some(kw => decoded.toLowerCase().includes(kw.toLowerCase()) || bodySnippet.toLowerCase().includes(kw.toLowerCase()))) {
           let bouncedEmails = [extractBouncedAddress(headers, decodedBody, senderEmail)].filter(Boolean);
           // AI 兜底：正则没提到，或正文有多人特征（逗号分隔多个邮箱）时用 AI 补全
-          const bodyText = decodedBody.slice(0, 50).join('\n').slice(0, 1000);
+          const bodyText = decodedBody.slice(0, 20).join('\n').slice(0, 1000);
           const needAI = !bouncedEmails.length || (bodyText.match(EMAIL_RE) || []).length > 2;
           if (needAI && apiKey) {
             const aiEmails = await aiExtractAddresses(bodyText, apiKey);
@@ -473,7 +480,7 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
               const decodedBody = decodeMimeBody(bodyLines);
               let addr = extractBouncedAddress(headerLines, decodedBody, senderEmail);
               let bouncedEmails2 = addr ? [addr] : [];
-              const bodyText2 = decodedBody.slice(0, 50).join('\n').slice(0, 1000);
+              const bodyText2 = decodedBody.slice(0, 20).join('\n').slice(0, 1000);
               const needAI2 = !bouncedEmails2.length || (bodyText2.match(EMAIL_RE) || []).length > 2;
               if (needAI2 && apiKey) {
                 const aiEmails = await aiExtractAddresses(bodyText2, apiKey);

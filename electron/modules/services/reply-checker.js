@@ -149,13 +149,22 @@ function imapCheckReplies(imapCfg, senderEmail) {
 
     imap.once('ready', () => {
       imap.openBox('INBOX', false, () => {
-        const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+        const since = new Date(Date.now() - 3 * 24 * 3600 * 1000);
         imap.search([['SINCE', since]], (err, results) => {
           if (err || !results?.length) { imap.end(); return resolve({ ok: true, replies: [] }); }
 
-          const last50 = results.slice(-50);
-          const fetch = imap.fetch(last50, {
-            bodies: ['HEADER.FIELDS (SUBJECT DATE FROM IN-REPLY-TO REFERENCES)', 'TEXT'],
+          // 增量扫描：跳过游标已记录的 UID
+          const cursor = readCursor();
+          const lastUid = cursor[imapCfg.user] || 0;
+          const newResults = results.filter(uid => uid > lastUid);
+          const toFetch = newResults.length ? newResults.slice(-20) : [];
+          if (!toFetch.length) { imap.end(); return resolve({ ok: true, replies: [] }); }
+          // 记录本次扫描的最大 UID
+          const maxUid = Math.max(...toFetch);
+          cursor[imapCfg.user] = maxUid;
+          writeCursor(cursor);
+          const fetch = imap.fetch(toFetch, {
+            bodies: ['HEADER.FIELDS (SUBJECT DATE FROM TO IN-REPLY-TO REFERENCES)', 'TEXT'],
             struct: true,
           });
 
@@ -170,30 +179,33 @@ function imapCheckReplies(imapCfg, senderEmail) {
               const subjectMatch = body.match(/^Subject:\s*(.+)/im);
               const fromMatch = body.match(/^From:\s*(.+)/im);
               const dateMatch = body.match(/^Date:\s*(.+)/im);
+              const toMatch = body.match(/^To:\s*(.+)/im);
               const inReplyToMatch = body.match(/^In-Reply-To:\s*(.+)/im);
               const refsMatch = body.match(/^References:\s*(.+)/im);
 
               const subject = decodeMimeHeader(subjectMatch?.[1] || '');
               const from = (fromMatch?.[1] || '').trim();
               const date = (dateMatch?.[1] || '').trim();
+              const toRaw = (toMatch?.[1] || '').trim();
+              const recipEmail = (toRaw.match(/<(.+?)>/) || [])[1] || toRaw.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[0] || '';
               const fromEmail = (from.match(/<(.+?)>/) || [])[1] || from.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[0] || '';
               if (!fromEmail) return;
 
               const msgId = (inReplyToMatch?.[1] || refsMatch?.[1] || '').trim();
               const bodyText = cleanBodySnippet(body);
 
-              candidates.push({ from: fromEmail, subject, date, inReplyTo: msgId, snippet: bodyText });
+              candidates.push({ from: fromEmail, recipEmail, subject, date, inReplyTo: msgId, snippet: bodyText });
             });
           });
 
           fetch.once('error', () => { /* skip */ });
           fetch.once('end', async () => {
             imap.end();
-            // 批量 AI 分类
+            // 批量 AI 分类 + 账号匹配
             const replies = [];
             for (const c of candidates) {
               const type = await classifySubject(c.subject, c.snippet);
-              if (type === 'other') continue; // 跳过无关邮件
+              if (type === 'other') continue;
               replies.push({ ...c, type });
             }
             resolve({ ok: true, replies });
@@ -275,7 +287,7 @@ async function pop3CheckReplies(cfg, senderEmail) {
       const parts = line.split(/\s+/);
       if (parts.length >= 2 && /^\d+$/.test(parts[0])) uidMap[parseInt(parts[0])] = parts[1];
     }
-    const ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 30);
+    const ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 15);
 
     for (const n of ids) {
       try {
@@ -337,6 +349,18 @@ async function checkReplies() {
 
   if (!checkAccounts.length) return { ok: false, error: '无可用邮箱（请在账号中配置 IMAP/POP3 收件箱）' };
 
+  // 预加载联系人邮箱集合（用于匹配发件人）
+  const contactEmails = new Set();
+  try {
+    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
+    if (fs.existsSync(cp)) {
+      const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+      for (const c of contacts) {
+        if (c.email) contactEmails.add(c.email.toLowerCase().trim());
+      }
+    }
+  } catch { /* 联系人加载失败不影响检测 */ }
+
   const allReplies = [];
   for (const acc of checkAccounts) {
     const senderEmail = acc.imap?.user || acc.smtp?.user || '';
@@ -346,11 +370,32 @@ async function checkReplies() {
         ? await pop3CheckReplies(acc.imap, senderEmail)
         : await imapCheckReplies(acc.imap, senderEmail);
       if (result.ok && result.replies?.length) {
-        result.replies.forEach(r => { r._accountLabel = acc.label || senderEmail; });
+        result.replies.forEach(r => {
+          r._accountLabel = acc.label || senderEmail;
+          r._contactMatched = contactEmails.has((r.from || '').toLowerCase().trim());
+        });
         allReplies.push(...result.replies);
       }
     } catch (e) {
       Log.warn(`[回复] 账号 ${acc.label || senderEmail} 检测异常:`, e.message);
+    }
+  }
+
+  // AI 从正文提取联系人邮箱（From 头没匹配到 + AI 可用时兜底）
+  if (_aiEnabled) {
+    for (const r of allReplies) {
+      if (r._contactMatched) continue; // 已匹配，跳过
+      const prompt = '从邮件正文中提取发件人的联系邮箱。排除 no-reply、postmaster、mailer-daemon 等系统地址。只返回邮箱，找不到返回 NONE。\n\n' +
+        '主题：' + (r.subject || '') + '\n正文：' + (r.snippet || '').slice(0, 800);
+      const answer = await _aiAsk(prompt, 20);
+      if (answer && answer !== 'NONE') {
+        const match = answer.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        if (match) {
+          const aiEmail = match[0].toLowerCase().trim();
+          r._contactMatched = contactEmails.has(aiEmail);
+          if (r._contactMatched) r._aiExtractedEmail = aiEmail;
+        }
+      }
     }
   }
 
@@ -403,7 +448,7 @@ function applyReplies(replies) {
 
 // ── 自动回复检测调度（由 send-engine 调用）──────────────────────────────────
 let _autoReplyTimer = null;
-const REPLY_CHECK_INTERVAL = 30 * 60 * 1000; // 30 分钟
+const REPLY_CHECK_INTERVAL = 5 * 60 * 1000; // 5 分钟
 
 function scheduleAutoReplyCheck(mainWindow, tray) {
   clearTimeout(_autoReplyTimer);

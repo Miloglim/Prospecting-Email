@@ -126,7 +126,7 @@ function register(ipcMain, deps) {
 
   // ── 退信检测 ──
   ipcMain.handle('imap:test', async (_e, cfg) => require('../bounce-checker').testConnection(cfg));
-  ipcMain.handle('bounce:check', async () => { try { return await Promise.race([require('../bounce-checker').checkBounces(), new Promise(r => setTimeout(() => r({ ok: false, error: '检测超时' }), 60000))]); } catch (e) { return { ok: false, error: '检测异常' }; } });
+  ipcMain.handle('bounce:check', async () => { try { return await Promise.race([require('../bounce-checker').checkBounces(), new Promise(r => setTimeout(() => r({ ok: false, error: '检测超时' }), 120000))]); } catch (e) { return { ok: false, error: '检测异常' }; } });
   ipcMain.handle('bounce:clear', async () => { require('../bounce-checker').clearCursor(); return { ok: true }; });
 
   // ── 退信日志 ──

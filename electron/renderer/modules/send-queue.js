@@ -725,10 +725,10 @@ export function resumeTimer() {
   }
 }
 
-// ── 十分钟循环退信扫描（仅队列发送中生效）─────────────────────────────────
+// ── 五分钟循环退信扫描（仅队列发送中生效）─────────────────────────────────
 export function startAutoBounceInterval() {
   clearInterval(S.autoBounceTimer);
-  S.nextBounceScanAt = Date.now() + 10 * 60 * 1000;
+  S.nextBounceScanAt = Date.now() + 5 * 60 * 1000;
   S.autoBounceTimer = setInterval(async () => {
     if (!S.sendInProgress) return; // 没在发送就不扫
     try {

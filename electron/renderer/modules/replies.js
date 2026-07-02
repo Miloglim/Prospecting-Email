@@ -25,8 +25,12 @@ function initContextMenu() {
     item.addEventListener('click', async () => {
       const tag = item.dataset.tag;
       const email = _ctxTarget?.dataset?.email;
+      const matched = _ctxTarget?.dataset?.matched === '1';
+      const contactMatched = _ctxTarget?.dataset?.contactMatched !== '0';
       _ctxMenu.style.display = 'none';
       if (!email || !tag) return;
+      if (!contactMatched) { showToast('发件人不在联系人库中，无法打标签', 'warn'); return; }
+      if (!matched) { showToast('未匹配联系人，无法打标签', 'warn'); return; }
 
       const contacts = await window.electronAPI.getContacts();
       const contact = contacts.find(c => (c.email || '').toLowerCase().trim() === email.toLowerCase().trim());
@@ -178,11 +182,13 @@ async function renderReplyListFromData(items) {
     const matched = !!contactMap[emailKey];
     const def = TYPE_DEF[r0.type] || TYPE_DEF.other;
 
-    return `<div class="reply-card" data-email="${escapeHtml(from)}" style="position:relative">
+    const contactMatched = r0._contactMatched !== false; // undefined（旧数据）视为匹配
+    return `<div class="reply-card" data-email="${escapeHtml(from)}" data-matched="${matched ? '1' : '0'}" data-contact-matched="${contactMatched ? '1' : '0'}" style="position:relative">
       <div class="reply-card-top">
         <span class="reply-avatar">${lucide(def.icon,ICON_SIZE)}</span>
         <span class="reply-from">${escapeHtml(from)}</span>
         ${matched ? `<span style="color:var(--text-secondary);font-weight:600;font-size:12px">已匹配</span>` : ''}
+        ${!contactMatched ? `<span style="color:var(--warning);font-size:11px">${lucide('alert-triangle',10)} 未匹配联系人</span>` : ''}
         <span class="reply-tag ${def.cls}">
           ${lucide(def.icon,10)} ${def.text}
         </span>
