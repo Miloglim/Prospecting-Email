@@ -121,6 +121,8 @@ function _buildContext(config) {
     // 批处理参数：组间间隔（每发一组后暂停），非"每N封停一次"
     groupIntervalMin: (sc.batch_pause_min_seconds ?? 150) * 1000,
     groupIntervalMax: (sc.batch_pause_max_seconds ?? 210) * 1000,
+    // ponytail: 小公司累计阈值 — 不足一组时连发，满 batchSize 人才暂停
+    batchSize: sc.batch_size || 10,
   };
   return ctx;
 }
@@ -404,6 +406,8 @@ async function runSendBatch(deps, sendProgress) {
   const MELTDOWN_COOLDOWN_SEC = 30;
   // ponytail: 快照队列长度，防止并发推入导致循环无限增长
   const queueLen = deps.sendQueue.length;
+  // ponytail: 小公司累计发送人数 — 满 batchSize 才触发组间间隔
+  let batchAccum = 0;
 
   // ponytail: 恢复上次未完成的组间间隔（防重启跳过倒计时）
   try {
@@ -527,11 +531,17 @@ async function runSendBatch(deps, sendProgress) {
           : { type: 'failed', id: email.id, to: (email.recipients || [email.to]).join(','), error: '' }
     );
 
-    // 组间间隔（仅批处理（匀速速发）模式，每组之间暂停）
+    // 组间间隔（仅批处理（匀速速发）模式，小公司累计满 batchSize 人才暂停）
     if (ctx.isBatch && i < queueLen - 1) {
+      batchAccum += result.n || 0;
+      if (batchAccum < ctx.batchSize) {
+        Log.info("发信", `小公司连发: 累计${batchAccum}/${ctx.batchSize}人, 跳过组间间隔`);
+        continue;
+      }
+      batchAccum = 0;
       const gi = Math.floor(Math.random() * (ctx.groupIntervalMax - ctx.groupIntervalMin + 1)) + ctx.groupIntervalMin;
       const giSec = Math.round(gi / 1000);
-      Log.info("发信", "组间间隔 " + giSec + "s (" + (i+1) + "/" + queueLen + "组)");
+      Log.info("发信", "组间间隔 " + giSec + "s (" + (i+1) + "/" + queueLen + "组, 累计满" + ctx.batchSize + "人)");
       // ponytail: 持久化间隔状态，防重启跳过倒计时
       try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ pendingDelaySec: giSec, delayStartedAt: Date.now(), status: 'delaying' })); } catch { /* 间隔状态记录失败不阻塞发送 */ }
       sendProgress({ type: 'delay', seconds: giSec, company: `组间间隔(${i + 1}/${queueLen}组)` });

@@ -29,6 +29,39 @@ function register(ipcMain, deps) {
     for (const name of companies) { const cur = h[name]?.stage || 'cold'; const idx = STAGES.indexOf(cur); const ni = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; const next = STAGES[ni]; const u = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] }; if (!h[name]?.startedAt) u.startedAt = now; if (next === 'archived') u.archivedAt = now; _dualWrite(h, name, u); }
     wsh(h); return h;
   });
+
+  // ── 阶段追回：扫描已发记录，将 cold 阶段已发公司推进到 f1 ──────────
+  ipcMain.handle('history:catchup', async () => {
+    const h = rsh();
+    const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
+    // 从发送日志提取已发公司
+    const logPaths = [
+      path.join(APP_ROOT, 'send', 'send-log.json'),
+      path.join(APP_ROOT, 'send', 'send-log-test.json'),
+    ];
+    const sentCompanies = new Set();
+    for (const lp of logPaths) {
+      try {
+        if (fs.existsSync(lp)) {
+          const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
+          (log.sent || []).forEach(r => { if (r.company) sentCompanies.add(r.company); });
+        }
+      } catch { /* 文件损坏跳过 */ }
+    }
+    // 推进 cold 阶段的已发公司
+    let caught = 0;
+    const now = new Date().toISOString();
+    for (const name of sentCompanies) {
+      const cur = h[name]?.stage || 'cold';
+      if (cur !== 'cold') continue;
+      const u = { ...h[name], stage: 'f1', lastSent: h[name]?.lastSent || now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
+      if (!h[name]?.startedAt) u.startedAt = now;
+      _dualWrite(h, name, u);
+      caught++;
+    }
+    if (caught > 0) wsh(h);
+    return { caught, total: sentCompanies.size };
+  });
   ipcMain.handle('history:recordSentences', async (_e, c, sids) => { const h = rsh(); const e = h[c] || {}; const u = e.usedSentences || []; _dualWrite(h, c, { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:reactivate', async (_e, c) => { const h = rsh(); _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:getLog', async (_e, params) => {

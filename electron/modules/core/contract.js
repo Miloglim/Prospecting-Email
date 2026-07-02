@@ -141,6 +141,8 @@ const HISTORY = {
   RECORD_SENTENCES: 'history:recordSentences',
   /** 重新激活公司 */
   REACTIVATE:       'history:reactivate',
+  /** 阶段追回：扫描已发记录补推进 */
+  CATCHUP:          'history:catchup',
 };
 
 // ── 队列持久化（queue）───────────────────────────────────────────────────────

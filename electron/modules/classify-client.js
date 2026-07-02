@@ -20,6 +20,7 @@ function classifyClient(company, category) {
     'nvocc', 'nvoc',
     'courier', 'cargo express', 'carga express',
     'international movers', 'consolidator', 'consolidador',
+    '代理', '货代', 'agente de cargas',
   ];
   if (agentStrong.some(kw => text.includes(kw))) return 'agent';
 
@@ -61,6 +62,7 @@ function classifyClient(company, category) {
     'pintura', 'paint', 'coating',
     'agricultura', 'agricultural', 'agro',
     'hospitalar', 'medical devices',
+    '直客',
   ];
   if (directStrong.some(kw => text.includes(kw))) return 'direct';
 

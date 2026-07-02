@@ -9,6 +9,28 @@ const { APP_ROOT } = require('./modules/config');
 const { Log } = require('./modules/core/logger');
 const { API } = require('./modules/core/contract');
 
+// ponytail: 每次调用时动态读取代理（避免缓存，支持运行时修改 + 系统代理）
+function _getProxyUrl() {
+  // 1. 优先用 config.json 中配置的代理
+  try {
+    const cp = path.join(APP_ROOT, 'send', 'config.json');
+    if (fs.existsSync(cp)) {
+      const cfg = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+      if (cfg?.proxy?.host) return 'http://' + cfg.proxy.host.replace(/^https?:\/\//, '');
+    }
+  } catch { /* 配置文件读取失败 */ }
+  // 2. 系统环境变量
+  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+}
+function _getProxyAgent() {
+  const url = _getProxyUrl();
+  if (!url) return undefined;
+  try {
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    return new HttpsProxyAgent(url);
+  } catch { return undefined; }
+}
+
 const BOUNCE_KW = [
   // 英文
   'undelivered','returned','failure','bounce','undeliverable',
@@ -173,12 +195,16 @@ async function aiAsk(systemPrompt, userContent, maxTokens, apiKey) {
         ...API.AGNES, port: 443, method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
         timeout: 15000, rejectUnauthorized: false,
+        agent: _getProxyAgent(),
       }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
-      req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.on('error', (e) => { Log.warn('[退信AI]', '网络: ' + (e.message || 'unknown')); resolve(null); });
+      req.on('timeout', () => { req.destroy(); Log.warn('[退信AI]', '超时'); resolve(null); });
       req.end(body);
     });
-    return (result?.choices?.[0]?.message?.content || '').trim();
-  } catch { return ''; }
+    const content = (result?.choices?.[0]?.message?.content || '').trim();
+    if (result && !content) Log.warn('[退信AI]', '返回空: HTTP ' + (result._httpStatus || '?'));
+    return content;
+  } catch (e) { Log.warn('[退信AI]', '异常: ' + (e.message || 'unknown')); return ''; }
 }
 
 // ── MIME body 解码 ─────────────────────────────────────────────────────

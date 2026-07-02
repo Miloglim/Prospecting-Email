@@ -8,6 +8,24 @@ const { APP_ROOT } = require('../config');
 const { Log } = require("../core/logger");
 const { API } = require('../core/contract');
 
+// ponytail: 每次调用时动态读取代理（优先 config，其次系统环境变量）
+function _getProxyUrl() {
+  try {
+    const cp = path.join(APP_ROOT, 'send', 'config.json');
+    if (fs.existsSync(cp)) {
+      const cfg = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+      if (cfg?.proxy?.host) return 'http://' + cfg.proxy.host.replace(/^https?:\/\//, '');
+    }
+  } catch { /* */ }
+  return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || null;
+}
+function _getProxyAgent() {
+  const url = _getProxyUrl();
+  if (!url) return undefined;
+  try { const { HttpsProxyAgent } = require('https-proxy-agent'); return new HttpsProxyAgent(url); }
+  catch { return undefined; }
+}
+
 // ── 自动回复关键词 ────────────────────────────────────────────────────────
 const AUTO_REPLY_KW = [
   'out of office','auto-reply','automatic reply','automated response',
@@ -86,12 +104,16 @@ async function _aiAsk(prompt, maxTokens) {
         ...API.AGNES, port: 443, method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _apiKey },
         timeout: 15000, rejectUnauthorized: false,
+        agent: _getProxyAgent(),
       }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
-      req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.on('error', (e) => { Log.warn('[回复AI]', '网络: ' + (e.message || 'unknown')); resolve(null); });
+      req.on('timeout', () => { req.destroy(); Log.warn('[回复AI]', '超时'); resolve(null); });
       req.end(body);
     });
-    return (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
-  } catch { return ''; }
+    const content = (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
+    if (result && !content) Log.warn('[回复AI]', '返回空');
+    return content;
+  } catch (e) { Log.warn('[回复AI]', '异常: ' + (e.message || 'unknown')); return ''; }
 }
 
 // 关键词快速匹配

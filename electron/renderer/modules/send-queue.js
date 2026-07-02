@@ -28,6 +28,14 @@ export function saveQueue() {
 // 应用重启后，「发送中」的残留项恢复为「待发送」
 export async function initQueue() {
   await S.loadQueue();
+  // 首次进入队列页自动追回历史阶段（仅执行一次）
+  if (!S._catchupDone) {
+    S._catchupDone = true;
+    try {
+      const r = await window.electronAPI.catchupStage();
+      if (r?.caught > 0) showToast(`阶段追回: ${r.caught} 家公司 cold → f1`, 'ok');
+    } catch { /* 追回失败不阻塞 UI */ }
+  }
   let changed = false;
   S.queue.forEach(e => {
     // 队列级别
@@ -587,6 +595,18 @@ export async function startSend() {
       if (nextP) {
         nextP.status = 'sending';
         if (nextP._recipientStatus) nextP._recipientStatus.forEach(r => { if (r.status === 'pending') r.status = 'sending'; });
+      }
+      // 热更新：检查刚完成的公司是否全部发完，是则立即推进阶段
+      if (data.type === 'sent' || data.type === 'skipped') {
+        const justDone = S.queue.find(e => e.id === data.id);
+        if (justDone && justDone.company && justDone._stage) {
+          const items = S.queue.filter(e => e.company === justDone.company);
+          const hasPending = items.some(e => e.status === 'pending');
+          const allDone = items.every(e => e.status === 'sent');
+          if (!hasPending && allDone) {
+            window.electronAPI.advanceStage([justDone.company]);
+          }
+        }
       }
     }
     const sent = S.queue.filter(e => e.status === 'sent' || e.status === 'failed').length;

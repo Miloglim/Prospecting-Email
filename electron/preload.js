@@ -128,6 +128,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSendBody: (bodyId) => ipcRenderer.invoke('history:getBody', bodyId),
   deleteHistory: (indices) => ipcRenderer.invoke('history:delete', indices),
   advanceStage: (companies) => ipcRenderer.invoke('history:advance', companies),
+  catchupStage: () => ipcRenderer.invoke('history:catchup'),
   recordSentences: (company, sentenceIds) => ipcRenderer.invoke('history:recordSentences', company, sentenceIds),
   reactivateCompany: (company) => ipcRenderer.invoke('history:reactivate', company),
 
