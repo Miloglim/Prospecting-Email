@@ -1,6 +1,6 @@
 {
   "name": "prospecting-email-send",
-  "version": "2.7.6",
+  "version": "2.7.8",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
   "main": "electron/main.js",
   "type": "commonjs",
@@ -9,14 +9,15 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "pack": "electron-vite build && electron-builder --win",
-    "release": "electron-vite build && electron-builder --win",
+    "build-only": "electron-vite build && electron-builder --win --publish never",
+    "release": "electron-vite build && electron-builder --win --publish always",
     "sync-oss": "node scripts/sync-oss.js"
   },
   "build": {
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
-    "appId": "com.milogin.prospecting-email",
+    "appId": "com.miloglim.prospecting-email",
     "productName": "Milogin's Prospector.",
     "directories": {
       "output": "../dist-release"
@@ -33,8 +34,7 @@
     "publish": {
       "provider": "github",
       "owner": "Miloglim",
-      "repo": "Prospecting-Email",
-      "releaseType": "release"
+      "repo": "Prospecting-Email"
     },
     "files": [
       "dist/**",
