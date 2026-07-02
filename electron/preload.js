@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateCompanyCountry: (company, newCountry) => ipcRenderer.invoke('contacts:updateCountry', company, newCountry),
   searchContacts: (query) => ipcRenderer.invoke('contacts:search', query),
   deepSearchContacts: (website, company) => ipcRenderer.invoke('contacts:deepSearch', website, company),
+  upsertContact: (contact) => ipcRenderer.invoke('contacts:upsert', contact),
 
   // 模板
   getTemplateLibrary: () => ipcRenderer.invoke('template:getLibrary'),
@@ -82,6 +83,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 退信检查
   checkBounces: () => ipcRenderer.invoke('bounce:check'),
+  clearBounceCursor: () => ipcRenderer.invoke('bounce:clear'),
   testImap: (cfg) => ipcRenderer.invoke('imap:test', cfg),
   loadBounceLog: () => ipcRenderer.invoke('bounce:loadLog'),
   saveBounceLog: (data) => ipcRenderer.invoke('bounce:saveLog', data),

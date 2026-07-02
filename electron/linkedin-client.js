@@ -2,6 +2,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { Log } = require('./modules/core/logger');
 
 let proc = null;
 let pending = new Map();
@@ -23,7 +24,7 @@ function start() {
       '--transport', 'stdio', '--log-level', 'ERROR',
       '--user-data-dir', PROFILE_DIR];
 
-    console.log('[linkedin] 启动独立服务...');
+    Log.info('linkedin', '启动独立服务...');
     proc = spawn(exe, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
     let buf = '';
@@ -40,7 +41,7 @@ function start() {
             pending.delete(msg.id);
             rs(msg);
           }
-        } catch {}
+        } catch { /* JSON 解析失败 → 跳过非 JSON 行 */ }
       }
     });
 
@@ -55,10 +56,10 @@ function start() {
       if (rsp.result) {
         ready = true;
         proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-        console.log('[linkedin] ✅ 就绪');
+        Log.info('linkedin', '✅ 就绪');
         resolve(true);
       } else {
-        console.log('[linkedin] 初始化失败');
+        Log.error('linkedin', '初始化失败');
         resolve(false);
       }
     }).catch(() => resolve(false));
@@ -72,7 +73,7 @@ function findExe() {
   const candidates = ['D:/Python/python.exe', 'python', 'python3'];
   for (const c of candidates) {
     try { const out = require('child_process').execSync(`"${c}" --version`, { encoding: 'utf-8' }); if (out) return c; }
-    catch {}
+    catch { /* 候选解释器不存在 → 继续尝试下一个 */ }
   }
   return null;
 }
@@ -95,7 +96,7 @@ async function searchPeople(keywords) {
     const text = (rsp?.result?.content || []).find(c => c.type === 'text')?.text || '';
     return parseSearchResults(text);
   } catch (e) {
-    console.log('[linkedin] 搜索跳过:', e.message?.slice(0, 80));
+    Log.error('linkedin', '搜索跳过', e.stack);
     return [];
   }
 }
@@ -106,7 +107,7 @@ async function getProfile(username) {
     const rsp = await send('tools/call', { name: 'get_person_profile', arguments: { linkedin_username: username } });
     return (rsp?.result?.content || []).find(c => c.type === 'text')?.text || null;
   } catch (e) {
-    console.log('[linkedin] 档案跳过:', e.message?.slice(0, 80));
+    Log.error('linkedin', '档案跳过', e.stack);
     return null;
   }
 }

@@ -28,6 +28,8 @@ data/send-state.json
 data/email-queue.json
 data/template-overrides.json
 data/user-templates.json
+data/companies.json
+data/reply-log.json
 
 # 背调报告（含邮箱、地址）
 reports/

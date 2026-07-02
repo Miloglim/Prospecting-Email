@@ -1,11 +1,12 @@
 // ── 模板引擎：解析 general-templates.md → 结构化 JS 对象 ──────────────
 const fs = require('fs');
 const path = require('path');
+const { Log } = require('./modules/core/logger');
 
 function parseTemplateLibrary() {
   const mdPath = path.join(__dirname, '..', 'templates', 'general-templates.md');
   if (!fs.existsSync(mdPath)) {
-    console.error('模板文件未找到:', mdPath);
+    Log.error('模板', '模板文件未找到: ' + mdPath);
     return null;
   }
 
@@ -67,7 +68,7 @@ function parseTemplateLibrary() {
 
   applyLabels(lib);
 
-  console.log(`模板库加载完成: ${total} 条句库, ${Object.keys(lib.subjects).length} 套主题行`);
+  Log.info('模板', `模板库加载完成: ${total} 条句库, ${Object.keys(lib.subjects).length} 套主题行`);
   return lib;
 }
 

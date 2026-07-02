@@ -48,7 +48,7 @@ function register(ipcMain) {
           dailyCounts = log.daily_counts || {};
         }
       }
-    } catch {}
+    } catch { /* 非关键 I/O 失败不影响主流程 */ }
     return { ok: true, data: accounts.map(a => ({ ...a, todaySent: dailyCounts[a.id] || 0 })) };
   });
 

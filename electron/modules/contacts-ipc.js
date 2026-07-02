@@ -4,21 +4,46 @@ const fs = require('fs');
 const { APP_ROOT } = require('./config');
 const { Log } = require("./core/logger");
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
-const { getCompanyMeta, deleteCompanyMeta } = require('./services/company-store');
+const { getCompanyMeta, deleteCompanyMeta, resolveCompanyId, buildIndexFromContacts } = require('./services/company-store');
+
+// ── 标签迁移状态（一次写入后标记，避免每次 contacts:list 都扫描）─────────
+let _tagsMigrated = false;
 
 // 预定义标签（contacts:setTags 可传的合法值）
 const PREDEFINED_TAGS = ['autoreply', 'reached', 'replied', 'bounced_by_contact'];
 
-// 旧 tag 字符串 → 新 tags 数组迁移（就地修改）
-function _migrateTags(contact) {
-  if (Array.isArray(contact.tags)) return;           // 已是数组，无需迁移
-  if (typeof contact.tag === 'string' && contact.tag) {
-    contact.tags = [contact.tag];
-  } else {
-    contact.tags = [];
+/** 智能拆分全名为 firstName + lastName */
+function _splitName(fullName) {
+  if (!fullName || !fullName.trim()) return { firstName: '', lastName: '' };
+  // 移除括号内备注（如 "Michel Braverman (director de marketing)"）
+  const cleaned = fullName.replace(/\(.*?\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  if (!cleaned) return { firstName: '', lastName: '' };
+  const parts = cleaned.split(/\s+/);
+  if (parts.length === 1) {
+    // 单字/无空格（中文名等）→ 全放 firstName
+    return { firstName: parts[0], lastName: '' };
   }
-  // 保留 tag 字段供渲染层向后兼容（取 tags 首元素或空字符串）
-  contact.tag = contact.tags[0] || '';
+  // 首段 = firstName，末段 = lastName
+  return { firstName: parts[0], lastName: parts[parts.length - 1] };
+}
+
+/**
+ * 删除旧 tag 单值字段（一次迁移，标记后不再扫描）
+ * 调用时机：contacts:list 首次发现 tag 字段时
+ */
+function _cleanupTagField(contacts) {
+  if (_tagsMigrated) return false;
+  let changed = false;
+  for (const c of contacts) {
+    if (typeof c.tag === 'string') {
+      if (c.tag && !Array.isArray(c.tags)) c.tags = [c.tag];
+      if (c.tag && Array.isArray(c.tags) && !c.tags.includes(c.tag)) c.tags.push(c.tag);
+      delete c.tag;
+      changed = true;
+    }
+  }
+  _tagsMigrated = true; // 无论是否有残留 tag，扫过一次就标记完成
+  return changed;
 }
 
 function register(ipcMain, deps) {
@@ -33,7 +58,7 @@ function register(ipcMain, deps) {
         contactsCache = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
         return contactsCache;
       }
-    } catch {}
+    } catch (e) { Log.error('联系人', '读取 contacts.json 失败', e.stack); }
     return [];
   }
 
@@ -49,7 +74,7 @@ function register(ipcMain, deps) {
         const src = i === 0 ? contactsPath : `${bakBase}${i}`;
         const dst = `${bakBase}${i + 1}`;
         if (fs.existsSync(src)) {
-          try { fs.copyFileSync(src, dst); } catch {}
+          try { fs.copyFileSync(src, dst); } catch { /* 备份轮转失败不阻塞写入 */ }
         }
       }
       fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
@@ -61,11 +86,23 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:list', async () => {
     const contacts = readContacts();
     let changed = false;
+
+    // 一次性迁移：删除旧 tag 字段 → tags 数组
+    if (_cleanupTagField(contacts)) changed = true;
+
     for (const c of contacts) {
-      // 旧数据迁移：tag 字符串 → tags 数组
-      if (!Array.isArray(c.tags)) {
-        _migrateTags(c);
+      // 旧数据迁移：contactName 自动拆分 firstName/lastName
+      if (!c.firstName && !c.lastName && c.contactName) {
+        const split = _splitName(c.contactName);
+        c.firstName = split.firstName;
+        c.lastName = split.lastName;
         changed = true;
+      }
+
+      // 旧数据迁移：无 companyId 的联系人自动分配
+      if (!c.companyId && c.company) {
+        const { companyId } = resolveCompanyId(c.company);
+        if (companyId) { c.companyId = companyId; changed = true; }
       }
 
       // 公司级元数据：手动设置了类型的公司，跳过自动分类
@@ -92,32 +129,76 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:import', async (_e, clients) => {
     contactsCache = null;
     const existing = readContacts();
-    const existingKeys = new Set(existing.map(c => `${c.company.toLowerCase()}||${(c.email || '').toLowerCase()}`));
-    let added = 0, skipped = 0, invalidEmail = 0;
+    // email 为唯一去重键（对齐 HubSpot 标准）
+    const emailIndex = new Map();
+    for (const c of existing) {
+      if (c.email) emailIndex.set(c.email.toLowerCase().trim(), c);
+    }
+    let added = 0, updated = 0, skipped = 0, invalidEmail = 0;
     for (const c of clients) {
       if (!c.company && !c.email) { skipped++; continue; }
-      const key = `${(c.company || '').toLowerCase()}||${(c.email || '').toLowerCase()}`;
-      if (existingKeys.has(key)) { skipped++; continue; }
       const cleanEmail = (c.email || '').trim();
-      if (cleanEmail && !EMAIL_RE.test(cleanEmail)) {
-        invalidEmail++;
+      if (!cleanEmail) { skipped++; continue; }
+      if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; continue; }
+
+      const existingContact = emailIndex.get(cleanEmail.toLowerCase());
+      if (existingContact) {
+        // 同 email → 更新已有记录
+        if (c.company) {
+          existingContact.company = c.company;
+          // 公司名变了 → 重新解析 companyId（保留旧的如果规范化后相同）
+          const { companyId } = resolveCompanyId(c.company);
+          if (companyId) existingContact.companyId = companyId;
+        }
+        existingContact.country = c.country || existingContact.country;
+        existingContact.category = c.category || existingContact.category;
+        existingContact.website = c.website || existingContact.website;
+        existingContact.linkedin = c.linkedin || existingContact.linkedin;
+        existingContact.contactName = c.contactName || existingContact.contactName;
+        existingContact.position = c.position || existingContact.position;
+        existingContact.phone = c.phone || existingContact.phone;
+        // firstName/lastName：优先用导入值，否则从 contactName 拆分填充
+        if (c.firstName || c.lastName) {
+          existingContact.firstName = c.firstName || existingContact.firstName || '';
+          existingContact.lastName = c.lastName || existingContact.lastName || '';
+        } else if (c.contactName && !existingContact.firstName && !existingContact.lastName) {
+          const split = _splitName(c.contactName);
+          existingContact.firstName = split.firstName;
+          existingContact.lastName = split.lastName;
+        }
+        // 仅当手动指定 clientType 时覆盖
+        if (c.clientType && c.clientType !== 'unlabeled') {
+          existingContact.clientType = c.clientType;
+        }
+        if (!existingContact.firstName && !existingContact.lastName && existingContact.contactName) {
+          const split = _splitName(existingContact.contactName);
+          existingContact.firstName = split.firstName;
+          existingContact.lastName = split.lastName;
+        }
+        updated++;
+      } else {
+        // 新联系人
+        const { company, _suspicious } = markSuspicious(c.company);
+        const { companyId } = resolveCompanyId(company);
+        const split = (c.firstName || c.lastName) ? {} : _splitName(c.contactName || '');
+        existing.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          company, companyId, country: c.country || '', category: c.category || '',
+          email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
+          firstName: c.firstName || split.firstName || '',
+          lastName: c.lastName || split.lastName || '',
+          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          clientType: c.clientType || classifyClient(c.company, c.category),
+          tags: [],  // 新联系人默认空标签
+          _suspicious, addedAt: new Date().toISOString(),
+        });
+        emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
+        added++;
       }
-      const { company, _suspicious } = markSuspicious(c.company);
-      existing.push({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        company, country: c.country || '', category: c.category || '',
-        email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
-        contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-        clientType: c.clientType || classifyClient(c.company, c.category),
-        tags: [], tag: '',  // 新联系人默认空标签
-        _suspicious, addedAt: new Date().toISOString(),
-      });
-      existingKeys.add(key);
-      added++;
     }
     writeContacts(existing);
-  Log.info("联系人", "导入: +" + added + " 新增, " + skipped + " 跳过, " + invalidEmail + " 无效邮箱, 总计" + existing.length);
-    return { total: existing.length, added, skipped, invalidEmail };
+    Log.info("联系人", "导入: +" + added + " 新增, " + updated + " 更新, " + skipped + " 跳过(无邮箱), " + invalidEmail + " 无效邮箱, 总计" + existing.length);
+    return { total: existing.length, added, updated, skipped, invalidEmail };
   });
 
   // 清理 send-history 中指定公司的联系人
@@ -132,7 +213,7 @@ function register(ipcMain, deps) {
         if (!sh[company].sentContacts.length) delete sh[company].sentContacts;
       }
       fs.writeFileSync(shp, JSON.stringify(sh, null, 2));
-    } catch {}
+    } catch (e) { Log.error('联系人', '删除公司后更新发送历史失败', e.stack); }
   }
 
   ipcMain.handle('contacts:delete', async (_e, id) => {
@@ -169,9 +250,12 @@ function register(ipcMain, deps) {
       if (fs.existsSync(bsp)) {
         let bs = JSON.parse(fs.readFileSync(bsp, 'utf-8'));
         delete bs[company];
+        // 同时清理 companyId 双写 key
+        const { companyId } = require('./services/company-store').resolveCompanyId(company);
+        if (companyId && companyId !== company) delete bs[companyId];
         fs.writeFileSync(bsp, JSON.stringify(bs, null, 2));
       }
-    } catch {}
+    } catch (e) { Log.error('联系人', '删除公司后更新背调状态失败', e.stack); }
 
     Log.info("联系人", "删除公司: " + company + ", " + (before - contacts.length) + "人");
     return { ok: true, deleted: before - contacts.length };
@@ -213,8 +297,7 @@ function register(ipcMain, deps) {
     const c = contacts.find(x => x.id === id);
     if (!c) return { ok: false, error: '联系人不存在' };
     const tagStr = tag || '';
-    c.tag = tagStr;
-    c.tags = tagStr ? [tagStr] : [];  // 同步写入数组
+    c.tags = tagStr ? [tagStr] : [];
     writeContacts(contacts);
     return { ok: true };
   });
@@ -226,7 +309,6 @@ function register(ipcMain, deps) {
     const c = contacts.find(x => x.id === id);
     if (!c) return { ok: false, error: '联系人不存在' };
     c.tags = Array.isArray(tags) ? [...tags] : [];
-    c.tag = c.tags[0] || '';  // 向后兼容：同步更新单值字段
     writeContacts(contacts);
     return { ok: true };
   });
@@ -308,7 +390,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:classifyAI', async () => {
     const cfgPath = path.join(APP_ROOT, 'send', 'config.json');
     let apiKey = '';
-    try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch {}
+    try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch { /* 配置文件不存在或损坏 → apiKey 为空，下方会提示用户配置 */ }
     if (!apiKey) return { ok: false, error: '请先配置 DeepSeek API Key' };
 
     const { classifyClientAI } = require('./classify-client');
@@ -326,6 +408,66 @@ function register(ipcMain, deps) {
     }
     if (updated > 0) writeContacts(contacts);
     return { ok: true, updated, total: unlabeled.length };
+  });
+
+  // ── 单个联系人 upsert（email 唯一）─────────────────────────────────────
+  ipcMain.handle('contacts:upsert', async (_e, contact) => {
+    contactsCache = null;
+    const contacts = readContacts();
+    const email = (contact.email || '').toLowerCase().trim();
+    if (!email || !EMAIL_RE.test(contact.email)) {
+      return { ok: false, error: '无效邮箱' };
+    }
+
+    const existing = contacts.find(c => (c.email || '').toLowerCase().trim() === email);
+    if (existing) {
+      // 更新已有记录
+      if (contact.company) {
+        existing.company = contact.company;
+        const { companyId } = resolveCompanyId(contact.company);
+        if (companyId) existing.companyId = companyId;
+      }
+      if (contact.country) existing.country = contact.country;
+      if (contact.category) existing.category = contact.category;
+      if (contact.website) existing.website = contact.website;
+      if (contact.linkedin) existing.linkedin = contact.linkedin;
+      if (contact.contactName) existing.contactName = contact.contactName;
+      if (contact.position) existing.position = contact.position;
+      if (contact.phone) existing.phone = contact.phone;
+      if (contact.firstName) existing.firstName = contact.firstName;
+      if (contact.lastName) existing.lastName = contact.lastName;
+      if (contact.clientType && contact.clientType !== 'unlabeled') existing.clientType = contact.clientType;
+      // 首次有 contactName 时自动拆分
+      if ((contact.contactName || contact.firstName) && !existing.firstName && !existing.lastName) {
+        const split = _splitName(contact.firstName
+          ? `${contact.firstName} ${contact.lastName || ''}`.trim()
+          : (contact.contactName || ''));
+        existing.firstName = split.firstName;
+        existing.lastName = split.lastName;
+      }
+      writeContacts(contacts);
+      return { ok: true, action: 'updated', contact: existing };
+    }
+
+    // 新建
+    const split = (contact.firstName || contact.lastName)
+      ? {} : _splitName(contact.contactName || '');
+    const { company, _suspicious } = markSuspicious(contact.company || '');
+    const { companyId } = resolveCompanyId(company);
+    const newContact = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      company, companyId, country: contact.country || '', category: contact.category || '',
+      email: contact.email.trim(), website: contact.website || '', linkedin: contact.linkedin || '',
+      firstName: contact.firstName || split.firstName || '',
+      lastName: contact.lastName || split.lastName || '',
+      contactName: contact.contactName || '', position: contact.position || '', phone: contact.phone || '',
+      clientType: contact.clientType || classifyClient(company, contact.category),
+      tags: [], tag: '',
+      _suspicious, addedAt: new Date().toISOString(),
+    };
+    contacts.push(newContact);
+    writeContacts(contacts);
+    return { ok: true, action: 'created', contact: newContact };
   });
 
   // 暴露内部方法给其他模块使用

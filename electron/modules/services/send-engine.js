@@ -45,7 +45,7 @@ function _tagContacts(emails, accountId, accountLabel) {
 const bodiesPath = path.join(APP_ROOT, 'data', 'send-bodies.json');
 
 function loadBodies() {
-  try { if (fs.existsSync(bodiesPath)) return JSON.parse(fs.readFileSync(bodiesPath, 'utf-8')); } catch {}
+  try { if (fs.existsSync(bodiesPath)) return JSON.parse(fs.readFileSync(bodiesPath, 'utf-8')); } catch { /* 正文缓存损坏 → 返回空对象，正文仍可实时构建 */ }
   return {};
 }
 
@@ -231,7 +231,7 @@ async function _sendOne(ctx, email, log, deps) {
     const em = err.message || '';
     // 连接错误：重建 transporter 重试一次
     if (!deps.currentSendAbort && (em.includes('socket') || em.includes('ECONN') || em.includes('closed'))) {
-      try { await deps.currentTransporter.close(); } catch {}
+      try { await deps.currentTransporter.close(); } catch { /* 关闭旧连接失败 → 直接重建 transporter */ }
       const acctMgr = require('./account-manager');
       if (deps.currentAccount?.smtp) {
         deps.currentTransporter = acctMgr.createTransporter(deps.currentAccount);
@@ -364,7 +364,7 @@ async function runSendBatch(deps, sendProgress) {
   function getTransporter(account) {
     if (!transporterCache.has(account.id)) {
       transporterCache.set(account.id, acctMgr.createTransporter(account));
-      console.log(`[发信] 创建 transporter: ${account.label || account.smtp?.user}`);
+      Log.info('发信', `创建 transporter: ${account.label || account.smtp?.user}`);
     }
     return transporterCache.get(account.id);
   }
@@ -381,7 +381,7 @@ async function runSendBatch(deps, sendProgress) {
         if (c._sentBy && c.email) contactAccountMap[c.email.toLowerCase().trim()] = c._sentBy;
       }
     }
-  } catch {}
+  } catch { /* 联系人数据无法读取 → 不影响发送，仅丢失账号映射信息 */ }
 
   function inWindow() {
     const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
@@ -396,6 +396,12 @@ async function runSendBatch(deps, sendProgress) {
 
   let sent = 0, failed = 0;
   let lastAccountIdx = -1;
+  // 速率熔断：5 秒内 >= 2 组成功发送 → 强制暂停
+  let rapidSendCount = 0;
+  let lastRapidTime = 0;
+  const RAPID_WINDOW_MS = 5000;
+  const RAPID_THRESHOLD = 2;
+  const MELTDOWN_COOLDOWN_SEC = 30;
   // ponytail: 快照队列长度，防止并发推入导致循环无限增长
   const queueLen = deps.sendQueue.length;
 
@@ -404,6 +410,12 @@ async function runSendBatch(deps, sendProgress) {
     const statePath = path.join(APP_ROOT, 'data', 'send-state.json');
     if (fs.existsSync(statePath)) {
       const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+      // 熔断冷却期检查
+      if (state.meltdownUntil && Date.now() < state.meltdownUntil) {
+        const remain = Math.ceil((state.meltdownUntil - Date.now()) / 1000);
+        sendProgress({ type: 'ratelimit', error: `发送过快！冷却中，${remain} 秒后可恢复` });
+        return;
+      }
       if (state.pendingDelaySec > 0 && state.delayStartedAt) {
         const elapsed = Math.floor((Date.now() - state.delayStartedAt) / 1000);
         const remain = Math.max(0, state.pendingDelaySec - elapsed);
@@ -415,9 +427,9 @@ async function runSendBatch(deps, sendProgress) {
         }
       }
     }
-  } catch {}
+  } catch (e) { Log.warn('发信', '恢复间隔状态失败', e.stack); }
   // 清除间隔状态
-  try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ status: 'sending' })); } catch {}
+  try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ status: 'sending' })); } catch { /* 状态文件写入失败不影响发送 */ }
 
   try {
   for (let i = 0; i < queueLen; i++) {
@@ -474,19 +486,38 @@ async function runSendBatch(deps, sendProgress) {
     } else if (result.ok) {
       sent += result.n;
       if (!ctx.testMode) acctMgr.recordSuccess(account.id, log._accountStates);
+
+      // 速率熔断检测（Dry Run 模式下不触发）
+      if (!ctx.dryRun && !ctx.testMode) {
+        const now = Date.now();
+        if (now - lastRapidTime < RAPID_WINDOW_MS) {
+          rapidSendCount++;
+        } else {
+          rapidSendCount = 1;
+        }
+        lastRapidTime = now;
+        if (rapidSendCount >= RAPID_THRESHOLD) {
+          Log.warn("发信", `速率熔断: ${RAPID_WINDOW_MS/1000}秒内发送${rapidSendCount}组, 强制暂停${MELTDOWN_COOLDOWN_SEC}秒`);
+          try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ meltdownUntil: Date.now() + MELTDOWN_COOLDOWN_SEC * 1000, status: 'meltdown' })); } catch { /* 熔断状态文件写入失败不阻塞暂停 */ }
+          sendProgress({ type: 'ratelimit', error: `发送过快！${RAPID_WINDOW_MS/1000}秒内连发${rapidSendCount}组，已强制暂停${MELTDOWN_COOLDOWN_SEC}秒` });
+          deps.isPaused = true;
+          rapidSendCount = 0;
+          break;
+        }
+      }
     } else if (result.fused) {
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, true);
-      console.log(`[发信] ⚡ 账号 ${account.label || account.smtp?.user} 已熔断`);
+      Log.info('发信', `⚡ 账号 ${account.label || account.smtp?.user} 已熔断`);
       failed += result.n;
     } else if (result.fatal) {
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
-      try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch {}
+      try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch { /* 日志写入失败 → 已在本循环另有写入点 */ }
       break;
     } else {
       failed += result.n;
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
     }
-    try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch {}
+    try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch { /* 日志写入失败不阻塞发送循环 */ }
     sendProgress(result.skipped
       ? { type: 'skipped', id: email.id }
       : result.ok
@@ -502,7 +533,7 @@ async function runSendBatch(deps, sendProgress) {
       const giSec = Math.round(gi / 1000);
       Log.info("发信", "组间间隔 " + giSec + "s (" + (i+1) + "/" + queueLen + "组)");
       // ponytail: 持久化间隔状态，防重启跳过倒计时
-      try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ pendingDelaySec: giSec, delayStartedAt: Date.now(), status: 'delaying' })); } catch {}
+      try { fs.writeFileSync(path.join(APP_ROOT, 'data', 'send-state.json'), JSON.stringify({ pendingDelaySec: giSec, delayStartedAt: Date.now(), status: 'delaying' })); } catch { /* 间隔状态记录失败不阻塞发送 */ }
       sendProgress({ type: 'delay', seconds: giSec, company: `组间间隔(${i + 1}/${queueLen}组)` });
       if (!await cancellableSleep(gi, deps)) break;
     }

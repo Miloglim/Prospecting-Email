@@ -6,7 +6,7 @@ if (!process.env.VITE_DEV_SERVER_URL) {
       watchRenderer: true,
       ignore: ['data/**', 'send/**', 'logs/**', 'reports/**'],
     });
-  } catch {}
+  } catch { /* electron-reloader 仅开发环境可用，生产环境忽略 */ }
 }
 require('./logger');
 const { Log } = require('./modules/core/logger');
@@ -26,7 +26,7 @@ function setupIPC() {
   require('./modules/contacts-ipc').register(ipcMain, deps);
   require('./modules/backcheck-ipc').register(ipcMain, deps);
   require('./modules/template-ipc').register(ipcMain, deps);
-  require('./modules/services/history-store').register(ipcMain);
+  require('./modules/services/history-store').register(ipcMain, deps);
   require('./modules/ipc/system-ipc').register(ipcMain, deps);
   require('./modules/ipc/account-ipc').register(ipcMain);
   require('./modules/send-ipc').register(ipcMain, deps);
@@ -91,6 +91,8 @@ function registerTableImportHandlers() {
         email: getStr(r, '联系方式','邮箱','邮箱地址','Email','email','收件人','to','邮件'),
         website: getStr(r, '网站','Website','website','官网','网址'),
         linkedin: getStr(r, 'LinkedIn'),
+        firstName: getStr(r, '名','FirstName','first_name','firstname'),
+        lastName: getStr(r, '姓','LastName','last_name','lastname'),
         contactName: getStr(r, '姓名 | 职位','姓名','联系人','Contact','contact'),
         position: getStr(r, '职位','Position','position','title'),
         phone: getStr(r, 'Phone','phone','电话','Tel','tel'),
@@ -110,6 +112,8 @@ function registerTableImportHandlers() {
         { keys: ['公司类型','品类','行业','Category','category','rubro'], field: 'category' },
         { keys: ['邮箱','联系方式','邮箱地址','Email','email','收件人'], field: 'email' },
         { keys: ['网站','Website','website','官网','LinkedIn'], field: 'website' },
+        { keys: ['名','FirstName','first_name','firstname'], field: 'firstName' },
+        { keys: ['姓','LastName','last_name','lastname'], field: 'lastName' },
         { keys: ['姓名','联系人','Contact','contact'], field: 'contactName' },
         { keys: ['职位','Position','position'], field: 'position' },
         { keys: ['电话','Phone','phone','Tel','tel'], field: 'phone' },
@@ -197,7 +201,7 @@ function createWindow() {
         const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
         closeAction = cfg?.general?.closeAction || 'tray';
       }
-    } catch {}
+    } catch { /* 配置文件读取失败 → 使用默认 closeAction='tray' */ }
     if (closeAction === 'tray' && deps.tray) {
       e.preventDefault();
       deps.mainWindow.hide();
@@ -215,7 +219,7 @@ function createTray() {
   deps.tray = new Tray(trayIcon);
   deps.tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示窗口', click: () => deps.mainWindow?.show() },
-    { label: '退出', click: () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} app.quit(); } },
+    { label: '退出', click: () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch { /* LinkedIn 未启动则跳过 */ } app.quit(); } },
   ]));
   deps.tray.setToolTip("Milogin's Prospector.");
   deps.tray.on('double-click', () => deps.mainWindow?.show());
@@ -254,5 +258,5 @@ app.whenReady().then(async () => {
 }).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });
 } // else (gotLock)
 
-app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch {} try { _sendCleanup?.(); } catch {} try { require('./modules/services/reply-checker').cleanup(); } catch {} });
+app.on('before-quit', () => { deps.isQuitting = true; try { require('./linkedin-client').stop(); } catch { /* 子进程已退出 */ } try { _sendCleanup?.(); } catch { /* 发送引擎未启动 */ } try { require('./modules/services/reply-checker').cleanup(); } catch { /* 回复检测未启动 */ } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -1,5 +1,6 @@
 // shared.js
 const S = window.S;
+import CS from './company-state.js';
 export const lucide = window.lucide ? (n,s,c) => window.lucide(n,s,c) : () => '';
 window.__pageHandlers = {};
 export function showModal({title,message,type='info',buttons,onClose}){return new Promise(r=>{const e=document.querySelector('.modal-overlay');if(e)e.remove();const o=document.createElement('div');o.className='modal-overlay';const b=(buttons||[{text:'确定',value:true,primary:true}]).map(b=>`<button class="${b.primary?'':'secondary'}" data-value="${b.value}">${b.text}</button>`).join('');o.innerHTML=`<div class="modal-card"><div class="modal-header m-${type}">${title}</div><div class="modal-body">${message}</div><div class="modal-footer">${b}</div></div>`;const close=async v=>{if(onClose){const keep=await onClose(v);if(keep===false)return}o.remove();r(v)};o.addEventListener('click',e=>{if(e.target===o)close(null)});o.addEventListener('keydown',e=>{if(e.key==='Escape')close(null)});o.querySelectorAll('button').forEach(b=>{b.addEventListener('click',()=>{let v=b.dataset.value;if(v==='true')v=true;else if(v==='false')v=false;close(v)})});const p=o.querySelector('button:not(.secondary)');if(p)setTimeout(()=>p.focus(),50);document.body.appendChild(o)})}
@@ -10,7 +11,7 @@ export function showToast(msg,type){const e=document.getElementById('tmpl-toast'
 let _versionSet = false;
 async function initVersion() {
   if (_versionSet) return;
-  try { const v = await window.electronAPI.getAppVersion(); const el = document.getElementById('nav-version'); if (el) el.textContent = 'v' + v; _versionSet = true; } catch {}
+  try { const v = await window.electronAPI.getAppVersion(); const el = document.getElementById('nav-version'); if (el) el.textContent = 'v' + v; _versionSet = true; } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
 
 export async function loadDashboard(){
@@ -135,8 +136,8 @@ export function renderPagination(c,total,cur,onChange){if(!c)return;const tp=Mat
 export function populateSelect(id,items){const s=document.getElementById(id);if(!s)return;s.innerHTML=items.map(i=>`<option value="${i[0]}">${i[1]}</option>`).join('')}
 export function statusLabel(s){const m={pending:`${lucide('clock',14)} 待发送`,sent:`${lucide('check-circle',14)} 已发送`,failed:`${lucide('x-circle',14)} 失败`,sending:`${lucide('refresh-cw',14,'spin')} 发送中`};return m[s]||s}
 export function initIcons(root=document){root.querySelectorAll('[data-icon]').forEach(e=>{const n=e.dataset.icon;if(!n)return;let s=18;if(e.classList.contains('drop-icon'))s=32;else if(e.classList.contains('nav-arrow'))s=14;else if(e.closest('button'))s=12;else if(e.closest('h2'))s=20;else if(e.closest('h3'))s=16;else if(e.closest('h4'))s=14;e.innerHTML=lucide(n,s)})}
-export async function checkNetworkStatus(){try{const r=await window.electronAPI.checkNetwork();const p=S.foreignNetworkOk;if(r){S.foreignNetworkOk=true;S.networkStatusDismissed=false;if(!p){const e=document.getElementById('network-status');if(e){e.style.display='none'}}return}S.foreignNetworkOk=false;if(S.networkStatusDismissed)return;const e=document.getElementById('network-status');if(e){e.textContent='网络不可用';e.style.display='block';e.style.cssText='padding:8px 16px;background:var(--danger);color:#fff;text-align:center;font-size:12px;cursor:pointer';e.onclick=()=>{S.networkStatusDismissed=true;e.style.display='none'}}}catch{}}
+export async function checkNetworkStatus(){try{const r=await window.electronAPI.checkNetwork();const p=S.foreignNetworkOk;if(r){S.foreignNetworkOk=true;CS.setNetworkDismissed(false);if(!p){const e=document.getElementById('network-status');if(e){e.style.display='none'}}return}S.foreignNetworkOk=false;if(CS.getNetworkDismissed())return;const e=document.getElementById('network-status');if(e){e.textContent='网络不可用';e.style.display='block';e.style.cssText='padding:8px 16px;background:var(--danger);color:#fff;text-align:center;font-size:12px;cursor:pointer';e.onclick=()=>{CS.setNetworkDismissed(true);e.style.display='none'}}}catch{/* 网络检测 IPC 不可用 → 静默降级 */}}
 export function clientTypeTag(t){var m={};m.agent=lucide('globe',12)+' 代理';m.direct=lucide('building',12)+' 直客';m.unlabeled='';m.agent='<span class="ctype-tag ctype-agent">'+m.agent+'</span>';m.direct='<span class="ctype-tag ctype-direct">'+m.direct+'</span>';return m[t]||''}
 export function groupByCompany(data){const g={};for(const c of data){const k=c.company||'未命名';if(!g[k])g[k]=[];g[k].push(c)}return Object.entries(g).sort((a,b)=>a[0].localeCompare(b[0]))}
 window.addEventListener('error',(e)=>{const m=`JS错误: ${e.message} (${e.filename}:${e.lineno})`;console.error(m,e.error);const b=document.createElement('div');b.style.cssText='position:fixed;top:0;left:0;right:0;background:#f44336;color:#fff;padding:8px 16px;font-size:12px;z-index:99999';b.textContent=m;document.body.prepend(b)});
-window.__pageHandlers['dashboard'] = async () => { await loadDashboard(); try { const { syncCards } = await import('./dashboard-editor.js'); syncCards(); } catch {} };
+window.__pageHandlers['dashboard'] = async () => { await loadDashboard(); try { const { syncCards } = await import('./dashboard-editor.js'); syncCards(); } catch { /* 渲染层降级：操作失败不影响 UI */ } };

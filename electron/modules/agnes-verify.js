@@ -1,8 +1,7 @@
 // ── Agnes 开发信质量验证 ────────────────────────────────────────────────────
 const https = require('https');
 const { APP_ROOT, loadSearchConfig } = require('./config');
-
-const AGNES_ENDPOINT = 'https://apihub.agnes-ai.com/v1/chat/completions';
+const { API } = require('./core/contract');
 
 function getAgnesKey() {
   try {
@@ -10,7 +9,7 @@ function getAgnesKey() {
     const raw = cfg?.verify?.agnesKey || '';
     // ponytail: 清理非法字符（换行/空格/不可见字符），防止 HTTP header 报错
     return raw.replace(/[\r\n\t]/g, '').trim();
-  } catch {}
+  } catch { /* Agnes Key 读取失败 → 下方会提示用户配置 */ }
   return '';
 }
 
@@ -48,9 +47,8 @@ async function verifyEmailWithAgnes(emailBody) {
     });
 
     const result = await new Promise((resolve) => {
-      const url = new URL(AGNES_ENDPOINT);
       const opts = {
-        hostname: url.hostname, port: 443, method: 'POST', path: url.pathname,
+        ...API.AGNES, port: 443, method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
         timeout: 30000, rejectUnauthorized: false,
       };

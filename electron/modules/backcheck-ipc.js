@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const { APP_ROOT, loadSearchConfig, createRequest } = require('./config');
+const { API } = require('./core/contract');
 const { sanitizeFilename } = require('./utils');
 const { autoRate } = require('./auto-rate');
 const { verifyEmailWithAgnes } = require('./agnes-verify');
@@ -21,6 +22,13 @@ function register(ipcMain, deps) {
     const dir = path.dirname(backcheckStatusPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(backcheckStatusPath, JSON.stringify(status, null, 2));
+  }
+  const { resolveCompanyId: _rcid } = require('./services/company-store');
+  /** 双写 backcheck status：同时写公司名 key 和 companyId key */
+  function _dualSet(st, cn, value) {
+    st[cn] = value;
+    const { companyId } = _rcid(cn);
+    if (companyId && companyId !== cn) st[companyId] = value;
   }
   function notifyBackcheck(cname, data) {
     if (deps.mainWindow && !deps.mainWindow.isDestroyed()) {
@@ -55,33 +63,33 @@ function register(ipcMain, deps) {
       try {
         const raw = await new Promise(r => {
           const b = JSON.stringify({ query: cname + ' ' + country + ' company', numResults: 8, type: 'auto' });
-          const o = { hostname: 'api.exa.ai', port: 443, method: 'POST', path: '/search', headers: { 'Content-Type': 'application/json', 'x-api-key': exaKey }, timeout: 15000, rejectUnauthorized: false };
+          const o = { port: 443, method: 'POST', ...API.EXA, headers: { 'Content-Type': 'application/json', 'x-api-key': exaKey }, timeout: 15000, rejectUnauthorized: false };
           const req = https.request(o, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { r(JSON.parse(d)); } catch { r(null); } }); });
           req.on('error', () => r(null)); req.on('timeout', () => { req.destroy(); r(null); }); req.end(b);
         });
         if (raw?.results?.length) searchContext = raw.results.slice(0, 6).map(r => '标题：' + (r.title || '') + '\nURL：' + (r.url || '') + '\n内容：' + (r.text || '').slice(0, 400)).join('\n\n');
-      } catch {}
+      } catch { /* Exa 搜索网络异常 → 降级，无搜索结果继续后续流程 */ }
     } else if (searcher === 'serper' && serperKey) {
       try {
         const raw = await new Promise(r => {
           const b = JSON.stringify({ q: cname + ' ' + country, num: 8 });
-          const o = { hostname: 'google.serper.dev', port: 443, method: 'POST', path: '/search', headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey }, timeout: 15000, rejectUnauthorized: false };
+          const o = { port: 443, method: 'POST', ...API.SERPER, headers: { 'Content-Type': 'application/json', 'X-API-KEY': serperKey }, timeout: 15000, rejectUnauthorized: false };
           const req = https.request(o, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { r(JSON.parse(d)); } catch { r(null); } }); });
           req.on('error', () => r(null)); req.on('timeout', () => { req.destroy(); r(null); }); req.end(b);
         });
         if (raw?.organic?.length) searchContext = raw.organic.slice(0, 6).map(r => '标题：' + (r.title || '') + '\nURL：' + (r.link || '') + '\n内容：' + (r.snippet || '').slice(0, 400)).join('\n\n');
-      } catch {}
+      } catch { /* Serper 搜索网络异常 → 降级 */ }
     } else if (searcher === 'tavily' && tvlyKey) {
       try {
         const raw = await new Promise(r => {
           const b = JSON.stringify({ api_key: tvlyKey, query: cname + ' ' + country, search_depth: 'advanced', max_results: 8, include_answer: true });
-          const o = { hostname: 'api.tavily.com', port: 443, method: 'POST', path: '/search', headers: { 'Content-Type': 'application/json' }, timeout: 15000, rejectUnauthorized: false };
+          const o = { port: 443, method: 'POST', ...API.TAVILY, headers: { 'Content-Type': 'application/json' }, timeout: 15000, rejectUnauthorized: false };
           const req = https.request(o, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { r(JSON.parse(d)); } catch { r(null); } }); });
           req.on('error', () => r(null)); req.on('timeout', () => { req.destroy(); r(null); }); req.end(b);
         });
         if (raw?.answer) searchContext += 'AI摘要：' + raw.answer + '\n\n';
         if (raw?.results?.length) searchContext += raw.results.slice(0, 6).map(r => '标题：' + (r.title || '') + '\nURL：' + (r.url || '') + '\n内容：' + (r.content || '').slice(0, 400)).join('\n\n');
-      } catch {}
+      } catch { /* Tavily 搜索网络异常 → 降级 */ }
     }
 
     notifyBackcheck(cname, { type: 'research-progress', progress: 'DeepSeek 分析...' });
@@ -92,7 +100,7 @@ function register(ipcMain, deps) {
     try {
       const body = JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: '公司名：' + cname + '\n国家：' + country + (searchContext ? '\n\n【搜索结果】\n' + searchContext : '') + '\n\n请开始分析。' }], temperature: 0.3, max_tokens: 4000 });
       const result = await new Promise((resolve) => {
-        const opts = { hostname: 'api.deepseek.com', port: 443, method: 'POST', path: '/v1/chat/completions', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, timeout: 60000, rejectUnauthorized: false };
+        const opts = { port: 443, method: 'POST', ...API.DEEPSEEK, headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey }, timeout: 60000, rejectUnauthorized: false };
         const req = https.request(opts, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
         req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); }); req.end(body);
       });
@@ -194,8 +202,8 @@ function register(ipcMain, deps) {
   ipcMain.handle('backcheck:research', async (_e, company, providerKey) => {
     const cn = company.company; const st = readBackcheckStatus();
     if (st[cn]?.status === 'researching') return { ok: false, message: '该公司正在背调中' };
-    const er = checkReportExists(cn); if (er) { try { fs.unlinkSync(er); } catch {} delete st[cn]; writeBackcheckStatus(st); }
-    st[cn] = { status: 'researching', requestedAt: new Date().toISOString(), progress: '搜索启动...' };
+    const er = checkReportExists(cn); if (er) { try { fs.unlinkSync(er); } catch { /* 报告文件删除失败 → 下一轮会覆盖 */ } const { companyId: cid } = _rcid(cn); delete st[cn]; if (cid) delete st[cid]; writeBackcheckStatus(st); }
+    _dualSet(st, cn, { status: 'researching', requestedAt: new Date().toISOString(), progress: '搜索启动...' });
     writeBackcheckStatus(st); notifyBackcheck(cn, { type: 'research-start' });
     researchInBackground(cn, company, providerKey || 'deep-research').catch(e => {
       console.error('[背调致命]', cn, e); updateStatus(cn, 'error', 0, e.message || '未知');
@@ -214,14 +222,14 @@ function register(ipcMain, deps) {
     notifyBackcheck(cn, { type: 'research-done', status: readBackcheckStatus()[cn]?.status || 'error' });
   }
   function updateStatus(cn, status, rating, progress) {
-    const st = readBackcheckStatus(); st[cn] = { status, rating, completedAt: new Date().toISOString(), progress }; writeBackcheckStatus(st);
+    const st = readBackcheckStatus(); _dualSet(st, cn, { status, rating, completedAt: new Date().toISOString(), progress }); writeBackcheckStatus(st);
   }
 
   ipcMain.handle('backcheck:markDone', async (_e, cn, rating) => {
-    const st = readBackcheckStatus(); st[cn] = { status: 'done', completedAt: new Date().toISOString(), rating: rating || st[cn]?.rating || 0 }; writeBackcheckStatus(st); return { ok: true };
+    const st = readBackcheckStatus(); _dualSet(st, cn, { status: 'done', completedAt: new Date().toISOString(), rating: rating || st[cn]?.rating || 0 }); writeBackcheckStatus(st); return { ok: true };
   });
   ipcMain.handle('backcheck:verifyEmail', async (_e, eb) => verifyEmailWithAgnes(eb));
-  ipcMain.handle('backcheck:cancel', async (_e, cn) => { const st = readBackcheckStatus(); delete st[cn]; writeBackcheckStatus(st); return { ok: true }; });
+  ipcMain.handle('backcheck:cancel', async (_e, cn) => { const st = readBackcheckStatus(); const { companyId: cid } = _rcid(cn); delete st[cn]; if (cid) delete st[cid]; writeBackcheckStatus(st); return { ok: true }; });
 
 }
 

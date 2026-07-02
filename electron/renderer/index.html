@@ -249,7 +249,7 @@
       </div>
       <div class="table-wrapper">
         <table id="clients-table" style="display:none">
-          <thead><tr><th>#</th><th>公司名</th><th>国家</th><th>品类</th><th>邮箱</th></tr></thead>
+          <thead><tr><th>#</th><th>公司名</th><th>姓名</th><th>国家</th><th>品类</th><th>邮箱</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -580,6 +580,7 @@
       <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <button id="reply-run-btn"><span data-icon="search"></span> 检查回复</button>
         <span id="reply-status" style="font-size:12px;color:var(--text-secondary)"></span>
+        <span id="reply-match-summary" style="font-size:11px;margin-left:8px"></span>
       </div>
       <div id="reply-list"></div>
       <p class="placeholder" id="reply-empty"><span data-icon="inbox"></span> 点击「检查回复」扫描所有关联收件箱，自动匹配联系人回复</p>
@@ -731,6 +732,67 @@
           </div>
         </div>
         <div id="cfg-schedule-estimate" class="settings-estimate"></div>
+      </div>
+
+      <div class="settings-section" id="sec-detection">
+        <div class="settings-section-label">退信与回复检测</div>
+
+        <div class="setting-card">
+          <div class="setting-card-header">
+            <h3><span data-icon="search"></span> 退信关键词</h3>
+            <span class="setting-status">匹配邮件主题/正文，触发退信判定</span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row">
+              <div class="kw-editor" id="kw-bounce-editor">
+                <div class="kw-tags" id="kw-bounce-tags"></div>
+                <input type="text" class="kw-input" id="kw-bounce-input" placeholder="输入关键词回车添加" maxlength="40">
+              </div>
+              <span class="input-hint">系统内置 50+ 关键词，此处为自定义补充</span>
+            </div>
+            <div class="form-row" style="margin-top:6px">
+              <button class="btn-link" id="kw-bounce-reset">恢复默认</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-card-header">
+            <h3><span data-icon="reply"></span> 自动回复关键词</h3>
+            <span class="setting-status">匹配邮件主题，排除非人工回复</span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row">
+              <div class="kw-editor" id="kw-autoreply-editor">
+                <div class="kw-tags" id="kw-autoreply-tags"></div>
+                <input type="text" class="kw-input" id="kw-autoreply-input" placeholder="输入关键词回车添加" maxlength="40">
+              </div>
+              <span class="input-hint">系统内置 20+ 关键词，此处为自定义补充</span>
+            </div>
+            <div class="form-row" style="margin-top:6px">
+              <button class="btn-link" id="kw-autoreply-reset">恢复默认</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-card-header">
+            <h3><span data-icon="corner-up-right"></span> 回复标识</h3>
+            <span class="setting-status">匹配邮件主题前缀，判定真人口复</span>
+          </div>
+          <div class="setting-card-body">
+            <div class="form-row">
+              <div class="kw-editor" id="kw-reply-editor">
+                <div class="kw-tags" id="kw-reply-tags"></div>
+                <input type="text" class="kw-input" id="kw-reply-input" placeholder="输入关键词回车添加" maxlength="40">
+              </div>
+              <span class="input-hint">邮件主题以这些前缀开头时判定为真人口复</span>
+            </div>
+            <div class="form-row" style="margin-top:6px">
+              <button class="btn-link" id="kw-reply-reset">恢复默认</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="settings-section" id="sec-api">

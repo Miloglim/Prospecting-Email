@@ -62,7 +62,12 @@ export async function renderHistoryTable() {
     if (!groups[key]) groups[key] = [];
     groups[key].push(r);
   });
-  const entries = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  // 按最新发送时间排序（取组内最新一封的时间比较）
+  const entries = Object.entries(groups).sort((a, b) => {
+    const ta = Math.max(...a[1].map(r => new Date(r.time || 0).getTime()));
+    const tb = Math.max(...b[1].map(r => new Date(r.time || 0).getTime()));
+    return tb - ta;
+  });
 
   if (listEl) {
     listEl.innerHTML = entries.map(([company, items]) => {
@@ -160,7 +165,7 @@ export async function showPreview(d) {
   const preview = document.getElementById('history-preview');
   if (!preview) return;
   let sigHtml = '';
-  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch {}
+  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch { /* 渲染层降级：操作失败不影响 UI */ }
   function textToHtml(bodyText) {
     const lines = bodyText.split('\n');
     const h = [];
@@ -180,7 +185,7 @@ export async function showPreview(d) {
 
   // ponytail: 解析多组数据，支持组间切换
   let groups = [];
-  try { groups = JSON.parse(d.groups || '[]'); } catch {}
+  try { groups = JSON.parse(d.groups || '[]'); } catch { /* 渲染层降级：操作失败不影响 UI */ }
   const hasGroups = groups.length > 1;
   const recipients = (d.to || '').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -210,7 +215,10 @@ export async function showPreview(d) {
       bodyEl.innerHTML = '<span style="color:var(--text-secondary)">加载中...</span>';
       try {
         const body = await window.electronAPI.getSendBody(g.bodyId);
-        bodyEl.innerHTML = body ? textToHtml(body) : '<span style="color:var(--text-secondary)">(无正文)</span>';
+        const isHtmlBody = /<[a-z][\s\S]*>/i.test(body || '');
+        bodyEl.innerHTML = body
+          ? (isHtmlBody ? body + '\n<br>\n' + sigHtml : textToHtml(body))
+          : '<span style="color:var(--text-secondary)">(无正文)</span>';
       } catch { bodyEl.textContent = '(加载失败)'; }
     } else if (bodyEl) {
       bodyEl.innerHTML = '<span style="color:var(--text-secondary)">(无邮件正文)</span>';
@@ -282,6 +290,7 @@ export async function initHistoryPage() {
 
     // 全部清除（只绑定一次）
     document.getElementById('history-clear-all')?.addEventListener('click', async () => {
+      if (window.S?.sendInProgress) { await showAlert('发送进行中，请先暂停后再清除记录'); return; }
       if (!await showConfirm('确定清除全部发送记录？此操作不可恢复。')) return;
       try {
         await window.electronAPI.deleteHistory(['__ALL__']);

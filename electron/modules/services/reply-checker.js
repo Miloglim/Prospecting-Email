@@ -1,39 +1,125 @@
 // ── 回复检测模块 ────────────────────────────────────────────────────────────
-// 遍历所有活跃账号的 IMAP 收件箱，匹配已发邮件的回复
-// 复用 bounce-checker.js 的 IMAP 连接模式，无需新依赖
+// 遍历所有活跃账号的 IMAP 收件箱，AI 四分类：回复 / 退信 / 自动回复 / 其他
 
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const { APP_ROOT } = require('../config');
 const { Log } = require("../core/logger");
+const { API } = require('./core/contract');
 
-// ── 排除关键词（自动回复 / 退信 / 系统邮件）────────────────────────────────
-const EXCLUDE_SUBJECT_KW = [
+// ── 自动回复关键词 ────────────────────────────────────────────────────────
+const AUTO_REPLY_KW = [
+  'out of office','auto-reply','automatic reply','automated response',
+  'vacation','ausente','fuera de oficina','fora do escritório',
+  '自动回复','休假',
+  'automatische antwort','respuesta automática','resposta automática',
+  'réponse automatique','automatisch antwoord','risposta automatica',
+];
+
+// ── 退信关键词（收件箱中误入的退信通知）───────────────────────────────────
+const BOUNCE_SUBJECT_KW = [
   'undelivered','returned','failure','bounce','undeliverable','delivery status',
-  'returned mail','message undeliverable','out of office','auto-reply','automatic reply',
-  'automated response','vacation','ausente','fuera de oficina','fora do escritório',
-  '退信','失败','退回','系统退信','无法送达','自动回复','休假',
+  'returned mail','message undeliverable',
+  '退信','失败','退回','系统退信','无法送达',
   'mail delivery','mailer-daemon','postmaster','noreply','no-reply',
 ];
 
-const REPLY_INDICATORS = ['re:','resp:','回复','enc:','fw:','fwd:'];
+const REPLY_INDICATORS = ['re:','resp:','回复:','enc:','fw:','fwd:'];
+
+// ponytail: 合并 config 中的自定义关键词
+function _mergeCustomKw(config) {
+  const customAutoReply = config?.reply?.autoReplyKeywords || [];
+  const customBounce = config?.reply?.bounceKeywords || [];
+  const customIndicators = config?.reply?.replyIndicators || [];
+  const effAutoReplyKws = [...AUTO_REPLY_KW, ...customAutoReply.filter(k => !AUTO_REPLY_KW.includes(k))];
+  const effBounceKws = [...BOUNCE_SUBJECT_KW, ...customBounce.filter(k => !BOUNCE_SUBJECT_KW.includes(k))];
+  const effIndicators = [...REPLY_INDICATORS, ...customIndicators.filter(k => !REPLY_INDICATORS.includes(k))];
+  return { effAutoReplyKws, effBounceKws, effIndicators };
+}
+
+// ── 正文清理：去掉 MIME 元数据、boundary、base64 块等 ─────────────────────
+function cleanBodySnippet(bodyStr) {
+  return bodyStr
+    .split(/\r?\n/)
+    .filter(l => !/^(--|=3D--|Content-|boundary|charset|This is a multi|<\!DOCTYPE|<html|<head|<meta|<body|<\/|[A-Za-z0-9+/=]{60,}|.{200,})/i.test(l.trim()))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 500)
+    .trim();
+}
 
 // ── MIME 解码（从 bounce-checker 精简）───────────────────────────────────────
 function decodeMimeHeader(str) {
   if (!str) return '';
   return str.replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi, (_, charset, enc, data) => {
     try {
-      if (enc.toUpperCase() === 'B')
-        return Buffer.from(data, 'base64').toString(charset.toLowerCase() === 'gb2312' ? 'gbk' : 'utf-8');
+      if (enc.toUpperCase() === 'B') {
+        const buf = Buffer.from(data, 'base64');
+        // 用 TextDecoder 支持全部编码（euc-kr, gb2312, shift_jis, iso-2022-jp 等）
+        try { return new TextDecoder(charset).decode(buf); }
+        catch { return buf.toString('utf-8'); }
+      }
       return decodeURIComponent(data.replace(/_/g, ' ').replace(/%/g, '%25'));
     } catch { return data; }
   });
 }
 
-function isExcluded(subject) {
+// ── 标题分类：AI 优先，关键词兜底 ──────────────────────────────────────────
+// 优先级：Re: 前缀（快速）→ AI（精准）→ 关键词（兜底）→ other
+let _effAutoReplyKws = AUTO_REPLY_KW;
+let _effBounceKws = BOUNCE_SUBJECT_KW;
+let _effIndicators = REPLY_INDICATORS;
+let _apiKey = '';
+let _aiEnabled = false;
+
+// AI 通用调用
+async function _aiAsk(prompt, maxTokens) {
+  try {
+    const body = JSON.stringify({
+      model: 'agnes-2.0-flash',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0, max_tokens: maxTokens,
+    });
+    const result = await new Promise((resolve) => {
+      const req = https.request({
+        ...API.AGNES, port: 443, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _apiKey },
+        timeout: 15000, rejectUnauthorized: false,
+      }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
+      req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
+      req.end(body);
+    });
+    return (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
+  } catch { return ''; }
+}
+
+// 关键词快速匹配
+function _classifyByKeyword(subject) {
   const s = (subject || '').toLowerCase();
-  if (REPLY_INDICATORS.some(kw => s.startsWith(kw))) return false; // 回复标题不排除
-  return EXCLUDE_SUBJECT_KW.some(kw => s.includes(kw));
+  if (_effIndicators.some(kw => s.startsWith(kw))) return 'reply';
+  if (_effBounceKws.some(kw => s.includes(kw))) return 'bounce';
+  if (_effAutoReplyKws.some(kw => s.includes(kw))) return 'auto-reply';
+  return '';
+}
+
+// AI + 关键词综合分类（关键词优先，AI 兜底）
+async function classifySubject(subject, bodySnippet) {
+  if (!subject && !bodySnippet) return 'other';
+
+  // 1. 关键词命中 → 直接返回（不浪费 AI，比 AI 精准）
+  const kw = _classifyByKeyword(subject);
+  if (kw) return kw;
+
+  // 2. 关键词没命中 → AI 兜底
+  if (_aiEnabled) {
+    const prompt = '分析这封邮件，只返回一个词：reply（客户回复/询价/订单）、bounce（退信/投递失败/邮箱不存在）、auto-reply（自动回复/休假/OOO）、other（以上都不是）。\n\n' +
+      '主题：' + (subject || '') + '\n正文：' + (bodySnippet || '').slice(0, 800);
+    const answer = await _aiAsk(prompt, 20);
+    if (['reply', 'bounce', 'auto-reply', 'other'].includes(answer)) return answer;
+  }
+
+  return 'other';
 }
 
 // ── 回复游标（增量扫描，避免重复）──────────────────────────────────────────
@@ -51,7 +137,7 @@ function writeCursor(data) {
 }
 
 // ── IMAP 回复扫描 ───────────────────────────────────────────────────────────
-function imapCheckReplies(imapCfg, knownRecipients, senderEmail) {
+function imapCheckReplies(imapCfg, senderEmail) {
   const Imap = require('imap');
   return new Promise((resolve) => {
     const imap = new Imap({
@@ -63,7 +149,6 @@ function imapCheckReplies(imapCfg, knownRecipients, senderEmail) {
 
     imap.once('ready', () => {
       imap.openBox('INBOX', false, () => {
-        // 扫描最近 7 天的邮件 — 直接传 Date 对象，node-imap 不接受 DD-MM-YYYY 字符串
         const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
         imap.search([['SINCE', since]], (err, results) => {
           if (err || !results?.length) { imap.end(); return resolve({ ok: true, replies: [] }); }
@@ -74,56 +159,43 @@ function imapCheckReplies(imapCfg, knownRecipients, senderEmail) {
             struct: true,
           });
 
-          const replies = [];
-          const recipientSet = new Set(knownRecipients.map(r => r.toLowerCase().trim()));
+          const candidates = []; // 先收集，再异步分类
 
           fetch.on('message', (msg) => {
-            let headers = '', body = '';
+            let body = '';
             msg.on('body', (stream) => {
               stream.on('data', (chunk) => { body += chunk.toString(); });
             });
-            msg.once('attributes', (attrs) => { /* UID for cursor */ });
             msg.once('end', () => {
-              // 解析头部
-              const subjectMatch = headers.match(/^Subject:\s*(.+)/im);
-              const fromMatch = body.match(/^From:\s*(.+)/im) || headers.match(/^From:\s*(.+)/im);
-              const dateMatch = headers.match(/^Date:\s*(.+)/im);
-              const inReplyToMatch = headers.match(/^In-Reply-To:\s*(.+)/im);
-              const refsMatch = headers.match(/^References:\s*(.+)/im);
+              const subjectMatch = body.match(/^Subject:\s*(.+)/im);
+              const fromMatch = body.match(/^From:\s*(.+)/im);
+              const dateMatch = body.match(/^Date:\s*(.+)/im);
+              const inReplyToMatch = body.match(/^In-Reply-To:\s*(.+)/im);
+              const refsMatch = body.match(/^References:\s*(.+)/im);
 
               const subject = decodeMimeHeader(subjectMatch?.[1] || '');
               const from = (fromMatch?.[1] || '').trim();
               const date = (dateMatch?.[1] || '').trim();
-
-              // 排除系统/退信/自动回复
-              if (isExcluded(subject)) return;
-
-              // 提取发件人邮箱
               const fromEmail = (from.match(/<(.+?)>/) || [])[1] || from.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[0] || '';
               if (!fromEmail) return;
 
-              // 匹配：发件人在已知收件人列表中
-              if (!recipientSet.has(fromEmail.toLowerCase().trim())) return;
-
-              // 尝试匹配已发邮件的 Message-ID
               const msgId = (inReplyToMatch?.[1] || refsMatch?.[1] || '').trim();
+              const bodyText = cleanBodySnippet(body);
 
-              // 提取正文摘要（前 500 字符）
-              const bodyText = body.replace(/\r?\n/g, ' ').slice(0, 500).trim();
-
-              replies.push({
-                from: fromEmail,
-                subject,
-                date,
-                inReplyTo: msgId,
-                snippet: bodyText,
-              });
+              candidates.push({ from: fromEmail, subject, date, inReplyTo: msgId, snippet: bodyText });
             });
           });
 
-          fetch.once('error', () => { /* skip individual message errors */ });
-          fetch.once('end', () => {
+          fetch.once('error', () => { /* skip */ });
+          fetch.once('end', async () => {
             imap.end();
+            // 批量 AI 分类
+            const replies = [];
+            for (const c of candidates) {
+              const type = await classifySubject(c.subject, c.snippet);
+              if (type === 'other') continue; // 跳过无关邮件
+              replies.push({ ...c, type });
+            }
             resolve({ ok: true, replies });
           });
         });
@@ -155,7 +227,7 @@ function pop3ReadLine(sock, timeoutMs) {
     let buf = '';
     const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读行超时')); }, timeoutMs || 15000);
     const onData = (d) => {
-      buf += d.toString();
+      buf += d.toString('latin1');
       const rn = buf.indexOf('\r\n'), n = buf.indexOf('\n');
       const end = rn >= 0 ? rn : n;
       if (end >= 0) { clearTimeout(timer); sock.removeListener('data', onData); resolve(buf.slice(0, end).trim()); }
@@ -168,7 +240,7 @@ function pop3ReadMulti(sock, timeoutMs) {
     let buf = '';
     const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时')); }, timeoutMs || 15000);
     const onData = (d) => {
-      buf += d.toString();
+      buf += d.toString('latin1');
       if (/\r?\n\.\r?\n/.test(buf)) {
         clearTimeout(timer); sock.removeListener('data', onData);
         const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/);
@@ -186,7 +258,7 @@ function pop3Cmd(sock, cmd) {
 }
 
 // ── POP3 回复扫描 ─────────────────────────────────────────────────────────
-async function pop3CheckReplies(cfg, knownRecipients, senderEmail) {
+async function pop3CheckReplies(cfg, senderEmail) {
   const sock = await pop3Connect(cfg.host, cfg.port || 995);
   const replies = [];
   try {
@@ -204,7 +276,6 @@ async function pop3CheckReplies(cfg, knownRecipients, senderEmail) {
       if (parts.length >= 2 && /^\d+$/.test(parts[0])) uidMap[parseInt(parts[0])] = parts[1];
     }
     const ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 30);
-    const recipientSet = new Set(knownRecipients.map(r => r.toLowerCase().trim()));
 
     for (const n of ids) {
       try {
@@ -221,20 +292,21 @@ async function pop3CheckReplies(cfg, knownRecipients, senderEmail) {
           if (hl.startsWith('from:')) from = h.slice(5).trim();
         }
         const decoded = decodeMimeHeader(subject);
-        if (isExcluded(decoded)) continue;
 
         const fromEmail = (from.match(/<(.+?)>/) || [])[1] || from.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)?.[0] || '';
-        if (!fromEmail || !recipientSet.has(fromEmail.toLowerCase().trim())) continue;
+        if (!fromEmail) continue;
 
-        const bodyText = bodyLines.join(' ').slice(0, 500).trim();
-        replies.push({ from: fromEmail, subject: decoded, date, inReplyTo: '', snippet: bodyText });
+        const bodyText = cleanBodySnippet(bodyLines.join('\n'));
+        const type = await classifySubject(decoded, bodyText);
+        if (type === 'other') continue;
+        replies.push({ from: fromEmail, subject: decoded, date, type, inReplyTo: '', snippet: bodyText });
       } catch { continue; }
     }
     sock.write('QUIT\r\n');
     sock.end();
     return { ok: true, replies };
   } catch (e) {
-    try { sock.end(); } catch {}
+    try { sock.end(); } catch { /* 清理操作失败不影响主流程 */ }
     return { ok: false, error: 'POP3 失败: ' + (e.message || String(e)) };
   }
 }
@@ -246,29 +318,17 @@ async function checkReplies() {
   let config;
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return { ok: false, error: '配置文件格式错误' }; }
 
+  // 合并自定义关键词 + API Key
+  const merged = _mergeCustomKw(config);
+  _effAutoReplyKws = merged.effAutoReplyKws;
+  _effBounceKws = merged.effBounceKws;
+  _effIndicators = merged.effIndicators;
+  const rawKey = (config.verify?.agnesKey || '').replace(/[\r\n\t]/g, '').trim();
+  _apiKey = rawKey;
+  _aiEnabled = rawKey.length >= 20 && !rawKey.includes(' ');
+
   const accounts = config.smtpAccounts || [];
   const activeAccounts = accounts.filter(a => a.active !== false && a.imap?.host && a.imap?.user);
-
-  // 加载已知收件人（所有联系人邮箱 + 发送历史收件人）
-  const knownRecipients = new Set();
-
-  // 从联系人数据库
-  try {
-    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-    if (fs.existsSync(cp)) {
-      const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-      contacts.forEach(c => { if (c.email) knownRecipients.add(c.email.toLowerCase().trim()); });
-    }
-  } catch { /* 联系人文件不存在或损坏 */ }
-
-  // 从发送日志
-  try {
-    const lp = path.join(APP_ROOT, 'send', 'send-log.json');
-    if (fs.existsSync(lp)) {
-      const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
-      (log.sent || []).forEach(r => { if (r.to) knownRecipients.add(r.to.toLowerCase().trim()); });
-    }
-  } catch { /* 发送日志不存在或损坏 */ }
 
   // 兼容旧全局 IMAP
   const checkAccounts = activeAccounts.length > 0 ? activeAccounts
@@ -283,8 +343,8 @@ async function checkReplies() {
     try {
       const isPop = isPop3(acc.imap);
       const result = isPop
-        ? await pop3CheckReplies(acc.imap, [...knownRecipients], senderEmail)
-        : await imapCheckReplies(acc.imap, [...knownRecipients], senderEmail);
+        ? await pop3CheckReplies(acc.imap, senderEmail)
+        : await imapCheckReplies(acc.imap, senderEmail);
       if (result.ok && result.replies?.length) {
         result.replies.forEach(r => { r._accountLabel = acc.label || senderEmail; });
         allReplies.push(...result.replies);
@@ -304,10 +364,11 @@ async function checkReplies() {
     } catch { /* 写入失败不影响检测结果 */ }
   }
 
-  return { ok: true, replies: allReplies, message: allReplies.length ? `发现 ${allReplies.length} 条回复` : '未发现回复' };
+  return { ok: true, replies: allReplies, message: allReplies.length ? `发现 ${allReplies.length} 条邮件` : '未发现匹配邮件' };
 }
 
 // ── 应用回复标记（由 IPC 层调用）───────────────────────────────────────────
+// 只标记 type === 'reply' 的邮件到联系人（auto-reply 不标记）
 function applyReplies(replies) {
   if (!replies?.length) return { matched: 0 };
 
@@ -316,8 +377,12 @@ function applyReplies(replies) {
   let contacts;
   try { contacts = JSON.parse(fs.readFileSync(cp, 'utf-8')); } catch { return { matched: 0 }; }
 
+  // 只处理真实回复，跳过自动回复
+  const realReplies = replies.filter(r => r.type === 'reply');
+  if (!realReplies.length) return { matched: 0 };
+
   let matched = 0;
-  for (const r of replies) {
+  for (const r of realReplies) {
     if (!r.from) continue;
     const key = r.from.toLowerCase().trim();
     for (const c of contacts) {

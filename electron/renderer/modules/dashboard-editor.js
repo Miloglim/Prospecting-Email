@@ -38,7 +38,7 @@ export function getLayout() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (saved && saved.version === LAYOUT_VERSION) return saved;
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
   return null;
 }
 

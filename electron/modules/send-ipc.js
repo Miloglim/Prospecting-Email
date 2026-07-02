@@ -46,7 +46,7 @@ function register(ipcMain, deps) {
     deps.isPaused = true; deps.currentSendAbort = true;
     engine._clearDelay();
     deps.sendQueue.length = 0; deps._sendInProgress = false;
-    try { deps.currentTransporter?.close(); } catch {}
+    try { deps.currentTransporter?.close(); } catch { /* 清理操作失败不影响主流程 */ }
     return { cancelled: true };
   });
 
@@ -57,7 +57,7 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('send:saveState', async (_e, data) => {
-    let cur = {}; try { if (fs.existsSync(ssp)) cur = JSON.parse(fs.readFileSync(ssp, 'utf-8')); } catch {}
+    let cur = {}; try { if (fs.existsSync(ssp)) cur = JSON.parse(fs.readFileSync(ssp, 'utf-8')); } catch { /* 清理操作失败不影响主流程 */ }
     fs.writeFileSync(ssp, JSON.stringify({ ...cur, ...data }, null, 2)); return { ok: true };
   });
 
@@ -127,10 +127,11 @@ function register(ipcMain, deps) {
   // ── 退信检测 ──
   ipcMain.handle('imap:test', async (_e, cfg) => require('../bounce-checker').testConnection(cfg));
   ipcMain.handle('bounce:check', async () => { try { return await Promise.race([require('../bounce-checker').checkBounces(), new Promise(r => setTimeout(() => r({ ok: false, error: '检测超时' }), 60000))]); } catch (e) { return { ok: false, error: '检测异常' }; } });
+  ipcMain.handle('bounce:clear', async () => { require('../bounce-checker').clearCursor(); return { ok: true }; });
 
   // ── 退信日志 ──
   const blp = path.join(APP_ROOT, 'data', 'bounce-log.json');
-  ipcMain.handle('bounce:loadLog', async () => { try { if (fs.existsSync(blp)) return { ok: true, data: JSON.parse(fs.readFileSync(blp, 'utf-8')) }; } catch {} return { ok: true, data: [] }; });
+  ipcMain.handle('bounce:loadLog', async () => { try { if (fs.existsSync(blp)) return { ok: true, data: JSON.parse(fs.readFileSync(blp, 'utf-8')) }; } catch { /* 清理操作失败不影响主流程 */ } return { ok: true, data: [] }; });
   ipcMain.handle('bounce:saveLog', async (_e, d) => { const dir = path.dirname(blp); if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(blp, JSON.stringify(d, null, 2)); return { ok: true }; });
 }
 

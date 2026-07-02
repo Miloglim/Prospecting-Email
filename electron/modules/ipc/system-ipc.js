@@ -16,7 +16,7 @@ function register(ipcMain, deps) {
   // ── 队列持久化 ──
   const qfp = path.join(APP_ROOT, 'data', 'email-queue.json');
   ipcMain.handle('queue:save', async (_e, data) => { const d = path.dirname(qfp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(qfp, JSON.stringify(data, null, 2)); return { ok: true }; });
-  ipcMain.handle('queue:load', async () => { try { if (fs.existsSync(qfp)) return { ok: true, data: JSON.parse(fs.readFileSync(qfp, 'utf-8')) }; } catch {} return { ok: false, data: [] }; });
+  ipcMain.handle('queue:load', async () => { try { if (fs.existsSync(qfp)) return { ok: true, data: JSON.parse(fs.readFileSync(qfp, 'utf-8')) }; } catch { /* 非关键 I/O 失败不影响主流程 */ } return { ok: false, data: [] }; });
 
   // ── 仪表盘统计 ──
   ipcMain.handle('dashboard:getStats', async () => {
@@ -31,7 +31,7 @@ function register(ipcMain, deps) {
         const raw = await fs.promises.readFile(lp, 'utf-8');
         allSent.push(...(JSON.parse(raw).sent || []));
       }
-    } catch {}
+    } catch { /* 非关键 I/O 失败不影响主流程 */ }
     const t = beijingToday();
     sentToday = allSent.filter(r => r.status === 'sent' && (r.time_beijing === t || (!r.time_beijing && r.time && beijingDateFromISO(r.time) === t))).length;
     totalSent = allSent.filter(r => r.status === 'sent').length;
@@ -48,7 +48,7 @@ function register(ipcMain, deps) {
           dailyLimit = config.schedule?.max_per_day || 500;
         }
       }
-    } catch {}
+    } catch { /* 非关键 I/O 失败不影响主流程 */ }
     _statsCache = { sentToday, dailyLimit, remaining: Math.max(0, dailyLimit - sentToday), totalSent, totalFailed, queueLength: deps.sendQueue.length };
     _statsCacheTime = now;
     return _statsCache;
@@ -77,7 +77,7 @@ function register(ipcMain, deps) {
               if (acctMgr.isFused(a.id, log._accountStates || {})) fusedIds.add(a.id);
             }
           }
-        } catch {}
+        } catch { /* 非关键 I/O 失败不影响主流程 */ }
 
         const enabled = c.smtpAccounts.filter(a => a.active !== false);
         if (!enabled.length) return { ok: false, host: '无活跃账号', user: '' };
@@ -138,7 +138,7 @@ function register(ipcMain, deps) {
 
   // ── 签名 ──
   const sfp = path.join(APP_ROOT, 'send', 'signature.html');
-  ipcMain.handle('signature:load', async () => { try { if (fs.existsSync(sfp)) return { ok: true, html: fs.readFileSync(sfp, 'utf-8') }; } catch {} return { ok: true, html: '<div style="font-family:Arial"><p><strong>Zayne Jin</strong></p></div>' }; });
+  ipcMain.handle('signature:load', async () => { try { if (fs.existsSync(sfp)) return { ok: true, html: fs.readFileSync(sfp, 'utf-8') }; } catch { /* 非关键 I/O 失败不影响主流程 */ } return { ok: true, html: '<div style="font-family:Arial"><p><strong>Zayne Jin</strong></p></div>' }; });
   ipcMain.handle('signature:save', async (_e, html) => { const d = path.dirname(sfp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(sfp, html); return { ok: true }; });
 
   // ── 设置 ──
@@ -157,12 +157,13 @@ function register(ipcMain, deps) {
         const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
         const rows = contacts.map(c => ({
           '公司': c.company || '', '国家': c.country || '', '分类': c.category || '',
-          '邮箱': c.email || '', '网站': c.website || '', '联系人': c.contactName || '',
+          '邮箱': c.email || '', '网站': c.website || '',
+          '名': c.firstName || '', '姓': c.lastName || '', '联系人': c.contactName || '',
           '职位': c.position || '', '电话': c.phone || '', '客户类型': c.clientType || '',
-          '标签': (c.tags||[]).join(', ') || c.tag || '', '添加时间': (c.addedAt||'').slice(0,10),
+          '标签': (c.tags||[]).join(', '), '添加时间': (c.addedAt||'').slice(0,10),
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
-      } catch {}
+      } catch { /* 非关键 I/O 失败不影响主流程 */ }
     }
 
     // Sheet2: 发送记录
@@ -178,7 +179,7 @@ function register(ipcMain, deps) {
           '错误信息': r.error || '', '阶段': r._stage || '',
         }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '发送记录');
-      } catch {}
+      } catch { /* 非关键 I/O 失败不影响主流程 */ }
     }
 
     // Sheet3: 跟进状态（联系人 + 发送历史合并）
@@ -198,7 +199,7 @@ function register(ipcMain, deps) {
         };
       });
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '跟进状态');
-    } catch {}
+    } catch { /* 非关键 I/O 失败不影响主流程 */ }
 
     // 保存到桌面
     const desktop = path.join(require('os').homedir(), 'Desktop');

@@ -1,4 +1,5 @@
 const S = window.S;
+import CS from './company-state.js';
 import { lucide,showAlert,showConfirm,showToast,escapeHtml,ratingStars,initIcons } from './shared.js';
 
 // ===== 客户开发 ======================================================
@@ -85,7 +86,7 @@ export async function initDiscover() {
 
   // 确保联系人数据已加载以更新底部栏
   if (!S.contactsData || !S.contactsData.length) {
-    try { S.contactsData = await window.electronAPI.getContacts(); } catch {}
+    try { await CS.refreshContacts(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
   }
   updateDiscoverBottomBar();
 }
@@ -368,7 +369,7 @@ export async function importSingleCompany(item) {
   showToast(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`, 'ok');
 
   // 刷新联系人数据
-  try { S.contactsData = await window.electronAPI.getContacts(); } catch {}
+  try { await CS.refreshContacts(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   // 刷新详情面板
   if (S.discoverSelectedIdx != null) selectDiscoverResult(S.discoverSelectedIdx);
@@ -449,7 +450,7 @@ export function updateDiscoverBottomBar() {
     const names = new Set(S.discoverResults.map(r => (r.company || '').trim()).filter(Boolean));
     const allContacts = S.contactsData || [];
     totalContacts = allContacts.filter(c => names.has((c.company || '').trim())).length;
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   if (totalContacts > 0) {
     bar.style.display = 'flex';
@@ -460,7 +461,7 @@ export function updateDiscoverBottomBar() {
           uniqueCompanies.add(c.company);
         }
       });
-    } catch {}
+    } catch { /* 渲染层降级：操作失败不影响 UI */ }
     summary.textContent = `已导入 ${uniqueCompanies.size} 家公司 · ${totalContacts} 位联系人`;
   } else {
     bar.style.display = 'none';

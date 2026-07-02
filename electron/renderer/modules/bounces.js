@@ -37,8 +37,8 @@ export function renderBounceTable() {
     const items = groups[g.key] || [];
     if (!items.length) continue;
     html += `<div class="bounce-group" style="margin-bottom:8px">`;
-    html += `<div class="bounce-group-head" style="font-size:12px;font-weight:600;color:${g.color};padding:4px 0;border-bottom:1px solid #eee;cursor:pointer;display:flex;align-items:center;gap:4px" onclick="const n=this.nextElementSibling;const a=this.querySelector('.bounce-arrow');n.style.display=n.style.display==='none'?'':'none';a.innerHTML=n.style.display==='none'?'${lucide('chevron-right',10)}':'${lucide('chevron-down',10)}'">`;
-    html += `<span class="bounce-arrow" style="font-size:10px;width:10px">${lucide('chevron-down',10)}</span>`;
+    html += `<div class="bounce-group-head" style="font-size:12px;font-weight:600;color:${g.color};padding:4px 0;border-bottom:1px solid #eee;cursor:pointer;display:flex;align-items:center;gap:4px">`;
+    html += `<span class="bounce-arrow" style="font-size:10px;width:10px">▼</span>`;
     html += `${g.label} (${items.length})`;
     html += `</div>`;
     html += `<div class="bounce-group-body">`;
@@ -58,6 +58,16 @@ export function renderBounceTable() {
   }
   if (groupsEl) {
     groupsEl.innerHTML = html;
+    // 折叠/展开
+    groupsEl.querySelectorAll('.bounce-group-head').forEach(head => {
+      head.addEventListener('click', () => {
+        const body = head.nextElementSibling;
+        const arrow = head.querySelector('.bounce-arrow');
+        const collapsed = body.style.display === 'none';
+        body.style.display = collapsed ? '' : 'none';
+        if (arrow) arrow.textContent = collapsed ? '▼' : '▶';
+      });
+    });
     // 单条删除
     groupsEl.querySelectorAll('.bounce-del-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -97,7 +107,7 @@ export async function initBouncePage() {
         S.bounceRecords = log.data;
         renderBounceTable();
       }
-    } catch {}
+    } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
     // 自动检测：上次发信在10分钟~24小时内 → 自动扫一次
     try {
@@ -106,7 +116,7 @@ export async function initBouncePage() {
         const since = (Date.now() - new Date(st.data.startedAt).getTime()) / 1000;
         if (since > 600 && since < 86400) setTimeout(() => runBtn.click(), 500);
       }
-    } catch {}
+    } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
     // 倒计时更新
     const countdownEl = document.getElementById('bounce-countdown');
@@ -185,7 +195,10 @@ export async function initBouncePage() {
     clearBtn.addEventListener('click', async () => {
       if (!await showConfirm('确定清除所有退信记录？')) return;
       S.bounceRecords = [];
-      await window.electronAPI.saveBounceLog([]);
+      await Promise.all([
+        window.electronAPI.saveBounceLog([]),
+        window.electronAPI.clearBounceCursor(),
+      ]);
       renderBounceTable();
     });
 
@@ -208,7 +221,10 @@ export async function initBouncePage() {
         }
       }
       S.bounceRecords = [];
-      await window.electronAPI.saveBounceLog([]);
+      await Promise.all([
+        window.electronAPI.saveBounceLog([]),
+        window.electronAPI.clearBounceCursor(),
+      ]);
       renderBounceTable();
       const parts = [];
       if (deleted) parts.push(`删除 ${deleted} 个联系人`);

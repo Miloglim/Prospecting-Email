@@ -1,6 +1,7 @@
 // ── Agent-Reach 多平台背调（Exa + Jina + Tavily）─────────────────────────
 const path = require('path'); const fs = require('fs'); const https = require('https');
 const { APP_ROOT, loadSearchConfig } = require('./config');
+const { API } = require('./core/contract');
 const { sanitizeFilename } = require('./utils'); const { autoRate } = require('./auto-rate');
 
 function httpsPost(hostname, port, pathname, headers, body, timeoutMs) {
@@ -34,29 +35,29 @@ async function research(cname, company, notifyProgress) {
   notifyProgress('Exa AI 搜索公司信息...');
   let exaUrl = '', entity = null;
   try {
-    const r1 = await httpsPost('api.exa.ai', 443, '/search', { 'Content-Type': 'application/json', 'x-api-key': exaKey }, JSON.stringify({ query: `${cleanName}${country ? ' ' + country : ''} company profile overview`, numResults: 5, type: 'auto' }), 30000);
+    const r1 = await httpsPost(API.EXA.hostname, 443, API.EXA.path, { 'Content-Type': 'application/json', 'x-api-key': exaKey }, JSON.stringify({ query: `${cleanName}${country ? ' ' + country : ''} company profile overview`, numResults: 5, type: 'auto' }), 30000);
     if (r1?.results?.length) {
       for (const r of r1.results) { if (r.entities?.length) { for (const e of r.entities) { if (e.type === 'company' && e.properties) { entity = e.properties; break; } } if (entity) break; } }
       exaUrl = r1.results[0]?.url || '';
       if (exaUrl?.includes('linkedin.com') || exaUrl?.includes('exa.ai')) { for (const r of r1.results) { const u = r.url || ''; if (u && !u.includes('linkedin.com') && !u.includes('exa.ai')) { exaUrl = u; break; } } }
     }
-  } catch {}
+  } catch { /* 外部服务请求失败 → 降级返回空结果 */ }
   if (!country && entity?.headquarters?.country) country = entity.headquarters.country;
   if (!category && entity?.description) { const d = entity.description.toLowerCase(); for (const [k, v] of [['automotive','汽车零部件'],['pharmaceutical','制药'],['food','食品'],['mining','采矿'],['steel','钢铁'],['textile','纺织'],['electronics','电子'],['machinery','机械'],['chemical','化工'],['medical','医疗器械'],['construction','建筑']]) { if (d.includes(k)) { category = v; break; } } }
 
   notifyProgress('Exa AI 搜索贸易数据...');
   let tradeText = '';
   try {
-    const r2 = await httpsPost('api.exa.ai', 443, '/search', { 'Content-Type': 'application/json', 'x-api-key': exaKey }, JSON.stringify({ query: `${cleanName}${country ? ' ' + country : ''} import export trade`, numResults: 5, type: 'auto' }), 30000);
+    const r2 = await httpsPost(API.EXA.hostname, 443, API.EXA.path, { 'Content-Type': 'application/json', 'x-api-key': exaKey }, JSON.stringify({ query: `${cleanName}${country ? ' ' + country : ''} import export trade`, numResults: 5, type: 'auto' }), 30000);
     if (r2?.results?.length) { const ts = r2.results.filter(r => { const u = (r.url || '').toLowerCase(); return ['exportgenius','tendata','volza','importgenius','tradeimex','seair'].some(s => u.includes(s)); }); if (ts.length) tradeText = ts.map(r => `- **${r.title || '贸易'}**\n  ${r.url || ''}`).join('\n'); }
-  } catch {}
+  } catch { /* 外部服务请求失败 → 降级返回空结果 */ }
 
   notifyProgress('Jina Reader 抓取官网...');
   let websiteText = ''; const urlToRead = website || exaUrl;
-  if (urlToRead?.startsWith('http')) { try { const raw = await httpsGet('https://r.jina.ai/' + urlToRead, { 'Accept': 'text/markdown' }, 30000); if (raw?.length > 100) websiteText = raw.slice(0, 4000); } catch {} }
+  if (urlToRead?.startsWith('http')) { try { const raw = await httpsGet('https://' + API.JINA.hostname + '/' + urlToRead, { 'Accept': 'text/markdown' }, 30000); if (raw?.length > 100) websiteText = raw.slice(0, 4000); } catch { /* 外部服务请求失败 → 降级返回空结果 */ } }
 
   notifyProgress('Tavily 搜索新闻...'); let tavilyText = '';
-  try { const tk = cfg?.search?.apiKey || ''; if (tk) { const r = await httpsPost('api.tavily.com', 443, '/search', { 'Content-Type': 'application/json' }, JSON.stringify({ api_key: tk, query: `${cleanName}${country ? ' ' + country : ''}`, search_depth: 'basic', max_results: 5, include_answer: true }), 25000); if (r?.answer) tavilyText = r.answer + '\n\n'; if (r?.results?.length) tavilyText += r.results.map(r => `- **${r.title || ''}**\n  ${r.content || r.snippet || ''}\n  ${r.url || ''}`).join('\n\n'); } } catch {}
+  try { const tk = cfg?.search?.apiKey || ''; if (tk) { const r = await httpsPost(API.TAVILY.hostname, 443, API.TAVILY.path, { 'Content-Type': 'application/json' }, JSON.stringify({ api_key: tk, query: `${cleanName}${country ? ' ' + country : ''}`, search_depth: 'basic', max_results: 5, include_answer: true }), 25000); if (r?.answer) tavilyText = r.answer + '\n\n'; if (r?.results?.length) tavilyText += r.results.map(r => `- **${r.title || ''}**\n  ${r.content || r.snippet || ''}\n  ${r.url || ''}`).join('\n\n'); } } catch { /* 外部服务请求失败 → 降级返回空结果 */ }
 
   notifyProgress('生成报告...');
   const { rating, signals } = autoRate([entity?.description || '', websiteText, tavilyText, tradeText].join('\n'), company);

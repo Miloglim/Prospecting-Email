@@ -8,7 +8,7 @@ import CS from './company-state.js';
 
 
 export async function initEmailSend() {
-  if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+  if (!S.templateLib) await CS.refreshTemplateLib();
   // 模板模式选择 — 与设置页同步
   const tplModeSel = document.getElementById('send-tpl-mode');
   const cfgModeSel = document.getElementById('cfg-template-mode');
@@ -59,7 +59,7 @@ export async function initEmailSend() {
     document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
     const stage = document.getElementById('send-fill-stage')?.value;
     let limit = 500;
-    try { const stats = await window.electronAPI.getDashboardStats(); limit = stats.remaining || 500; } catch {}
+    try { const stats = await window.electronAPI.getDashboardStats(); limit = stats.remaining || 500; } catch { /* 渲染层降级：操作失败不影响 UI */ }
     let total = 0;
     const allItems = document.querySelectorAll('#send-company-list .send-company-item:not(.archived)');
     const sorted = [...allItems].sort((a, b) => {
@@ -240,11 +240,11 @@ function applyTemplateOverride(name, ctype, stage, lang, action, tplId) {
 
 // ── 模板预览 ──────────────────────────────────────────────────────
 export async function initTemplatePreview() {
-  if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+  if (!S.templateLib) await CS.refreshTemplateLib();
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   // 预加载签名
   let sigHtml = '';
-  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch {}
+  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   let selType = 'agent', selLang = 'es', selStage = 'cold', selSource = 'preset';
 
@@ -293,7 +293,7 @@ export async function initTemplatePreview() {
     // 预设库：现有逻辑
     if (!S.templateLib) return;
     const picked = randomPick(selType, selStage, [], false);
-    const email = assembleEmail(selLang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, selStage, selType, config?.sender?.bodyName);
+    const email = assembleEmail(selLang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, selStage, selType, config?.sender?.bodyName, undefined);
     const html = textToHtml(email);
 
     // 在正文旁标注来源 ID
@@ -347,14 +347,20 @@ export function updateMonthlyReportSection() {
 
 
 export async function loadSendContacts() {
-  S.contactsData = await window.electronAPI.getContacts();
-  S.sendHistory = await window.electronAPI.getSendHistory() || {};
+  await CS.refreshContacts();
+  await CS.refreshSendHistory();
   try { S.sendBackcheckStatus = await window.electronAPI.getBackcheckStatus(); } catch { S.sendBackcheckStatus = {}; }
   S.sendCompanies = {};
+  S.sendCompaniesById = {};
   for (const c of S.contactsData) {
     const name = c.company || '未命名';
     if (!S.sendCompanies[name]) S.sendCompanies[name] = [];
     S.sendCompanies[name].push(c);
+    // Phase 3: build companyId index
+    if (c.companyId) {
+      if (!S.sendCompaniesById[c.companyId]) S.sendCompaniesById[c.companyId] = [];
+      S.sendCompaniesById[c.companyId].push(c);
+    }
   }
   renderCompanyList();
   updateMonthlyReportSection();
@@ -484,7 +490,7 @@ export function renderCompanyList(filter) {
         if (!await showConfirm(`确定重新激活 ${company}？\n将重置为冷开发阶段，清空序列记录。`)) return;
         btn.disabled = true; btn.textContent = '⏳';
         await window.electronAPI.reactivateCompany(company);
-        S.sendHistory = await window.electronAPI.getSendHistory() || {};
+        await CS.refreshSendHistory();
         CS.setFilter('active');
         document.querySelectorAll('.send-stage-tab').forEach(t => {
           t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
@@ -545,7 +551,7 @@ export function renderCompanyList(filter) {
       showToast(`${names.length} 家公司已重置`, 'ok');
       // 后端异步确认
       Promise.all(names.map(c => window.electronAPI.reactivateCompany(c))).then(async () => {
-        S.sendHistory = await window.electronAPI.getSendHistory() || {};
+        await CS.refreshSendHistory();
         renderCompanyList(document.getElementById('send-search')?.value || '');
       });
     };
@@ -556,7 +562,7 @@ export function renderCompanyList(filter) {
 }
 
 export function getSelectedCompanies() {
-  return [...S.selectedCompanySet];
+  return [...S.selectedCompanySet].map(id => CS.getName(id));
 }
 
 export function updateSelectedCount() {
@@ -590,7 +596,7 @@ export function updateSelectedCount() {
           for (const name of selected) {
             await window.electronAPI.reactivateCompany(name).catch(() => {});
           }
-          S.sendHistory = await window.electronAPI.getSendHistory() || {};
+          await CS.refreshSendHistory();
           CS.setFilterAndClear('active');
           document.querySelectorAll('.send-stage-tab').forEach(t => {
             t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
@@ -630,7 +636,7 @@ export async function renderSelectedCards() {
   let userTemplates = [];
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const tplMode = document.getElementById('send-tpl-mode')?.value || config?.template?.mode || 'adaptive';
-  try { userTemplates = await window.electronAPI.listUserTemplates(); } catch {}
+  try { userTemplates = await window.electronAPI.listUserTemplates(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   for (const name of selected) {
     if (!S.selectedCards[name]) {
@@ -731,7 +737,7 @@ async function addToQueue() {
     if (!members.length) continue;
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => (m.tags || []).includes('reached') || m.tag === 'reached'); // 已触达不入队
+    const reachedMembers = members.filter(m => (m.tags || []).includes('reached')); // 已触达不入队
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact')); // 被联系人退回也跳过
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
     const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
@@ -752,7 +758,7 @@ async function addToQueue() {
         await window.electronAPI.reactivateCompany(r.name);
         reactivatedCount += r.count;
       }
-      S.sendHistory = await window.electronAPI.getSendHistory() || {};
+      await CS.refreshSendHistory();
     } else {
       for (const r of needReset) skippedDupOrBounced += r.count;
     }
@@ -763,7 +769,7 @@ async function addToQueue() {
     if (!card) continue;
     const members = S.sendCompanies[name] || [];
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => (m.tags || []).includes('reached') || m.tag === 'reached');
+    const reachedMembers = members.filter(m => (m.tags || []).includes('reached'));
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
@@ -810,14 +816,16 @@ async function addToQueue() {
     const useUserTpl = card._templateSource === 'user' && card._userTemplate;
     let baseSubject, body;
     const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
+    // Phase 3: 取第一个联系人的 firstName 用于模板变量
+    const firstNameDisplay = members[0]?.firstName || '';
 
     if (useUserTpl) {
       const ut = card._userTemplate;
-      baseSubject = (ut.subject || '').replace(/\{\{company\}\}/g, companyDisplay);
-      body = (ut.body || '').replace(/\{\{company\}\}/g, companyDisplay);
+      baseSubject = (ut.subject || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
+      body = (ut.body || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
     } else {
       const subjects = S.templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
-      baseSubject = (subjects[lang] || subjects.es || subjects.en || '').replace(/\{\{company\}\}/g, companyDisplay);
+      baseSubject = (subjects[lang] || subjects.es || subjects.en || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
     }
 
     const totalGroups = Math.ceil(valid.length / GROUP_SIZE);
@@ -841,12 +849,12 @@ async function addToQueue() {
         }
         groupTpl = currentTpl;
         groupsOnTpl++;
-        body = assembleEmail(lang, groupTpl.hook, groupTpl.pain, groupTpl.proof, groupTpl.cta, groupTpl.followup, stage, card.type, config?.sender?.bodyName);
+        body = assembleEmail(lang, groupTpl.hook, groupTpl.pain, groupTpl.proof, groupTpl.cta, groupTpl.followup, stage, card.type, config?.sender?.bodyName, firstNameDisplay);
       }
 
       const batchLabel = totalGroups > 1 ? ` (${g + 1}/${totalGroups})` : '';
       S.queue.push({
-        id: ++S.queueIdCounter, company: name, to: groupEmails.join(", "), recipients: groupEmails,
+        id: ++S.queueIdCounter, company: name, companyId: members[0]?.companyId || '', to: groupEmails.join(", "), recipients: groupEmails,
         subject: baseSubject, body, status: "pending", addedAt: new Date().toISOString(),
         _stage: stage, _type: card.type, _lang: card.lang, _country: members[0]?.country || '',
         _tplInfo: useUserTpl ? `user:${card._userTemplate?.id}` : [groupTpl?.hook?.id, groupTpl?.pain?.id, groupTpl?.proof?.id, groupTpl?.cta?.id, groupTpl?.followup?.id].filter(Boolean).join('·'),

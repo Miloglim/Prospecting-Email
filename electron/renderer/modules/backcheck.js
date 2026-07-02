@@ -1,4 +1,5 @@
 const S = window.S;
+import CS from './company-state.js';
 import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany } from './shared.js';
 
 // ===== 背调详情 ======================================================
@@ -19,7 +20,7 @@ export async function loadBackcheck() {
   checkNetworkStatus();
 
   // 从联系人列表加载
-  S.contactsData = await window.electronAPI.getContacts();
+  await CS.refreshContacts();
   const status = await window.electronAPI.getBackcheckStatus();
 
   if (!S.contactsData.length) {
@@ -32,7 +33,7 @@ export async function loadBackcheck() {
   try {
     const cfg = await window.electronAPI.loadConfig();
     filterEnabled = cfg?.backcheck?.filterEnabled !== false; // 默认开启
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   // 按公司分组 → 根据设置决定是否仅保留 ≥5 人
   let groups = groupByCompany(S.contactsData);
@@ -160,7 +161,7 @@ export async function loadBackcheck() {
   if (S.discoverPreselectCompany) {
     const target = container.querySelector(`.backcheck-company[data-company="${escapeHtml(discoverPreselectCompany)}"]`);
     if (target) target.click();
-    S.discoverPreselectCompany = null;
+    CS.setDiscoverPreselect($1);
   }
 
   // 工具栏事件委托（一次性绑定）
@@ -182,7 +183,7 @@ export async function loadBackcheck() {
         if (btn.id === 'btn-research' || btn.id === 'btn-recheck') doResearch(cname);
         if (btn.id === 'btn-cancel-research') { if (await showConfirm('确定取消？')) { await window.electronAPI.cancelBackcheck(cname); loadBackcheck(); } }
         if (btn.id === 'btn-open-folder') window.electronAPI.openReportsFolder?.();
-        if (btn.id === 'btn-reactivate-bc') { if (await showConfirm(`确定重新激活 ${cname}？`)) { await window.electronAPI.reactivateCompany(cname); S.contactsSendHistory = await window.electronAPI.getSendHistory() || {}; loadBackcheck(); } }
+        if (btn.id === 'btn-reactivate-bc') { if (await showConfirm(`确定重新激活 ${cname}？`)) { await window.electronAPI.reactivateCompany(cname); await CS.refreshContactsSendHistory(); loadBackcheck(); } }
         if (btn.id === 'btn-fix-country') fixCountryFromToolbar();
         if (btn.id === 'btn-add-to-queue') addReportToQueue();
       });
@@ -344,7 +345,7 @@ export async function fixCountryFromToolbar() {
   }
   if (result.ok && result.updated > 0) {
     showToast(`✅ 已修正 ${result.updated}/${result.total} 位联系人：${old} → ${detectedCountry}`, 'ok');
-    S.contactsData = await window.electronAPI.getContacts();
+    await CS.refreshContacts();
     loadBackcheck();
   } else { showToast(`修正失败: ${result.error || '无匹配联系人'}`, 'err'); }
 }

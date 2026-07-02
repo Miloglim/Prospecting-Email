@@ -10,6 +10,7 @@
 
 const { autoUpdater } = require('electron-updater');
 const { ipcMain } = require('electron');
+const { Log } = require('./core/logger');
 
 let _win = null;
 let _checkTimer = null;
@@ -30,10 +31,10 @@ function init(mainWindow) {
       if (proxyHost) {
         process.env.HTTP_PROXY = 'http://' + proxyHost;
         process.env.HTTPS_PROXY = 'http://' + proxyHost;
-        console.log('[更新] 使用代理:', proxyHost);
+        Log.info('更新', '使用代理: ' + proxyHost);
       }
     }
-  } catch {}
+  } catch { /* 配置文件读取失败 → 不使用代理 */ }
 
   // 用户确认后再下载
   autoUpdater.autoDownload = false;

@@ -1,4 +1,5 @@
 const S = window.S;
+import CS from './company-state.js';
 import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
 import { randomPick, assembleEmail } from './templates.js';
 
@@ -61,7 +62,7 @@ export async function initQueue() {
         t.style.color = 'var(--text-secondary)';
       }
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
   // 恢复延迟倒计时
   try {
     const raw = localStorage.getItem('_delay');
@@ -78,7 +79,7 @@ export async function initQueue() {
         }
       }
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
 
 export async function syncTestMode() {
@@ -98,7 +99,7 @@ export async function syncTestMode() {
     if (liveLogBtn) {
       liveLogBtn.style.display = (testEnabled && testEmail) ? '' : 'none';
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
 
 export async function renderQueue() {
@@ -145,10 +146,10 @@ export async function renderQueue() {
     for (const c of contacts) {
       const name = c.company || '未命名';
       if (!companyTagMap[name]) companyTagMap[name] = new Set();
-      const tags = (c.tags && c.tags.length) ? c.tags : (c.tag ? [c.tag] : []);
+      const tags = c.tags || [];
       for (const t of tags) companyTagMap[name].add(t);
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   const cardHtml = (e) => {
     const count = e.recipients?.length || (e.to?.split(',')?.length || 1);
@@ -389,9 +390,7 @@ export async function startSend() {
       recipientsFixed++;
     }
   }
-  if (recipientsFixed > 0) {
-    console.log(`🔄 已补全 ${recipientsFixed} 条旧队列的收件人列表`);
-  }
+  // ponytail: 旧队列收件人补全已在上方处理，静默执行
 
   // 仅第一个队列项标记为发送中（聚焦当前任务）
   const firstPending = pending[0];
@@ -606,7 +605,6 @@ export async function startSend() {
     setTimeout(() => {
       const stuck = S.queue.filter(e => e.status === 'sending');
       if (stuck.length && !S.sendInProgress) {
-        console.log('🔄 修复卡住的发送项:', stuck.length);
         stuck.forEach(e => _rollbackSendingStatus(e));
         saveQueue();
         renderQueue();
@@ -673,7 +671,7 @@ document.getElementById('queue-test-send')?.addEventListener('click', async () =
   try {
     // ponytail: 生成简短测试正文，使用模板库的第一个 hook
     const config = await window.electronAPI.loadConfig().catch(() => ({}));
-    if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+    if (!S.templateLib) await CS.refreshTemplateLib();
     const hook = S.templateLib?.hooks?.[0];
     const testCompany = config?.test?.company || 'Demo Company';
     const senderName = config?.sender?.bodyName || 'Zayne';
@@ -683,7 +681,7 @@ document.getElementById('queue-test-send')?.addEventListener('click', async () =
 
     let body;
     if (hook) {
-      body = assembleEmail('es', hook, null, null, null, null, 'cold', 'unlabeled', senderName);
+      body = assembleEmail('es', hook, null, null, null, null, 'cold', 'unlabeled', senderName, undefined);
     } else {
       body = `Buen día,\n\nSoy ${senderName}, de YQN. Somos un agente de carga con operaciones en las principales rutas de Asia a Latinoamérica.\n\nSi en algún momento necesitan apoyo logístico, estoy a su disposición.\n\nSaludos,`;
     }
@@ -753,7 +751,7 @@ export function startAutoBounceInterval() {
           showToast(`📨 自动扫描: ${result.bounced.length} 封退信，${matched.length} 人匹配`, 'warn');
         }
       }
-    } catch {}
+    } catch { /* 渲染层降级：操作失败不影响 UI */ }
     S.nextBounceScanAt = Date.now() + 10 * 60 * 1000;
   }, 10 * 60 * 1000);
 }
@@ -767,7 +765,7 @@ export function clearQueueDelayUI() {
 export async function doQueueRefresh() {
   try {
   if (S.sendInProgress) return await showAlert('发送进行中，请先暂停');
-  if (!S.templateLib) S.templateLib = await window.electronAPI.getTemplateLibrary();
+  if (!S.templateLib) await CS.refreshTemplateLib();
   const pending = S.queue.filter(e => e.status === 'pending');
   if (!pending.length) return await showAlert('没有待发送的队列项');
   if (!await showConfirm(`确定刷新 ${pending.length} 个待发送队列项？\n将按当前配置重新分组并随机换模板。已完成的不受影响。`)) return;
@@ -777,7 +775,7 @@ export async function doQueueRefresh() {
 
   // ponytail: 加载用户模板，刷新时保留用户模板来源
   let userTemplates = [];
-  try { userTemplates = await window.electronAPI.listUserTemplates(); } catch {}
+  try { userTemplates = await window.electronAPI.listUserTemplates(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   const companyEmails = {};
   for (const item of pending) {
@@ -787,7 +785,7 @@ export async function doQueueRefresh() {
     emails.forEach(e => { if (e) companyEmails[name].emails.push(e); });
   }
   if (!S.sendHistory || !Object.keys(S.sendHistory).length) {
-    try { S.sendHistory = await window.electronAPI.getSendHistory() || {}; } catch { S.sendHistory = {}; }
+    try { await CS.refreshSendHistory(); } catch { S.sendHistory = {}; }
   }
   if (!S.sendCompanies || !Object.keys(S.sendCompanies).length) {
     try { const contacts = await window.electronAPI.getContacts();
@@ -804,6 +802,8 @@ export async function doQueueRefresh() {
 
     // ponytail: 保留用户模板来源
     const isUserTpl = meta._templateSource === 'user';
+    const members = S.sendCompanies[name] || [];
+    const firstNameDisplay = members[0]?.firstName || '';
     let userTpl = null;
     let baseSubject = '';
     if (isUserTpl) {
@@ -811,14 +811,14 @@ export async function doQueueRefresh() {
       userTpl = userTemplates.find(ut => ut.id === tplId);
       if (userTpl) {
         const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
-        baseSubject = (userTpl.subject || '').replace(/\{\{company\}\}/g, companyDisplay);
+        baseSubject = (userTpl.subject || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
         // 正文在 per-group 循环中处理
       }
     }
     if (!baseSubject) {
       const subjects = S.templateLib.subjects?.[t] || { es: '' };
       const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
-      baseSubject = (subjects[lang] ?? subjects.es ?? '').replace(/\{\{company\}\}/g, companyDisplay);
+      baseSubject = (subjects[lang] ?? subjects.es ?? '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
     }
 
     for (let g = 0; g < groups; g++) {
@@ -829,17 +829,17 @@ export async function doQueueRefresh() {
       if (userTpl && g === 0) {
         // 用户模板：第一组用原文
         const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
-        body = (userTpl.body || '').replace(/\{\{company\}\}/g, companyDisplay);
+        body = (userTpl.body || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
         tplInfo = `user:${userTpl.id}`;
       } else {
         // 预设库拼装：每组随机选，不追踪重复
         const picked = randomPick(t, stage, []);
-        body = assembleEmail(lang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, stage, t, config?.sender?.bodyName);
+        body = assembleEmail(lang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, stage, t, config?.sender?.bodyName, firstNameDisplay);
         tplInfo = [picked.hook?.id, picked.pain?.id, picked.proof?.id, picked.cta?.id, picked.followup?.id].filter(Boolean).join('·');
       }
 
       newPending.push({
-        id: ++S.queueIdCounter, company: name, to: groupEmails.join(', '), recipients: groupEmails,
+        id: ++S.queueIdCounter, company: name, companyId: members[0]?.companyId || '', to: groupEmails.join(', '), recipients: groupEmails,
         subject: baseSubject, body, status: 'pending', addedAt: new Date().toISOString(),
         _stage: stage, _type: t, _lang: lang, _country: meta._country || '',
         _tplInfo: tplInfo,

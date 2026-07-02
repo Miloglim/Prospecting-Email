@@ -111,7 +111,7 @@ async function renderReplyList() {
   try {
     const r = await window.electronAPI.loadReplyLog();
     if (r.ok && r.data?.length) await renderReplyListFromData(r.data);
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
 
 async function renderReplyListFromData(items) {
@@ -121,14 +121,20 @@ async function renderReplyListFromData(items) {
   if (!items.length) { if (empty) empty.style.display = 'block'; return; }
   if (empty) empty.style.display = 'none';
 
-  // 加载联系人标签，优先用 contacts.json 的真实标签，其次用标题判断
-  let contactTags = {};
+  // 加载联系人，用于匹配 + 标签
+  let contactMap = {}; // email → { tags, company, contactName }
   try {
     const contacts = await window.electronAPI.getContacts();
     for (const c of contacts) {
-      if (c.email) contactTags[c.email.toLowerCase().trim()] = c.tags || [];
+      if (c.email) {
+        contactMap[c.email.toLowerCase().trim()] = {
+          tags: c.tags || [],
+          company: c.company || '',
+          name: (c.firstName || c.lastName) ? `${c.firstName || ''} ${c.lastName || ''}`.trim() : (c.contactName || ''),
+        };
+      }
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   const grouped = {};
   for (const r of items) {
@@ -137,31 +143,48 @@ async function renderReplyListFromData(items) {
     grouped[key].push(r);
   }
 
-  list.innerHTML = Object.entries(grouped).map(([from, replies]) => {
+  const matchedCount = Object.keys(grouped).filter(email => contactMap[email.toLowerCase().trim()]).length;
+  const totalCount = Object.keys(grouped).length;
+  const matchSummary = document.getElementById('reply-match-summary');
+  if (matchSummary) {
+    matchSummary.textContent = `已匹配 ${matchedCount}/${totalCount} 个联系人`;
+    matchSummary.style.color = matchedCount === totalCount ? 'var(--success)' : matchedCount > 0 ? 'var(--warning)' : 'var(--text-secondary)';
+  }
+
+  // 排序：已匹配优先 → 同状态内 reply > bounce > auto-reply > other
+  const TYPE_ORDER = { reply: 0, bounce: 1, 'auto-reply': 2, other: 3 };
+  const sortedGroups = Object.entries(grouped).sort(([a, ra], [b, rb]) => {
+    const ma = !!contactMap[a.toLowerCase().trim()];
+    const mb = !!contactMap[b.toLowerCase().trim()];
+    if (ma !== mb) return mb - ma; // matched first
+    const oa = TYPE_ORDER[ra[0]?.type] ?? 4;
+    const ob = TYPE_ORDER[rb[0]?.type] ?? 4;
+    return oa - ob;
+  });
+
+  const TYPE_DEF = {
+    reply:      { cls: 'reply-tag-client', icon: 'corner-up-left', text: '客户回复' },
+    bounce:     { cls: 'reply-tag-bounce', icon: 'alert-circle',    text: '退信' },
+    'auto-reply': { cls: 'reply-tag-auto', icon: 'bot',             text: '自动回复' },
+    other:      { cls: 'reply-tag-other',  icon: 'help-circle',     text: '其他' },
+  };
+
+  list.innerHTML = sortedGroups.map(([from, replies]) => {
     const r0 = replies[0];
     const subject = escapeHtml(r0.subject || '无主题');
     const date = formatDate(r0.date);
     const label = r0._accountLabel || '';
     const emailKey = from.toLowerCase().trim();
-    const tags = contactTags[emailKey] || [];
-    // 优先用联系人真实标签，其次用标题判断
-    let tagType, tagIcon, tagText;
-    if (tags.includes('autoreply')) {
-      tagType = 'reply-tag-auto'; tagIcon = 'bot'; tagText = '自动回复';
-    } else if (tags.includes('replied')) {
-      tagType = 'reply-tag-client'; tagIcon = 'corner-up-left'; tagText = '客户回复';
-    } else if (isAutoReply(r0.subject)) {
-      tagType = 'reply-tag-auto'; tagIcon = 'refresh-cw'; tagText = '自动回复';
-    } else {
-      tagType = 'reply-tag-client'; tagIcon = 'corner-up-left'; tagText = '客户回复';
-    }
+    const matched = !!contactMap[emailKey];
+    const def = TYPE_DEF[r0.type] || TYPE_DEF.other;
 
     return `<div class="reply-card" data-email="${escapeHtml(from)}" style="position:relative">
       <div class="reply-card-top">
-        <span class="reply-avatar">${lucide(tagIcon,ICON_SIZE)}</span>
+        <span class="reply-avatar">${lucide(def.icon,ICON_SIZE)}</span>
         <span class="reply-from">${escapeHtml(from)}</span>
-        <span class="reply-tag ${tagType}">
-          ${lucide(tagIcon,10)} ${tagText}
+        ${matched ? `<span style="color:var(--text-secondary);font-weight:600;font-size:12px">已匹配</span>` : ''}
+        <span class="reply-tag ${def.cls}">
+          ${lucide(def.icon,10)} ${def.text}
         </span>
         ${label ? `<span class="reply-account">${lucide('at-sign',10)} ${escapeHtml(label)}</span>` : ''}
         <span class="reply-meta">${lucide('clock',10)} ${date} · ${replies.length} 封</span>
@@ -181,11 +204,6 @@ async function renderReplyListFromData(items) {
       _ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 120) + 'px';
     });
   });
-}
-
-function isAutoReply(subject) {
-  const s = (subject || '').toLowerCase();
-  return ['auto','automatic','自动','ausente','fuera','vacation','out of office'].some(k => s.includes(k));
 }
 
 window.__pageHandlers['replies'] = initReplyPage;

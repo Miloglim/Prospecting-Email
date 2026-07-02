@@ -1,4 +1,5 @@
 const S = window.S;
+import CS from './company-state.js';
 import { lucide,showAlert,showConfirm,showToast,escapeHtml,populateSelect,initIcons,showModal,formatDate } from './shared.js';
 import { assembleEmail } from './templates.js';
 
@@ -104,7 +105,7 @@ export function runQualityCheck(panel, spamWords, limits) {
 
 export async function initTemplateEditor() {
   try {
-    S.templateLib = await window.electronAPI.getTemplateLibrary();  // ponytail: 每次进入都重新加载，确保覆盖层生效
+    await CS.refreshTemplateLib();  // ponytail: 每次进入都重新加载，确保覆盖层生效
     if (!S.templateLib || !S.templateLib.hooks) {
       document.getElementById('tmpl-tree').innerHTML = '<p style="color:var(--danger);padding:12px">模板加载失败，请重启应用</p>';
       return;
@@ -407,9 +408,9 @@ export function showUserTemplateEditor(tpl) {
         <select id="ut-lang"><option value="">— 请选择 —</option>${Object.entries(USER_TEMPLATE_LANGS).map(([k,v]) => `<option value="${k}"${tpl.lang===k?' selected':''}>${v}</option>`).join('')}</select>
       </div>
     </div>
-    <div class="form-group"><label>主题 <span style="color:var(--danger)">*</span></label><input type="text" id="ut-subject" value="${escapeHtml(tpl.subject)}" placeholder="邮件主题，可选用 {{company}}"></div>
+    <div class="form-group"><label>主题 <span style="color:var(--danger)">*</span></label><input type="text" id="ut-subject" value="${escapeHtml(tpl.subject)}" placeholder="邮件主题，可选用 {{company}} {{firstName}}"></div>
     <div class="form-group"><label>正文 <span style="color:var(--danger)">*</span></label><div id="ut-body" contenteditable="true" style="width:100%;min-height:280px;max-height:500px;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:4px;overflow-y:auto;font-family:Arial,sans-serif;line-height:1.6;background:var(--surface);outline:none" placeholder="在此粘贴或输入邮件正文...">${tpl.body}</div></div>
-    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>，发信时自动替换为客户公司名。支持加粗、斜体、列表等富文本格式，粘贴时保留格式。</p>
+    <p style="font-size:10px;color:var(--text-secondary);margin:4px 0">${lucide('lightbulb',10)} 在正文中写 <code>{{company}}</code>、<code>{{firstName}}</code>，发信时自动替换为客户公司名和收件人名。支持富文本格式。</p>
 
     <div style="display:flex;gap:8px;margin-top:12px">
       <button id="btn-ut-save" style="font-size:13px;padding:6px 20px">💾 保存</button>

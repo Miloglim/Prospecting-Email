@@ -57,6 +57,8 @@ const CONTACTS = {
   SEARCH:         'contacts:search',
   /** 深度搜索（按网站/公司名抓取联系人） */
   DEEP_SEARCH:    'contacts:deepSearch',
+  /** 按 email 插入或更新联系人（email 为唯一键） */
+  UPSERT:         'contacts:upsert',
 };
 
 // ── 发送（send）──────────────────────────────────────────────────────────────
@@ -161,6 +163,8 @@ const BOUNCE = {
   IMAP_TEST:         'imap:test',
   /** 自动检测到退信事件（main → renderer） */
   AUTO_DETECTED:     'bounce:autoDetected',
+  /** 清除退信 UID 游标 */
+  CLEAR:             'bounce:clear',
 };
 
 // ── 系统（system）────────────────────────────────────────────────────────────
@@ -472,6 +476,19 @@ const IPC = {
  */
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 外部 API 端点（统一管理，换域名只改这里）
+// ══════════════════════════════════════════════════════════════════════════════
+
+const API = {
+  DEEPSEEK: { hostname: 'api.deepseek.com', path: '/v1/chat/completions' },
+  EXA:      { hostname: 'api.exa.ai',        path: '/search' },
+  SERPER:   { hostname: 'google.serper.dev', path: '/search' },
+  TAVILY:   { hostname: 'api.tavily.com',    path: '/search' },
+  JINA:     { hostname: 'r.jina.ai',         path: '/' },
+  AGNES:    { hostname: 'apihub.agnes-ai.com', path: '/v1/chat/completions' },
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 导出
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -479,6 +496,7 @@ module.exports = {
   ok,
   fail,
   IPC,
+  API,
   // 分域导出（方便解构使用）
   CONTACTS,
   SEND,

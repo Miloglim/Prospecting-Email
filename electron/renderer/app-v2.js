@@ -31,7 +31,7 @@ initNavigation();
   try {
     const cfg = await window.electronAPI.loadConfig();
     if (cfg?.general?.loaderAnimDisabled) skipLoader = true;
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   const elapsed = Date.now() - loadStart;
   const MIN_LOADER_MS = skipLoader ? 0 : 1000;
@@ -135,7 +135,7 @@ async function checkOnboarding() {
     if (cfg?.smtpAccounts?.length > 0) return;
     // 旧格式兼容
     if (cfg?.smtp?.host && cfg?.smtp?.user && cfg?.smtp?.pass) return;
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
   showOnboarding();
 }
 
@@ -247,7 +247,7 @@ window.onboardingNext = async function() {
     const cfg = (await window.electronAPI.loadConfig()) || {};
     if (!cfg.template) cfg.template = {};
     cfg.template.mode = _obTemplateChoice;
-    try { await window.electronAPI.saveConfig(cfg); } catch {}
+    try { await window.electronAPI.saveConfig(cfg); } catch { /* 渲染层降级：操作失败不影响 UI */ }
     _onboardingStep = 5; updateObStep();
     // 触发 Logo + 标题动画
     setTimeout(() => {
@@ -294,7 +294,7 @@ window.onboardingFinish = async function() {
         _lastTest: { ok: r.ok, at: new Date().toISOString(), error: r.error || '' }
       }).catch(() => {});
     }
-  } catch {}
+  } catch { /* 渲染层降级：操作失败不影响 UI */ }
   // 立即刷新仪表盘
   loadDashboard();
 
@@ -354,7 +354,7 @@ async function saveOnboardingConfig() {
   if (senderBody) { if (!cfg.sender) cfg.sender = {}; cfg.sender.bodyName = senderBody; }
   if (!cfg.sender?.email && smtpUser) { cfg.sender.email = smtpUser; }
 
-  try { await window.electronAPI.saveConfig(cfg); } catch {}
+  try { await window.electronAPI.saveConfig(cfg); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   // SMTP：在 saveConfig 之后保存账号，避免被覆盖
   if (smtpHost && smtpUser) {
@@ -387,5 +387,5 @@ async function saveGeneralConfig() {
   cfg.general.autoLaunch = autoLaunch;
   cfg.schedule = cfg.schedule || {};
   cfg.schedule.mode = 'batch';
-  try { await window.electronAPI.saveConfig(cfg); } catch {}
+  try { await window.electronAPI.saveConfig(cfg); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }

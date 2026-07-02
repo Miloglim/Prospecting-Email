@@ -1,4 +1,6 @@
 // ── 客户分类逻辑（代理 / 直客 / 未标签）─────────────────────────────────────
+const { API } = require('./core/contract');
+
 function classifyClient(company, category) {
   const companyText = (company || '').toLowerCase();
   const catText = (category || '').toLowerCase();
@@ -120,7 +122,7 @@ async function classifyClientAI(company, category, apiKey) {
     const result = await new Promise((resolve) => {
       const https = require('https');
       const req = https.request({
-        hostname: 'api.deepseek.com', port: 443, method: 'POST', path: '/v1/chat/completions',
+        ...API.DEEPSEEK, port: 443, method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
         timeout: 10000, rejectUnauthorized: false,
       }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });

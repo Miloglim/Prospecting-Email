@@ -26,16 +26,16 @@ function _migrateIfNeeded() {
     const oldDir = path.join(oldRoot, d);
     const newDir = path.join(APP_ROOT, d);
     if (!fs.existsSync(oldDir)) continue;
-    try { fs.mkdirSync(newDir, { recursive: true }); } catch {}
+    try { fs.mkdirSync(newDir, { recursive: true }); } catch { /* 非关键文件操作失败不影响主流程 */ }
     try {
       const files = fs.readdirSync(oldDir);
       for (const f of files) {
         const oldPath = path.join(oldDir, f);
         const newPath = path.join(newDir, f);
         if (fs.existsSync(newPath)) continue; // 已存在不覆盖
-        try { fs.copyFileSync(oldPath, newPath); } catch {}
+        try { fs.copyFileSync(oldPath, newPath); } catch { /* 非关键文件操作失败不影响主流程 */ }
       }
-    } catch {}
+    } catch { /* 非关键文件操作失败不影响主流程 */ }
   }
 }
 
@@ -44,14 +44,14 @@ function ensureRuntimeDirs() {
   const dirs = ['logs', 'data', 'send', 'reports'];
   for (const d of dirs) {
     const p = path.join(APP_ROOT, d);
-    try { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); } catch {}
+    try { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); } catch { /* 非关键文件操作失败不影响主流程 */ }
   }
 }
 
 function loadSearchConfig() {
   const configPath = path.join(APP_ROOT, 'send', 'config.json');
   if (fs.existsSync(configPath)) {
-    try { return JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch {}
+    try { return JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { /* 非关键文件操作失败不影响主流程 */ }
   }
   return {};
 }
