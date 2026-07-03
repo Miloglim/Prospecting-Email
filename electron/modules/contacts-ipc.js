@@ -83,6 +83,66 @@ function register(ipcMain, deps) {
     }
   }
 
+  // ── 国家名标准化映射（中文/西语 → 英文）──────────────────────────────
+  function _normalizeCountry(raw) {
+    if (!raw || !raw.trim()) return '';
+    const m = {
+      '巴西':'Brazil','brasil':'Brazil',
+      '葡萄牙':'Portugal',
+      '安哥拉':'Angola',
+      '莫桑比克':'Mozambique','moçambique':'Mozambique',
+      '佛得角':'Cape Verde','cabo verde':'Cape Verde',
+      '几内亚比绍':'Guinea-Bissau','guiné-bissau':'Guinea-Bissau','guine-bissau':'Guinea-Bissau',
+      '圣多美':'São Tomé','são tomé':'São Tomé','sao tome':'São Tomé',
+      '东帝汶':'East Timor','timor-leste':'East Timor',
+      '墨西哥':'Mexico','méxico':'Mexico',
+      '哥伦比亚':'Colombia',
+      '智利':'Chile',
+      '秘鲁':'Peru','perú':'Peru',
+      '阿根廷':'Argentina',
+      '厄瓜多尔':'Ecuador',
+      '玻利维亚':'Bolivia',
+      '巴拉圭':'Paraguay',
+      '乌拉圭':'Uruguay',
+      '巴拿马':'Panama','panamá':'Panama',
+      '哥斯达黎加':'Costa Rica',
+      '委内瑞拉':'Venezuela',
+      '危地马拉':'Guatemala',
+      '洪都拉斯':'Honduras',
+      '萨尔瓦多':'El Salvador',
+      '尼加拉瓜':'Nicaragua',
+      '多米尼加':'Dominican Republic',
+      '古巴':'Cuba',
+      '波多黎各':'Puerto Rico',
+      '美国':'United States','usa':'United States','us':'United States',
+      '英国':'United Kingdom','uk':'United Kingdom','england':'United Kingdom',
+      '加拿大':'Canada',
+      '澳大利亚':'Australia',
+      '新西兰':'New Zealand',
+      '德国':'Germany','deutschland':'Germany',
+      '法国':'France',
+      '意大利':'Italy','italia':'Italy',
+      '西班牙':'Spain','españa':'Spain',
+      '荷兰':'Netherlands','holland':'Netherlands',
+      '比利时':'Belgium',
+      '日本':'Japan',
+      '韩国':'South Korea','korea':'South Korea',
+      '中国':'China',
+      '印度':'India',
+      '新加坡':'Singapore',
+      '阿联酋':'UAE','迪拜':'UAE','dubai':'UAE',
+    };
+    const key = raw.trim();
+    // 精确匹配优先
+    if (m[key] !== undefined) return m[key];
+    // 大小写不敏感
+    const lower = key.toLowerCase();
+    for (const [k, v] of Object.entries(m)) {
+      if (k.toLowerCase() === lower) return v;
+    }
+    return raw.trim();
+  }
+
   ipcMain.handle('contacts:list', async () => {
     const contacts = readContacts();
     let changed = false;
@@ -105,16 +165,20 @@ function register(ipcMain, deps) {
         if (companyId) { c.companyId = companyId; changed = true; }
       }
 
+      // 国家名标准化：中文/西语 → 英文
+      if (c.country) {
+        const normalized = _normalizeCountry(c.country);
+        if (normalized !== c.country) { c.country = normalized; changed = true; }
+      }
+
       // 公司级元数据：手动设置了类型的公司，跳过自动分类
       const meta = getCompanyMeta(c.company);
       if (meta._manualType) {
-        // 手动类型优先，不重新运行 classifyClient
         if (c.clientType !== meta.clientType) {
           c.clientType = meta.clientType;
           changed = true;
         }
       } else {
-        // 没有手动标记，运行自动分类
         const newType = classifyClient(c.company, c.category);
         if (c.clientType !== newType) {
           c.clientType = newType;
@@ -135,11 +199,14 @@ function register(ipcMain, deps) {
       if (c.email) emailIndex.set(c.email.toLowerCase().trim(), c);
     }
     let added = 0, updated = 0, skipped = 0, invalidEmail = 0;
+    const invalidEmails = [];
     for (const c of clients) {
       if (!c.company && !c.email) { skipped++; continue; }
       const cleanEmail = (c.email || '').trim();
       if (!cleanEmail) { skipped++; continue; }
-      if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; continue; }
+      if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; invalidEmails.push({ company: c.company || '未知', email: cleanEmail }); continue; }
+      // 国家名标准化
+      if (c.country) c.country = _normalizeCountry(c.country);
 
       const existingContact = emailIndex.get(cleanEmail.toLowerCase());
       if (existingContact) {
@@ -198,7 +265,7 @@ function register(ipcMain, deps) {
     }
     writeContacts(existing);
     Log.info("联系人", "导入: +" + added + " 新增, " + updated + " 更新, " + skipped + " 跳过(无邮箱), " + invalidEmail + " 无效邮箱, 总计" + existing.length);
-    return { total: existing.length, added, updated, skipped, invalidEmail };
+    return { total: existing.length, added, updated, skipped, invalidEmail, invalidEmails };
   });
 
   // 清理 send-history 中指定公司的联系人

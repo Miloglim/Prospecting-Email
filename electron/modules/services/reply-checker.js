@@ -103,7 +103,7 @@ async function _aiAsk(prompt, maxTokens) {
       const req = https.request({
         ...API.AGNES, port: 443, method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _apiKey },
-        timeout: 15000, rejectUnauthorized: false,
+        timeout: 5000, rejectUnauthorized: false,
         agent: _getProxyAgent(),
       }, (res) => { let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch { resolve(null); } }); });
       req.on('error', (e) => { Log.warn('[回复AI]', '网络: ' + (e.message || 'unknown')); resolve(null); });

@@ -29,6 +29,7 @@ function setupIPC() {
   require('./modules/services/history-store').register(ipcMain, deps);
   require('./modules/ipc/system-ipc').register(ipcMain, deps);
   require('./modules/ipc/account-ipc').register(ipcMain);
+  require('./modules/ipc/inbox-ipc').register(ipcMain);
   require('./modules/send-ipc').register(ipcMain, deps);
   _sendCleanup = require('./modules/send-ipc').cleanup;
   registerTableImportHandlers();
@@ -84,21 +85,32 @@ function registerTableImportHandlers() {
       }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       const getStr = (obj, ...keys) => { for (const k of keys) { const v = obj[k]; if (v !== undefined && v !== null && String(v).trim()) return String(v).trim(); } return ''; };
-      const clients = rows.map(r => ({
-        company: getStr(r, '公司名称','公司名','公司','Company','company','empresa','客户名称','客户'),
-        country: getStr(r, '国家','Country','country'),
-        category: getStr(r, '公司类型','品类','Category','category','rubro','行业'),
-        email: getStr(r, '联系方式','邮箱','邮箱地址','Email','email','收件人','to','邮件'),
-        website: getStr(r, '网站','Website','website','官网','网址'),
-        linkedin: getStr(r, 'LinkedIn'),
-        firstName: getStr(r, '名','FirstName','first_name','firstname'),
-        lastName: getStr(r, '姓','LastName','last_name','lastname'),
-        contactName: getStr(r, '姓名 | 职位','姓名','联系人','Contact','contact'),
-        position: getStr(r, '职位','Position','position','title'),
-        phone: getStr(r, 'Phone','phone','电话','Tel','tel'),
-        clientType: classifyClient(getStr(r, '公司名称','公司名','公司','Company','company','empresa','客户名称','客户'), getStr(r, '公司类型','品类','Category','category','rubro','行业')),
-      })).filter(c => c.company);
-      return { clients, total: clients.length };
+      const EMAIL_RE = /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/;
+      const clients = [];
+      const invalidEmails = [];
+      rows.forEach(r => {
+        const company = getStr(r, '公司全称','公司名称','公司名','公司','Company','company','empresa','客户名称','客户');
+        if (!company) return;
+        const rawEmail = getStr(r, '联系方式','邮箱','邮箱地址','Email','email','收件人','to','邮件');
+        if (rawEmail && !EMAIL_RE.test(rawEmail)) {
+          invalidEmails.push({ company, email: rawEmail });
+        }
+        clients.push({
+          company,
+          country: getStr(r, '国家','Country','country'),
+          category: getStr(r, '公司类型','品类','Category','category','rubro','行业'),
+          email: rawEmail,
+          website: getStr(r, '网站','Website','website','官网','网址'),
+          linkedin: getStr(r, 'LinkedIn'),
+          firstName: getStr(r, '名','FirstName','first_name','firstname'),
+          lastName: getStr(r, '姓','LastName','last_name','lastname'),
+          contactName: getStr(r, '姓名 | 职位','姓名','联系人','Contact','contact'),
+          position: getStr(r, '职位','Position','position','title'),
+          phone: getStr(r, 'Phone','phone','电话','Tel','tel'),
+          clientType: classifyClient(company, getStr(r, '公司类型','品类','Category','category','rubro','行业')),
+        });
+      });
+      return { clients, total: clients.length, invalidEmails };
     } catch (e) { return { error: e.message }; }
   });
 

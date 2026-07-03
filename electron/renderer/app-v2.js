@@ -9,8 +9,7 @@ import './modules/send-queue.js';
 import './modules/send-history.js';
 import './modules/discover.js';
 import './modules/settings.js';
-import './modules/bounces.js';
-import './modules/replies.js';
+import './modules/inbox.js';
 import { initQueue } from './modules/send-queue.js';
 
 document.getElementById('tb-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());

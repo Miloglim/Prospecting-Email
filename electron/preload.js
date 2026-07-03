@@ -82,6 +82,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadSendState: () => ipcRenderer.invoke('send:loadState'),
 
   // 退信检查
+  // 收件箱
+  fetchInbox: () => ipcRenderer.invoke('inbox:fetch'),
+  listInbox: () => ipcRenderer.invoke('inbox:list'),
+  getInboxBody: (index) => ipcRenderer.invoke('inbox:getBody', index),
+  markInboxProcessed: (index) => ipcRenderer.invoke('inbox:markProcessed', index),
+  linkInboxContact: (index, contactId, company) => ipcRenderer.invoke('inbox:linkContact', index, contactId, company),
+  deleteInboxMail: (index) => ipcRenderer.invoke('inbox:delete', index),
+
   checkBounces: () => ipcRenderer.invoke('bounce:check'),
   clearBounceCursor: () => ipcRenderer.invoke('bounce:clear'),
   testImap: (cfg) => ipcRenderer.invoke('imap:test', cfg),

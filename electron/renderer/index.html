@@ -147,9 +147,9 @@
     <div class="nav-brand"><span class="nav-subtitle">Milogin's</span><h1>Prospector .</h1></div>
     <ul class="nav-list">
       <li class="nav-item active" data-page="dashboard"><span class="nav-icon" data-icon="dashboard"></span> 仪表盘</li>
+      <li class="nav-item" data-page="inbox"><span class="nav-icon" data-icon="inbox"></span> 收件箱</li>
       <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
-      <li class="nav-item" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发 <span style="font-size:10px;color:var(--text-secondary)">(开发中)</span></li>
       <li class="nav-item nav-parent">
         <span class="nav-icon" data-icon="mail"></span> 邮件工坊 <span class="nav-arrow" data-icon="chevron-down"></span>
       </li>
@@ -157,8 +157,7 @@
       <li class="nav-sub" data-page="signature"><span class="nav-icon" data-icon="pencil"></span> 签名管理</li>
       <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
-      <li class="nav-sub" data-page="bounces"><span class="nav-icon" data-icon="alert-circle"></span> 退信检测</li>
-      <li class="nav-sub" data-page="replies"><span class="nav-icon" data-icon="reply"></span> 回复检测</li>
+      <li class="nav-sub" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
@@ -560,31 +559,28 @@
       <p class="placeholder" id="history-empty">暂无发送记录</p>
     </section>
 
-    <!-- 📨 退信检测 -->
-    <section id="page-bounces" class="page">
-      <h2><span data-icon="download"></span> 退信检测</h2>
-      <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button id="bounce-run-btn"><span data-icon="search"></span> 检查退信</button>
-        <button id="bounce-clear-btn" class="secondary" style="font-size:11px;padding:4px 10px">清除记录</button>
-        <button id="bounce-del-all-btn" class="secondary" style="font-size:11px;padding:4px 10px;color:var(--danger);display:none">一键删除全部</button>
-        <span id="bounce-status" style="font-size:12px;color:var(--text-secondary)"></span>
-        <span id="bounce-countdown" style="font-size:11px;color:var(--text-secondary);margin-left:auto"></span>
+    <!-- 📬 收件箱 -->
+    <section id="page-inbox" class="page">
+      <h2><span data-icon="inbox"></span> 收件箱</h2>
+      <div class="inbox-toolbar">
+        <button id="inbox-refresh"><span data-icon="refresh-cw"></span> 刷新</button>
+        <span id="inbox-count" style="font-size:12px;color:var(--text-secondary)"></span>
       </div>
-      <div id="bounce-groups"></div>
-      <p class="placeholder" id="bounce-empty">点击「检查退信」扫描邮箱中的退信邮件，自动匹配联系人数据库</p>
-    </section>
-
-    <!-- 📬 回复检测 -->
-    <section id="page-replies" class="page">
-      <h2><span data-icon="message-circle"></span> 回复检测</h2>
-      <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button id="reply-run-btn"><span data-icon="search"></span> 检查回复</button>
-        <span id="reply-status" style="font-size:12px;color:var(--text-secondary)"></span>
-        <span id="reply-match-summary" style="font-size:11px;margin-left:8px"></span>
+      <div class="inbox-container">
+        <div class="inbox-left">
+          <select id="inbox-filter">
+            <option value="all">全部</option>
+            <option value="reply">🟢 回复</option>
+            <option value="auto-reply">🟡 自动回复</option>
+            <option value="bounce">🔴 退信</option>
+            <option value="other">⚪ 其他</option>
+          </select>
+          <div id="inbox-list"></div>
+        </div>
+        <div class="inbox-right" id="inbox-detail">
+          <div class="inbox-detail-empty">选择左侧邮件查看正文</div>
+        </div>
       </div>
-      <div id="reply-list"></div>
-      <p class="placeholder" id="reply-empty"><span data-icon="inbox"></span> 点击「检查回复」扫描所有关联收件箱，自动匹配联系人回复</p>
-      <p style="font-size:10px;color:var(--text-secondary);margin-top:4px">支持 IMAP (993) 和 POP3 (995) 协议，自动检测。请在设置 → 发信账号中确认收件箱配置。</p>
     </section>
 
     <!-- ⚙️ 设置 -->
@@ -940,6 +936,50 @@
   </div>
   <style>
     @keyframes toastIn { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+    /* 收件箱 */
+    #page-inbox.active { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+    .inbox-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; flex-shrink:0; }
+    .inbox-toolbar select { padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; }
+    .inbox-container { display:flex; gap:0; flex:1; min-height:0; overflow:hidden; }
+    #inbox-filter { width:100%; padding:8px 12px; border:none; border-bottom:1px solid var(--border); border-radius:8px 8px 0 0; background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; outline:none; flex-shrink:0; }
+    .inbox-left { width:40%; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); display:flex; flex-direction:column; }
+    #inbox-list { flex:1; overflow-y:auto; min-height:0; }
+    .inbox-right { width:60%; display:flex; flex-direction:column; background:var(--bg); overflow:hidden; border:1px solid var(--border); border-left:none; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; }
+    .inbox-item { display:flex; align-items:center; gap:10px; padding:11px 14px; cursor:pointer; border-bottom:1px solid var(--border); transition:background .12s; }
+    .inbox-item:hover { background:var(--bg-hover); }
+    .inbox-item.active { background:var(--primary-10); border-left:3px solid var(--primary); padding-left:11px; }
+    .inbox-type { flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+    .inbox-meta { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+    .inbox-subject { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text); }
+    .inbox-from { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .inbox-time { font-size:10px; color:var(--text-secondary); flex-shrink:0; font-variant-numeric:tabular-nums; }
+    .inbox-loading { display:flex; align-items:center; justify-content:center; padding:40px; color:var(--text-secondary); gap:8px; font-size:13px; }
+    .inbox-detail-empty { display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-secondary); font-size:13px; }
+    .inbox-detail-header { padding:0 16px; margin-bottom:12px; display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+    .inbox-detail-field { display:flex; align-items:center; gap:8px; font-size:12px; padding:7px 12px; border-bottom:1px solid var(--border); }
+    .inbox-detail-field:last-child { border-bottom:none; }
+    .inbox-detail-field.wide { grid-column:1/-1; }
+    .inbox-detail-field span:first-child { color:var(--text-secondary); min-width:48px; font-weight:600; font-size:11px; flex-shrink:0; }
+    .inbox-detail-field span:last-child { word-break:break-all; line-height:1.4; }
+    .inbox-detail-field .muted { color:var(--text-secondary); font-style:italic; }
+    .inbox-detail-body { width:100%; flex:1; min-height:0; border:none; border-radius:8px; background:var(--bg-secondary); margin:0 16px 12px; }
+    .inbox-detail-actions { display:flex; gap:8px; padding:0 16px; }
+    .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; }
+    .inbox-detail-actions button:hover { background:var(--bg-hover); }
+
+    /* 统一滚动条 */
+    .inbox-left::-webkit-scrollbar,
+    .inbox-right::-webkit-scrollbar,
+    .inbox-detail-body::-webkit-scrollbar { width:8px; }
+    .inbox-left::-webkit-scrollbar-track,
+    .inbox-right::-webkit-scrollbar-track,
+    .inbox-detail-body::-webkit-scrollbar-track { background:transparent; }
+    .inbox-left::-webkit-scrollbar-thumb,
+    .inbox-right::-webkit-scrollbar-thumb,
+    .inbox-detail-body::-webkit-scrollbar-thumb { background:#c0c0c0; border-radius:4px; min-height:40px; }
+    .inbox-left::-webkit-scrollbar-thumb:hover,
+    .inbox-right::-webkit-scrollbar-thumb:hover,
+    .inbox-detail-body::-webkit-scrollbar-thumb:hover { background:#999; }
   </style>
   <script type="module" src="app-v2.js"></script>
 </body>

@@ -1,5 +1,5 @@
 const S = window.S;
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag,countryToLang } from './shared.js';
 import { randomPick, assembleEmail, assembleMonthlyReport, generateMonthlyReports, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 import CS from './company-state.js';
@@ -134,7 +134,7 @@ function showSendContextMenu(companyName, x, y) {
   const ctype = members[0]?.clientType || 'unlabeled';
   const hist = S.sendHistory[companyName];
   const stage = hist?.stage || 'cold';
-  const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+  const lang = countryToLang(members[0]?.country || '');
   const card = S.selectedCards[companyName];
   const isUserTpl = card?._templateSource === 'user';
   const curTplName = isUserTpl ? card._userTemplate?.name : '预设模板';
@@ -644,7 +644,7 @@ export async function renderSelectedCards() {
       const ctype = members[0]?.clientType || 'unlabeled';
       const hist = S.sendHistory[name];
       const stage = hist?.stage || 'cold';
-      const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+      const lang = countryToLang(members[0]?.country || '');
       const usedSentences = hist?.usedSentences || [];
       // ponytail: 仅「用户模板」模式使用用户模板，「自适应」始终用预设库
       if (tplMode === 'general') {

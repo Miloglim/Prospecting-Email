@@ -24,7 +24,11 @@ function register(ipcMain, deps) {
     if (deps._sendInProgress) return { finished: false, error: '发送已在进行中，请等待当前批次完成' };
     deps._sendInProgress = true;
     deps.sendQueue.length = 0; deps.sendQueue.push(...emails); deps.isPaused = false;
-    try { await engine.runSendBatch(deps, sendProgress); } finally { deps._sendInProgress = false; }
+    try { await engine.runSendBatch(deps, sendProgress); } finally {
+      deps._sendInProgress = false;
+      // 发信完成后触发收件箱自动拉取（等退信到达）
+      try { require('./ipc/inbox-ipc').triggerInboxFetch?.(); } catch { /* 收件箱模块不存在不影响发送 */ }
+    }
     return { finished: true };
   });
 
@@ -126,7 +130,7 @@ function register(ipcMain, deps) {
 
   // ── 退信检测 ──
   ipcMain.handle('imap:test', async (_e, cfg) => require('../bounce-checker').testConnection(cfg));
-  ipcMain.handle('bounce:check', async () => { try { return await Promise.race([require('../bounce-checker').checkBounces(), new Promise(r => setTimeout(() => r({ ok: false, error: '检测超时' }), 120000))]); } catch (e) { return { ok: false, error: '检测异常' }; } });
+  ipcMain.handle('bounce:check', async () => { try { return await Promise.race([require('../bounce-checker').checkBounces(), new Promise(r => setTimeout(() => r({ ok: false, error: '检测超时' }), 600000))]); } catch (e) { return { ok: false, error: '检测异常' }; } });
   ipcMain.handle('bounce:clear', async () => { require('../bounce-checker').clearCursor(); return { ok: true }; });
 
   // ── 退信日志 ──

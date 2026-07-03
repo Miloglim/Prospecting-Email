@@ -1,5 +1,5 @@
 const S = window.S;
-import { lucide,escapeHtml,showToast,showAlert,showConfirm } from './shared.js';
+import { lucide,escapeHtml,showToast,showAlert,showConfirm,countryToLang } from './shared.js';
 import { saveQueue, renderQueue } from './send-queue.js';
 
 export function matchUserTemplates(templates, type, stage, lang) {
@@ -252,7 +252,7 @@ export async function generateMonthlyReports() {
     if (!emails.length) continue;
 
     const ctype = members[0]?.clientType || 'unlabeled';
-    const lang = (members[0]?.country || '').includes('Brasil') ? 'pt' : 'es';
+    const lang = countryToLang(members[0]?.country || '');
     const hook = randomPick(ctype, 'monthly', []).hook; // 月度报告只要 Hook
 
     const body = assembleMonthlyReport(lang, hook, marketContext);

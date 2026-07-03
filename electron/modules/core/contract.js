@@ -169,6 +169,22 @@ const BOUNCE = {
   CLEAR:             'bounce:clear',
 };
 
+// ── 收件箱（inbox）────────────────────────────────────────────────────────────
+const INBOX = {
+  /** 拉取最新邮件 */
+  FETCH:             'inbox:fetch',
+  /** 获取缓存的邮件列表 */
+  LIST:              'inbox:list',
+  /** 获取单封邮件正文 */
+  GET_BODY:          'inbox:getBody',
+  /** 标记已处理 */
+  MARK_PROCESSED:    'inbox:markProcessed',
+  /** 关联联系人 */
+  LINK_CONTACT:      'inbox:linkContact',
+  /** 删除邮件记录 */
+  DELETE:            'inbox:delete',
+};
+
 // ── 系统（system）────────────────────────────────────────────────────────────
 // 聚合 dashboard、smtp、signature、window、app、network、config、general
 const SYSTEM = {
@@ -290,6 +306,7 @@ const IPC = {
   HISTORY,
   QUEUE,
   BOUNCE,
+  INBOX,
   SYSTEM,
   UPDATE,
   ACCOUNT,
@@ -507,6 +524,7 @@ module.exports = {
   HISTORY,
   QUEUE,
   BOUNCE,
+  INBOX,
   SYSTEM,
   UPDATE,
   ACCOUNT,

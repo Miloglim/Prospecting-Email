@@ -29,7 +29,13 @@ export async function doImport(file) {
   if (result.error) { await showAlert('导入失败: ' + result.error); return; }
   S.clientsData = result.clients;
   S.clientsPage = 1;
-  await showAlert(`成功导入 ${S.clientsData.length} 条记录`);
+  let msg = `成功导入 ${S.clientsData.length} 条记录`;
+  if (result.invalidEmails?.length) {
+    const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
+    const more = result.invalidEmails.length > 10 ? `\n...等共 ${result.invalidEmails.length} 个` : '';
+    msg += `\n\n⚠️ ${result.invalidEmails.length} 个邮箱格式异常：\n${list}${more}`;
+  }
+  await showAlert(msg);
   renderClientsTable();
 }
 
@@ -86,7 +92,11 @@ document.getElementById('clients-import-btn')?.addEventListener('click', async (
   const result = await window.electronAPI.importContacts(S.clientsData);
   let msg = `新增 ${result.added} 位联系人（总计 ${result.total} 位）`;
   if (result.skipped > 0) msg += `\n跳过 ${result.skipped} 条重复记录`;
-  if (result.invalidEmail > 0) msg += `\n⚠️ ${result.invalidEmail} 个邮箱格式异常，已导入但建议手动修正`;
+  if (result.invalidEmail > 0) {
+    const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
+    const more = result.invalidEmail > 10 ? `\n...等共 ${result.invalidEmail} 个` : '';
+    msg += `\n\n⚠️ ${result.invalidEmail} 个邮箱格式异常：\n${list}${more}`;
+  }
   await showAlert(msg);
 });
 

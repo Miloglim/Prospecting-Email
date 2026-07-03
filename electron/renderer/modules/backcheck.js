@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany,countryToLang } from './shared.js';
 
 // ===== 背调详情 ======================================================
 
@@ -306,7 +306,7 @@ export async function addReportToQueue() {
     S.queue.push({
       id: ++S.queueIdCounter, company: S.currentBackcheckCompany, to: toEmails.join(', '), recipients: toEmails,
       subject: baseSubject, body: emailBody, status: 'pending', addedAt: new Date().toISOString(),
-      _stage: 'cold', _type: ctype, _lang: country === 'Brazil' ? 'pt' : 'es', _country: country,
+      _stage: 'cold', _type: ctype, _lang: countryToLang(country), _country: country,
       _fromReport: true,
     });
     added++;
