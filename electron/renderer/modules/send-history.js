@@ -6,7 +6,7 @@ import { lucide,showToast,escapeHtml,formatDate,daysSince,renderPagination,statu
 export async function loadHistoryPage() {
   const q = (document.getElementById('history-search')?.value || '').trim();
   const params = {
-    limit: S.HISTORY_PAGE_SIZE, offset: S.historyPage * S.HISTORY_PAGE_SIZE,
+    limit: Math.max(S.HISTORY_PAGE_SIZE, 500), offset: 0, // ponytail: 一次取足够多用于日期分组
     search: q || undefined,
     type: S.historyFilters.type || undefined,
     lang: S.historyFilters.lang || undefined,
@@ -27,9 +27,8 @@ export async function renderHistoryTable() {
   const preview = document.getElementById('history-preview');
 
   const records = await loadHistoryPage();
-  const totalPages = Math.ceil(S.historyTotal / S.HISTORY_PAGE_SIZE);
 
-  if (count) count.textContent = S.historyTotal ? `共 ${S.historyTotal} 封（第 ${S.historyPage + 1}/${totalPages || 1} 页）` : '';
+  if (count) count.textContent = S.historyTotal ? `共 ${S.historyTotal} 封` : '';
   // 动态生成国家筛选按钮
   const countryContainer = document.getElementById('history-country-btns');
   if (countryContainer && S.historyCountries.length > 0) {
@@ -55,22 +54,55 @@ export async function renderHistoryTable() {
   if (empty) empty.style.display = 'none';
   if (layout) layout.style.display = 'flex';
 
-  // 按公司分组
-  const groups = {};
+  // 按日期分组 → 每日期内按时段 + 公司分组
+  // ponytail: 同日发送用 time 区分批次，相邻 2 小时内为同一时段
+  const dateGroups = {};
   records.forEach(r => {
-    const key = r.company || '未知';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(r);
+    const ts = r.time_beijing || r.time || '';
+    const d = ts.slice(0, 10); // YYYY-MM-DD
+    const hour = parseInt(ts.slice(11, 13)) || 0; // HH
+    const slot = hour < 12 ? '上午' : hour < 18 ? '下午' : '晚上'; // 粗略时段
+    if (!dateGroups[d]) dateGroups[d] = {};
+    const company = r.company || '未知';
+    const key = `${slot}｜${company}`;
+    if (!dateGroups[d][key]) dateGroups[d][key] = { company, slot, items: [] };
+    dateGroups[d][key].items.push(r);
   });
-  // 按最新发送时间排序（取组内最新一封的时间比较）
-  const entries = Object.entries(groups).sort((a, b) => {
-    const ta = Math.max(...a[1].map(r => new Date(r.time || 0).getTime()));
-    const tb = Math.max(...b[1].map(r => new Date(r.time || 0).getTime()));
-    return tb - ta;
-  });
+  // 日期降序
+  const sortedDates = Object.keys(dateGroups).sort((a, b) => b.localeCompare(a));
+
+  // 分页：按日期分页（每页 N 个日期）
+  const PAGE_DATES = 3;
+  const totalDatePages = Math.ceil(sortedDates.length / PAGE_DATES);
+  if (S._historyDatePage === undefined) S._historyDatePage = 0;
+  const pageDates = sortedDates.slice(S._historyDatePage * PAGE_DATES, (S._historyDatePage + 1) * PAGE_DATES);
+
+  if (pagination && totalDatePages > 1) {
+    pagination.style.display = 'flex';
+    let ph = '';
+    ph += `<button ${S._historyDatePage === 0 ? 'disabled' : ''} data-dp="0">««</button>`;
+    ph += `<button ${S._historyDatePage === 0 ? 'disabled' : ''} data-dp="${S._historyDatePage - 1}">«</button>`;
+    for (let i = 0; i < totalDatePages; i++) {
+      if (i < 3 || i >= totalDatePages - 2 || Math.abs(i - S._historyDatePage) < 2) {
+        ph += `<button class="${i === S._historyDatePage ? 'active' : ''}" data-dp="${i}">${i + 1}</button>`;
+      } else if (i === 3 || i === totalDatePages - 3) {
+        ph += '<span>…</span>';
+      }
+    }
+    ph += `<button ${S._historyDatePage >= totalDatePages - 1 ? 'disabled' : ''} data-dp="${S._historyDatePage + 1}">»</button>`;
+    ph += `<button ${S._historyDatePage >= totalDatePages - 1 ? 'disabled' : ''} data-dp="${totalDatePages - 1}">»»</button>`;
+    pagination.innerHTML = ph;
+    pagination.querySelectorAll('button[data-dp]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        S._historyDatePage = parseInt(btn.dataset.dp);
+        renderHistoryTable();
+      });
+    });
+  } else if (pagination) { pagination.style.display = 'none'; }
 
   if (listEl) {
-    listEl.innerHTML = entries.map(([company, items]) => {
+    // ponytail: 日期分组折叠 + 公司列表
+    const buildCompanyRow = (company, items) => {
       const r0 = items[0];
       const tags = [];
       const tt = clientTypeTag(r0._type);
@@ -78,35 +110,16 @@ export async function renderHistoryTable() {
       if (r0._country) tags.push(escapeHtml(r0._country));
       if (r0._lang) tags.push(escapeHtml(r0._lang).toUpperCase());
       const tplMap = { agent:'代理模板', direct:'直客模板', unlabeled:'通用模板' };
-      const tplTag = r0._templateSource === 'user'
-        ? (r0._templateLabel || '用户模板')
-        : (tplMap[r0._type] || '通用模板');
+      const tplTag = r0._templateSource === 'user' ? (r0._templateLabel || '用户模板') : (tplMap[r0._type] || '通用模板');
       tags.push(lucide('file-text',11) + ' ' + tplTag);
       if (r0._test) tags.push(lucide('flask-conical',11) + ' 测试');
-      // 收集去重收件人
       const allTo = [...new Set(items.map(r => r.to).filter(Boolean))];
       const recipientsStr = allTo.join(', ');
       const timeStr = r0.time ? new Date(new Date(r0.time).getTime() + 8*3600000).toISOString().slice(0, 16).replace('T', ' ') : '';
       const stageLbl = { cold:'冷开发',f1:'F1',f2:'F2',f3:'F3',f4:'F4',archived:'已归档',monthly:'月度' }[r0._stage] || '';
       const allIdx = items.map(r => r.index).join('|');
-      // ponytail: 按 bodyId 去重 — 同一队列项的收件人共享正文，合并为一条
       const deduped = new Map();
-      items.forEach(r => {
-        const key = r.bodyId || r.index;
-        if (!deduped.has(key)) {
-          deduped.set(key, {
-            subject: r.subject || '',
-            bodyId: r.bodyId || '',
-            time: r.time || '',
-            idx: r.index,
-            _type: r._type || '',
-            _tplInfo: r._tplInfo || '',
-            _templateSource: r._templateSource || '',
-            _templateLabel: r._templateLabel || '',
-            _batchLabel: r._batchLabel || '',
-          });
-        }
-      });
+      items.forEach(r => { const k = r.bodyId || r.index; if (!deduped.has(k)) deduped.set(k, { subject: r.subject || '', bodyId: r.bodyId || '', time: r.time || '', idx: r.index, _type: r._type || '', _tplInfo: r._tplInfo || '', _templateSource: r._templateSource || '', _templateLabel: r._templateLabel || '', _batchLabel: r._batchLabel || '' }); });
       const groupsData = [...deduped.values()];
       return `<div class="history-item" data-idx="${allIdx}"
             data-groups="${escapeHtml(JSON.stringify(groupsData))}"
@@ -123,7 +136,48 @@ export async function renderHistoryTable() {
           <div style="font-size:10px;color:var(--text-secondary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tags.join(' · ')}</div>
         </div>
       </div>`;
+    };
+
+    listEl.innerHTML = pageDates.map(date => {
+      const groups = dateGroups[date];
+      const sortedEntries = Object.values(groups).sort((a, b) => {
+        const ta = Math.max(...a.items.map(r => new Date(r.time || 0).getTime()));
+        const tb = Math.max(...b.items.map(r => new Date(r.time || 0).getTime()));
+        return ta - tb; // 早→晚
+      });
+      const totalInDate = sortedEntries.reduce((s, g) => s + g.items.length, 0);
+      const isOpen = S._historyOpenDates?.[date] !== false;
+      const arrowCls = isOpen ? 'arrow open' : 'arrow';
+      const bodyStyle = isOpen ? '' : 'display:none';
+      const dateLabel = date.slice(5);
+      // 显示时段分布
+      const slotCounts = {};
+      sortedEntries.forEach(g => { slotCounts[g.slot] = (slotCounts[g.slot] || 0) + g.items.length; });
+      const slotStr = Object.entries(slotCounts).map(([s, c]) => `${s} ${c}封`).join(' · ');
+      return `<div class="history-date-group">
+        <div class="history-date-head" data-date="${date}">
+          <span class="${arrowCls}">▸</span> ${dateLabel} <span class="history-date-count">${totalInDate} 封 · ${sortedEntries.length} 家公司${slotStr ? ' · ' + slotStr : ''}</span>
+        </div>
+        <div class="history-date-body" data-date="${date}" style="${bodyStyle}">
+          ${sortedEntries.map(g => buildCompanyRow(g.company, g.items)).join('')}
+        </div>
+      </div>`;
     }).join('');
+
+    // 日期折叠点击
+    listEl.querySelectorAll('.history-date-head').forEach(head => {
+      head.addEventListener('click', () => {
+        const date = head.dataset.date;
+        const body = listEl.querySelector(`.history-date-body[data-date="${date}"]`);
+        const arrow = head.querySelector('.arrow');
+        if (!body) return;
+        const hidden = body.style.display === 'none';
+        body.style.display = hidden ? '' : 'none';
+        if (arrow) arrow.classList.toggle('open', hidden);
+        if (!S._historyOpenDates) S._historyOpenDates = {};
+        S._historyOpenDates[date] = hidden;
+      });
+    });
 
     listEl.querySelectorAll('.history-item').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -135,30 +189,6 @@ export async function renderHistoryTable() {
     });
   }
 
-  // 分页
-  if (pagination && totalPages > 1) {
-    pagination.style.display = 'flex';
-    let h = `<button ${S.historyPage === 0 ? 'disabled' : ''} data-p="0">««</button>`;
-    h += `<button ${S.historyPage === 0 ? 'disabled' : ''} data-p="${S.historyPage - 1}">«</button>`;
-    for (let i = 1; i <= totalPages; i++) {
-      if (i === 1 || i === totalPages || (i >= S.historyPage + 1 - 2 && i <= S.historyPage + 1 + 2)) {
-        h += `<button class="${i - 1 === S.historyPage ? 'active' : ''}" data-p="${i - 1}">${i}</button>`;
-      } else if (i === S.historyPage + 1 - 3 || i === S.historyPage + 1 + 3) {
-        h += '<span>...</span>';
-      }
-    }
-    h += `<button ${S.historyPage >= totalPages - 1 ? 'disabled' : ''} data-p="${S.historyPage + 1}">»</button>`;
-    h += `<button ${S.historyPage >= totalPages - 1 ? 'disabled' : ''} data-p="${totalPages - 1}">»»</button>`;
-    pagination.innerHTML = h;
-    pagination.querySelectorAll('button[data-p]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        S.historyPage = parseInt(btn.dataset.p);
-        renderHistoryTable();
-      });
-    });
-  } else if (pagination) {
-    pagination.style.display = 'none';
-  }
 }
 
 export async function showPreview(d) {
@@ -282,7 +312,8 @@ export async function initHistoryPage() {
     const fullLog = await window.electronAPI.getSendLog({ limit: 99999, offset: 0, search: undefined, type: undefined, lang: undefined, stage: undefined, country: undefined });
     S.historyCountries = [...new Set((fullLog.records || []).map(r => r._country).filter(Boolean))].sort();
   } catch { S.historyCountries = []; }
-  S.historyPage = 0;
+  S._historyDatePage = 0;
+  S._historyOpenDates = {};
   renderHistoryTable();
 
   if (!document.querySelector('#history-filter-group')._bound) {

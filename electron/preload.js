@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 发送历史
   getSendHistory: () => ipcRenderer.invoke('history:get'),
   getSendLog: (params) => ipcRenderer.invoke('history:getLog', params),
+  getSendDates: () => ipcRenderer.invoke('history:getDates'),
   getSendBody: (bodyId) => ipcRenderer.invoke('history:getBody', bodyId),
   deleteHistory: (indices) => ipcRenderer.invoke('history:delete', indices),
   advanceStage: (companies) => ipcRenderer.invoke('history:advance', companies),

@@ -30,6 +30,30 @@ function register(ipcMain, deps) {
     wsh(h); return h;
   });
 
+  // ── 批次统计：按日期分组计数 ────────────────────────────────────────
+  ipcMain.handle('history:getDates', async () => {
+    const logPaths = [
+      path.join(APP_ROOT, 'send', 'send-log.json'),
+      path.join(APP_ROOT, 'send', 'send-log-test.json'),
+    ];
+    const dateMap = {};
+    try {
+      for (const lp of logPaths) {
+        if (fs.existsSync(lp)) {
+          const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
+          (log.sent || []).forEach(r => {
+            const d = (r.time_beijing || r.time || '').slice(0, 10); // YYYY-MM-DD
+            if (d) dateMap[d] = (dateMap[d] || 0) + 1;
+          });
+        }
+      }
+    } catch { /* 日志损坏 → 空 */ }
+    const dates = Object.entries(dateMap)
+      .sort((a, b) => b[0].localeCompare(a[0])) // 最新在前
+      .map(([date, count]) => ({ date, count }));
+    return { ok: true, data: dates };
+  });
+
   // ── 阶段追回：扫描已发记录，将 cold 阶段已发公司推进到 f1 ──────────
   ipcMain.handle('history:catchup', async () => {
     const h = rsh();
@@ -65,8 +89,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('history:recordSentences', async (_e, c, sids) => { const h = rsh(); const e = h[c] || {}; const u = e.usedSentences || []; _dualWrite(h, c, { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:reactivate', async (_e, c) => { const h = rsh(); _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:getLog', async (_e, params) => {
-    const { limit, offset, search, type, lang, country, stage } = params || {};
-    // 合并正式 + 测试两个日志文件
+    const { limit, offset, search, type, lang, country, stage, date } = params || {};
     const logPaths = [
       path.join(APP_ROOT, 'send', 'send-log.json'),
       path.join(APP_ROOT, 'send', 'send-log-test.json'),
@@ -84,6 +107,7 @@ function register(ipcMain, deps) {
       if (lang) records = records.filter(r => (r._lang || '') === lang);
       if (country) records = records.filter(r => (r._country || '') === country);
       if (stage) records = records.filter(r => r._stage === stage);
+      if (date) records = records.filter(r => (r.time_beijing || r.time || '').slice(0, 10) === date);
       const total = records.length; records = records.slice(offset || 0, (offset || 0) + (limit || 50));
       return { total, records: records.map(r => { const { body, ...rest } = r; return rest; }) };
     } catch (e) { return { total: 0, records: [] }; }

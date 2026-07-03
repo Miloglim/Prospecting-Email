@@ -967,6 +967,18 @@
     .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; }
     .inbox-detail-actions button:hover { background:var(--bg-hover); }
 
+    /* 发送总览 */
+    .history-split { display:flex; gap:0; height:calc(100vh - 200px); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+    .history-list-pane { width:340px; display:flex; flex-direction:column; min-width:0; border-right:1px solid var(--border); flex-shrink:0; }
+    .history-preview-pane { flex:1; display:flex; flex-direction:column; min-width:0; }
+    .history-items { flex:1; overflow-y:auto; min-height:0; }
+    .history-date-group { border-bottom:1px solid var(--border); }
+    .history-date-head { padding:8px 12px; font-size:12px; font-weight:600; color:var(--text); background:var(--bg-secondary); cursor:pointer; display:flex; align-items:center; gap:6px; user-select:none; }
+    .history-date-head .arrow { font-size:10px; transition:transform .15s; display:inline-block; }
+    .history-date-head .arrow.open { transform:rotate(90deg); }
+    .history-date-count { font-weight:400; color:var(--text-secondary); font-size:11px; }
+    #history-preview { flex:1; overflow-y:auto; padding:16px; min-height:0; }
+
     /* 统一滚动条 */
     .inbox-left::-webkit-scrollbar,
     .inbox-right::-webkit-scrollbar,

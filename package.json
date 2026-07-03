@@ -11,6 +11,7 @@
     "pack": "electron-vite build && electron-builder --win",
     "build-only": "electron-vite build && electron-builder --win --publish never",
     "ship": "electron-vite build && electron-builder --win --publish never",
+    "upload": "node scripts/release.js",
     "sync-oss": "node scripts/sync-oss.js"
   },
   "build": {
@@ -24,7 +25,8 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "${name}-setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
