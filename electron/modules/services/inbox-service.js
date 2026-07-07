@@ -22,7 +22,6 @@ function _loadKeywords() {
   try {
     if (fs.existsSync(KW_PATH)) {
       const raw = JSON.parse(fs.readFileSync(KW_PATH, 'utf-8'));
-      // 展平：新格式 {_note, words} → 数组，兼容旧格式（直接为数组）
       const flat = {};
       const keys = ['bounce_subject','bounce_senders','bounce_body','bounce_left','auto_reply','reply_prefix','inquiry'];
       for (const k of keys) {
@@ -33,8 +32,27 @@ function _loadKeywords() {
       return _kw;
     }
   } catch (e) { Log.error('[收件箱]', '关键词文件读取失败', e.stack); }
-  // 兜底：空数组，全部归为 other
-  _kw = { bounce_subject:[], bounce_senders:[], bounce_body:[], bounce_left:[], auto_reply:[], reply_prefix:[], inquiry:[] };
+  // ponytail: 文件缺失时用内置兜底，并自动写出文件供后续编辑
+  Log.warn('[收件箱]', '关键词文件缺失，使用内置默认并创建文件');
+  _kw = {
+    bounce_subject: ['undelivered','returned mail','delivery failure','mail delivery failed','returned to sender','message could not be delivered','delivery status notification','failure notice','mail system','address rejected','user unknown','mailbox full','not found','does not exist','non remis','nicht zugestellt','no se pudo entregar','退信','退回','退件','系统退信','投递失败','发送失败','undeliverable','permanent failure','message undelivered','warning: message','delayed delivery','delivery incomplete','rejected mail'],
+    bounce_senders: ['mailer-daemon','postmaster','mail delivery subsystem','mailadmin@','mailer@'],
+    bounce_body: ['address rejected','user unknown','mailbox not found','no such user','invalid recipient','mailbox unavailable','does not like recipient','not accepting mail','unrouteable address','recipient rejected','status: 5','over quota','mailbox exceeded','message blocked','smtp error','delivery failed permanently','unable to deliver','recipient unknown',"couldn't be delivered","couldn't deliver to","weren't found at","unknown to address","the following recipients","action required","recipients weren't found"],
+    bounce_left: ['no longer','has left','left the company','no longer with','is no longer at','no longer works','不再该公司','已离职','no longer employed'],
+    auto_reply: ['automatic reply','auto-reply','auto reply','out of office','out of the office','vacation','vacaciones','feriado','holiday notice','ooo -','[ooo]','ausente','ausência','fuera de la oficina','fora do escritório','respuesta automática','resposta automática','away from office','no estaré','estare ausente','estoy fuera','licença maternidade','maternity leave','acceso limitado'],
+    reply_prefix: ['re:','resp:','rv:','ref:','回复:','答复:','转发:','fw:','fwd:'],
+    inquiry: ['solicitud','consulta','cotización','cotizacion','información','info.','request for quote','rfq','presupuesto','orçamento','budget request','shipping quote','freight quote','logistics inquiry','cargo quote','transport quote'],
+  };
+  // 自动创建关键词文件
+  try {
+    const dir = path.dirname(KW_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const toWrite = {};
+    for (const k of ['bounce_subject','bounce_senders','bounce_body','bounce_left','auto_reply','reply_prefix','inquiry']) {
+      toWrite[k] = { _note: '', words: _kw[k] };
+    }
+    fs.writeFileSync(KW_PATH, JSON.stringify(toWrite, null, 2));
+  } catch { /* 写文件失败不影响运行 */ }
   return _kw;
 }
 

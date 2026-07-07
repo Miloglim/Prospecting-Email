@@ -155,8 +155,8 @@ function renderInbox() {
           }
         }
         _saveViewedKeys();
-        listEl.querySelectorAll('.inbox-selected').forEach(e => e.classList.remove('inbox-selected'));
         _selectedSet.clear();
+        renderInbox();
       });
       menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
         menu.remove();
