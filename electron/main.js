@@ -29,7 +29,7 @@ function setupIPC() {
   require('./modules/services/history-store').register(ipcMain, deps);
   require('./modules/ipc/system-ipc').register(ipcMain, deps);
   require('./modules/ipc/account-ipc').register(ipcMain);
-  require('./modules/ipc/inbox-ipc').register(ipcMain);
+  require('./modules/ipc/inbox-ipc').register(ipcMain, deps);
   require('./modules/send-ipc').register(ipcMain, deps);
   _sendCleanup = require('./modules/send-ipc').cleanup;
   registerTableImportHandlers();
@@ -260,11 +260,11 @@ app.whenReady().then(async () => {
   require('./modules/updater').init(deps.mainWindow);
   Log.info("系统", "应用启动完成");
 
-  // 后台轮询：退信 + 回复检测
-  const { scheduleAutoBounceCheck } = require('./modules/services/send-engine');
-  const { scheduleAutoReplyCheck } = require('./modules/services/reply-checker');
-  scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
-  scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
+  // ponytail: 退信/回复检测已由收件箱统一接管，不再独立轮询
+  // const { scheduleAutoBounceCheck } = require('./modules/services/send-engine');
+  // const { scheduleAutoReplyCheck } = require('./modules/services/reply-checker');
+  // scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
+  // scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
 
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); else deps.mainWindow?.show(); });
 }).catch((err) => { Log.error('启动', '启动失败', err); app.quit(); });

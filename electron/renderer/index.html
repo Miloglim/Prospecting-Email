@@ -150,6 +150,9 @@
       <li class="nav-item" data-page="inbox"><span class="nav-icon" data-icon="inbox"></span> 收件箱</li>
       <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
+      <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
+      <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
+      <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
       <li class="nav-item nav-parent">
         <span class="nav-icon" data-icon="mail"></span> 邮件工坊 <span class="nav-arrow" data-icon="chevron-down"></span>
       </li>
@@ -158,9 +161,6 @@
       <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
       <li class="nav-sub" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发</li>
-      <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
-      <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
-      <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
     </ul>
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
@@ -257,21 +257,26 @@
 
     <!-- 👥 联系人 -->
     <section id="page-contacts" class="page">
-      <h2><span data-icon="users"></span> 联系人</h2>
+      <h2><span data-icon="users"></span> 联系人 <span id="contacts-summary" style="display:none;font-size:12px;font-weight:400;color:var(--text-secondary);margin-left:8px"></span></h2>
       <div class="contacts-toolbar">
         <input type="text" id="contacts-search" placeholder="搜索公司名、国家或邮箱...">
         <button id="contacts-add-btn"><span data-icon="plus"></span> 添加客户</button>
         <button id="contacts-ai-classify-btn" class="secondary" style="font-size:12px;padding:4px 12px"><span data-icon="sparkles"></span> AI 分类</button>
+        <button id="contacts-del-log-btn" class="secondary" style="font-size:12px;padding:4px 12px">删除记录</button>
       </div>
       <div class="contacts-filter" id="contacts-filter" style="display:none">
         <button type="button" class="cf-tab active" data-filter="all">全部</button>
-	        <button type="button" class="cf-tab" data-filter="agent"><span data-icon="globe"></span> 代理</button>
-	        <button type="button" class="cf-tab" data-filter="direct"><span data-icon="building"></span> 直客</button>
-	        <button type="button" class="cf-tab" data-filter="unlabeled"><span data-icon="help-circle"></span> 未标签</button>
-        <button type="button" class="cf-tab" data-filter="sent"><span data-icon="send"></span> 已发送</button>
-        <button type="button" class="cf-tab" data-filter="unsent"><span data-icon="mail"></span> 未发送</button>
-	        <button type="button" class="cf-tab" data-filter="suspicious"><span data-icon="alert-circle"></span> 待确认</button>
-	        <button type="button" class="cf-tab" data-filter="archived"><span data-icon="archive"></span> 已归档</button>
+        <button type="button" class="cf-tab" data-filter="agent"><span data-icon="globe"></span> 代理</button>
+        <button type="button" class="cf-tab" data-filter="direct"><span data-icon="building"></span> 直客</button>
+        <button type="button" class="cf-tab" data-filter="unlabeled"><span data-icon="help-circle"></span> 未标签</button>
+        <span class="cf-sep">|</span>
+        <button type="button" class="cf-tab" data-filter="tag:reached">已触达</button>
+        <button type="button" class="cf-tab" data-filter="tag:left_company">已离职</button>
+        <button type="button" class="cf-tab" data-filter="tag:replied">有回复</button>
+        <button type="button" class="cf-tab" data-filter="tag:autoreply">自动回复</button>
+        <button type="button" class="cf-tab" data-filter="tag:bounced_by_contact">退信</button>
+        <span class="cf-sep">|</span>
+        <button type="button" class="cf-tab" data-filter="archived"><span data-icon="archive"></span> 已归档</button>
       </div>
       <div class="contacts-summary" id="contacts-summary" style="display:none"></div>
       <div class="contacts-layout" id="contacts-layout" style="display:none">
@@ -563,18 +568,19 @@
     <section id="page-inbox" class="page">
       <h2><span data-icon="inbox"></span> 收件箱</h2>
       <div class="inbox-toolbar">
-        <button id="inbox-refresh"><span data-icon="refresh-cw"></span> 刷新</button>
+        <button id="inbox-refresh" style="min-width:90px"><span data-icon="refresh-cw"></span> 刷新</button>
+        <button id="inbox-sync-tags" class="secondary" style="font-size:12px;padding:4px 10px">同步标签</button>
         <span id="inbox-count" style="font-size:12px;color:var(--text-secondary)"></span>
       </div>
       <div class="inbox-container">
         <div class="inbox-left">
-          <select id="inbox-filter">
-            <option value="all">全部</option>
-            <option value="reply">🟢 回复</option>
-            <option value="auto-reply">🟡 自动回复</option>
-            <option value="bounce">🔴 退信</option>
-            <option value="other">⚪ 其他</option>
-          </select>
+          <div class="inbox-filter-bar" id="inbox-filter">
+            <button class="inbox-filter-btn active" data-filter="all">全部<span class="filter-badge"></span></button>
+            <button class="inbox-filter-btn" data-filter="reply"><span class="filter-dot" style="color:#22a644">●</span> 回复<span class="filter-badge"></span></button>
+            <button class="inbox-filter-btn" data-filter="auto-reply"><span class="filter-dot" style="color:#e6a817">●</span> 自动回复<span class="filter-badge"></span></button>
+            <button class="inbox-filter-btn" data-filter="bounce"><span class="filter-dot" style="color:#e5484d">●</span> 退信<span class="filter-badge"></span></button>
+            <button class="inbox-filter-btn" data-filter="other"><span class="filter-dot" style="color:#8b8b8b">●</span> 其他<span class="filter-badge"></span></button>
+          </div>
           <div id="inbox-list"></div>
         </div>
         <div class="inbox-right" id="inbox-detail">
@@ -730,67 +736,6 @@
         <div id="cfg-schedule-estimate" class="settings-estimate"></div>
       </div>
 
-      <div class="settings-section" id="sec-detection">
-        <div class="settings-section-label">退信与回复检测</div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
-            <h3><span data-icon="search"></span> 退信关键词</h3>
-            <span class="setting-status">匹配邮件主题/正文，触发退信判定</span>
-          </div>
-          <div class="setting-card-body">
-            <div class="form-row">
-              <div class="kw-editor" id="kw-bounce-editor">
-                <div class="kw-tags" id="kw-bounce-tags"></div>
-                <input type="text" class="kw-input" id="kw-bounce-input" placeholder="输入关键词回车添加" maxlength="40">
-              </div>
-              <span class="input-hint">系统内置 50+ 关键词，此处为自定义补充</span>
-            </div>
-            <div class="form-row" style="margin-top:6px">
-              <button class="btn-link" id="kw-bounce-reset">恢复默认</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
-            <h3><span data-icon="reply"></span> 自动回复关键词</h3>
-            <span class="setting-status">匹配邮件主题，排除非人工回复</span>
-          </div>
-          <div class="setting-card-body">
-            <div class="form-row">
-              <div class="kw-editor" id="kw-autoreply-editor">
-                <div class="kw-tags" id="kw-autoreply-tags"></div>
-                <input type="text" class="kw-input" id="kw-autoreply-input" placeholder="输入关键词回车添加" maxlength="40">
-              </div>
-              <span class="input-hint">系统内置 20+ 关键词，此处为自定义补充</span>
-            </div>
-            <div class="form-row" style="margin-top:6px">
-              <button class="btn-link" id="kw-autoreply-reset">恢复默认</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
-            <h3><span data-icon="corner-up-right"></span> 回复标识</h3>
-            <span class="setting-status">匹配邮件主题前缀，判定真人口复</span>
-          </div>
-          <div class="setting-card-body">
-            <div class="form-row">
-              <div class="kw-editor" id="kw-reply-editor">
-                <div class="kw-tags" id="kw-reply-tags"></div>
-                <input type="text" class="kw-input" id="kw-reply-input" placeholder="输入关键词回车添加" maxlength="40">
-              </div>
-              <span class="input-hint">邮件主题以这些前缀开头时判定为真人口复</span>
-            </div>
-            <div class="form-row" style="margin-top:6px">
-              <button class="btn-link" id="kw-reply-reset">恢复默认</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div class="settings-section" id="sec-api">
         <div class="settings-section-label">API 与服务</div>
 
@@ -842,17 +787,6 @@
 
       <div class="settings-section" id="sec-advanced">
         <div class="settings-section-label">高级</div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
-            <h3><span data-icon="alert-circle"></span> 退信关键词</h3>
-            <span class="setting-status"></span>
-          </div>
-          <div class="setting-card-body">
-            <div class="form-row"><label>关键词</label><textarea id="cfg-bounce-keywords" rows="3" placeholder="一行一个，不区分大小写"></textarea></div>
-            <p style="font-size:10px;color:var(--text-secondary);margin:4px 0 0">例如: spam rejected / mailbox unavailable / 拒收 / 退信</p>
-          </div>
-        </div>
 
         <div class="setting-card">
           <div class="setting-card-header">
@@ -941,14 +875,24 @@
     .inbox-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; flex-shrink:0; }
     .inbox-toolbar select { padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; }
     .inbox-container { display:flex; gap:0; flex:1; min-height:0; overflow:hidden; }
-    #inbox-filter { width:100%; padding:8px 12px; border:none; border-bottom:1px solid var(--border); border-radius:8px 8px 0 0; background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; outline:none; flex-shrink:0; }
+    .inbox-filter-bar { display:flex; gap:0; border-bottom:1px solid var(--border); flex-shrink:0; }
+    .inbox-filter-btn { flex:1; padding:8px 4px; border:none; border-radius:0; background:transparent; color:var(--text-secondary); font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; transition:color .15s,box-shadow .15s; }
+    .inbox-filter-btn:hover { color:var(--text); }
+    .inbox-filter-btn.active { color:var(--text); font-weight:600; box-shadow:inset 0 -2px 0 var(--primary); }
+    .inbox-filter-btn .filter-dot { font-size:8px; line-height:1; flex-shrink:0; }
+    .filter-badge { display:none; width:6px; height:6px; border-radius:50%; background:#e5484d; margin-left:2px; flex-shrink:0; }
+    .filter-badge.show { display:inline-block; }
     .inbox-left { width:40%; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); display:flex; flex-direction:column; }
     #inbox-list { flex:1; overflow-y:auto; min-height:0; }
     .inbox-right { width:60%; display:flex; flex-direction:column; background:var(--bg); overflow:hidden; border:1px solid var(--border); border-left:none; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; }
-    .inbox-item { display:flex; align-items:center; gap:10px; padding:11px 14px; cursor:pointer; border-bottom:1px solid var(--border); transition:background .12s; }
+    .inbox-detail-body-wrap { flex:1; min-height:0; overflow-y:auto; padding:0 16px 12px; }
+    .inbox-item { display:flex; align-items:center; gap:10px; padding:11px 11px 11px 11px; cursor:pointer; border-bottom:1px solid var(--border); border-left:3px solid transparent; transition:background .12s,border-color .12s; }
     .inbox-item:hover { background:var(--bg-hover); }
-    .inbox-item.active { background:var(--primary-10); border-left:3px solid var(--primary); padding-left:11px; }
+    .inbox-item.active { background:var(--primary-10); border-left-color:var(--primary); }
+    .inbox-item.inbox-selected { background:var(--primary-10); }
     .inbox-type { flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+    .inbox-dot { line-height:1; transition:transform .3s ease; display:inline-block; }
+    .inbox-dot-new { transform:scale(1.6); }
     .inbox-meta { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
     .inbox-subject { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text); }
     .inbox-from { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -962,10 +906,17 @@
     .inbox-detail-field span:first-child { color:var(--text-secondary); min-width:48px; font-weight:600; font-size:11px; flex-shrink:0; }
     .inbox-detail-field span:last-child { word-break:break-all; line-height:1.4; }
     .inbox-detail-field .muted { color:var(--text-secondary); font-style:italic; }
-    .inbox-detail-body { width:100%; flex:1; min-height:0; border:none; border-radius:8px; background:var(--bg-secondary); margin:0 16px 12px; }
+    .inbox-link-company { color:var(--primary); text-decoration:none; cursor:pointer; }
+    .inbox-link-company:hover { text-decoration:underline; }
+    .inbox-matched { padding:6px 16px; margin:0 16px 8px; font-size:11px; background:var(--primary-10); border-radius:6px; display:flex; gap:8px; align-items:flex-start; }
+    .inbox-matched span:first-child { color:var(--primary); font-weight:600; white-space:nowrap; flex-shrink:0; }
+    .inbox-matched span:last-child { word-break:break-all; line-height:1.5; }
+    .inbox-detail-body { width:100%; border:none; background:var(--bg-secondary); }
     .inbox-detail-actions { display:flex; gap:8px; padding:0 16px; }
-    .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; }
+    .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; transition:all .15s; }
     .inbox-detail-actions button:hover { background:var(--bg-hover); }
+    #inbox-btn-delete:hover { background:#e5484d; color:#fff; border-color:#e5484d; }
+    #inbox-btn-processed.done { background:var(--primary-10); color:#22a644; border-color:#22a644; }
 
     /* 发送总览 */
     .history-split { display:flex; gap:0; height:calc(100vh - 200px); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
@@ -981,17 +932,13 @@
 
     /* 统一滚动条 */
     .inbox-left::-webkit-scrollbar,
-    .inbox-right::-webkit-scrollbar,
-    .inbox-detail-body::-webkit-scrollbar { width:8px; }
+    .inbox-detail-body-wrap::-webkit-scrollbar { width:8px; }
     .inbox-left::-webkit-scrollbar-track,
-    .inbox-right::-webkit-scrollbar-track,
-    .inbox-detail-body::-webkit-scrollbar-track { background:transparent; }
+    .inbox-detail-body-wrap::-webkit-scrollbar-track { background:transparent; }
     .inbox-left::-webkit-scrollbar-thumb,
-    .inbox-right::-webkit-scrollbar-thumb,
-    .inbox-detail-body::-webkit-scrollbar-thumb { background:#c0c0c0; border-radius:4px; min-height:40px; }
+    .inbox-detail-body-wrap::-webkit-scrollbar-thumb { background:#c0c0c0; border-radius:4px; min-height:40px; }
     .inbox-left::-webkit-scrollbar-thumb:hover,
-    .inbox-right::-webkit-scrollbar-thumb:hover,
-    .inbox-detail-body::-webkit-scrollbar-thumb:hover { background:#999; }
+    .inbox-detail-body-wrap::-webkit-scrollbar-thumb:hover { background:#999; }
   </style>
   <script type="module" src="app-v2.js"></script>
 </body>

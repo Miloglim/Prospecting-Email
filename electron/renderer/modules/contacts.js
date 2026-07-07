@@ -155,9 +155,13 @@ export async function loadContacts() {
   // 绑定筛选标签事件（仅一次）
   if (!window._contactsFilterBound) {
     window._contactsFilterBound = true;
+    // 三分组独立筛选
+    S.contactsFilter = 'all';
     document.querySelectorAll('#contacts-filter .cf-tab').forEach(tab => {
       tab.addEventListener('click', (e) => {
         e.preventDefault();
+        document.querySelectorAll('#contacts-filter .cf-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
         S.contactsFilter = tab.dataset.filter;
         S.selectedContactCompany = null;
         renderContactsList();
@@ -172,15 +176,12 @@ export async function loadContacts() {
 export function renderContactsList(filtered) {
   let data = filtered || S.contactsData;
 
-  // 应用类型筛选
+  // 应用筛选
   if (S.contactsFilter === 'archived') {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
-  } else if (S.contactsFilter === 'suspicious') {
-    data = data.filter(c => c._suspicious === true);
-  } else if (S.contactsFilter === 'sent') {
-    data = data.filter(c => !!c._sentBy);
-  } else if (S.contactsFilter === 'unsent') {
-    data = data.filter(c => !c._sentBy);
+  } else if (S.contactsFilter?.startsWith('tag:')) {
+    const tag = S.contactsFilter.slice(4);
+    data = data.filter(c => (c.tags || []).includes(tag));
   } else if (S.contactsFilter !== 'all') {
     data = data.filter(c => (c.clientType || 'unlabeled') === S.contactsFilter);
   }
@@ -203,16 +204,24 @@ export function renderContactsList(filtered) {
     }
   }
 
-  // 更新筛选标签（即使列表为空也保持可见，确保用户能切回）
+  // 更新筛选标签
   const tabs = filterBar?.querySelectorAll('.cf-tab');
   if (tabs) {
+    const tagCounts = { reached: 0, left_company: 0, replied: 0, autoreply: 0, bounced_by_contact: 0 };
+    for (const c of S.contactsData) {
+      for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
+    }
     const labelMap = {
       all: `全部 ${seenCompanies.size}`,
-      agent: `${lucide('globe',13)} 代理 ${counts.agent}`,
-      direct: `${lucide('building',13)} 直客 ${counts.direct}`,
-      unlabeled: `${lucide('help-circle',13)} 未标签 ${counts.unlabeled}`,
-      suspicious: `${lucide("alert-circle",13)} 待确认 ${S.contactsData.filter(c => c._suspicious).length}`,
-      archived: `${lucide("archive",13)} 已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === "archived").length}`,
+      agent: `代理 ${counts.agent}`,
+      direct: `直客 ${counts.direct}`,
+      unlabeled: `未标签 ${counts.unlabeled}`,
+      'tag:reached': `已触达 ${tagCounts.reached}`,
+      'tag:left_company': `已离职 ${tagCounts.left_company}`,
+      'tag:replied': `有回复 ${tagCounts.replied}`,
+      'tag:autoreply': `自动回复 ${tagCounts.autoreply}`,
+      'tag:bounced_by_contact': `退信 ${tagCounts.bounced_by_contact}`,
+      archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
     };
     tabs.forEach(tab => {
       const f = tab.dataset.filter;
@@ -222,7 +231,7 @@ export function renderContactsList(filtered) {
   }
 
   if (!data.length) {
-    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter === 'suspicious' ? '暂无待确认公司' : S.contactsFilter === 'sent' ? '暂无已发送联系人 — 发送完成后自动标记' : S.contactsFilter === 'unsent' ? '全部已发送' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
+    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter?.startsWith('tag:') ? '该标签暂无联系人' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
     if (layout) layout.style.display = 'none';
     if (statsBar) statsBar.style.display = 'none';
     if (filterBar) filterBar.style.display = 'flex';
@@ -245,11 +254,12 @@ export function renderContactsList(filtered) {
     S.contactsGroupMap.set(company, members);
   }
 
-  // 统计
-  const vipCount = groups.filter(g => g[1].length >= 5).length;
+  // 统计（始终基于全部数据，不受筛选影响）
   if (statsBar) {
-    statsBar.style.display = 'block';
-    statsBar.textContent = `${data.length} 位联系人 · ${groups.length} 家公司 · ${vipCount} 家可定制客户`;
+    const allGroups = groupByCompany(S.contactsData);
+    const vipCount = allGroups.filter(g => g[1].length >= 5).length;
+    statsBar.style.display = 'inline';
+    statsBar.textContent = `${S.contactsData.length} 位联系人 · ${allGroups.length} 家公司 · ${vipCount} 家可定制客户`;
   }
 
   // 左侧公司列表
@@ -309,6 +319,7 @@ export function renderContactDetail(company) {
       <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px;margin-left:auto">背调</button>
+      ${S.contactsFilter === 'tag:bounced_by_contact' ? `<button id="btn-delete-bounced" class="secondary" style="font-size:11px;padding:3px 10px;color:#e5484d;border-color:#e5484d">删除全部退信</button>` : ''}
     </div>
     <div class="contacts-detail-body">
       <table>
@@ -436,6 +447,26 @@ export function renderContactDetail(company) {
     });
   }
 
+  // 删除全部退信联系人
+  const delBouncedBtn = document.getElementById('btn-delete-bounced');
+  if (delBouncedBtn) {
+    delBouncedBtn.addEventListener('click', async () => {
+      const allMembers = S.contactsGroupMap.get(company) || [];
+      const bounced = allMembers.filter(m => (m.tags || []).includes('bounced_by_contact'));
+      if (!bounced.length) { showToast('该公司无退信联系人', 'warn'); return; }
+      let ok = (S._deleteSkipUntil || 0) > Date.now();
+      if (!ok) {
+        const r = await showConfirm(`确定删除 ${company} 的全部 ${bounced.length} 个退信联系人？`, { skipText: '10分钟免提示' });
+        if (!r) return;
+        if (r === 'skip') S._deleteSkipUntil = Date.now() + 600000;
+      }
+      for (const m of bounced) { await window.electronAPI.deleteContact(m.id); }
+      await CS.refreshContacts();
+      renderContactsList();
+      showToast(`已删除 ${bounced.length} 个退信联系人`, 'ok');
+    });
+  }
+
   // 发起背调按钮
   const bcBtn = document.getElementById('btn-backcheck-contact');
   if (bcBtn) {
@@ -490,21 +521,27 @@ export function renderContactDetail(company) {
       const currentTags = contact.tags || [];
       const currentTag = currentTags[0] || '';
       const TAG_OPTIONS = [
+        { val: 'reached', label: '已触达', color: '#3b82f6' },
+        { val: 'left_company', label: '已离职', color: '#d93025' },
+        null, // 分隔线
+        { val: 'replied', label: '有回复', color: '#22a644' },
         { val: 'autoreply', label: '自动回复', color: '#e6a817' },
-        { val: 'replied', label: '有回复', color: '#3b82f6' },
-        { val: 'reached', label: '已触达', color: '#22a644' },
+        { val: 'bounced_by_contact', label: '退信', color: '#e5484d' },
       ];
 
-      // 生成单选菜单项
+      // 生成单选菜单项（手动标签 / 自动标签 分栏）
       const tagItems = TAG_OPTIONS.map(t => {
+        if (!t) return `<div style="border-top:1px solid var(--border);margin:4px 0"></div>`;
         const isActive = currentTag === t.val;
-        const check = isActive ? '✓' : '';
-        return `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:8px;color:${t.color};${isActive ? 'font-weight:600' : ''}" data-action="select" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${check} ${t.label}</div>`;
+        return `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:8px;color:${t.color};${isActive ? 'font-weight:600' : ''}" data-action="select" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${isActive ? '✓' : ''} ${t.label}</div>`;
       }).join('');
 
       menu.innerHTML = tagItems +
         `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
-        `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:var(--text-secondary)" data-action="clear" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
+        `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="edit" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">编辑联系人</div>` +
+        `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
+        `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:var(--text-secondary)" data-action="clear" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">清除标签</div>` +
+        `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除联系人</div>`;
 
       // 点击选中单个标签（再次点击同一标签则取消）
       menu.querySelectorAll('[data-action="select"]').forEach(item => {
@@ -534,6 +571,25 @@ export function renderContactDetail(company) {
         renderContactDetail(company);
       });
 
+      // 编辑联系人
+      menu.querySelector('[data-action="edit"]').addEventListener('click', () => {
+        menu.remove();
+        showContactEditor(contact);
+      });
+
+      // 删除联系人
+      menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+        menu.remove();
+        if (!await showConfirm('确定删除该联系人？')) return;
+        await window.electronAPI.deleteContact(contact.id);
+        S.contactsData = S.contactsData.filter(c => c.id !== contact.id);
+        const newMembers = S.contactsGroupMap.get(company) || [];
+        const idx = newMembers.findIndex(m => m.id === contact.id);
+        if (idx >= 0) newMembers.splice(idx, 1);
+        await CS.refreshContacts();
+        renderContactsList();
+      });
+
       document.body.appendChild(menu);
       const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
       setTimeout(() => document.addEventListener('click', close), 0);
@@ -555,29 +611,37 @@ document.getElementById('contacts-search')?.addEventListener('input', async (e) 
 document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
   showModal({
     title: '添加联系人',
-    type: 'info',
-    message: `<div style="display:flex;flex-direction:column;gap:8px">
-        <style>
-          #ac-company,#ac-email,#ac-country,#ac-category,#ac-firstname,#ac-lastname,#ac-type{width:100%;box-sizing:border-box;font-size:12px;padding:7px 10px;border:1px solid #e0e0e0;border-radius:8px;outline:none;background:#fafafa;transition:border-color .15s}
-          #ac-company:focus,#ac-email:focus,#ac-country:focus,#ac-category:focus,#ac-firstname:focus,#ac-lastname:focus,#ac-type:focus{border-color:var(--primary);background:#fff}
-        </style>
-        <div><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">公司名</label><input id="ac-company" placeholder="必填"></div>
-        <div><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">邮箱</label><input id="ac-email" placeholder="必填"></div>
-        <div style="display:flex;gap:10px">
-          <div style="flex:1"><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">国家</label><input id="ac-country" placeholder="如 Mexico"></div>
-          <div style="flex:1"><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">品类</label><input id="ac-category" placeholder="如 freight forwarder"></div>
+    message: `
+      <style>
+        .ac-form { display:flex; flex-direction:column; gap:12px; }
+        .ac-row { display:flex; gap:12px; }
+        .ac-field { flex:1; display:flex; flex-direction:column; gap:3px; }
+        .ac-field label { font-size:11px; font-weight:500; color:var(--text-secondary); }
+        .ac-field input, .ac-field select { padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:var(--bg); color:var(--text); outline:none; }
+        .ac-field input:focus, .ac-field select:focus { border-color:var(--primary); }
+      </style>
+      <div class="ac-form">
+        <div class="ac-field"><label>公司名</label><input id="ac-company" placeholder="必填"></div>
+        <div class="ac-field"><label>邮箱</label><input id="ac-email" placeholder="必填"></div>
+        <div class="ac-row">
+          <div class="ac-field"><label>名</label><input id="ac-firstname" placeholder="如 Julio"></div>
+          <div class="ac-field"><label>姓</label><input id="ac-lastname" placeholder="如 Gallegos"></div>
         </div>
-        <div style="display:flex;gap:10px">
-          <div style="flex:1"><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">名</label><input id="ac-firstname" placeholder="如 Julio"></div>
-          <div style="flex:1"><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">姓</label><input id="ac-lastname" placeholder="如 Gallegos"></div>
+        <div class="ac-row">
+          <div class="ac-field"><label>国家</label><input id="ac-country" placeholder="如 Mexico"></div>
+          <div class="ac-field"><label>品类</label><input id="ac-category" placeholder="如 freight forwarder"></div>
         </div>
-        <div style="display:flex;gap:10px">
-          <div style="flex:1"><label style="display:block;font-size:10px;color:#999;margin-bottom:2px;font-weight:500">类型</label><select id="ac-type"><option value="unlabeled">未标签</option><option value="agent">代理</option><option value="direct">直客</option></select></div>
+        <div class="ac-row">
+          <div class="ac-field"><label>职位</label><input id="ac-position" placeholder="如 Manager"></div>
+          <div class="ac-field"><label>电话</label><input id="ac-phone" placeholder="如 +52 555..."></div>
+        </div>
+        <div class="ac-row">
+          <div class="ac-field"><label>类型</label><select id="ac-type"><option value="unlabeled">未标签</option><option value="agent">代理</option><option value="direct">直客</option></select></div>
         </div>
       </div>`,
     buttons: [
       { text: '取消', value: false },
-      { text: '确定添加', value: 'ok', primary: true },
+      { text: '添加', value: 'ok', primary: true },
     ],
     onClose: async (val) => {
       if (val !== 'ok') return;
@@ -593,7 +657,10 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         contactName: `${firstName} ${lastName}`.trim(),
         country: document.getElementById('ac-country')?.value.trim() || '',
         category: document.getElementById('ac-category')?.value.trim() || '',
+        position: document.getElementById('ac-position')?.value.trim() || '',
+        phone: document.getElementById('ac-phone')?.value.trim() || '',
         clientType: document.getElementById('ac-type')?.value || 'unlabeled',
+        tags: [],
         addedAt: new Date().toISOString(),
       };
       await window.electronAPI.importContacts([contact]);
@@ -603,17 +670,91 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
     },
   });
 });
+// ── 删除记录按钮 ──────────────────────────────────────────────────────────
+document.getElementById('contacts-del-log-btn')?.addEventListener('click', async () => {
+  const log = await window.electronAPI.getDeletedContactsLog();
+  if (!log.length) { showToast('暂无删除记录', 'info'); return; }
+  showModal({
+    title: `删除记录 (${log.length}条，保留5天)`,
+    message: `
+      <style>.dl-table{width:100%;border-collapse:collapse;font-size:12px}.dl-table th,.dl-table td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}.dl-table th{color:var(--text-secondary);font-weight:500}</style>
+      <table class="dl-table"><thead><tr><th>邮箱</th><th>公司</th><th>删除时间</th></tr></thead>
+      <tbody>${log.map(e => `<tr><td>${escapeHtml(e.email)}</td><td>${escapeHtml(e.company)}</td><td>${new Date(e.ts).toLocaleString('zh-CN')}</td></tr>`).join('')}</tbody></table>`,
+    buttons: [{ text: '关闭', value: true, primary: true }],
+  });
+});
 // ── AI 分类按钮 ──────────────────────────────────────────────────────────
 document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', async () => {
   const btn = document.getElementById('contacts-ai-classify-btn');
   btn.disabled = true; btn.textContent = 'AI 分类中...';
   try {
     const r = await window.electronAPI.classifyContactsAI();
-    if (r.ok) { await CS.refreshContacts(); renderContactsList(); showToast(`AI 分类完成: ${r.updated}/${r.total} 个重新分类`, 'ok'); }
+    if (r.ok) { await CS.refreshContacts(); renderContactsList(); showToast(`AI 分类完成: ${r.updated} 人 / ${r.total} 家公司`, 'ok'); }
     else showToast(r.error || 'AI 分类失败', 'err');
   } catch (e) { showToast('AI 分类异常', 'err'); }
   btn.disabled = false; btn.textContent = 'AI 分类';
   renderContactsList();
+});
+// ── 编辑联系人弹窗 ──────────────────────────────────────────────────────────
+function showContactEditor(contact) {
+  showModal({
+    title: '编辑联系人',
+    message: `
+      <style>
+        .ec-form { display:flex; flex-direction:column; gap:12px; }
+        .ec-row { display:flex; gap:12px; }
+        .ec-field { flex:1; display:flex; flex-direction:column; gap:3px; }
+        .ec-field label { font-size:11px; font-weight:500; color:var(--text-secondary); }
+        .ec-field input { padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:var(--bg); color:var(--text); outline:none; transition:border-color .15s; }
+        .ec-field input:focus { border-color:var(--primary); }
+      </style>
+      <div class="ec-form">
+        <div class="ec-row">
+          <div class="ec-field"><label>名</label><input id="ec-firstname" value="${escapeHtml(contact.firstName || '')}" placeholder="如 Julio"></div>
+          <div class="ec-field"><label>姓</label><input id="ec-lastname" value="${escapeHtml(contact.lastName || '')}" placeholder="如 Gallegos"></div>
+        </div>
+        <div class="ec-field"><label>邮箱</label><input id="ec-email" value="${escapeHtml(contact.email || '')}" placeholder="email@example.com"></div>
+        <div class="ec-row">
+          <div class="ec-field"><label>国家</label><input id="ec-country" value="${escapeHtml(contact.country || '')}" placeholder="如 Mexico"></div>
+          <div class="ec-field"><label>品类</label><input id="ec-category" value="${escapeHtml(contact.category || '')}" placeholder="如 freight forwarder"></div>
+        </div>
+        <div class="ec-row">
+          <div class="ec-field"><label>职位</label><input id="ec-position" value="${escapeHtml(contact.position || '')}" placeholder="如 Manager"></div>
+          <div class="ec-field"><label>电话</label><input id="ec-phone" value="${escapeHtml(contact.phone || '')}" placeholder="如 +52 555..."></div>
+        </div>
+      </div>`,
+    buttons: [
+      { text: '取消', value: false },
+      { text: '保存', value: 'ok', primary: true },
+    ],
+    onClose: async (val) => {
+      if (val !== 'ok') return;
+      const updated = {
+        id: contact.id,
+        company: contact.company,
+        email: document.getElementById('ec-email')?.value?.trim() || contact.email,
+        firstName: document.getElementById('ec-firstname')?.value?.trim() || '',
+        lastName: document.getElementById('ec-lastname')?.value?.trim() || '',
+        country: document.getElementById('ec-country')?.value?.trim() || '',
+        category: document.getElementById('ec-category')?.value?.trim() || '',
+        position: document.getElementById('ec-position')?.value?.trim() || '',
+        phone: document.getElementById('ec-phone')?.value?.trim() || '',
+        clientType: contact.clientType,
+        tags: contact.tags,
+      };
+      await window.electronAPI.upsertContact(updated);
+      await CS.refreshContacts();
+      renderContactsList();
+      showToast('已保存', 'ok');
+    },
+  });
+}
+// 热刷新：主进程通知联系人数据变化时自动更新
+window.electronAPI.onContactsChanged(() => {
+  if (document.getElementById('page-contacts')?.classList.contains('active')) {
+    CS.refreshContacts();
+    renderContactsList();
+  }
 });
 window.__pageHandlers['contacts'] = loadContacts;
 window.__pageHandlers['clients'] = renderClientsTable;

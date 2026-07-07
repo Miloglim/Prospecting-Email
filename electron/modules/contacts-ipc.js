@@ -49,7 +49,7 @@ function _cleanupTagField(contacts) {
 function register(ipcMain, deps) {
   const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
   let contactsCache = null;
-  let contactsWriteLock = false;
+  let _writeQueue = Promise.resolve(); // 写入队列，串行化所有写操作
 
   function readContacts() {
     if (contactsCache) return contactsCache;
@@ -62,13 +62,31 @@ function register(ipcMain, deps) {
     return [];
   }
 
-  function writeContacts(contacts) {
+  function writeContacts(contacts, caller) {
+    // ponytail: 写入前重读磁盘，合并保留并发写入 + 正确删除
+    try {
+      if (fs.existsSync(contactsPath)) {
+        const onDisk = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+        const idMap = new Map(contacts.map(c => [c.id, c]));
+        // 只保留传入数组中存在的 id（支持删除）
+        const keepIds = new Set(contacts.map(c => c.id));
+        const merged = onDisk.filter(c => keepIds.has(c.id));
+        for (const c of merged) {
+          const incoming = idMap.get(c.id);
+          if (incoming) Object.assign(c, incoming);
+        }
+        contacts = merged;
+      }
+    } catch { /* 读盘失败用传入数据 */ }
+    Log.info('[写盘]', `${caller} → ${contactsPath} (${contacts.length}条, agent=${contacts.filter(c=>c.clientType==='agent').length})`);
     contactsCache = contacts;
-    contactsWriteLock = true;
     try {
       const dir = path.dirname(contactsPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      // 自动备份：保留最近 3 份
+      // 原子写入：先写临时文件，再 rename
+      const tmp = contactsPath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2));
+      // 备份轮转
       const bakBase = contactsPath.replace('.json', '.bak');
       for (let i = 2; i >= 0; i--) {
         const src = i === 0 ? contactsPath : `${bakBase}${i}`;
@@ -77,10 +95,8 @@ function register(ipcMain, deps) {
           try { fs.copyFileSync(src, dst); } catch { /* 备份轮转失败不阻塞写入 */ }
         }
       }
-      fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
-    } finally {
-      contactsWriteLock = false;
-    }
+      fs.renameSync(tmp, contactsPath);
+    } finally { /* noop */ }
   }
 
   // ── 国家名标准化映射（中文/西语 → 英文）──────────────────────────────
@@ -186,13 +202,25 @@ function register(ipcMain, deps) {
         }
       }
     }
-    if (changed) writeContacts(contacts);
+    if (changed) writeContacts(contacts, 'contacts-ipc');
     return contacts;
   });
 
   ipcMain.handle('contacts:import', async (_e, clients) => {
     contactsCache = null;
     const existing = readContacts();
+    // 读取删除记录，5天内删除的邮箱跳过
+    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
+    let deletedEmails = new Set();
+    try {
+      if (fs.existsSync(delLogPath)) {
+        const delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
+        const cutoff = Date.now() - 5 * 86400000;
+        for (const e of delLog) {
+          if (e.ts > cutoff) deletedEmails.add(e.email.toLowerCase().trim());
+        }
+      }
+    } catch { /* 静默 */ }
     // email 为唯一去重键（对齐 HubSpot 标准）
     const emailIndex = new Map();
     for (const c of existing) {
@@ -205,6 +233,7 @@ function register(ipcMain, deps) {
       const cleanEmail = (c.email || '').trim();
       if (!cleanEmail) { skipped++; continue; }
       if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; invalidEmails.push({ company: c.company || '未知', email: cleanEmail }); continue; }
+      if (deletedEmails.has(cleanEmail.toLowerCase().trim())) { skipped++; continue; }
       // 国家名标准化
       if (c.country) c.country = _normalizeCountry(c.country);
 
@@ -289,9 +318,19 @@ function register(ipcMain, deps) {
     const target = contacts.find(c => c.id === id);
     if (target?.company && target?.email) {
       removeFromSendHistory(target.company, [target.email]);
+      // 记录删除日志（5天保留）
+      const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
+      try {
+        let delLog = [];
+        if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
+        const cutoff = Date.now() - 5 * 86400000;
+        delLog = delLog.filter(e => e.ts > cutoff);
+        delLog.push({ email: target.email, company: target.company, ts: Date.now() });
+        fs.writeFileSync(delLogPath, JSON.stringify(delLog));
+      } catch { /* 删除日志写入失败不影响主流程 */ }
     }
     contacts = contacts.filter(c => c.id !== id);
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
     return { ok: true };
   });
 
@@ -305,9 +344,22 @@ function register(ipcMain, deps) {
     contactsCache = null;
     let contacts = readContacts();
     const before = contacts.length;
-    const emails = contacts.filter(c => c.company === company).map(c => c.email).filter(Boolean);
+    const targets = contacts.filter(c => c.company === company);
+    const emails = targets.map(c => c.email).filter(Boolean);
     contacts = contacts.filter(c => c.company !== company);
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
+    // 记录删除日志
+    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
+    try {
+      let delLog = [];
+      if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
+      const cutoff = Date.now() - 5 * 86400000;
+      delLog = delLog.filter(e => e.ts > cutoff);
+      for (const t of targets) {
+        if (t.email) delLog.push({ email: t.email, company: t.company, ts: Date.now() });
+      }
+      fs.writeFileSync(delLogPath, JSON.stringify(delLog));
+    } catch { /* 静默 */ }
 
     // 级联清理公司状态
     removeFromSendHistory(company, emails);
@@ -341,7 +393,7 @@ function register(ipcMain, deps) {
         updated++;
       }
     }
-    if (updated) writeContacts(contacts);
+    if (updated) writeContacts(contacts, 'contacts-ipc');
     return { ok: true, updated };
   });
 
@@ -353,7 +405,7 @@ function register(ipcMain, deps) {
         c.bounced = false; c.bounceType = ''; c.bounceReason = ''; c.bouncedAt = '';
       }
     }
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
     return { ok: true };
   });
 
@@ -365,7 +417,7 @@ function register(ipcMain, deps) {
     if (!c) return { ok: false, error: '联系人不存在' };
     const tagStr = tag || '';
     c.tags = tagStr ? [tagStr] : [];
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
     return { ok: true };
   });
 
@@ -376,7 +428,7 @@ function register(ipcMain, deps) {
     const c = contacts.find(x => x.id === id);
     if (!c) return { ok: false, error: '联系人不存在' };
     c.tags = Array.isArray(tags) ? [...tags] : [];
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
     return { ok: true };
   });
 
@@ -400,7 +452,7 @@ function register(ipcMain, deps) {
         updated++;
       }
     }
-    if (updated > 0) writeContacts(contacts);
+    if (updated > 0) writeContacts(contacts, 'contacts-ipc');
     return { ok: true, updated, total: contacts.filter(c => (c.company || '').trim() === companyName.trim()).length };
   });
 
@@ -457,24 +509,72 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:classifyAI', async () => {
     const cfgPath = path.join(APP_ROOT, 'send', 'config.json');
     let apiKey = '';
-    try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch { /* 配置文件不存在或损坏 → apiKey 为空，下方会提示用户配置 */ }
-    if (!apiKey) return { ok: false, error: '请先配置 DeepSeek API Key' };
+    try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch (e) { Log.error('[AI分类]', '读取配置失败', e.stack); }
+    if (!apiKey) { Log.warn('[AI分类]', '缺少 DeepSeek API Key，跳过'); return { ok: false, error: '请先配置 DeepSeek API Key' }; }
 
     const { classifyClientAI } = require('./classify-client');
     const contacts = readContacts();
     const unlabeled = contacts.filter(c => c.clientType === 'unlabeled');
-    if (!unlabeled.length) return { ok: true, updated: 0, message: '所有联系人已分类' };
+    if (!unlabeled.length) { Log.info('[AI分类]', '所有联系人已分类，无需 AI'); return { ok: true, updated: 0, message: '所有联系人已分类' }; }
+
+    // ponytail: 按公司去重，同一家公司只调一次 AI，避免 1729 个联系人重复请求
+    const companyMap = new Map(); // company → contacts
+    for (const c of unlabeled) {
+      const key = c.company || '';
+      if (!companyMap.has(key)) companyMap.set(key, []);
+      companyMap.get(key).push(c);
+    }
+    const companies = [...companyMap.keys()].slice(0, 20);
+    Log.info('[AI分类]', `开始 AI 分类，未标签 ${unlabeled.length} 个联系人 × ${companies.length} 家公司（单次上限20）`);
 
     let updated = 0;
-    for (const c of unlabeled) {
-      const newType = await classifyClientAI(c.company, c.category, apiKey);
-      if (newType !== 'unlabeled' && newType !== c.clientType) {
-        c.clientType = newType;
-        updated++;
+    try {
+      for (const company of companies) {
+        const members = companyMap.get(company);
+        // ponytail: 限速保护，避免连续调用触发 DeepSeek 429
+        await new Promise(r => setTimeout(r, 1000));
+        const newType = await classifyClientAI(company, members[0]?.category || '', apiKey);
+        if (newType !== 'unlabeled') {
+          for (const c of members) {
+            if (c.clientType !== newType) {
+              c.clientType = newType;
+              updated++;
+            }
+          }
+          Log.info('[AI分类]', `${company} → ${newType}（${members.length}人）`);
+        }
       }
+    } catch (e) {
+      if (e.message === 'DeepSeek_API_Key_Invalid') {
+        return { ok: false, error: 'DeepSeek API Key 无效，请到设置页更新' };
+      }
+      throw e;
     }
-    if (updated > 0) writeContacts(contacts);
-    return { ok: true, updated, total: unlabeled.length };
+    if (updated > 0) {
+      Log.info('[AI分类]', `准备写入 ${updated} 条变更到 ${contactsPath}...`);
+      writeContacts(contacts, 'AI分类');
+      contactsCache = null; // 强制后续读取从磁盘加载
+      const diskVerify = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+      const dvAgent = diskVerify.filter(c => c.clientType === 'agent').length;
+      const dvDirect = diskVerify.filter(c => c.clientType === 'direct').length;
+      Log.info('[AI分类]', `磁盘验证: ${dvAgent} agent, ${dvDirect} direct`);
+    }
+    Log.info('[AI分类]', `完成: ${updated} 人 / ${companies.length} 家公司重新分类`);
+    if (updated > 0) deps.mainWindow?.webContents.send('contacts:changed');
+    return { ok: true, updated, total: companies.length };
+  });
+
+  // ── 读取删除记录 ──────────────────────────────────────────────────────────
+  ipcMain.handle('contacts:deletedLog', async () => {
+    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
+    try {
+      if (fs.existsSync(delLogPath)) {
+        const log = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
+        const cutoff = Date.now() - 5 * 86400000;
+        return log.filter(e => e.ts > cutoff).sort((a, b) => b.ts - a.ts);
+      }
+    } catch { /* 静默 */ }
+    return [];
   });
 
   // ── 单个联系人 upsert（email 唯一）─────────────────────────────────────
@@ -512,7 +612,7 @@ function register(ipcMain, deps) {
         existing.firstName = split.firstName;
         existing.lastName = split.lastName;
       }
-      writeContacts(contacts);
+      writeContacts(contacts, 'contacts-ipc');
       return { ok: true, action: 'updated', contact: existing };
     }
 
@@ -533,12 +633,12 @@ function register(ipcMain, deps) {
       _suspicious, addedAt: new Date().toISOString(),
     };
     contacts.push(newContact);
-    writeContacts(contacts);
+    writeContacts(contacts, 'contacts-ipc');
     return { ok: true, action: 'created', contact: newContact };
   });
 
   // 暴露内部方法给其他模块使用
-  return { readContacts, writeContacts, contactsPath };
+  return { readContacts, writeContacts: (c) => writeContacts(c, 'external'), contactsPath };
 }
 
 module.exports = { register };

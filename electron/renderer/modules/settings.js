@@ -77,10 +77,6 @@ export function loadSettingsIntoForm(config) {
     document.getElementById('cfg-feishu-base-extracted').value = url.match(/\/base\/([a-zA-Z0-9_-]+)/)?.[1] || '';
     document.getElementById('cfg-feishu-table-extracted').value = url.match(/table[=\/]([a-zA-Z0-9_-]+)/)?.[1] || '';
   }
-  // 退信自定义关键词
-  const kw = config?.bounce?.keywords || [];
-  const kwEl = document.getElementById('cfg-bounce-keywords');
-  if (kwEl) kwEl.value = kw.join('\n');
 }
 
 export function collectSettingsFromForm() {
@@ -98,13 +94,6 @@ export function collectSettingsFromForm() {
   // 模式选择
   const modeEl = document.getElementById('cfg-schedule-mode');
   if (modeEl && modeEl.value) { if (!config.schedule) config.schedule = {}; config.schedule.mode = modeEl.value; }
-  // 退信自定义关键词
-  const kwEl = document.getElementById('cfg-bounce-keywords');
-  if (kwEl) {
-    const kw = kwEl.value.split('\n').map(s => s.trim()).filter(Boolean);
-    if (!config.bounce) config.bounce = {};
-    config.bounce.keywords = kw;
-  }
   return config;
 
   function getOrSet(obj, path, val) {
@@ -473,7 +462,6 @@ function initUpdateCheck() {
 const SETTINGS_NAV = [
   { id: 'sec-general', label: '通用' },
   { id: 'sec-mail', label: '邮件发送' },
-  { id: 'sec-detection', label: '退信与回复检测' },
   { id: 'sec-api', label: 'API 与服务' },
   { id: 'sec-advanced', label: '高级' },
 ];
@@ -743,115 +731,6 @@ function initAccountManager() {
     // ponytail: 每次切到设置页重新绑定添加按钮，防止模块加载时序导致漏绑
     const addBtn = document.getElementById('btn-add-account');
     if (addBtn && !addBtn._bound) { addBtn._bound = true; addBtn.addEventListener('click', () => openEditor(null)); }
-    initKeywordEditors();
     render();
   };
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// 关键词编辑器（退信 / 自动回复 / 回复标识）
-// ══════════════════════════════════════════════════════════════════════════════
-
-const KW_DEFAULTS = {
-  bounce: ['undelivered','退信','failure','bounce','undeliverable','mail delivery','returned mail','message undeliverable','系统退信','无法送达','投递失败','邮件被退回','未送达','发送失败','拒收','不存在','not found','user unknown','mailbox full','recipient rejected','address rejected','no-reply','배달','실패','반송','mailer-daemon','postmaster'],
-  autoreply: ['auto-reply','automatic reply','automated response','vacation','out of office','ausente','fuera de oficina','fora do escritório','自动回复','休假','automatische antwort','respuesta automática','resposta automática','réponse automatique','no-reply','noreply','mailer-daemon','postmaster'],
-  reply: ['re:','resp:','回复:','enc:','fw:','fwd:'],
-};
-
-const KW_CONFIG_PATHS = {
-  bounce: 'bounce.keywords',
-  autoreply: 'reply.autoReplyKeywords',
-  reply: 'reply.replyIndicators',
-};
-
-function _kwEditorId(type) { return `kw-${type}-editor`; }
-function _kwTagsId(type) { return `kw-${type}-tags`; }
-function _kwInputId(type) { return `kw-${type}-input`; }
-
-/** 刷新单个标签列表 UI */
-function _renderKwTags(type, tags) {
-  const container = document.getElementById(_kwTagsId(type));
-  if (!container) return;
-  container.innerHTML = tags.map(kw =>
-    `<span class="kw-tag">${escapeHtml(kw)}<span class="kw-remove" data-kw="${escapeHtml(kw)}">&times;</span></span>`
-  ).join('');
-  // 点击 × 删除
-  container.querySelectorAll('.kw-remove').forEach(el => {
-    el.addEventListener('click', async () => {
-      const current = _getKwTags(type);
-      const updated = current.filter(k => k !== el.dataset.kw);
-      _renderKwTags(type, updated);
-      await _saveKeywords(type, updated);
-    });
-  });
-}
-
-/** 读取当前标签列表 */
-function _getKwTags(type) {
-  const container = document.getElementById(_kwTagsId(type));
-  if (!container) return [];
-  return [...container.querySelectorAll('.kw-tag')].map(el => {
-    const rm = el.querySelector('.kw-remove');
-    return rm ? rm.dataset.kw : '';
-  }).filter(Boolean);
-}
-
-/** 保存到 config.json */
-async function _saveKeywords(type, tags) {
-  const config = await window.electronAPI.loadConfig() || {};
-  const path = KW_CONFIG_PATHS[type];
-  const parts = path.split('.');
-  let obj = config;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (!obj[parts[i]]) obj[parts[i]] = {};
-    obj = obj[parts[i]];
-  }
-  obj[parts[parts.length - 1]] = tags;
-  await window.electronAPI.saveConfig(config);
-}
-
-/** 加载并渲染所有关键词编辑器 */
-async function initKeywordEditors() {
-  const config = await window.electronAPI.loadConfig() || {};
-
-  for (const type of ['bounce', 'autoreply', 'reply']) {
-    const input = document.getElementById(_kwInputId(type));
-    const tagsEl = document.getElementById(_kwTagsId(type));
-    if (!input || !tagsEl) continue;
-
-    // 读取当前自定义关键词
-    const path = KW_CONFIG_PATHS[type];
-    const parts = path.split('.');
-    let obj = config;
-    for (const p of parts) obj = obj?.[p];
-    const currentTags = Array.isArray(obj) ? obj : [];
-
-    // 渲染
-    _renderKwTags(type, currentTags);
-
-    // Enter 添加
-    input.addEventListener('keydown', async (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const val = input.value.trim().toLowerCase();
-        if (!val) return;
-        const existing = _getKwTags(type);
-        if (existing.includes(val)) { input.value = ''; return; }
-        const updated = [...existing, val];
-        _renderKwTags(type, updated);
-        await _saveKeywords(type, updated);
-        input.value = '';
-      }
-    });
-
-    // 恢复默认按钮
-    const resetBtn = document.getElementById(`kw-${type}-reset`);
-    if (resetBtn) {
-      resetBtn.addEventListener('click', async () => {
-        _renderKwTags(type, []);
-        await _saveKeywords(type, []);
-        showToast('已恢复默认关键词', 'ok');
-      });
-    }
-  }
 }

@@ -463,7 +463,7 @@ function applyReplies(replies) {
   }
 
   if (matched > 0) {
-    fs.writeFileSync(cp, JSON.stringify(contacts, null, 2));
+    { const tmp = cp + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, cp); }
   }
   return { matched };
 }

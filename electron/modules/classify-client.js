@@ -1,5 +1,6 @@
 // ── 客户分类逻辑（代理 / 直客 / 未标签）─────────────────────────────────────
 const { API } = require('./core/contract');
+const { Log } = require('./core/logger');
 
 function classifyClient(company, category) {
   const companyText = (company || '').toLowerCase();
@@ -133,8 +134,24 @@ async function classifyClientAI(company, category, apiKey) {
       req.end(body);
     });
     const answer = (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
-    if (answer === 'agent' || answer === 'direct' || answer === 'unlabeled') return answer;
-  } catch { /* AI 不可用静默降级 */ }
+    if (!result) { Log.warn('[AI分类]', `${company} — API 无响应，降级关键词`); }
+    else if (answer) { Log.info('[AI分类]', `${company} — DeepSeek: "${answer}"`); }
+    else {
+      const errMsg = result?.error?.message || '';
+      Log.warn('[AI分类]', `${company} — ${errMsg || '空内容'}，原始: ${JSON.stringify(result).slice(0, 300)}`);
+      // ponytail: 认证失败/权限错误 → 直接终止，不浪费后续调用
+      if (errMsg.includes('Authentication') || errMsg.includes('invalid')) {
+        throw new Error('DeepSeek_API_Key_Invalid');
+      }
+    }
+    // ponytail: API 可能返回多余文本（如 "agent." 或 "This company is an agent"），用 includes 兜底
+    if (answer.includes('agent')) return 'agent';
+    if (answer.includes('direct')) return 'direct';
+    if (answer.includes('unlabeled')) return 'unlabeled';
+  } catch (e) {
+    if (e.message === 'DeepSeek_API_Key_Invalid') throw e; // 往上抛给 IPC 层终止
+    Log.error('[AI分类]', `${company} AI请求异常`, e.stack);
+  }
   return classifyClient(company, category);
 }
 

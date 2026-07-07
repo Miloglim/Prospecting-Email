@@ -353,4 +353,10 @@ document.getElementById('page-settings')?.addEventListener('click', async (e) =>
   if (url) await window.electronAPI.openExternal(url);
 });
 
+// 热刷新：发送完成时自动更新总览
+window.electronAPI.onHistoryChanged(() => {
+  if (document.getElementById('page-history')?.classList.contains('active')) {
+    initHistoryPage();
+  }
+});
 window.__pageHandlers['history'] = initHistoryPage;

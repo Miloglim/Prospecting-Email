@@ -6,6 +6,18 @@ let _mails = [];
 let _selectedIdx = -1;
 let _filter = 'all';
 let _loading = false;
+// ponytail: 已读状态存 localStorage，重启不丢，上限 2000 条
+function _loadViewedKeys() {
+  try { const s = localStorage.getItem('inbox-viewed'); return s ? new Set(JSON.parse(s)) : new Set(); }
+  catch { return new Set(); }
+}
+function _saveViewedKeys() {
+  const arr = [..._viewedKeys].slice(-2000);
+  localStorage.setItem('inbox-viewed', JSON.stringify(arr));
+}
+const _viewedKeys = _loadViewedKeys();
+let _initialLoadDone = false;
+const _selectedSet = new Set(); // 多选集合
 
 const TYPE_LABELS = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
 const TYPE_DOT = { bounce: '#e5484d', reply: '#22a644', 'auto-reply': '#e6a817', other: '#8b8b8b' };
@@ -15,23 +27,38 @@ export async function initInbox() {
   _selectedIdx = -1;
   const list = await window.electronAPI.listInbox();
   if (list.ok) _mails = list.data || [];
+  // 首次加载：所有存量邮件标为已读
+  if (!_initialLoadDone) {
+    _mails.forEach(m => {
+      const mkey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+      _viewedKeys.add(mkey);
+    });
+    _saveViewedKeys();
+    _initialLoadDone = true;
+  }
   renderInbox();
 }
 
 export async function doFetchInbox() {
   if (_loading) return;
   _loading = true;
-  renderInbox();
+  // 刷新按钮转圈，列表保持不动
+  const btn = document.getElementById('inbox-refresh');
+  if (btn) btn.innerHTML = `${lucide('refresh-cw', 14, 'spin')} 刷新中...`;
 
   const result = await window.electronAPI.fetchInbox();
   _loading = false;
   if (result.ok) {
-    _mails = result.data || [];
-    showToast(`收件箱已刷新 · ${_mails.length} 封`, 'ok');
+    const newData = result.data || [];
+    if (newData.length !== _mails.length) {
+      _mails = newData;
+      renderInbox();
+    }
   } else {
     showToast(`拉取失败: ${result.error}`, 'err');
   }
-  renderInbox();
+  // 恢复按钮
+  if (btn) btn.innerHTML = `${lucide('refresh-cw', 14)} 刷新`;
 }
 
 function renderInbox() {
@@ -48,18 +75,27 @@ function renderInbox() {
 
   // 统计
   const counts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
-  _mails.forEach(m => { if (counts[m.type] !== undefined) counts[m.type]++; });
+  const newCounts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
+  _mails.forEach(m => {
+    if (counts[m.type] !== undefined) counts[m.type]++;
+    const mkey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+    if (!_viewedKeys.has(mkey)) newCounts[m.type]++;
+  });
   if (countEl) {
     countEl.textContent = `共 ${_mails.length} 封 · 退信 ${counts.bounce} · 回复 ${counts.reply} · 自动回复 ${counts['auto-reply']} · 其他 ${counts.other}`;
   }
+  // 分类标签红点
+  _updateBadges(newCounts);
 
   // 左侧列表
   listEl.innerHTML = filtered.map((m, i) => {
     const realIdx = _mails.indexOf(m);
     const cls = realIdx === _selectedIdx ? 'inbox-item active' : 'inbox-item';
     const time = _shortTime(m.date);
-    return `<div class="${cls}" data-idx="${realIdx}">
-      <span class="inbox-type"><span style="color:${TYPE_DOT[m.type] || '#8b8b8b'};font-weight:600">●</span></span>
+    const mkey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+    const isNew = !_viewedKeys.has(mkey);
+    return `<div class="${cls}" data-idx="${realIdx}" data-mkey="${escapeHtml(mkey)}">
+      <span class="inbox-type"><span class="inbox-dot ${isNew ? 'inbox-dot-new' : ''}" style="color:${TYPE_DOT[m.type] || '#8b8b8b'}">●</span></span>
       <div class="inbox-meta">
         <span class="inbox-subject">${escapeHtml(m.subject || '(无主题)')}</span>
         <span class="inbox-from">${escapeHtml(m.fromName || m.from)}${m.contactCompany ? ` · ${escapeHtml(m.contactCompany)}` : ''}</span>
@@ -70,20 +106,77 @@ function renderInbox() {
 
   // 点击事件
   listEl.querySelectorAll('.inbox-item').forEach(el => {
+    // 左键点击
     el.addEventListener('click', () => {
       _selectedIdx = parseInt(el.dataset.idx);
+      const mkey = el.dataset.mkey;
+      listEl.querySelectorAll('.inbox-item').forEach(e => e.classList.remove('active'));
+      el.classList.add('active');
+      const dot = el.querySelector('.inbox-dot-new');
+      if (dot && mkey) {
+        dot.classList.remove('inbox-dot-new');
+        _viewedKeys.add(mkey);
+        _saveViewedKeys();
+        dot.addEventListener('transitionend', () => {
+          _updateBadgesAfterView(mkey);
+          renderDetail();
+        }, { once: true });
+        renderDetail();
+        return;
+      }
+      if (mkey) { _viewedKeys.add(mkey); _saveViewedKeys(); }
       renderDetail();
-      renderInbox();
+    });
+    // 右键菜单
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const idx = parseInt(el.dataset.idx);
+      // 右键项加入多选（原地标记，不重渲）
+      if (!_selectedSet.has(idx)) { _selectedSet.add(idx); el.classList.add('inbox-selected'); }
+      const selected = [..._selectedSet].sort((a, b) => b - a);
+      document.getElementById('ctx-menu')?.remove();
+      const menu = document.createElement('div');
+      menu.id = 'ctx-menu';
+      menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
+      const selCount = selected.length > 1 ? ` (${selected.length}封)` : '';
+      menu.innerHTML = `
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读${selCount}</div>
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除${selCount}</div>
+      `;
+      menu.querySelector('[data-action="read"]').addEventListener('click', () => {
+        menu.remove();
+        for (const i of selected) {
+          const m = _mails[i];
+          if (m) {
+            const mk = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+            _viewedKeys.add(mk);
+          }
+        }
+        _saveViewedKeys();
+        listEl.querySelectorAll('.inbox-selected').forEach(e => e.classList.remove('inbox-selected'));
+        _selectedSet.clear();
+      });
+      menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+        menu.remove();
+        for (const i of selected) { await window.electronAPI.deleteInboxMail(i); }
+        for (const i of selected) { _mails.splice(i, 1); }
+        if (_selectedIdx >= 0 && !_mails[_selectedIdx]) _selectedIdx = -1;
+        _selectedSet.clear();
+        renderInbox();
+      });
+      document.body.appendChild(menu);
+      const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
     });
   });
 
   // 右侧详情
   renderDetail();
 
-  // 加载中
-  if (_loading) {
-    listEl.innerHTML = `<div class="inbox-loading">${lucide('refresh-cw', 20, 'spin')} 正在拉取邮件...</div>`;
-  } else if (!filtered.length) {
+  // 空列表提示
+  if (!_loading && !filtered.length) {
     listEl.innerHTML = '<div class="inbox-loading">暂无邮件，点击刷新拉取</div>';
   }
 }
@@ -116,26 +209,36 @@ async function renderDetail() {
       <div class="inbox-detail-field"><span>时间</span><span>${time}</span></div>
       <div class="inbox-detail-field"><span>账号</span><span>${escapeHtml(m.accountLabel || m.accountId)}</span></div>
       <div class="inbox-detail-field"><span>分类</span><span><span style="color:${TYPE_DOT[m.type] || '#8b8b8b'};font-weight:600">●</span> ${typeLabel}</span></div>
-      <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `${escapeHtml(m.contactCompany)}` : '未关联'}</span></div>
+      <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a>` : '未关联'}</span></div>
     </div>
-    <iframe class="inbox-detail-body" sandbox="allow-same-origin"></iframe>
+    ${(m.matchedContacts || []).length ? `<div class="inbox-matched"><span>📋 正文中匹配</span><span>${m.matchedContacts.map(c => `${escapeHtml(c.email)} → <b>${escapeHtml(c.company)}</b>`).join(' · ')}</span></div>` : ''}
+    <div class="inbox-detail-body-wrap"><iframe class="inbox-detail-body" sandbox="allow-same-origin allow-scripts" scrolling="no"></iframe></div>
     <div class="inbox-detail-actions">
-      <button id="inbox-btn-processed">${lucide('check', 12)} ${m.processed ? '已处理' : '标记已处理'}</button>
-      <button id="inbox-btn-delete">${lucide('trash', 12)} 删除</button>
+      <button id="inbox-btn-processed" class="${m.processed ? 'done' : ''}">${m.processed ? lucide('check-circle', 12) : '<span style="font-size:14px">○</span>'} ${m.processed ? '已处理' : '标记已处理'}</button>
+      <button id="inbox-btn-delete">${lucide('trash', 12)} 删除邮件</button>
     </div>
   `;
 
-  // 正文用 iframe srcdoc 渲染（沙箱隔离，自动处理 HTML/CSS/中文）
+  // 正文用 iframe 渲染（CSS 隔离 + wrap 层提供外部滚动条）
   const iframe = el.querySelector('.inbox-detail-body');
   if (iframe) {
     const doc = body || '<p style="color:#999">(无正文)</p>';
-    iframe.srcdoc = `<html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.7;color:var(--text, #333);padding:0;margin:0;word-break:break-word}img{max-width:100%}a{color:var(--primary, #2563eb)}</style></head><body>${doc}</body></html>`;
+    iframe.srcdoc = `<html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.7;color:#333;padding:0;margin:0 8px 0 0;word-break:break-word}img{max-width:100%}a{color:#2563eb}</style></head><body>${doc}<script>parent.postMessage({h:document.body.scrollHeight},'*')</script></body></html>`;
+    // 自适应高度：收到 body 高度后撑开 iframe
+    const onMsg = (e) => {
+      if (e.data && typeof e.data.h === 'number') {
+        iframe.style.height = (e.data.h + 16) + 'px';
+        window.removeEventListener('message', onMsg);
+      }
+    };
+    window.addEventListener('message', onMsg);
   }
 
   document.getElementById('inbox-btn-processed')?.addEventListener('click', async () => {
+    m.processed = !m.processed;
     await window.electronAPI.markInboxProcessed(_selectedIdx);
-    m.processed = true;
-    showToast('已标记', 'ok');
+    showToast(m.processed ? '已标记' : '已取消标记', 'ok');
+    renderDetail();
     renderInbox();
   });
   document.getElementById('inbox-btn-delete')?.addEventListener('click', async () => {
@@ -144,6 +247,37 @@ async function renderDetail() {
     _selectedIdx = -1;
     renderInbox();
   });
+
+  // 点击公司名 → 跳转联系人页并搜索
+  el.querySelector('.inbox-link-company')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!m.contactCompany) return;
+    document.querySelector('.nav-item[data-page="contacts"]')?.click();
+    const searchInput = document.getElementById('contacts-search');
+    if (searchInput) {
+      searchInput.value = m.contactCompany;
+      searchInput.dispatchEvent(new Event('input'));
+    }
+  });
+}
+
+function _updateBadges(newCounts) {
+  ['reply','auto-reply','bounce','other'].forEach(type => {
+    const badge = document.querySelector(`#inbox-filter .inbox-filter-btn[data-filter="${type}"] .filter-badge`);
+    if (badge) badge.classList.toggle('show', newCounts[type] > 0);
+  });
+}
+
+// 动画结束后不重渲整列表，只更新被点击那封的分类红点
+function _updateBadgesAfterView(mkey) {
+  const m = _mails.find(m => `${m.accountId}|${m.uid}|${m.from}|${m.subject}` === mkey);
+  if (!m) return;
+  const newCounts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
+  _mails.forEach(m2 => {
+    const k = `${m2.accountId}|${m2.uid}|${m2.from}|${m2.subject}`;
+    if (!_viewedKeys.has(k) && newCounts[m2.type] !== undefined) newCounts[m2.type]++;
+  });
+  _updateBadges(newCounts);
 }
 
 function _shortTime(dateStr) {
@@ -159,12 +293,30 @@ function _shortTime(dateStr) {
 }
 
 // ── 筛选 ────────────────────────────────────────────────────────────────
-document.getElementById('inbox-filter')?.addEventListener('change', (e) => {
-  _filter = e.target.value;
+document.getElementById('inbox-filter')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.inbox-filter-btn');
+  if (!btn) return;
+  document.querySelectorAll('#inbox-filter .inbox-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _filter = btn.dataset.filter;
   _selectedIdx = -1;
   renderInbox();
 });
 
 document.getElementById('inbox-refresh')?.addEventListener('click', doFetchInbox);
+document.getElementById('inbox-sync-tags')?.addEventListener('click', async () => {
+  const btn = document.getElementById('inbox-sync-tags');
+  btn.disabled = true; btn.textContent = '同步中...';
+  const r = await window.electronAPI.syncInboxTags();
+  showToast(r.ok ? (r.message || '同步完成') : ('同步失败: ' + (r.error || '')), r.ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '同步标签';
+});
 
+// 热刷新：后台拉到新邮件时自动更新列表
+window.electronAPI.onInboxChanged(async () => {
+  if (document.getElementById('page-inbox')?.classList.contains('active')) {
+    const list = await window.electronAPI.listInbox();
+    if (list.ok) { _mails = list.data || []; renderInbox(); }
+  }
+});
 window.__pageHandlers['inbox'] = initInbox;

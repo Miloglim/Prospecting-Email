@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchContacts: (query) => ipcRenderer.invoke('contacts:search', query),
   deepSearchContacts: (website, company) => ipcRenderer.invoke('contacts:deepSearch', website, company),
   upsertContact: (contact) => ipcRenderer.invoke('contacts:upsert', contact),
+  getDeletedContactsLog: () => ipcRenderer.invoke('contacts:deletedLog'),
 
   // 模板
   getTemplateLibrary: () => ipcRenderer.invoke('template:getLibrary'),
@@ -89,6 +90,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   markInboxProcessed: (index) => ipcRenderer.invoke('inbox:markProcessed', index),
   linkInboxContact: (index, contactId, company) => ipcRenderer.invoke('inbox:linkContact', index, contactId, company),
   deleteInboxMail: (index) => ipcRenderer.invoke('inbox:delete', index),
+  syncInboxTags: () => ipcRenderer.invoke('inbox:syncTags'),
+
+  onContactsChanged: (cb) => { ipcRenderer.on('contacts:changed', cb); return () => ipcRenderer.removeListener('contacts:changed', cb); },
+  onInboxChanged: (cb) => { ipcRenderer.on('inbox:changed', cb); return () => ipcRenderer.removeListener('inbox:changed', cb); },
+  onHistoryChanged: (cb) => { ipcRenderer.on('history:changed', cb); return () => ipcRenderer.removeListener('history:changed', cb); },
 
   checkBounces: () => ipcRenderer.invoke('bounce:check'),
   clearBounceCursor: () => ipcRenderer.invoke('bounce:clear'),

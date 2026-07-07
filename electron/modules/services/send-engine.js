@@ -37,7 +37,7 @@ function _tagContacts(emails, accountId, accountLabel) {
         }
       }
     }
-    if (changed) fs.writeFileSync(contactsPath, JSON.stringify(contacts, null, 2));
+    if (changed) { const tmp = contactsPath + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, contactsPath); }
   } catch { /* 联系人文件锁或损坏，静默跳过 */ }
 }
 
@@ -555,11 +555,11 @@ async function runSendBatch(deps, sendProgress) {
   }
   Log.info("发信", "完成: 成功" + sent + "封, 失败" + failed + "封");
   if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: queueLen, sent, failed, _testMode: ctx.testMode || undefined });
+  if (!deps.isPaused && !deps.currentSendAbort) deps.mainWindow?.webContents.send('history:changed');
   if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Prospector", body: `发送完成: 成功 ${sent} 封` }).show();
-  if (!ctx.testMode) {
-    scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
-    require('./reply-checker').scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
-  }
+  // ponytail: 老退信/回复检测已由收件箱接管
+  // scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
+  // require('./reply-checker').scheduleAutoReplyCheck(deps.mainWindow, deps.tray);
 }
 
 // ── 自动退信调度 ──────────────────────────────────────────────────────────
@@ -579,7 +579,7 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
         for (const c of contacts) { if ((c.email || '').toLowerCase().trim() === key) { c.bounced = true; c.bounceType = b.type || 'unknown'; c.bounceReason = b.reason || ''; c.bouncedAt = c.bouncedAt || new Date().toISOString(); matched++; } }
       }
       if (matched > 0) {
-        fs.writeFileSync(cp, JSON.stringify(contacts, null, 2));
+        { const tmp = cp + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, cp); }
         if (tray) new (require('electron').Notification)({ title: '📨 退信检测', body: `发现 ${result.bounced.length} 封退信，已标记 ${matched} 个联系人` }).show();
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bounce:autoDetected', { count: result.bounced.length, matched });
       }

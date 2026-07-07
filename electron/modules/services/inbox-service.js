@@ -13,23 +13,56 @@ const CACHE_PATH = path.join(APP_ROOT, 'data', 'inbox-cache.json');
 const CURSOR_PATH = path.join(APP_ROOT, 'data', 'inbox-cursor.json');
 const DELETED_PATH = path.join(APP_ROOT, 'data', 'inbox-deleted.json');
 
-// ── 关键词分类 ───────────────────────────────────────────────────────────────
-const BOUNCE_KW = ['undelivered','returned mail','delivery failure','mail delivery','returned to sender',
-  'message could not be delivered','delivery status notification','failure notice','mail system',
-  'address rejected','user unknown','mailbox full','not found','does not exist','devuelto',
-  'rebotado','devolución','no entregado','dirección de correo','no existe','bandeja llena'];
-const AUTO_REPLY_KW = ['auto','automatic','automática','automático','ausente','out of office',
-  'vacation','vacaciones','feriado','holiday','out of the office','fuera de la oficina',
-  'ausencia','ooo','away from','no estaré','estare ausente','estoy fuera'];
-const REPLY_INDICATORS = ['re:','resp:','rv:','enc:'];
+// ── 关键词加载（data/inbox-keywords.json）────────────────────────────────
+const KW_PATH = path.join(APP_ROOT, 'data', 'inbox-keywords.json');
 
-function _classify(subject, from) {
+let _kw = null;
+function _loadKeywords() {
+  if (_kw) return _kw;
+  try {
+    if (fs.existsSync(KW_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(KW_PATH, 'utf-8'));
+      // 展平：新格式 {_note, words} → 数组，兼容旧格式（直接为数组）
+      const flat = {};
+      const keys = ['bounce_subject','bounce_senders','bounce_body','bounce_left','auto_reply','reply_prefix','inquiry'];
+      for (const k of keys) {
+        const v = raw[k];
+        flat[k] = Array.isArray(v) ? v : (v?.words || []);
+      }
+      _kw = flat;
+      return _kw;
+    }
+  } catch (e) { Log.error('[收件箱]', '关键词文件读取失败', e.stack); }
+  // 兜底：空数组，全部归为 other
+  _kw = { bounce_subject:[], bounce_senders:[], bounce_body:[], bounce_left:[], auto_reply:[], reply_prefix:[], inquiry:[] };
+  return _kw;
+}
+
+function _classify(subject, from, bodySnippet) {
+  const kw = _loadKeywords();
   const s = (subject || '').toLowerCase();
   const f = (from || '').toLowerCase();
-  if (BOUNCE_KW.some(kw => s.includes(kw))) return 'bounce';
-  if (f.includes('mailer-daemon') || f.includes('postmaster') || f.includes('mail delivery')) return 'bounce';
-  if (AUTO_REPLY_KW.some(kw => s.includes(kw) || f.includes(kw))) return 'auto-reply';
-  if (REPLY_INDICATORS.some(kw => s.startsWith(kw))) return 'reply';
+  const b = (bodySnippet || '').toLowerCase();
+
+  // 1. 退信
+  // 1a. 标题含退信关键词
+  if (kw.bounce_subject.some(k => s.includes(k))) return 'bounce';
+  // 1b. 发件人是邮件系统地址
+  if (kw.bounce_senders.some(k => f.includes(k))) return 'bounce';
+  // 1c. 正文含 SMTP 错误码（5xx）或退信特征短语
+  if (/\b5\d{2}\b/.test(b)) return 'bounce';
+  if (kw.bounce_body.some(k => b.includes(k))) return 'bounce';
+  // 1d. 离职/人已不在 → 也是退信
+  if (kw.bounce_left.some(k => b.includes(k))) return 'bounce';
+
+  // 2. 自动回复：标题 或 正文前 500 字符
+  if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'auto-reply';
+
+  // 3. 回复/询盘
+  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
+  if (kw.inquiry.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'reply';
+
+  // 4. 其余
   return 'other';
 }
 
@@ -48,8 +81,9 @@ function _buildContactsIndex() {
       const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
       for (const c of contacts) {
         if (c.email) _contactsIndex[c.email.toLowerCase().trim()] = {
-          company: c.company || '', companyId: c.companyId || '', contactName: c.contactName || '',
-          firstName: c.firstName || '', lastName: c.lastName || '', clientType: c.clientType || '',
+          id: c.id || '', company: c.company || '', companyId: c.companyId || '',
+          contactName: c.contactName || '', firstName: c.firstName || '', lastName: c.lastName || '',
+          clientType: c.clientType || '', tags: c.tags || [],
         };
       }
     }
@@ -58,9 +92,41 @@ function _buildContactsIndex() {
   return _contactsIndex;
 }
 
-function _matchContact(fromEmail) {
+function _matchContact(fromEmail, fromName) {
   const idx = _buildContactsIndex();
-  return idx[(fromEmail || '').toLowerCase().trim()] || null;
+  const emailMatch = idx[(fromEmail || '').toLowerCase().trim()];
+  if (emailMatch) return emailMatch;
+  // ponytail: 邮箱没匹配到时，尝试姓名匹配（O(n) 遍历，仅在邮箱失配时触发）
+  if (fromName) {
+    const nameLower = fromName.toLowerCase().trim();
+    for (const contact of Object.values(idx)) {
+      const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(' ').toLowerCase();
+      const contactName = (contact.contactName || '').toLowerCase();
+      if ((fullName && nameLower.includes(fullName)) ||
+          (contactName && nameLower.includes(contactName))) {
+        return contact;
+      }
+    }
+  }
+  return null;
+}
+
+// ── 从正文提取邮箱 → 匹配联系人 ───────────────────────────────────────────
+function _extractBodyContacts(plainText, htmlText) {
+  const idx = _buildContactsIndex();
+  const text = (plainText || '') + ' ' + (htmlText || '').replace(/<[^>]+>/g, ' ');
+  const seen = new Set();
+  const result = [];
+  const emails = text.match(EMAIL_RE) || [];
+  for (const em of emails) {
+    if (result.length >= 10) break;
+    const contact = idx[em.toLowerCase().trim()];
+    if (contact && !seen.has(contact.companyId || contact.company)) {
+      seen.add(contact.companyId || contact.company);
+      result.push({ email: em, company: contact.company, companyId: contact.companyId || '', contactName: contact.contactName || contact.firstName || '' });
+    }
+  }
+  return result;
 }
 
 // ── 缓存读写 ──────────────────────────────────────────────────────────────────
@@ -71,8 +137,9 @@ function _readCache() {
 function _writeCache(mails) {
   const dir = path.dirname(CACHE_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const trimmed = mails.slice(-1000);
-  fs.writeFileSync(CACHE_PATH, JSON.stringify(trimmed, null, 2));
+  // ponytail: 不加格式化，避免 2000 封邮件写出几十 MB JSON
+  const trimmed = mails.slice(-2000);
+  fs.writeFileSync(CACHE_PATH, JSON.stringify(trimmed));
 }
 function _readDeleted() {
   try { return fs.existsSync(DELETED_PATH) ? new Set(JSON.parse(fs.readFileSync(DELETED_PATH, 'utf-8'))) : new Set(); }
@@ -83,7 +150,7 @@ function _writeDeleted(set) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   // 只保留最近 1000 条，限制文件大小
   const arr = [...set].slice(-1000);
-  fs.writeFileSync(DELETED_PATH, JSON.stringify(arr, null, 2));
+  fs.writeFileSync(DELETED_PATH, JSON.stringify(arr));
 }
 function _readCursor() {
   try { return fs.existsSync(CURSOR_PATH) ? JSON.parse(fs.readFileSync(CURSOR_PATH, 'utf-8')) : {}; }
@@ -92,20 +159,57 @@ function _readCursor() {
 function _writeCursor(data) {
   const dir = path.dirname(CURSOR_PATH);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(CURSOR_PATH, JSON.stringify(data, null, 2));
+  fs.writeFileSync(CURSOR_PATH, JSON.stringify(data));
+}
+
+// ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
+function _syncTagsToContacts(newMails) {
+  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: 'replied', 'auto-reply': 'autoreply' };
+  const updates = {}; // contactDbId → tag
+  for (const m of newMails) {
+    const tag = TYPE_TAG[m.type];
+    if (!tag || !m.contactDbId) continue;
+    if (!m.contactTags.includes(tag)) updates[m.contactDbId] = tag;
+  }
+  if (!Object.keys(updates).length) return;
+  try {
+    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
+    if (!fs.existsSync(cp)) return;
+    // ponytail: 读取 → 修改 → 原子写入，始终基于盘上最新版本
+    const onDisk = JSON.parse(fs.readFileSync(cp, 'utf-8'));
+    let synced = 0;
+    for (const c of onDisk) {
+      const tag = updates[c.id];
+      if (tag) {
+        c.tags = c.tags || [];
+        if (!c.tags.includes(tag)) { c.tags.push(tag); synced++; }
+      }
+    }
+    if (synced > 0) {
+      const tmp = cp + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(onDisk));
+      fs.renameSync(tmp, cp);
+      Log.info('[写盘]', `收件箱标签 → ${cp} (agent=${onDisk.filter(c=>c.clientType==='agent').length})`);
+      Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
+    }
+  } catch (e) { Log.error('[收件箱]', '标签同步失败', e.stack); }
 }
 
 // ── 用 mailparser 解析 raw source → 统一格式 ────────────────────────────────
 async function _parseRaw(rawSource, uid, accountId) {
   try {
-    // ponytail: mailparser v3 兼容性 — Buffer 转 binary string 保留原始字节
+    // ponytail: 跳过空邮件（POP3 状态行等）
+    if (!rawSource || rawSource.length < 20) return null;
     const input = typeof rawSource === 'string' ? rawSource : Buffer.from(rawSource).toString('binary');
     const parsed = await simpleParser(input);
     const fromAddr = parsed.from?.value?.[0]?.address || '';
     const fromName = parsed.from?.value?.[0]?.name || parsed.from?.text || fromAddr;
     const subject = parsed.subject || '(无主题)';
-    const type = _classify(subject, fromAddr);
-    const contact = _matchContact(fromAddr);
+    const bodySnippet = parsed.text ? parsed.text.slice(0, 1000) : '';
+    const type = _classify(subject, fromAddr, bodySnippet);
+    const contact = _matchContact(fromAddr, fromName);
+    // 正文中提取邮箱 → 匹配联系人
+    const matchedContacts = _extractBodyContacts(parsed.text || '', parsed.html || '');
     const body = parsed.html || parsed.text || '';
     if (!fromAddr && !parsed.subject) {
       Log.warn('[收件箱]', `mailparser 无发件人+主题 — len=${input.length} 前200字: ${input.slice(0, 200)}`);
@@ -118,6 +222,9 @@ async function _parseRaw(rawSource, uid, accountId) {
       type,
       contactCompany: contact?.company || '',
       contactId: contact?.companyId || '',
+      contactDbId: contact?.id || '',
+      contactTags: contact?.tags || [],
+      matchedContacts: matchedContacts || [],
       processed: false,
     };
   } catch (e) {
@@ -142,7 +249,7 @@ function _imapFetch(cfg, sinceDays) {
         const since = new Date(Date.now() - sinceDays * 86400000);
         imap.search([['SINCE', since]], (err, results) => {
           if (err || !results?.length) { imap.end(); return resolve(rawSources); }
-          const toFetch = results.slice(-50);
+          const toFetch = results.slice(-30);
           // ponytail: 取完整 raw source，mailparser 自动处理所有 MIME
           const fetch = imap.fetch(toFetch, { bodies: '', struct: true });
           fetch.on('message', (msg) => {
@@ -177,14 +284,26 @@ function _pop3ReadLine(sock, timeoutMs) {
   });
 }
 function _pop3ReadRaw(sock, timeoutMs) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const chunks = [];
-    const timer = setTimeout(() => { sock.removeAllListeners('data'); resolve(Buffer.concat(chunks)); }, timeoutMs || 30000);
+    let totalLen = 0;
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); resolve(Buffer.concat(chunks, totalLen)); }, timeoutMs || 15000);
     const onData = (d) => {
       chunks.push(d);
-      // 检查所有已收数据尾部是否有 \r\n.\r\n（POP3 多行结束标记）
-      const all = Buffer.concat(chunks).toString();
-      if (/\r?\n\.\r?\n/.test(all)) { clearTimeout(timer); sock.removeListener('data', onData); resolve(Buffer.concat(chunks)); }
+      totalLen += d.length;
+      if (totalLen < 5) return;
+      // ponytail: 只拼末尾 200 字节查结束标记，避免 O(n²) 全量拼接
+      let scanned = 0;
+      const tailChunks = [];
+      for (let i = chunks.length - 1; i >= 0 && scanned < 200; i--) {
+        tailChunks.unshift(chunks[i]);
+        scanned += chunks[i].length;
+      }
+      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString())) {
+        clearTimeout(timer);
+        sock.removeListener('data', onData);
+        resolve(Buffer.concat(chunks, totalLen));
+      }
     };
     sock.on('data', onData);
   });
@@ -199,9 +318,25 @@ function _pop3Cmd(sock, cmd) {
 
 function _pop3ReadMulti(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
-    let buf = '';
+    const chunks = [];
     const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时')); }, timeoutMs || 15000);
-    const onData = (d) => { buf += d.toString(); if (/\r?\n\.\r?\n/.test(buf)) { clearTimeout(timer); sock.removeListener('data', onData); const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/); resolve(lines.length > 1 && /^[+-]/.test(lines[0]) ? lines.slice(1) : lines); } };
+    const onData = (d) => {
+      chunks.push(d);
+      // ponytail: 只拼末尾 200 字节查结束标记，避免大 UIDL 列表的 O(n²) 字符串拼接
+      let scanned = 0;
+      const tailChunks = [];
+      for (let i = chunks.length - 1; i >= 0 && scanned < 200; i--) {
+        tailChunks.unshift(chunks[i]);
+        scanned += chunks[i].length;
+      }
+      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString())) {
+        clearTimeout(timer);
+        sock.removeListener('data', onData);
+        const buf = Buffer.concat(chunks).toString();
+        const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/);
+        resolve(lines.length > 1 && /^[+-]/.test(lines[0]) ? lines.slice(1) : lines);
+      }
+    };
     sock.on('data', onData);
   });
 }
@@ -233,12 +368,18 @@ async function _pop3Fetch(cfg, sinceDays) {
       .filter(([, uid]) => uid !== lastUid)
       .map(([n]) => parseInt(n))
       .sort((a, b) => b - a)
-      .slice(0, 50);
-    if (!ids.length) ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 20);
+      .slice(0, 30);
+    // ponytail: 有游标说明不是第一次拉，没新邮件直接返回
+    if (!ids.length) {
+      if (lastUid) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
+      ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 30);
+    }
     let newUid = lastUid;
     for (const n of ids) {
       try {
-        rawSources.push(await _pop3Cmd(sock, `RETR ${n}`));
+        const raw = await _pop3Cmd(sock, `RETR ${n}`);
+        raw._pop3Seq = String(n);
+        rawSources.push(raw);
         if (!newUid || uidMap[n]) newUid = uidMap[n];
       } catch { continue; }
     }
@@ -252,7 +393,20 @@ async function _pop3Fetch(cfg, sinceDays) {
 }
 
 // ── 主入口 ──────────────────────────────────────────────────────────────────
+let _fetchLock = false;
+let _fetchLockTime = 0;
 async function fetchInbox(configPath) {
+  // 锁超时：超过 5 分钟认为上次卡死，强制释放
+  if (_fetchLock && Date.now() - _fetchLockTime > 120000) {
+    Log.warn('[收件箱]', '上次拉取超过2分钟未完成，强制释放锁');
+    _fetchLock = false;
+  }
+  if (_fetchLock) { Log.info('[收件箱]', '上一次拉取未完成，跳过'); return _readCache(); }
+  _fetchLock = true;
+  _fetchLockTime = Date.now();
+  try { return await _fetchInbox(configPath); } finally { _fetchLock = false; }
+}
+async function _fetchInbox(configPath) {
   if (!fs.existsSync(configPath)) return [];
   let config;
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return []; }
@@ -262,47 +416,65 @@ async function fetchInbox(configPath) {
 
   const existing = _readCache();
   const deletedSet = _readDeleted();
-  const existingKeys = new Set(existing.map(m => `${m.accountId}|${m.uid}|${m.from}|${m.subject}`));
+  // uid+accountId 去重，保留 POP3/IPAM 序列号作为唯一标识
+  const existingKeys = new Set(existing.map(m => `${m.accountId}|${m.uid}`));
 
-  let newMails = [];
+  // ponytail: 多账号并行拉取，不再串行排队
+  const activeAccounts = [];
   for (const acc of accounts) {
     if (acc.active === false) continue;
     const cfg = acc.imap || { host: acc.smtp?.host?.replace('smtp.', 'pop3.') || '', port: 995, user: acc.smtp?.user || '', pass: acc.smtp?.pass || '' };
     if (!cfg.host || !cfg.user) continue;
+    activeAccounts.push({ acc, cfg });
+  }
 
+  const results = await Promise.all(activeAccounts.map(async ({ acc, cfg }) => {
     Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port})...`);
     try {
       let rawSources = [];
       if (cfg.host.includes('imap') || cfg.port === 993) {
-        rawSources = await _imapFetch(cfg, 7);
+        rawSources = await _imapFetch(cfg, 2);
       } else {
-        rawSources = await _pop3Fetch(cfg, 7);
+        rawSources = await _pop3Fetch(cfg, 2);
       }
-      // mailparser 解析每个 raw source（顺序处理避免 CPU 峰值）
       Log.info('[收件箱]', `${acc.label || cfg.user} 收到 ${rawSources.length} 封原始邮件，解析中...`);
-      let parsedOk = 0;
+      const mails = [];
       for (const raw of rawSources) {
-        const m = await _parseRaw(raw, '', cfg.user);
+        const uid = raw._pop3Seq || '';
+        const m = await _parseRaw(raw, uid, cfg.user);
         if (!m) continue;
-        parsedOk++;
         m.accountLabel = acc.label || cfg.user;
-        const key = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
-        if (!existingKeys.has(key) && !deletedSet.has(key)) {
-          existingKeys.add(key);
-          newMails.push(m);
-        }
+        mails.push(m);
       }
-      Log.info('[收件箱]', `${acc.label || cfg.user} 解析完成: ${parsedOk}/${rawSources.length} 封`);
+      Log.info('[收件箱]', `${acc.label || cfg.user} 解析完成: ${mails.length}/${rawSources.length} 封`);
+      return mails;
     } catch (e) {
       Log.warn('[收件箱]', `${acc.label || cfg.user} 拉取失败: ${e.message}`);
+      return [];
     }
+  }));
+
+  // 合并去重：uid+accountId 唯一，过滤已删除
+  const newMails = [];
+  for (const m of results.flat()) {
+    const dedupKey = `${m.accountId}|${m.uid}`;
+    const delKey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+    if (existingKeys.has(dedupKey)) continue;
+    if (deletedSet.has(delKey)) continue;
+    existingKeys.add(dedupKey);
+    newMails.push(m);
   }
 
+  // 同步分类标签到联系人表
+  if (newMails.length) _syncTagsToContacts(newMails);
+
+  // ponytail: 直接返回内存数据，避免写完又读
   if (newMails.length) {
-    const merged = [...newMails, ...existing].slice(-500);
+    const merged = [...newMails, ...existing].slice(-2000);
     _writeCache(merged);
+    return merged;
   }
-  return _readCache();
+  return existing;
 }
 
 function listInbox() {
@@ -317,7 +489,7 @@ function getBody(index) {
 
 function markProcessed(index) {
   const mails = _readCache();
-  if (mails[index]) { mails[index].processed = true; _writeCache(mails); }
+  if (mails[index]) { mails[index].processed = !mails[index].processed; _writeCache(mails); }
 }
 
 function linkContact(index, contactId, company) {
@@ -338,4 +510,11 @@ function deleteMail(index) {
   _writeCache(mails);
 }
 
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail };
+function syncAllTags() {
+  const mails = _readCache();
+  if (!mails.length) return { ok: true, synced: 0, message: '缓存为空' };
+  _syncTagsToContacts(mails);
+  return { ok: true, synced: 1, message: `已扫描 ${mails.length} 封缓存邮件` };
+}
+
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, syncAllTags };

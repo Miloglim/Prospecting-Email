@@ -639,27 +639,26 @@ export async function renderSelectedCards() {
   try { userTemplates = await window.electronAPI.listUserTemplates(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 
   for (const name of selected) {
-    if (!S.selectedCards[name]) {
-      const members = S.sendCompanies[name] || [];
-      const ctype = members[0]?.clientType || 'unlabeled';
-      const hist = S.sendHistory[name];
-      const stage = hist?.stage || 'cold';
-      const lang = countryToLang(members[0]?.country || '');
-      const usedSentences = hist?.usedSentences || [];
-      // ponytail: 仅「用户模板」模式使用用户模板，「自适应」始终用预设库
-      if (tplMode === 'general') {
-        const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang);
-        if (matchedTpls.length) {
-          const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
-          CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl });
-        } else {
-          CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
-        }
+    const members = S.sendCompanies[name] || [];
+    const ctype = members[0]?.clientType || 'unlabeled';
+    const hist = S.sendHistory[name];
+    const stage = hist?.stage || 'cold';
+    const lang = countryToLang(members[0]?.country || '');
+    const usedSentences = hist?.usedSentences || [];
+    // ponytail: 每次加入队列时重新读取全局模板模式，不保留旧选择
+    if (tplMode === 'general') {
+      const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang);
+      if (matchedTpls.length) {
+        const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
+        CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl });
       } else {
         CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
       }
+    } else {
+      CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
     }
   }
+  const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
   CS.pruneCards(selected);
   if (container) {
     container.innerHTML = selected.map(name => {
@@ -675,11 +674,10 @@ export async function renderSelectedCards() {
       const ctry = escapeHtml(members[0]?.country || '');
       const nextLabel = S.STAGE_LABELS_SEND[S.STAGE_NEXT_SEND[card.stage]] || 'F1';
       const typeTag = clientTypeTag(card.type);
-      const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
       const tplLabel = typeLabelMap[card.type] || '通用模板';
       const tplSourceTag = card._templateSource === 'user'
-        ? `<span style="color:var(--primary);font-weight:600">📝 用户: ${escapeHtml(card._userTemplate?.name || '')}</span>`
-        : `<span>📋 预设</span>`;
+        ? `<span style="color:var(--primary);font-weight:600">📝 ${escapeHtml(card._userTemplate?.name || '')}</span>`
+        : `<span>📋 ${typeLabelMap[card.type] || '自适应'}</span>`;
       const hist2 = S.sendHistory[name];
       const startedStr = hist2?.startedAt ? `<span>${formatDate(hist2.startedAt)}</span>` : '';
       const daysStr2 = hist2?.startedAt ? `<span style="color:var(--accent);font-weight:600">${daysSince(hist2.startedAt)}</span>` : '';
@@ -737,11 +735,13 @@ async function addToQueue() {
     if (!members.length) continue;
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => (m.tags || []).includes('reached')); // 已触达不入队
-    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact')); // 被联系人退回也跳过
+    const reachedMembers = members.filter(m => (m.tags || []).includes('reached'));
+    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
+    const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
+    const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
     const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
-    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m));
+    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if (!stage || stage === 'cold') needReset.push({ name, count: members.length });
@@ -771,11 +771,11 @@ async function addToQueue() {
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
     const reachedMembers = members.filter(m => (m.tags || []).includes('reached'));
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
+    const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
+    const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    // 已通过 _sentBy 标记的联系人（实时拉取 contacts.json，不受内存快照过期影响）
     const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
-    // 已在队列中（未发/发送中）的联系人，防重复添加
     const queuedEmails = new Set();
     S.queue.forEach(q => {
       if (q.status === 'pending' || q.status === 'sending') {
@@ -783,7 +783,7 @@ async function addToQueue() {
       }
     });
     const alreadyQueued = members.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !alreadyQueued.includes(m));
+    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !alreadyQueued.includes(m));
     if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
     if (taggedSent.length) skippedDupOrBounced += taggedSent.length;
 
@@ -859,7 +859,7 @@ async function addToQueue() {
         _stage: stage, _type: card.type, _lang: card.lang, _country: members[0]?.country || '',
         _tplInfo: useUserTpl ? `user:${card._userTemplate?.id}` : [groupTpl?.hook?.id, groupTpl?.pain?.id, groupTpl?.proof?.id, groupTpl?.cta?.id, groupTpl?.followup?.id].filter(Boolean).join('·'),
         _templateSource: card._templateSource || 'preset',
-        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : '',
+        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : (typeLabelMap[card.type] || '自适应'),
         _groupOf: totalGroups > 1 ? name : undefined, _groupSeq: totalGroups > 1 ? g : undefined, _groupTotal: totalGroups > 1 ? totalGroups : undefined,
         _batchLabel: batchLabel,
         _recipientStatus: groupEmails.map(e => ({ email: e, status: 'pending' })),
@@ -876,8 +876,6 @@ async function addToQueue() {
     return await showAlert(`所选公司无法加入队列：${reasons.join('，')}`);
   }
   if (reactivatedCount > 0) showToast(lucide('refresh-cw',12) + ` ${reactivatedCount} 个联系人已重置，${needReset.length} 家公司可重新发送`, 'ok');
-  if (skippedQueued > 0) showToast(`已自动跳过 ${skippedQueued} 个已在队列中的联系人`, 'warn');
-  if (skippedDupOrBounced > 0) showToast(`已自动跳过 ${skippedDupOrBounced} 个已退信/已发送联系人`, 'warn');
   saveQueue();
   document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
   // 清空选择，防止二次添加

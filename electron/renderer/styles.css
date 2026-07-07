@@ -770,11 +770,12 @@ select option { font-size: 12px; }
 .ci-stage-archived { background:#fce4ec; color:#c62828; }
 
 /* 分类筛选标签 */
-.contacts-filter { display: flex; gap: 6px; margin-bottom: 10px; }
+.contacts-filter { display: flex; align-items:center; gap: 4px; margin-bottom: 8px; flex-wrap:wrap; }
+.cf-sep { color:var(--border); margin:0 2px; user-select:none; font-size:11px; }
 .cf-tab {
-  padding: 5px 14px; border: 1px solid var(--border); border-radius: 16px;
-  background: #fff; font-size: 12px; cursor: pointer; color: var(--text-secondary);
-  transition: all 0.15s;
+  padding: 3px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: #fff; font-size: 11px; cursor: pointer; color: var(--text-secondary);
+  transition: all 0.15s; display:flex; align-items:center; gap:3px;
 }
 .cf-tab:hover { background: #e8eaf6; }
 .cf-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
