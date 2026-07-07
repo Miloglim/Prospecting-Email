@@ -86,30 +86,24 @@ export async function loadDashboard(){
     document.getElementById('stat-sent').textContent=s.sentToday;
     document.getElementById('stat-remaining').textContent=s.remaining;
     document.getElementById('stat-queue').textContent=S.queue.filter(e=>e.status==='pending').length;
-    // 回复率 — 从联系人数据库统计今日回复
+    // 回复邮件 — 统计标签含 replied/reached 的联系人
     try{
       const contacts=await window.electronAPI.getContacts();
-      const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
-      const todayReplied=contacts.filter(c=>c.replied&&(c.repliedAt||'').slice(0,10)===today).length;
-      const todaySent=s.sentToday||0;
-      document.getElementById('dash-reply-rate').textContent=todaySent>0?(todayReplied/todaySent*100).toFixed(1)+'%':'—';
+      const repliedN=contacts.filter(c=>(c.tags||[]).includes('replied')).length;
+      const reachedN=contacts.filter(c=>(c.tags||[]).includes('reached')).length;
+      document.getElementById('dash-reply-rate').textContent=repliedN+reachedN>0?repliedN+reachedN:'—';
+      document.getElementById('dash-reply-label').textContent=`回复邮件 · 有回复${repliedN} 已触达${reachedN}`;
       // 今日新增线索
+      const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
       const todayNew=contacts.filter(c=>(c.addedAt||'').slice(0,10)===today);
       const newCompanies=new Set(todayNew.map(c=>c.company).filter(Boolean)).size;
       document.getElementById('stat-new').textContent=todayNew.length?`${todayNew.length}人 / ${newCompanies}家`:'—';
     }catch(e){document.getElementById('dash-reply-rate').textContent='—';document.getElementById('stat-new').textContent='—';}
-    // 退信率 — 从退信日志取今日数据
+    // 退回邮件 — 独立计数器（删联系人不影响）
     try{
-      const blog=await window.electronAPI.loadBounceLog();
-      const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
-      const records=blog.data||blog||[];
-      // 兼容邮件头日期格式：尝试解析后转为 YYYY-MM-DD
-      const todayBounces=records.filter(b=>{
-        if(!b.date) return false;
-        try{const d=new Date(b.date);if(isNaN(d.getTime())) return false;return d.toLocaleDateString('en-CA',{timeZone:'Asia/Shanghai'})===today;}catch{return false;}
-      }).length;
-      const todaySent=s.sentToday||0;
-      document.getElementById('dash-bounce-rate').textContent=todaySent>0?(todayBounces/todaySent*100).toFixed(1)+'%':'—';
+      const bc=await window.electronAPI.getBounceCount();
+      document.getElementById('dash-bounce-rate').textContent=bc.total>0?bc.total:'—';
+      document.getElementById('dash-bounce-label').textContent=`退回邮件 · 今日${bc.today} 累计${bc.total}`;
     }catch(e){document.getElementById('dash-bounce-rate').textContent='—';}
     // 进度条
     const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;

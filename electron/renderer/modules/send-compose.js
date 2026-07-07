@@ -715,6 +715,8 @@ export async function renderSelectedCards() {
 // ── 加入队列 ────────────────────────────────────────────────────────
 // ponytail: 从 app.js 迁移，适配 S.* 全局状态
 async function addToQueue() {
+  try {
+  const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
   const selected = getSelectedCompanies();
   if (!selected.length) return await showAlert('请先勾选左侧公司');
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
@@ -883,6 +885,10 @@ async function addToQueue() {
   // 跳转到发送队列
   const queueNav = document.querySelector('[data-page="queue"]');
   if (queueNav) queueNav.click();
+  } catch (e) {
+    showToast(`加入队列失败: ${e.message}`, 'err');
+    console.error('addToQueue error:', e);
+  }
 }
 
 // ── 用户模板匹配 ────────────────────────────────────────────────────

@@ -303,6 +303,13 @@ function pauseDelay() {
   _delayTimer = null;
   _delayTotal -= (Date.now() - _delayStarted);
   if (_delayTotal < 0) _delayTotal = 0;
+  // ponytail: 持久化暂停时的剩余延迟，防重启跳过倒计时
+  if (_delayTotal > 0) {
+    try {
+      const statePath = path.join(APP_ROOT, 'data', 'send-state.json');
+      fs.writeFileSync(statePath, JSON.stringify({ pendingDelaySec: Math.ceil(_delayTotal / 1000), delayStartedAt: Date.now(), status: 'paused' }));
+    } catch { /* 状态文件写入失败不阻塞 */ }
+  }
 }
 
 function resumeDelay() {

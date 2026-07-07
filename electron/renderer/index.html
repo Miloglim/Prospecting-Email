@@ -194,11 +194,11 @@
           <div class="dash-progress-text" id="dash-progress-text">等待发送</div>
         </div>
         <div class="dash-card dash-metric" data-card-id="dash-reply-rate">
-          <div class="dash-card-label">回复率</div>
+          <div class="dash-card-label" id="dash-reply-label">回复邮件</div>
           <div class="dash-metric-value" id="dash-reply-rate">—</div>
         </div>
         <div class="dash-card dash-metric" data-card-id="dash-bounce-rate">
-          <div class="dash-card-label">退信率</div>
+          <div class="dash-card-label" id="dash-bounce-label">退回邮件</div>
           <div class="dash-metric-value" id="dash-bounce-rate">—</div>
         </div>
         <div class="dash-card dash-metric" data-card-id="dash-window">
@@ -570,12 +570,14 @@
       <div class="inbox-toolbar">
         <button id="inbox-refresh" style="min-width:90px"><span data-icon="refresh-cw"></span> 刷新</button>
         <button id="inbox-sync-tags" class="secondary" style="font-size:12px;padding:4px 10px">同步标签</button>
+        <button id="inbox-clear" class="secondary" style="font-size:12px;padding:4px 10px">清除记录</button>
         <span id="inbox-count" style="font-size:12px;color:var(--text-secondary)"></span>
       </div>
       <div class="inbox-container">
         <div class="inbox-left">
           <div class="inbox-filter-bar" id="inbox-filter">
             <button class="inbox-filter-btn active" data-filter="all">全部<span class="filter-badge"></span></button>
+            <button class="inbox-filter-btn" data-filter="important"><span class="filter-dot" style="color:#e6a817">★</span> 重要<span class="filter-badge"></span></button>
             <button class="inbox-filter-btn" data-filter="reply"><span class="filter-dot" style="color:#22a644">●</span> 回复<span class="filter-badge"></span></button>
             <button class="inbox-filter-btn" data-filter="auto-reply"><span class="filter-dot" style="color:#e6a817">●</span> 自动回复<span class="filter-badge"></span></button>
             <button class="inbox-filter-btn" data-filter="bounce"><span class="filter-dot" style="color:#e5484d">●</span> 退信<span class="filter-badge"></span></button>
@@ -897,9 +899,10 @@
     .inbox-subject { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text); }
     .inbox-from { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .inbox-time { font-size:10px; color:var(--text-secondary); flex-shrink:0; font-variant-numeric:tabular-nums; }
+    .inbox-matched-tag { font-size:9px; padding:1px 5px; border-radius:8px; background:var(--primary-10); color:var(--primary); flex-shrink:0; font-weight:500; }
     .inbox-loading { display:flex; align-items:center; justify-content:center; padding:40px; color:var(--text-secondary); gap:8px; font-size:13px; }
     .inbox-detail-empty { display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-secondary); font-size:13px; }
-    .inbox-detail-header { padding:0 16px; margin-bottom:12px; display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+    .inbox-detail-header { padding:0 16px; display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--border); border-radius:8px 8px 0 0; overflow:hidden; }
     .inbox-detail-field { display:flex; align-items:center; gap:8px; font-size:12px; padding:7px 12px; border-bottom:1px solid var(--border); }
     .inbox-detail-field:last-child { border-bottom:none; }
     .inbox-detail-field.wide { grid-column:1/-1; }
@@ -908,9 +911,18 @@
     .inbox-detail-field .muted { color:var(--text-secondary); font-style:italic; }
     .inbox-link-company { color:var(--primary); text-decoration:none; cursor:pointer; }
     .inbox-link-company:hover { text-decoration:underline; }
-    .inbox-matched { padding:6px 16px; margin:0 16px 8px; font-size:11px; background:var(--primary-10); border-radius:6px; display:flex; gap:8px; align-items:flex-start; }
+    .inbox-matched { padding:5px 16px; margin:0 16px; font-size:11px; background:var(--primary-10); border:1px solid var(--border); border-top:none; border-radius:0 0 8px 8px; overflow:hidden; transition:all .25s ease; }
+    .inbox-matched.muted { background:var(--bg-secondary); }
+    .inbox-matched.collapsed { max-height:24px; padding-top:3px; padding-bottom:3px; opacity:.7; }
+    .inbox-matched .drawer-arrow { margin-left:auto; font-size:10px; color:var(--text-secondary); transition:transform .25s; flex-shrink:0; }
+    .inbox-matched.collapsed .drawer-arrow { transform:rotate(-90deg); }
+    .inbox-matched-detail { overflow:hidden; transition:max-height .25s ease,opacity .25s; }
+    .inbox-matched.collapsed .inbox-matched-detail { max-height:0; opacity:0; }
     .inbox-matched span:first-child { color:var(--primary); font-weight:600; white-space:nowrap; flex-shrink:0; }
     .inbox-matched span:last-child { word-break:break-all; line-height:1.5; }
+    .inbox-match-item { display:inline-flex; align-items:center; gap:2px; }
+    .inbox-match-x { display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; border-radius:50%; cursor:pointer; color:var(--text-secondary); transition:all .15s; margin-left:1px; vertical-align:middle; }
+    .inbox-match-x:hover { background:#e5484d; color:#fff; }
     .inbox-detail-body { width:100%; border:none; background:var(--bg-secondary); }
     .inbox-detail-actions { display:flex; gap:8px; padding:0 16px; }
     .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; transition:all .15s; }

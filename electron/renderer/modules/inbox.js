@@ -1,6 +1,6 @@
 // ===== 收件箱 ==========================================================
 const S = window.S;
-import { lucide, escapeHtml, showToast, formatDate } from './shared.js';
+import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared.js';
 
 let _mails = [];
 let _selectedIdx = -1;
@@ -68,10 +68,11 @@ function renderInbox() {
   if (!listEl) return;
 
   // 筛选
-  const filtered = _filter === 'all' ? _mails : _mails.filter(m => m.type === _filter);
-  // 排序：回复 > 自动回复 > 退信 > 其他，同类内最新在前
-  const TYPE_ORDER = { reply: 0, 'auto-reply': 1, bounce: 2, other: 3 };
-  filtered.sort((a, b) => (TYPE_ORDER[a.type] ?? 3) - (TYPE_ORDER[b.type] ?? 3) || (b.date || '').localeCompare(a.date || ''));
+  const filtered = _filter === 'all' ? _mails :
+    _filter === 'important' ? _mails.filter(m => m.important) :
+    _mails.filter(m => m.type === _filter);
+  // ponytail: 按时间倒序
+  filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   // 统计
   const counts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
@@ -100,7 +101,9 @@ function renderInbox() {
         <span class="inbox-subject">${escapeHtml(m.subject || '(无主题)')}</span>
         <span class="inbox-from">${escapeHtml(m.fromName || m.from)}${m.contactCompany ? ` · ${escapeHtml(m.contactCompany)}` : ''}</span>
       </div>
+      ${m.important ? `<span style="color:#e6a817;flex-shrink:0;font-size:12px" title="重要邮件">★</span>` : ''}
       <span class="inbox-time">${time}</span>
+      ${(m.contactCompany || (m.matchedContacts || []).some(c => c.matched !== false)) ? `<span class="inbox-matched-tag">已匹配</span>` : ''}
     </div>`;
   }).join('');
 
@@ -141,10 +144,21 @@ function renderInbox() {
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
       const selCount = selected.length > 1 ? ` (${selected.length}封)` : '';
+      const isImportant = _mails[selected[0]]?.important;
       menu.innerHTML = `
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}${selCount}</div>
         <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读${selCount}</div>
         <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除${selCount}</div>
       `;
+      menu.querySelector('[data-action="important"]').addEventListener('click', async () => {
+        menu.remove();
+        for (const i of selected) {
+          await window.electronAPI.toggleInboxImportant(i);
+          if (_mails[i]) _mails[i].important = !_mails[i].important;
+        }
+        _selectedSet.clear();
+        renderInbox();
+      });
       menu.querySelector('[data-action="read"]').addEventListener('click', () => {
         menu.remove();
         for (const i of selected) {
@@ -211,7 +225,21 @@ async function renderDetail() {
       <div class="inbox-detail-field"><span>分类</span><span><span style="color:${TYPE_DOT[m.type] || '#8b8b8b'};font-weight:600">●</span> ${typeLabel}</span></div>
       <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a>` : '未关联'}</span></div>
     </div>
-    ${(m.matchedContacts || []).length ? `<div class="inbox-matched"><span>📋 正文中匹配</span><span>${m.matchedContacts.map(c => `${escapeHtml(c.email)} → <b>${escapeHtml(c.company)}</b>`).join(' · ')}</span></div>` : ''}
+    ${(() => {
+      const allMatched = [];
+      if (m.contactCompany) allMatched.push({ email: m.from, company: m.contactCompany, contactId: m.contactDbId, matched: true });
+      for (const c of (m.matchedContacts || [])) {
+        if (c.company && c.company === m.contactCompany) continue; // 去重
+        allMatched.push(c);
+      }
+      const matched = allMatched.filter(c => c.matched !== false);
+      const unmatched = allMatched.filter(c => c.matched === false);
+      if (!allMatched.length) return '<div class="inbox-matched muted"><span>未提取到邮箱</span><span class="drawer-arrow">▾</span></div>';
+      const detailHtml = [];
+      if (matched.length) detailHtml.push(`<div>${matched.map(c => `<span class="inbox-match-item">${escapeHtml(c.email)} → <b>${escapeHtml(c.company)}</b><span class="inbox-match-x" data-email="${escapeHtml(c.email)}" data-contactid="${escapeHtml(c.contactId || '')}" data-matched="1" title="删除该联系人"><svg width="8" height="8" viewBox="0 0 10 10" style="display:block"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5"/></svg></span></span>`).join(' · ')}</div>`);
+      if (unmatched.length) detailHtml.push(`<div style="color:var(--text-secondary);margin-top:4px">未匹配: ${unmatched.map(c => escapeHtml(c.email)).join(' · ')}</div>`);
+      return `<div class="inbox-matched"><span>已匹配 ${matched.length} 人 · 未匹配 ${unmatched.length} 个邮箱</span><span class="drawer-arrow">▾</span><div class="inbox-matched-detail" style="max-height:200px">${detailHtml.join('')}</div></div>`;
+    })()}
     <div class="inbox-detail-body-wrap"><iframe class="inbox-detail-body" sandbox="allow-same-origin allow-scripts" scrolling="no"></iframe></div>
     <div class="inbox-detail-actions">
       <button id="inbox-btn-processed" class="${m.processed ? 'done' : ''}">${m.processed ? lucide('check-circle', 12) : '<span style="font-size:14px">○</span>'} ${m.processed ? '已处理' : '标记已处理'}</button>
@@ -248,6 +276,43 @@ async function renderDetail() {
     renderInbox();
   });
 
+  // 下滑正文时匹配栏平滑收回
+  const wrap = el.querySelector('.inbox-detail-body-wrap');
+  const matchedBar = el.querySelector('.inbox-matched');
+  if (wrap && matchedBar) {
+    wrap.addEventListener('scroll', () => {
+      matchedBar.classList.toggle('collapsed', wrap.scrollTop > 10);
+    });
+  }
+
+  // 点击 × 删除匹配联系人
+  el.querySelectorAll('.inbox-match-x').forEach(x => {
+    x.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const email = x.dataset.email;
+      const contactId = x.dataset.contactid;
+      const isMatched = x.dataset.matched === '1';
+      // 从数据库删除
+      if (isMatched && contactId) {
+        await window.electronAPI.deleteContact(contactId);
+      }
+      // 从缓存移除
+      await window.electronAPI.removeInboxMatchedContact(_selectedIdx, email);
+      // 更新内存
+      if (m.matchedContacts) {
+        m.matchedContacts = m.matchedContacts.filter(c => c.email !== email);
+      }
+      if (email === m.from) {
+        m.contactCompany = '';
+        m.contactId = '';
+        m.contactDbId = '';
+      }
+      showToast('已删除', 'ok');
+      renderDetail();
+    });
+  });
+
   // 点击公司名 → 跳转联系人页并搜索
   el.querySelector('.inbox-link-company')?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -262,9 +327,12 @@ async function renderDetail() {
 }
 
 function _updateBadges(newCounts) {
-  ['reply','auto-reply','bounce','other'].forEach(type => {
+  ['important','reply','auto-reply','bounce','other'].forEach(type => {
     const badge = document.querySelector(`#inbox-filter .inbox-filter-btn[data-filter="${type}"] .filter-badge`);
-    if (badge) badge.classList.toggle('show', newCounts[type] > 0);
+    if (badge) {
+      const n = type === 'important' ? _mails.filter(m => m.important && !_viewedKeys.has(`${m.accountId}|${m.uid}|${m.from}|${m.subject}`)).length : newCounts[type];
+      badge.classList.toggle('show', n > 0);
+    }
   });
 }
 
@@ -304,6 +372,14 @@ document.getElementById('inbox-filter')?.addEventListener('click', (e) => {
 });
 
 document.getElementById('inbox-refresh')?.addEventListener('click', doFetchInbox);
+document.getElementById('inbox-clear')?.addEventListener('click', async () => {
+  if (!await showConfirm('确定清除全部收件箱记录？\n重要标记会丢失。\n下次拉取会重新下载。')) return;
+  await window.electronAPI.clearInbox();
+  _mails = [];
+  _selectedIdx = -1;
+  renderInbox();
+  showToast('已清除，下次拉取重新下载', 'ok');
+});
 document.getElementById('inbox-sync-tags')?.addEventListener('click', async () => {
   const btn = document.getElementById('inbox-sync-tags');
   btn.disabled = true; btn.textContent = '同步中...';

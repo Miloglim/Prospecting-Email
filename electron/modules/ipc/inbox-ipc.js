@@ -1,5 +1,6 @@
 // ── 收件箱 IPC 路由 ──────────────────────────────────────────────────────────
 const path = require('path');
+const fs = require('fs');
 const { APP_ROOT } = require('../config');
 const { Log } = require('../core/logger');
 
@@ -42,6 +43,16 @@ function register(ipcMain, deps) {
   ipcMain.handle('inbox:linkContact', async (_e, i, cid, co) => { inbox.linkContact(i, cid, co); return { ok: true }; });
   ipcMain.handle('inbox:delete', async (_e, i) => { inbox.deleteMail(i); return { ok: true }; });
   ipcMain.handle('inbox:syncTags', async () => inbox.syncAllTags());
+  ipcMain.handle('inbox:removeMatchedContact', async (_e, index, email) => { inbox.removeMatchedContact(index, email); return { ok: true }; });
+  ipcMain.handle('inbox:getBounceCount', async () => inbox.getBounceCount());
+  ipcMain.handle('inbox:toggleImportant', async (_e, i) => { inbox.toggleImportant(i); return { ok: true }; });
+  ipcMain.handle('inbox:clear', async () => {
+    const cachePath = path.join(APP_ROOT, 'data', 'inbox-cache.json');
+    const cursorPath = path.join(APP_ROOT, 'data', 'inbox-cursor.json');
+    try { if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath); } catch { /* 静默 */ }
+    try { if (fs.existsSync(cursorPath)) fs.unlinkSync(cursorPath); } catch { /* 静默 */ }
+    return { ok: true };
+  });
 
   // ── 长短时自动拉取 ────────────────────────────────────────────────────
   exports.triggerInboxFetch = () => {

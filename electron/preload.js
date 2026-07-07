@@ -91,6 +91,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   linkInboxContact: (index, contactId, company) => ipcRenderer.invoke('inbox:linkContact', index, contactId, company),
   deleteInboxMail: (index) => ipcRenderer.invoke('inbox:delete', index),
   syncInboxTags: () => ipcRenderer.invoke('inbox:syncTags'),
+  removeInboxMatchedContact: (index, email) => ipcRenderer.invoke('inbox:removeMatchedContact', index, email),
+  getBounceCount: () => ipcRenderer.invoke('inbox:getBounceCount'),
+  toggleInboxImportant: (index) => ipcRenderer.invoke('inbox:toggleImportant', index),
+  clearInbox: () => ipcRenderer.invoke('inbox:clear'),
 
   onContactsChanged: (cb) => { ipcRenderer.on('contacts:changed', cb); return () => ipcRenderer.removeListener('contacts:changed', cb); },
   onInboxChanged: (cb) => { ipcRenderer.on('inbox:changed', cb); return () => ipcRenderer.removeListener('inbox:changed', cb); },
