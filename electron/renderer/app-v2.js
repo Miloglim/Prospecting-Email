@@ -10,6 +10,7 @@ import './modules/send-history.js';
 import './modules/discover.js';
 import './modules/settings.js';
 import './modules/inbox.js';
+import { initAutoSend, teardownAutoSend } from './modules/auto-send.js';
 import { initQueue } from './modules/send-queue.js';
 
 document.getElementById('tb-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());

@@ -1,0 +1,28 @@
+{
+  "profileId": "freight-forwarder-latam",
+  "label": "拉美货代公司",
+  "companyDiscovery": {
+    "source": "apollo",
+    "nameKeywords": [
+      "freight forwarder", "freight", "cargo", "logistics",
+      "customs brokerage", "aduana", "despacho", "comex",
+      "transporte internacional"
+    ],
+    "countries": ["Colombia"],
+    "sizeRanges": ["11,50", "51,200"],
+    "maxPagesPerKeyword": 3,
+    "perPage": 25
+  },
+  "contactFilter": {
+    "requireEmail": true,
+    "perCompanyLimit": 0,
+    "titleScoring": {
+      "high": ["logistics","supply chain","procurement","import","export","freight","cargo","shipping","transport","comercio exterior","aduana","despacho","fulfillment","pricing","cotizacion"],
+      "medium": ["operations","operaciones","general manager","ceo","chief executive","owner","director","gerente general","country manager","supply","trade","distribution","sales","ventas","comercial","business development","key account","account manager","customer","cliente"]
+    }
+  },
+  "emailReveal": {
+    "smartMode": true,
+    "smartSampleSize": 3
+  }
+}

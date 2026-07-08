@@ -152,6 +152,7 @@
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
+      <li class="nav-item" data-page="auto-send"><span class="nav-icon" data-icon="radio-tower"></span> 自动发送</li>
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
       <li class="nav-item nav-parent">
         <span class="nav-icon" data-icon="mail"></span> 邮件工坊 <span class="nav-arrow" data-icon="chevron-down"></span>
@@ -316,69 +317,115 @@
     <!-- 🔍 客户开发 -->
     <section id="page-discover" class="page">
       <div class="discover-layout-v2">
-        <div class="discover-tabs">
-          <button class="discover-tab active" data-tab="find"><span data-icon="search"></span> 客户发现</button>
-          <button class="discover-tab" data-tab="lookup"><span data-icon="mail"></span> 邮箱反查</button>
+        <!-- 左列：搜索筛选器 -->
+        <div class="discover-search-col">
+          <!-- 标题行 -->
+          <div class="discover-section-head">
+            <span style="font-weight:600;font-size:13px">筛选条件</span>
+            <div style="display:flex;gap:4px;align-items:center">
+              <select id="df-saved-filters" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;max-width:90px;background:#fff">
+                <option value="">已保存...</option>
+              </select>
+              <button id="df-save-filter" title="保存当前筛选" style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">💾</button>
+              <button id="df-delete-filter" title="删除" style="display:none;font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:#fff;color:#e74c3c;cursor:pointer">🗑</button>
+            </div>
+          </div>
+
+          <!-- 国家 — 按钮选择器 -->
+          <div class="discover-section">
+            <div class="discover-section-label">国家</div>
+            <div class="chip-group" id="df-countries">
+              <button class="chip" data-val="Colombia">Colombia</button>
+              <button class="chip" data-val="Brazil">Brazil</button>
+              <button class="chip" data-val="Mexico">Mexico</button>
+              <button class="chip" data-val="Chile">Chile</button>
+              <button class="chip" data-val="Peru">Peru</button>
+              <button class="chip" data-val="Argentina">Argentina</button>
+              <button class="chip" data-val="Ecuador">Ecuador</button>
+            </div>
+          </div>
+
+          <!-- 公司名关键词 — Tag 输入 -->
+          <div class="discover-section">
+            <div class="discover-section-label">公司名关键词</div>
+            <div id="df-name-tags" class="tag-bar" onclick="this.querySelector('input')?.focus()">
+              <input id="df-name-input" class="tag-input" placeholder="输入后回车" onkeydown="window._tagKeydown(event,'df-name-tags','df-name-input','nameTags')">
+            </div>
+          </div>
+
+          <!-- 员工规模 -->
+          <div class="discover-section">
+            <div class="discover-section-label">员工规模</div>
+            <div class="chip-group" id="df-sizes">
+              <button class="chip" data-val="1,10">1 – 10</button>
+              <button class="chip" data-val="11,50">11 – 50</button>
+              <button class="chip" data-val="51,200">51 – 200</button>
+              <button class="chip" data-val="201,500">201 – 500</button>
+              <button class="chip" data-val="501,1000">501 – 1000</button>
+            </div>
+          </div>
+
+          <!-- 职位关键词 -->
+          <div class="discover-section">
+            <div class="discover-section-label">职位关键词 <span style="font-weight:400;font-size:10px;color:var(--text-secondary)">打分排序用</span></div>
+            <div id="df-title-tags" class="tag-bar" onclick="this.querySelector('input')?.focus()">
+              <input id="df-title-input" class="tag-input" placeholder="输入后回车" onkeydown="window._tagKeydown(event,'df-title-tags','df-title-input','titleTags')">
+            </div>
+          </div>
+
+          <!-- 底部固定 -->
+          <div class="discover-search-foot">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+              <label style="font-size:11px;white-space:nowrap">预算</label>
+              <input id="df-credits" type="number" value="50" min="1" max="500" style="flex:1;font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;width:60px">
+              <span style="font-size:10px;color:var(--text-secondary)">credits</span>
+            </div>
+            <button id="df-search" style="width:100%">搜索公司</button>
+            <p style="font-size:9px;color:var(--text-secondary);text-align:center;margin:6px 0 0">搜索免费 · 仅获取邮箱消耗 credits</p>
+          </div>
         </div>
-        <div class="discover-main">
-          <!-- 左列：搜索面板 -->
-          <div class="discover-search-col">
-            <div id="discover-find-search" class="discover-search-form">
-              <div class="form-group"><label>国家</label><select id="df-country"><option value="">选择国家</option></select></div>
-              <div class="form-group"><label>行业</label><input id="df-industry" placeholder="如 auto parts"></div>
-              <div class="form-group"><label>角色</label><select id="df-role"><option value="importer">进口商</option><option value="distributor">分销商</option><option value="manufacturer">制造商</option><option value="any">不限</option></select></div>
-              <div class="form-group"><label>关键词</label><input id="df-keywords" placeholder="额外关键词"></div>
-              <button id="df-search" style="width:100%;margin-top:4px">开始搜索</button>
-              <div id="df-stats" class="discover-stats" style="display:none"></div>
-            </div>
-            <div id="discover-lookup-search" class="discover-search-form" style="display:none">
-              <div class="form-group"><label>公司名</label><input id="dl-company" placeholder="公司名"></div>
-              <div style="text-align:center;color:var(--text-secondary);margin:8px 0;font-size:12px">或</div>
-              <div class="form-group"><label>已知邮箱</label><input id="dl-email" placeholder="name@company.com"></div>
-              <button id="dl-search" style="width:100%;margin-top:4px">开始反查</button>
-              <div id="dl-format" class="discover-stats" style="display:none"></div>
-            </div>
-          </div>
 
-          <!-- 中列：结果列表 -->
-          <div class="discover-results-col">
-            <div class="discover-results-head">
-              <button id="df-selectall" class="secondary" style="font-size:11px;padding:4px 10px">全选</button>
-              <button id="df-import" class="secondary" style="font-size:11px;padding:4px 10px">导入选中</button>
-              <span id="df-count" style="font-size:11px;color:var(--text-secondary);margin-left:auto"></span>
-            </div>
-            <div id="df-results" class="discover-results"></div>
-            <div id="dl-results" class="discover-results" style="display:none"></div>
-            <p class="placeholder" id="discover-results-empty">选择国家后点击搜索</p>
+        <!-- 中列：结果列表 -->
+        <div class="discover-results-col">
+          <div id="df-report-bar" style="display:none;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;margin-bottom:8px;font-size:12px;display:none;align-items:center;gap:16px;flex-wrap:wrap"></div>
+          <div class="discover-results-head">
+            <button id="df-selectall" class="secondary" style="font-size:11px;padding:4px 10px">全选</button>
+            <span id="df-count" style="font-size:11px;color:var(--text-secondary);margin-left:auto"></span>
           </div>
+          <div id="df-results" class="discover-results"></div>
+          <p class="placeholder" id="discover-results-empty">设置筛选条件后点击「搜索公司」</p>
+        </div>
 
-          <!-- 右列：详情/操作面板 -->
-          <div class="discover-detail-col">
-            <div id="discover-detail-empty" class="placeholder" style="height:100%;display:flex;align-items:center;justify-content:center;margin:0;border:none;border-radius:0">
-              ← 选择一家公司查看详情和可用操作
+        <!-- 右列：公司详情 + 联系人 -->
+        <div class="discover-detail-col">
+          <div id="discover-detail-empty" class="placeholder" style="height:100%;display:flex;align-items:center;justify-content:center;margin:0;border:none;border-radius:0">
+            ← 点击公司查看联系人
+          </div>
+          <div id="discover-detail-content" style="display:none;flex-direction:column;overflow-y:auto">
+            <h3 id="discover-detail-name" style="font-size:16px;font-weight:700;color:var(--primary);margin-bottom:8px"></h3>
+            <div id="discover-detail-fields" style="font-size:12px;line-height:1.6;margin-bottom:12px;color:var(--text-secondary)"></div>
+            <div style="border-top:1px solid var(--border);padding-top:12px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <h4 style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin:0">联系人</h4>
+                <span id="discover-detail-contact-count" style="font-size:10px;color:var(--text-secondary)"></span>
+              </div>
+              <div id="discover-detail-people" style="font-size:12px;line-height:1.6;max-height:260px;overflow-y:auto"></div>
             </div>
-            <div id="discover-detail-content" style="display:none;flex-direction:column">
-              <h3 id="discover-detail-name" style="font-size:16px;font-weight:700;color:var(--primary);margin-bottom:12px"></h3>
-              <div id="discover-detail-fields" style="font-size:13px;line-height:1.8;margin-bottom:20px"></div>
-              <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:16px">
-                <h4 style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:8px">操作</h4>
-                <div id="discover-action-btns" style="display:flex;flex-direction:column;gap:6px"></div>
-              </div>
-              <div style="border-top:1px solid var(--border);padding-top:14px">
-                <h4 style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:10px">开发进度</h4>
-                <div id="discover-pipeline" class="discover-pipeline"></div>
-              </div>
+            <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px">
+              <button id="df-reveal-company-btn" style="width:100%;display:none">✉️ 获取邮箱</button>
+              <div id="discover-reveal-result" style="display:none;font-size:11px;color:var(--primary);margin-top:8px"></div>
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- 底部操作栏 -->
-        <div class="discover-bottom-bar" id="discover-bottom-bar" style="display:none">
-          <span id="discover-import-summary"></span>
-          <div style="display:flex;gap:8px">
-            <button id="discover-go-backcheck" class="secondary">去背调页面</button>
-            <button id="discover-go-send">去邮件发送</button>
-          </div>
+      <!-- 底部批量操作栏 -->
+      <div class="discover-bottom-bar" id="discover-bottom-bar" style="display:none">
+        <span id="discover-import-summary"></span>
+        <div style="display:flex;gap:8px">
+          <button id="df-reveal-selected" class="secondary">获取选中公司邮箱</button>
+          <button id="discover-go-backcheck" class="secondary">去背调</button>
+          <button id="discover-go-send">去发信</button>
         </div>
       </div>
     </section>
@@ -523,6 +570,10 @@
       <p class="placeholder" id="queue-empty">队列为空 — 从「邮件发送」勾选公司加入队列</p>
     </section>
 
+    <!-- 🤖 自动发送 -->
+    <section id="page-auto-send" class="page">
+    </section>
+
     <!-- 📋 发送总览 -->
     <section id="page-history" class="page">
       <h2><span data-icon="file-text"></span> 发送总览 <span id="history-count" style="font-size:14px;color:var(--text-secondary);font-weight:400"></span></h2>
@@ -534,9 +585,6 @@
           <button class="htab" data-key="type" data-val="agent">代理</button>
           <button class="htab" data-key="type" data-val="direct">直客</button>
           <button class="htab" data-key="type" data-val="unlabeled">通用</button>
-          <span style="color:var(--text-secondary);margin-left:4px">国家</span>
-          <button class="htab active" data-key="country" data-val="">全部</button>
-          <span id="history-country-btns" style="display:contents"></span>
           <span style="color:var(--text-secondary);margin-left:4px">阶段</span>
           <button class="htab" data-key="stage" data-val="">全部</button>
           <button class="htab" data-key="stage" data-val="cold">冷开发</button>
@@ -953,6 +1001,65 @@
     .inbox-detail-body-wrap::-webkit-scrollbar-thumb { background:#c0c0c0; border-radius:4px; min-height:40px; }
     .inbox-left::-webkit-scrollbar-thumb:hover,
     .inbox-detail-body-wrap::-webkit-scrollbar-thumb:hover { background:#999; }
+
+    /* ═══ 自动发送 ═══ */
+    #page-auto-send.active { display:flex; flex-direction:column; height:100%; overflow-y:auto; gap:10px; padding:0; }
+    .as-statusbar { display:flex; align-items:center; justify-content:space-between; padding:8px 14px; background:var(--bg); border:1px solid var(--border); border-radius:8px; flex-shrink:0; }
+    .as-status-left { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-secondary); }
+    .as-status-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+    .as-status-dot.running { background:var(--success); animation: as-pulse 2s infinite; }
+    .as-status-dot.idle { background:var(--text-secondary); }
+    @keyframes as-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .as-status-sep { color:var(--border); }
+    .as-status-right { display:flex; gap:6px; }
+    .as-btn-primary { padding:5px 14px; border:none; border-radius:6px; background:var(--primary); color:#fff; font-size:12px; cursor:pointer; display:flex; align-items:center; gap:5px; }
+    .as-btn-primary:disabled { opacity:.5; cursor:default; }
+    .as-btn-secondary { padding:5px 14px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:5px; }
+    .as-btn-secondary:disabled { opacity:.4; cursor:default; }
+    .as-btn-sm { padding:3px 8px; border:1px solid var(--border); border-radius:4px; background:var(--bg); color:var(--text-secondary); font-size:11px; cursor:pointer; display:flex; align-items:center; gap:3px; }
+    .as-card { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; }
+    .as-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; flex-shrink:0; }
+    .as-card-header h3 { margin:0; font-size:13px; display:flex; align-items:center; gap:6px; }
+    /* 主内容：左计划+右侧栏 */
+    .as-main { display:flex; gap:12px; flex:1; min-height:0; overflow:hidden; }
+    .as-plan { flex:1; display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+    .as-plan-table-wrap { flex:1; overflow-y:auto; min-height:0; }
+    .as-plan-table { width:100%; border-collapse:collapse; font-size:11px; }
+    .as-plan-table thead { position:sticky; top:0; z-index:1; }
+    .as-plan-table th { background:var(--bg-hover,#f5f6f8); color:var(--text-secondary); font-weight:600; padding:5px 8px; text-align:left; border-bottom:1px solid var(--border); white-space:nowrap; font-size:10px; }
+    .as-plan-table td { padding:4px 8px; border-bottom:1px solid var(--border); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px; }
+    .as-empty-row { text-align:center !important; color:var(--text-secondary); padding:24px !important; }
+    .as-email-cell { font-family:monospace; font-size:10px; max-width:180px; }
+    .as-reason-cell { max-width:200px; color:var(--text-secondary); font-size:10px; }
+    /* 阶段芯片 */
+    .as-stage-chip { font-size:10px; padding:1px 6px; border-radius:8px; white-space:nowrap; font-weight:500; }
+    .as-stage-chip.stage-cold { background:#e3f2fd; color:#1565c0; }
+    .as-stage-chip.stage-f1 { background:#e8f5e9; color:#2e7d32; }
+    .as-stage-chip.stage-f2 { background:#fff3e0; color:#e65100; }
+    .as-stage-chip.stage-f3 { background:#fce4ec; color:#c62828; }
+    .as-stage-chip.stage-f4 { background:#f3e5f5; color:#6a1b9a; }
+    /* 右侧栏 */
+    .as-side { width:220px; flex-shrink:0; display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
+    .as-rules-grid { display:grid; grid-template-columns:1fr; gap:4px; }
+    .as-rule-item { display:flex; align-items:center; gap:4px; font-size:11px; }
+    .as-rule-item label { width:52px; color:var(--text-secondary); flex-shrink:0; font-size:10px; }
+    .as-rule-item input { width:44px; padding:2px 4px; border:1px solid var(--border); border-radius:4px; font-size:11px; text-align:center; background:var(--bg); color:var(--text); }
+    .as-rule-item span { font-size:10px; color:var(--text-secondary); }
+    .as-fc-day { padding:6px; border-radius:6px; background:var(--bg-hover,#f8f8f8); }
+    .as-fc-label { font-size:10px; color:var(--text-secondary); margin-bottom:2px; }
+    .as-fc-stats { font-size:11px; color:var(--text); display:flex; align-items:center; gap:4px; margin-bottom:2px; }
+    .as-fc-breakdown { display:flex; flex-wrap:wrap; gap:2px; }
+    .as-log { flex-shrink:0; max-height:150px; display:flex; flex-direction:column; }
+    .as-log-list { flex:1; overflow-y:auto; font-size:11px; min-height:0; }
+    .as-log-empty { color:var(--text-secondary); padding:10px; text-align:center; font-size:11px; }
+    .as-log-entry { display:flex; align-items:center; gap:5px; padding:3px 6px; border-bottom:1px solid var(--border); font-size:10px; white-space:nowrap; overflow:hidden; }
+    .as-log-entry:hover { background:var(--bg-hover,#f8f8f8); }
+    .as-log-icon { flex-shrink:0; }
+    .as-log-ts { flex-shrink:0; color:var(--text-secondary); width:36px; font-size:10px; }
+    .as-log-email { flex-shrink:0; max-width:140px; overflow:hidden; text-overflow:ellipsis; font-family:monospace; font-size:10px; }
+    .as-log-company { flex-shrink:0; max-width:80px; overflow:hidden; text-overflow:ellipsis; color:var(--text-secondary); }
+    .as-log-decision { flex-shrink:0; color:var(--primary); }
+    .as-log-reason { flex:1; overflow:hidden; text-overflow:ellipsis; color:var(--text-secondary); min-width:0; }
   </style>
   <script type="module" src="app-v2.js"></script>
 </body>

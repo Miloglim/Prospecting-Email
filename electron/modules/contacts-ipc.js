@@ -323,21 +323,41 @@ function register(ipcMain, deps) {
     const target = contacts.find(c => c.id === id);
     if (target?.company && target?.email) {
       removeFromSendHistory(target.company, [target.email]);
-      // 记录删除日志（5天保留）
-      const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
-      try {
-        let delLog = [];
-        if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
-        const cutoff = Date.now() - 5 * 86400000;
-        delLog = delLog.filter(e => e.ts > cutoff);
-        delLog.push({ email: target.email, company: target.company, ts: Date.now() });
-        fs.writeFileSync(delLogPath, JSON.stringify(delLog));
-      } catch { /* 删除日志写入失败不影响主流程 */ }
+      _logDeletion(target.email, target.company);
     }
     contacts = contacts.filter(c => c.id !== id);
     writeContacts(contacts, 'contacts-ipc');
     return { ok: true };
   });
+
+  // 批量删除（一次读盘写盘）
+  ipcMain.handle('contacts:deleteMany', async (_e, ids) => {
+    contactsCache = null;
+    const idSet = new Set(ids || []);
+    let contacts = readContacts();
+    const toDelete = contacts.filter(c => idSet.has(c.id));
+    for (const target of toDelete) {
+      if (target.company && target.email) {
+        removeFromSendHistory(target.company, [target.email]);
+        _logDeletion(target.email, target.company);
+      }
+    }
+    contacts = contacts.filter(c => !idSet.has(c.id));
+    writeContacts(contacts, 'contacts-ipc');
+    return { ok: true, deleted: toDelete.length };
+  });
+
+  function _logDeletion(email, company) {
+    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
+    try {
+      let delLog = [];
+      if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
+      const cutoff = Date.now() - 5 * 86400000;
+      delLog = delLog.filter(e => e.ts > cutoff);
+      delLog.push({ email, company, ts: Date.now() });
+      fs.writeFileSync(delLogPath, JSON.stringify(delLog));
+    } catch { /* 静默 */ }
+  }
 
   ipcMain.handle('contacts:deleteAll', async () => {
     Log.warn("联系人", "全部清除");

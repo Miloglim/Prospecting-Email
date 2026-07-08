@@ -10,7 +10,6 @@ export async function loadHistoryPage() {
     search: q || undefined,
     type: S.historyFilters.type || undefined,
     lang: S.historyFilters.lang || undefined,
-    country: S.historyFilters.country || undefined,
     stage: S.historyFilters.stage || undefined,
   };
   const result = await window.electronAPI.getSendLog(params);
@@ -29,21 +28,6 @@ export async function renderHistoryTable() {
   const records = await loadHistoryPage();
 
   if (count) count.textContent = S.historyTotal ? `共 ${S.historyTotal} 封` : '';
-  // 动态生成国家筛选按钮
-  const countryContainer = document.getElementById('history-country-btns');
-  if (countryContainer && S.historyCountries.length > 0) {
-    countryContainer.innerHTML = S.historyCountries.map(c =>
-      `<button class="htab${S.historyFilters.country === c ? ' active' : ''}" data-key="country" data-val="${escapeHtml(c)}">${escapeHtml(c)}</button>`
-    ).join('');
-    countryContainer.querySelectorAll('.htab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        S.historyFilters[btn.dataset.key] = btn.dataset.val;
-        document.querySelectorAll(`#history-filter-group .htab[data-key="country"]`).forEach(b => b.classList.toggle('active', b.dataset.val === btn.dataset.val));
-        S.historyPage = 0;
-        renderHistoryTable();
-      });
-    });
-  }
   if (!records.length) {
     if (layout) layout.style.display = 'none';
     if (empty) empty.style.display = 'block';
@@ -307,11 +291,6 @@ export function debounceHistorySearch() {
 }
 
 export async function initHistoryPage() {
-  // 预加载所有国家列表（用于筛选按钮）
-  try {
-    const fullLog = await window.electronAPI.getSendLog({ limit: 99999, offset: 0, search: undefined, type: undefined, lang: undefined, stage: undefined, country: undefined });
-    S.historyCountries = [...new Set((fullLog.records || []).map(r => r._country).filter(Boolean))].sort();
-  } catch { S.historyCountries = []; }
   S._historyDatePage = 0;
   S._historyOpenDates = {};
   renderHistoryTable();

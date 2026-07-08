@@ -2,7 +2,7 @@
 // 本文件是 preload.js ↔ main.js 之间的唯一 IPC 真相源。
 // 所有通道名、请求/响应格式均定义于此，增删通道时必须同步更新。
 
-'use strict';
+"use strict";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 通用响应构建函数
@@ -34,155 +34,155 @@ function fail(message) {
 // ── 联系人（contacts）────────────────────────────────────────────────────────
 const CONTACTS = {
   /** 获取全部联系人列表 */
-  LIST:           'contacts:list',
+  LIST: "contacts:list",
   /** 批量导入联系人 */
-  IMPORT:         'contacts:import',
+  IMPORT: "contacts:import",
   /** 删除单个联系人 */
-  DELETE:         'contacts:delete',
+  DELETE: "contacts:delete",
   /** 更新退信标记 */
-  UPDATE_BOUNCE:  'contacts:updateBounce',
+  UPDATE_BOUNCE: "contacts:updateBounce",
   /** 清除退信标记 */
-  CLEAR_BOUNCE:   'contacts:clearBounce',
+  CLEAR_BOUNCE: "contacts:clearBounce",
   /** 设置联系人标签（单值，向后兼容） */
-  SET_TAG:        'contacts:setTag',
+  SET_TAG: "contacts:setTag",
   /** 设置联系人标签（多值） */
-  SET_TAGS:       'contacts:setTags',
+  SET_TAGS: "contacts:setTags",
   /** 删除全部联系人 */
-  DELETE_ALL:     'contacts:deleteAll',
+  DELETE_ALL: "contacts:deleteAll",
   /** 按公司名删除联系人 */
-  DELETE_COMPANY: 'contacts:deleteCompany',
+  DELETE_COMPANY: "contacts:deleteCompany",
   /** 更新公司所属国家 */
-  UPDATE_COUNTRY: 'contacts:updateCountry',
+  UPDATE_COUNTRY: "contacts:updateCountry",
   /** 关键词搜索联系人 */
-  SEARCH:         'contacts:search',
+  SEARCH: "contacts:search",
   /** 深度搜索（按网站/公司名抓取联系人） */
-  DEEP_SEARCH:    'contacts:deepSearch',
+  DEEP_SEARCH: "contacts:deepSearch",
   /** 按 email 插入或更新联系人（email 为唯一键） */
-  UPSERT:         'contacts:upsert',
+  UPSERT: "contacts:upsert",
 };
 
 // ── 发送（send）──────────────────────────────────────────────────────────────
 const SEND = {
   /** 开始批量发送 */
-  START:          'send:start',
+  START: "send:start",
   /** 恢复暂停的发送 */
-  RESUME:         'send:resume',
+  RESUME: "send:resume",
   /** 暂停发送 */
-  PAUSE:          'send:pause',
+  PAUSE: "send:pause",
   /** 取消发送 */
-  CANCEL:         'send:cancel',
+  CANCEL: "send:cancel",
   /** 发送单封测试邮件 */
-  TEST_ONE:       'send:testOne',
+  TEST_ONE: "send:testOne",
   /** 获取发送状态 */
-  STATUS:         'send:status',
+  STATUS: "send:status",
   /** 持久化发送状态 */
-  SAVE_STATE:     'send:saveState',
+  SAVE_STATE: "send:saveState",
   /** 加载持久化的发送状态 */
-  LOAD_STATE:     'send:loadState',
+  LOAD_STATE: "send:loadState",
   /** 发送进度事件（main → renderer） */
-  PROGRESS:       'send:progress',
+  PROGRESS: "send:progress",
 };
 
 // ── 背调（backcheck）─────────────────────────────────────────────────────────
 const BACKCHECK = {
   /** 获取全部背调报告 */
-  GET_REPORTS:    'backcheck:getReports',
+  GET_REPORTS: "backcheck:getReports",
   /** 获取背调任务状态 */
-  GET_STATUS:     'backcheck:getStatus',
+  GET_STATUS: "backcheck:getStatus",
   /** 获取单家公司背调详情 */
-  GET_DETAIL:     'backcheck:getDetail',
+  GET_DETAIL: "backcheck:getDetail",
   /** 启动公司调研 */
-  RESEARCH:       'backcheck:research',
+  RESEARCH: "backcheck:research",
   /** 标记背调完成并设置评分 */
-  MARK_DONE:      'backcheck:markDone',
+  MARK_DONE: "backcheck:markDone",
   /** 验证邮件正文 */
-  VERIFY_EMAIL:   'backcheck:verifyEmail',
+  VERIFY_EMAIL: "backcheck:verifyEmail",
   /** 取消背调 */
-  CANCEL:         'backcheck:cancel',
+  CANCEL: "backcheck:cancel",
   /** 背调进度事件（main → renderer） */
-  PROGRESS:       'backcheck:progress',
+  PROGRESS: "backcheck:progress",
 };
 
 // ── 模板（template）──────────────────────────────────────────────────────────
 const TEMPLATE = {
   /** 获取模板库 */
-  GET_LIBRARY:           'template:getLibrary',
+  GET_LIBRARY: "template:getLibrary",
   /** 获取邮件主题列表 */
-  GET_SUBJECTS:          'template:getSubjects',
+  GET_SUBJECTS: "template:getSubjects",
   /** 保存模板覆盖配置 */
-  SAVE_OVERRIDES:        'template:saveOverrides',
+  SAVE_OVERRIDES: "template:saveOverrides",
   /** 获取模板覆盖配置 */
-  GET_OVERRIDES:         'template:getOverrides',
+  GET_OVERRIDES: "template:getOverrides",
   /** 重新加载模板 */
-  RELOAD:                'template:reload',
+  RELOAD: "template:reload",
   /** 按阶段应用覆盖 */
-  APPLY_STAGE_OVERRIDES: 'template:applyStageOverrides',
+  APPLY_STAGE_OVERRIDES: "template:applyStageOverrides",
   /** 列出用户自定义模板 */
-  LIST_USER:             'template:listUser',
+  LIST_USER: "template:listUser",
   /** 保存用户自定义模板 */
-  SAVE_USER:             'template:saveUser',
+  SAVE_USER: "template:saveUser",
   /** 删除用户自定义模板 */
-  DELETE_USER:           'template:deleteUser',
+  DELETE_USER: "template:deleteUser",
 };
 
 // ── 发送历史（history）───────────────────────────────────────────────────────
 const HISTORY = {
   /** 获取全部发送历史 */
-  GET:              'history:get',
+  GET: "history:get",
   /** 获取发送日志 */
-  GET_LOG:          'history:getLog',
+  GET_LOG: "history:getLog",
   /** 获取某封邮件的正文 */
-  GET_BODY:         'history:getBody',
+  GET_BODY: "history:getBody",
   /** 删除历史记录 */
-  DELETE:           'history:delete',
+  DELETE: "history:delete",
   /** 推进公司阶段 */
-  ADVANCE:          'history:advance',
+  ADVANCE: "history:advance",
   /** 记录已用句库 */
-  RECORD_SENTENCES: 'history:recordSentences',
+  RECORD_SENTENCES: "history:recordSentences",
   /** 重新激活公司 */
-  REACTIVATE:       'history:reactivate',
+  REACTIVATE: "history:reactivate",
   /** 阶段追回：扫描已发记录补推进 */
-  CATCHUP:          'history:catchup',
+  CATCHUP: "history:catchup",
 };
 
 // ── 队列持久化（queue）───────────────────────────────────────────────────────
 const QUEUE = {
   /** 保存发送队列到磁盘 */
-  SAVE: 'queue:save',
+  SAVE: "queue:save",
   /** 从磁盘加载发送队列 */
-  LOAD: 'queue:load',
+  LOAD: "queue:load",
 };
 
 // ── 退信检查（bounce）────────────────────────────────────────────────────────
 const BOUNCE = {
   /** 执行退信检查 */
-  CHECK:             'bounce:check',
+  CHECK: "bounce:check",
   /** 加载退信日志 */
-  LOAD_LOG:          'bounce:loadLog',
+  LOAD_LOG: "bounce:loadLog",
   /** 保存退信日志 */
-  SAVE_LOG:          'bounce:saveLog',
+  SAVE_LOG: "bounce:saveLog",
   /** 测试 IMAP 连接 */
-  IMAP_TEST:         'imap:test',
+  IMAP_TEST: "imap:test",
   /** 自动检测到退信事件（main → renderer） */
-  AUTO_DETECTED:     'bounce:autoDetected',
+  AUTO_DETECTED: "bounce:autoDetected",
   /** 清除退信 UID 游标 */
-  CLEAR:             'bounce:clear',
+  CLEAR: "bounce:clear",
 };
 
 // ── 收件箱（inbox）────────────────────────────────────────────────────────────
 const INBOX = {
   /** 拉取最新邮件 */
-  FETCH:             'inbox:fetch',
+  FETCH: "inbox:fetch",
   /** 获取缓存的邮件列表 */
-  LIST:              'inbox:list',
+  LIST: "inbox:list",
   /** 获取单封邮件正文 */
-  GET_BODY:          'inbox:getBody',
+  GET_BODY: "inbox:getBody",
   /** 标记已处理 */
-  MARK_PROCESSED:    'inbox:markProcessed',
+  MARK_PROCESSED: "inbox:markProcessed",
   /** 关联联系人 */
-  LINK_CONTACT:      'inbox:linkContact',
+  LINK_CONTACT: "inbox:linkContact",
   /** 删除邮件记录 */
-  DELETE:            'inbox:delete',
+  DELETE: "inbox:delete",
 };
 
 // ── 系统（system）────────────────────────────────────────────────────────────
@@ -190,104 +190,124 @@ const INBOX = {
 const SYSTEM = {
   // -- 仪表盘
   /** 获取仪表盘统计数据 */
-  DASHBOARD_STATS:    'dashboard:getStats',
+  DASHBOARD_STATS: "dashboard:getStats",
   // -- SMTP
   /** 检查 SMTP 连接状态 */
-  SMTP_STATUS:        'smtp:checkStatus',
+  SMTP_STATUS: "smtp:checkStatus",
   // -- 签名
   /** 加载邮件签名 */
-  SIGNATURE_LOAD:     'signature:load',
+  SIGNATURE_LOAD: "signature:load",
   /** 保存邮件签名 */
-  SIGNATURE_SAVE:     'signature:save',
+  SIGNATURE_SAVE: "signature:save",
   // -- 窗口控制（ipcRenderer.send，无返回值）
   /** 最小化窗口 */
-  WINDOW_MINIMIZE:    'window:minimize',
+  WINDOW_MINIMIZE: "window:minimize",
   /** 最大化/还原窗口 */
-  WINDOW_MAXIMIZE:    'window:maximize',
+  WINDOW_MAXIMIZE: "window:maximize",
   /** 关闭窗口 */
-  WINDOW_CLOSE:       'window:close',
+  WINDOW_CLOSE: "window:close",
   // -- 应用功能
   /** 最小化到系统托盘 */
-  APP_TRAY:           'app:minimizeToTray',
+  APP_TRAY: "app:minimizeToTray",
   /** 打开背调报告文件夹 */
-  APP_REPORTS:        'app:openReports',
+  APP_REPORTS: "app:openReports",
   /** 打开发送记录文件夹 */
-  APP_SEND_FOLDER:    'app:openSendFolder',
+  APP_SEND_FOLDER: "app:openSendFolder",
   /** 在默认浏览器打开外部链接 */
-  APP_EXTERNAL:       'app:openExternal',
+  APP_EXTERNAL: "app:openExternal",
   /** 打开日志文件 */
-  APP_LOG:            'app:openLogFile',
+  APP_LOG: "app:openLogFile",
   // -- 网络
   /** 检查网络连通性 */
-  NETWORK_CHECK:      'network:check',
+  NETWORK_CHECK: "network:check",
   // -- 配置
   /** 加载应用配置 */
-  CONFIG_LOAD:        'config:load',
+  CONFIG_LOAD: "config:load",
   /** 保存应用配置 */
-  CONFIG_SAVE:        'config:save',
+  CONFIG_SAVE: "config:save",
   // -- 通用设置
   /** 设置开机自启 */
-  AUTO_LAUNCH_SET:    'general:setAutoLaunch',
+  AUTO_LAUNCH_SET: "general:setAutoLaunch",
   /** 获取开机自启状态 */
-  AUTO_LAUNCH_GET:    'general:getAutoLaunch',
+  AUTO_LAUNCH_GET: "general:getAutoLaunch",
 };
 
 // ── 自动更新（updater）────────────────────────────────────────────────────────
 const UPDATE = {
   /** 发现新版本（main → renderer） */
-  AVAILABLE:            'update:available',
+  AVAILABLE: "update:available",
   /** 下载进度（main → renderer） */
-  DOWNLOAD_PROGRESS:    'update:download-progress',
+  DOWNLOAD_PROGRESS: "update:download-progress",
   /** 下载完成，可安装（main → renderer） */
-  DOWNLOADED:           'update:downloaded',
+  DOWNLOADED: "update:downloaded",
   /** 渲染进程手动检查更新 */
-  CHECK:                'update:check',
+  CHECK: "update:check",
   /** 渲染进程触发安装 */
-  INSTALL:              'update:install',
+  INSTALL: "update:install",
 };
 
 // ── 发信账号（account）─────────────────────────────────────────────────────────
 const ACCOUNT = {
   /** 获取所有账号 */
-  LIST:               'account:list',
+  LIST: "account:list",
   /** 添加账号 */
-  ADD:                'account:add',
+  ADD: "account:add",
   /** 更新账号 */
-  UPDATE:             'account:update',
+  UPDATE: "account:update",
   /** 删除账号 */
-  DELETE:             'account:delete',
+  DELETE: "account:delete",
   /** 启用/停用账号 */
-  TOGGLE:             'account:toggle',
+  TOGGLE: "account:toggle",
   /** 测试账号 SMTP 连接 */
-  TEST:               'account:test',
+  TEST: "account:test",
   /** 获取各账号发送状态统计 */
-  STATUS:             'account:status',
+  STATUS: "account:status",
 };
 
 // ── 回复检测（reply）──────────────────────────────────────────────────────────
 const REPLY = {
   /** 手动触发回复检测 */
-  CHECK:              'reply:check',
+  CHECK: "reply:check",
   /** 获取回复日志 */
-  LOG:                'reply:log',
+  LOG: "reply:log",
   /** 自动检测到回复事件（main → renderer） */
-  DETECTED:           'reply:detected',
+  DETECTED: "reply:detected",
+};
+
+// ── 自动发送（auto-send）─────────────────────────────────────────────────────
+const AUTO_SEND = {
+  /** 启动调度器 */
+  START: "auto:start",
+  /** 停止调度器 */
+  STOP: "auto:stop",
+  /** 获取调度器状态 */
+  STATUS: "auto:status",
+  /** 更新阶段规则 */
+  UPDATE_RULES: "auto:updateRules",
+  /** 获取今明两日预计 */
+  FORECAST: "auto:forecast",
+  /** 获取当前详细发送计划 */
+  PLAN: "auto:plan",
+  /** 获取决策日志 */
+  DECISION_LOG: "auto:decisionLog",
+  /** 自动发送进度事件（main → renderer） */
+  PROGRESS: "auto:progress",
 };
 
 // ── 客户开发（discover）──────────────────────────────────────────────────────
 const DISCOVER = {
   /** 搜索潜在客户 */
-  SEARCH: 'discover:search',
+  SEARCH: "discover:search",
   /** 查询公司详细信息 */
-  LOOKUP: 'discover:lookup',
+  LOOKUP: "discover:lookup",
 };
 
 // ── 客户表（table）──────────────────────────────────────────────────────────
 const TABLE = {
   /** 从文件导入客户表 */
-  IMPORT_FILE:   'table:importFile',
+  IMPORT_FILE: "table:importFile",
   /** 从飞书多维表格导入客户表 */
-  IMPORT_FEISHU: 'table:importFeishu',
+  IMPORT_FEISHU: "table:importFeishu",
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -313,6 +333,7 @@ const IPC = {
   REPLY,
   DISCOVER,
   TABLE,
+  AUTO_SEND,
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -499,12 +520,12 @@ const IPC = {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const API = {
-  DEEPSEEK: { hostname: 'api.deepseek.com', path: '/v1/chat/completions' },
-  EXA:      { hostname: 'api.exa.ai',        path: '/search' },
-  SERPER:   { hostname: 'google.serper.dev', path: '/search' },
-  TAVILY:   { hostname: 'api.tavily.com',    path: '/search' },
-  JINA:     { hostname: 'r.jina.ai',         path: '/' },
-  AGNES:    { hostname: 'apihub.agnes-ai.com', path: '/v1/chat/completions' },
+  DEEPSEEK: { hostname: "api.deepseek.com", path: "/v1/chat/completions" },
+  EXA: { hostname: "api.exa.ai", path: "/search" },
+  SERPER: { hostname: "google.serper.dev", path: "/search" },
+  TAVILY: { hostname: "api.tavily.com", path: "/search" },
+  JINA: { hostname: "r.jina.ai", path: "/" },
+  AGNES: { hostname: "apihub.agnes-ai.com", path: "/v1/chat/completions" },
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -531,4 +552,5 @@ module.exports = {
   REPLY,
   DISCOVER,
   TABLE,
+  AUTO_SEND,
 };

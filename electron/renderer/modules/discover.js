@@ -1,471 +1,394 @@
+// ── 客户开发 — 搜索筛选器 + 结果 + 邮箱获取 ───────────────────────────────
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,ratingStars,initIcons } from './shared.js';
+import { lucide, showAlert, showConfirm, showToast, escapeHtml } from './shared.js';
 
-// ===== 客户开发 ======================================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tag 输入
+// ═══════════════════════════════════════════════════════════════════════════════
+
+window._tagKeydown = function(event, wrapId, inputId, storeKey) {
+  if (event.key === 'Enter' || event.key === ',') {
+    event.preventDefault();
+    const input = document.getElementById(inputId);
+    const val = input.value.trim();
+    if (!val) return;
+    S['_' + storeKey] = S['_' + storeKey] || [];
+    if (!S['_' + storeKey].includes(val)) {
+      S['_' + storeKey].push(val);
+      renderTags(wrapId, inputId, storeKey);
+    }
+    input.value = '';
+  }
+};
+
+window._removeTag = function(wrapId, inputId, storeKey, idx) {
+  S['_' + storeKey].splice(idx, 1);
+  renderTags(wrapId, inputId, storeKey);
+};
+
+function renderTags(wrapId, inputId, storeKey) {
+  const wrap = document.getElementById(wrapId);
+  const tags = S['_' + storeKey] || [];
+  wrap.innerHTML = tags.map((t, i) =>
+    `<span class="tag-badge">${escapeHtml(t)}<span onclick="window._removeTag('${wrapId}','${inputId}','${storeKey}',${i})" style="cursor:pointer;margin-left:4px;color:var(--text-secondary)">&times;</span></span>`
+  ).join('') + `<input id="${inputId}" class="tag-input" placeholder="${tags.length ? '' : '输入后回车添加'}" onkeydown="window._tagKeydown(event,'${wrapId}','${inputId}','${storeKey}')">`;
+}
+
+function getCheckedChips(containerId) {
+  const chips = document.querySelectorAll(`#${containerId} .chip.active`);
+  return [...chips].map(c => c.dataset.val);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 初始化
+// ═══════════════════════════════════════════════════════════════════════════════
 
 export async function initDiscover() {
-  // 国家列表（拉美重点市场）
-  const countries = ['','Mexico','Brazil','Chile','Peru','Colombia','Argentina','Ecuador','Bolivia','Paraguay','Uruguay','Panama','Costa Rica'];
-  const sel = document.getElementById('df-country');
-  if (sel && !sel.dataset.filled) {
-    sel.dataset.filled = '1';
-    countries.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c || '选择国家'; sel.appendChild(o); });
-  }
+  S._nameTags = S._nameTags || ['freight forwarder', 'cargo', 'logistics'];
+  S._titleTags = S._titleTags || ['logistics', 'freight', 'shipping', 'procurement', 'sales'];
+  S._searchResult = null;
+  S._selectedDomain = null;
 
-  // Tab 切换
-  document.querySelectorAll('.discover-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.discover-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      S.discoverActiveTab = tab.dataset.tab;
-      const isFind = S.discoverActiveTab === 'find';
-      document.getElementById('discover-find-search').style.display = isFind ? '' : 'none';
-      document.getElementById('discover-lookup-search').style.display = isFind ? 'none' : '';
-      document.getElementById('df-results').style.display = isFind ? '' : 'none';
-      document.getElementById('df-stats').style.display = isFind ? (document.getElementById('df-stats').textContent ? '' : 'none') : 'none';
-      document.getElementById('dl-results').style.display = isFind ? 'none' : '';
-      document.getElementById('dl-format').style.display = isFind ? 'none' : (document.getElementById('dl-format').textContent ? '' : 'none');
-      document.querySelector('.discover-results-head').style.display = '';
+  renderTags('df-name-tags', 'df-name-input', 'nameTags');
+  renderTags('df-title-tags', 'df-title-input', 'titleTags');
+
+  // Chip 点击
+  document.querySelectorAll('.chip-group').forEach(group => {
+    group.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+      chip.classList.toggle('active');
     });
   });
 
-  // 客户发现搜索
-  document.getElementById('df-search')?.addEventListener('click', doDiscoverSearch);
-  // 邮箱反查
-  document.getElementById('dl-search')?.addEventListener('click', doEmailLookup);
-  // 全选
-  const fullSelBtn = document.getElementById('df-selectall');
-  if (fullSelBtn && !fullSelBtn.dataset.bound) {
-    fullSelBtn.dataset.bound = '1';
-    fullSelBtn.addEventListener('click', toggleAllDiscover);
-  }
-  // 导入选中
-  document.getElementById('df-import')?.addEventListener('click', () => importSelectedDiscover());
+  // 预设 Colombia + 51-200
+  document.querySelector('#df-countries .chip[data-val="Colombia"]')?.classList.add('active');
+  document.querySelector('#df-sizes .chip[data-val="51,200"]')?.classList.add('active');
+  document.querySelector('#df-sizes .chip[data-val="11,50"]')?.classList.add('active');
 
-  // 结果列表点击委托
+  document.getElementById('df-search')?.addEventListener('click', doSearch);
+  document.getElementById('df-selectall')?.addEventListener('click', toggleAll);
+  document.getElementById('df-reveal-company-btn')?.addEventListener('click', revealCompany);
+  document.getElementById('df-reveal-selected')?.addEventListener('click', revealSelected);
+  document.getElementById('df-save-filter')?.addEventListener('click', saveFilter);
+  document.getElementById('df-delete-filter')?.addEventListener('click', deleteFilter);
+  document.getElementById('discover-go-backcheck')?.addEventListener('click', goBackcheck);
+  document.getElementById('discover-go-send')?.addEventListener('click', goSend);
+
   document.getElementById('df-results')?.addEventListener('click', (e) => {
     const item = e.target.closest('.discover-result-item');
-    if (!item) return;
-    const idx = parseInt(item.dataset.idx);
-    if (!isNaN(idx)) selectDiscoverResult(idx);
-  });
-  document.getElementById('dl-results')?.addEventListener('click', (e) => {
-    const item = e.target.closest('.discover-result-item');
-    if (!item) return;
-    const idx = parseInt(item.dataset.idx);
-    if (!isNaN(idx)) selectDiscoverResult(idx);
+    if (item?.dataset.domain) selectCompany(item.dataset.domain);
   });
 
-  // 底部栏导航
-  document.getElementById('discover-go-backcheck')?.addEventListener('click', () => {
-    if (S.discoverSelectedIdx != null && S.discoverResults[S.discoverSelectedIdx]) {
-      S.discoverPreselectCompany = S.discoverResults[S.discoverSelectedIdx].company;
-    }
-    const nav = document.querySelector('[data-page="backcheck"]');
-    if (nav) nav.click();
-  });
-  document.getElementById('discover-go-send')?.addEventListener('click', () => {
-    if (S.discoverSelectedIdx != null && S.discoverResults[S.discoverSelectedIdx]) {
-      S.selectedCompanySet.add(S.discoverResults[S.discoverSelectedIdx].company);
-    }
-    const nav = document.querySelector('[data-page="email-send"]');
-    if (nav) nav.click();
+  document.getElementById('df-saved-filters')?.addEventListener('change', (e) => {
+    if (e.target.value) loadFilter(e.target.value);
   });
 
-  // 详情面板操作按钮事件委托
-  document.getElementById('discover-detail-content')?.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button');
-    if (!btn || !S.discoverSelectedIdx || !S.discoverResults[S.discoverSelectedIdx]) return;
-    const item = S.discoverResults[S.discoverSelectedIdx];
-    if (btn.id === 'discover-btn-import') await importSingleCompany(item);
-    if (btn.id === 'discover-btn-backcheck') await startBackcheckFromDiscover(item.company);
-    if (btn.id === 'discover-btn-send') goToSend(item.company);
-    if (btn.id === 'discover-btn-deepsearch') deepSearchFromDiscover(item);
-  });
-
-  // 确保联系人数据已加载以更新底部栏
-  if (!S.contactsData || !S.contactsData.length) {
-    try { await CS.refreshContacts(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
-  }
-  updateDiscoverBottomBar();
+  loadSavedFiltersList();
 }
 
-export async function doDiscoverSearch() {
-  const btn = document.getElementById('df-search');
-  const country = document.getElementById('df-country')?.value || '';
-  const industry = document.getElementById('df-industry')?.value || '';
-  const role = document.getElementById('df-role')?.value || 'importer';
-  const keywords = document.getElementById('df-keywords')?.value || '';
-  if (!country) { await showAlert('请选择国家'); return; }
+// ═══════════════════════════════════════════════════════════════════════════════
+// 搜索
+// ═══════════════════════════════════════════════════════════════════════════════
 
+async function doSearch() {
+  const countries = getCheckedChips('df-countries');
+  if (!countries.length) { await showAlert('请至少选择一个国家'); return; }
+
+  const nameKeywords = S._nameTags || [];
+  if (!nameKeywords.length) { await showAlert('请至少输入一个公司名关键词'); return; }
+
+  const sizes = getCheckedChips('df-sizes');
+  const finalSizes = sizes.length ? sizes : ['11,50', '51,200'];
+
+  const btn = document.getElementById('df-search');
   btn.disabled = true; btn.textContent = '搜索中...';
-  document.getElementById('df-results').innerHTML = `<div class="discover-spin">${lucide('refresh-cw',20,'spin')} 正在多平台搜索...</div>`;
-  document.getElementById('discover-results-empty').style.display = 'none';
+
+  document.getElementById('df-results').innerHTML = `<div class="discover-spin">${lucide('refresh-cw',20,'spin')} 正在搜索公司...</div>`;
   document.getElementById('discover-detail-empty').style.display = '';
   document.getElementById('discover-detail-content').style.display = 'none';
-  S.discoverResults = [];
-  S.discoverSelectedIdx = null;
+
+  // 将当前筛选条件临时保存为 profile 传给后端
+  const profileId = '_adhoc_search';
+  const profile = {
+    profileId, label: '临时搜索',
+    companyDiscovery: { source: 'apollo', nameKeywords, countries, sizeRanges: finalSizes, maxPagesPerKeyword: 3, perPage: 25 },
+    contactFilter: { requireEmail: true, perCompanyLimit: 0,
+      titleScoring: { high: S._titleTags || [], medium: ['sales','operations','manager','director','ceo','owner'] } },
+    emailReveal: { smartMode: true, smartSampleSize: 3 },
+  };
+  await window.electronAPI.discoverSaveProfile(profileId, profile);
 
   try {
-    const r = await window.electronAPI.discoverSearch({ country, industry, role, keywords, limit: '30' });
-    if (!r.ok) { document.getElementById('df-results').innerHTML = '<div class="discover-spin">搜索失败</div>'; return; }
+    const r = await window.electronAPI.discoverSearch(profileId);
+    if (!r.ok) { document.getElementById('df-results').innerHTML = `<div class="discover-spin">${r.error}</div>`; btn.disabled = false; btn.textContent = '🔍 搜索公司（免费）'; return; }
 
-    S.discoverResults = r.companies || [];
-
-    // 统计
-    const stats = document.getElementById('df-stats');
-    const srcLabels = Object.entries(r.sources || {}).map(([k,v]) => `<span>${k}: ${v}</span>`).join('');
-    stats.innerHTML = `找到 <b>${r.total}</b> 家公司 · ${srcLabels}`;
-    stats.style.display = '';
-
-    // 计数
-    const countEl = document.getElementById('df-count');
-    if (countEl) countEl.textContent = `共 ${S.discoverResults.length} 条`;
-
-    // 渲染
-    renderDiscoverResults('df-results', S.discoverResults);
-  } catch(e) {
+    S._searchResult = r;
+    S._selectedDomain = null;
+    renderReport(r.report);
+    renderCompanyList(r.companies || [], r.report);
+  } catch (e) {
     document.getElementById('df-results').innerHTML = `<div class="discover-spin">网络错误: ${e.message}</div>`;
   }
-  btn.disabled = false; btn.textContent = '开始搜索';
+  btn.disabled = false; btn.textContent = '🔍 搜索公司（免费）';
 }
 
-export async function doEmailLookup() {
-  const btn = document.getElementById('dl-search');
-  const company = document.getElementById('dl-company')?.value?.trim() || '';
-  const email = document.getElementById('dl-email')?.value?.trim() || '';
-  if (!company && !email) { await showAlert('请输入公司名或已知邮箱'); return; }
+// ═══════════════════════════════════════════════════════════════════════════════
+// 报告条
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  btn.disabled = true; btn.textContent = '反查中...';
-  document.getElementById('dl-results').innerHTML = `<div class="discover-spin">${lucide('refresh-cw',20,'spin')} 正在查找邮箱格式...</div>`;
-  document.getElementById('dl-format').style.display = 'none';
-  document.getElementById('discover-results-empty').style.display = 'none';
-  S.discoverResults = [];
-  S.discoverSelectedIdx = null;
-
-  try {
-    const domain = email ? email.split('@')[1] : '';
-    const r = await window.electronAPI.discoverLookup({ company, domain });
-
-    if (!r.ok) {
-      document.getElementById('dl-results').innerHTML = `<div class="discover-spin">未找到相关信息</div>`;
-      btn.disabled = false; btn.textContent = '开始反查';
-      return;
-    }
-
-    // 显示邮箱格式
-    if (r.pattern) {
-      document.getElementById('dl-format').innerHTML = `📧 邮箱格式: <span class="dl-format-badge">${r.pattern}</span> · 置信度: ${Math.round(r.confidence*100)}%`;
-      document.getElementById('dl-format').style.display = '';
-    }
-
-    // 渲染结果
-    if (r.people?.length) {
-      S.discoverResults = r.people.map(p => ({
-        company: p.name, website: p.email || '', snippet: `${p.title || ''} · ${p.source || ''}`,
-        source: p.source || 'inferred', confidence: p.confidence || 0.5,
-        extra: { email: p.email, title: p.title }
-      }));
-      renderDiscoverResults('dl-results', S.discoverResults);
-    } else {
-      document.getElementById('dl-results').innerHTML = '<div class="discover-spin">未找到相关人员。尝试输入公司官网邮箱格式。</div>';
-    }
-  } catch(e) {
-    document.getElementById('dl-results').innerHTML = `<div class="discover-spin">网络错误: ${e.message}</div>`;
-  }
-  btn.disabled = false; btn.textContent = '开始反查';
+function renderReport(report) {
+  const bar = document.getElementById('df-report-bar');
+  if (!bar || !report) return;
+  bar.style.display = 'flex';
+  bar.innerHTML = `
+    <span>🏢 <b>${report.totalCompanies}</b> 家公司</span>
+    <span>👤 <b>${report.totalPeople}</b> 个联系人</span>
+    <span style="color:var(--text-secondary);font-size:11px">搜索免费 · 获取邮箱消耗 credits</span>
+  `;
 }
 
-export function renderDiscoverResults(containerId, companies) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  const emptyEl = document.getElementById('discover-results-empty');
+// ═══════════════════════════════════════════════════════════════════════════════
+// 公司列表
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  if (!companies?.length) {
-    container.innerHTML = '<div class="discover-spin">无结果</div>';
-    if (emptyEl) emptyEl.style.display = '';
-    return;
-  }
-  if (emptyEl) emptyEl.style.display = 'none';
+function renderCompanyList(companies, report) {
+  const container = document.getElementById('df-results');
+  if (!companies?.length) { container.innerHTML = '<div class="discover-spin">无结果，尝试调整筛选条件</div>'; return; }
 
-  container.innerHTML = companies.map((c, i) => {
-    const badge = c.confidence >= 0.7 ? 'badge-high' : c.confidence >= 0.5 ? 'badge-mid' : 'badge-low';
-    const website = c.website || c.extra?.email || '';
-    const snippet = c.snippet || c.extra?.title || '';
-    return `<div class="discover-result-item" data-idx="${i}">
-      <input type="checkbox" data-idx="${i}" data-name="${escapeHtml(c.company)}" data-site="${escapeHtml(website)}" data-snippet="${escapeHtml(snippet)}" onclick="event.stopPropagation()">
+  const countMap = {};
+  if (report?.topCompanies) report.topCompanies.forEach(t => { countMap[t.name] = t.count; });
+
+  container.innerHTML = companies.map(c => {
+    const cnt = countMap[c.name] || 0;
+    return `<div class="discover-result-item" data-domain="${escapeHtml(c.domain)}">
+      <input type="checkbox" data-domain="${escapeHtml(c.domain)}" data-name="${escapeHtml(c.name)}" data-count="${cnt}" onclick="event.stopPropagation()">
       <div class="discover-result-info">
-        <div class="dri-name">${escapeHtml(c.company)}</div>
-        <div class="dri-meta">${escapeHtml(website)} · ${escapeHtml(snippet)}</div>
+        <div class="dri-name">${escapeHtml(c.name)}</div>
+        <div class="dri-meta">${escapeHtml(c.domain)} · ${cnt ? cnt + ' 个联系人' : ''}</div>
       </div>
-      <span class="discover-result-badge ${badge}">${c.source} ⭐${(c.confidence||0).toFixed(1)}</span>
+      ${cnt ? `<span class="dri-count">${cnt}</span>` : ''}
     </div>`;
   }).join('');
+
+  document.getElementById('df-count').textContent = `共 ${companies.length} 家`;
+  document.getElementById('discover-results-empty').style.display = 'none';
+  document.getElementById('discover-bottom-bar').style.display = 'flex';
 }
 
-export function toggleAllDiscover() {
-  const container = S.discoverActiveTab === 'find'
-    ? document.getElementById('df-results')
-    : document.getElementById('dl-results');
-  if (!container) return;
-  const cbs = container.querySelectorAll('input[type=checkbox]');
+// ═══════════════════════════════════════════════════════════════════════════════
+// 公司详情
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function selectCompany(domain) {
+  S._selectedDomain = domain;
+  document.querySelectorAll('#df-results .discover-result-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.domain === domain);
+  });
+
+  document.getElementById('discover-detail-empty').style.display = 'none';
+  const content = document.getElementById('discover-detail-content');
+  content.style.display = 'flex';
+
+  try {
+    const r = await window.electronAPI.discoverCompanyDetail(domain);
+    if (!r.ok) { content.innerHTML = `<p>${r.error}</p>`; return; }
+
+    document.getElementById('discover-detail-name').textContent = r.companyName || domain;
+    document.getElementById('discover-detail-fields').innerHTML = `
+      <div>🌐 ${escapeHtml(domain)}</div>
+      <div>👥 ${r.total} 人 · 📧 ${r.withEmail} 有邮箱</div>
+    `;
+    document.getElementById('discover-detail-contact-count').textContent = `${r.withEmail} 可获取邮箱`;
+
+    const list = document.getElementById('discover-detail-people');
+    const withEmail = (r.people || []).filter(p => p.hasEmail);
+    const noEmail = (r.people || []).filter(p => !p.hasEmail);
+
+    list.innerHTML = [
+      ...withEmail.map(p =>
+        `<div class="dp-item" style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border-light, #f0f0f0)">
+          <input type="checkbox" data-person="${p.personId}" data-name="${escapeHtml(p.firstName + ' ' + p.lastName)}" data-title="${escapeHtml(p.title)}">
+          <span>📧 <b>${escapeHtml(p.firstName)} ${escapeHtml(p.lastName)}</b></span>
+          <span style="color:var(--text-secondary);font-size:11px;margin-left:auto">${escapeHtml(p.title)}</span>
+        </div>`
+      ),
+      ...noEmail.slice(0, 3).map(p =>
+        `<div class="dp-item" style="color:var(--text-secondary);padding:3px 0;font-size:11px">✖ ${escapeHtml(p.firstName)} ${escapeHtml(p.lastName)} — ${escapeHtml(p.title)}</div>`
+      ),
+    ].join('');
+
+    const btn = document.getElementById('df-reveal-company-btn');
+    if (btn && withEmail.length > 0) {
+      btn.style.display = '';
+      btn.textContent = `✉️ 获取邮箱 (${withEmail.length} 人)`;
+      btn.dataset.domain = domain;
+      btn.dataset.count = withEmail.length;
+    }
+  } catch (e) {
+    content.innerHTML = `<p>加载失败: ${e.message}</p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 获取邮箱
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function revealCompany() {
+  const btn = document.getElementById('df-reveal-company-btn');
+  const domain = btn.dataset.domain;
+  const count = parseInt(btn.dataset.count) || 10;
+  const maxCredits = parseInt(document.getElementById('df-credits')?.value || '50');
+
+  const ok = await showConfirm(`将消耗最多 ${Math.min(count, maxCredits)} credits 获取 ${domain} 的联系人邮箱。确定？`);
+  if (!ok) return;
+
+  btn.disabled = true; btn.textContent = '获取中...';
+
+  try {
+    const r = await window.electronAPI.discoverReveal('_adhoc_search', maxCredits, domain);
+    if (!r.ok) { await showAlert(r.error); btn.disabled = false; btn.textContent = '✉️ 获取邮箱'; return; }
+
+    // 导入到联系人
+    const imp = await window.electronAPI.importContacts(r.contacts);
+    showToast(`✅ ${imp?.added || r.stats.total} 条联系人已导入 (${r.stats.revealed}c 揭示 + ${r.stats.inferred} 推断)`, 'ok');
+    try { await CS.refreshContacts(); } catch {}
+
+    btn.style.display = 'none';
+    const result = document.getElementById('discover-reveal-result');
+    if (result) { result.style.display = ''; result.textContent = `✅ 已导入 ${imp?.added || r.stats.total} 条`; }
+
+    updateBottomBar();
+  } catch (e) {
+    showToast('获取失败: ' + e.message, 'err');
+  }
+  btn.disabled = false;
+}
+
+async function revealSelected() {
+  const checked = document.querySelectorAll('#df-results input[type=checkbox]:checked');
+  if (!checked.length) { showToast('请先勾选公司', 'warn'); return; }
+
+  const domains = [...checked].map(cb => cb.dataset.domain);
+  const maxCredits = parseInt(document.getElementById('df-credits')?.value || '50');
+
+  const ok = await showConfirm(`将为 ${domains.length} 家公司获取邮箱，最多 ${maxCredits} credits。确定？`);
+  if (!ok) return;
+
+  let total = 0;
+  for (const domain of domains) {
+    try {
+      const r = await window.electronAPI.discoverReveal('_adhoc_search', maxCredits, domain);
+      if (r.ok) {
+        await window.electronAPI.importContacts(r.contacts);
+        total += r.stats?.total || 0;
+      }
+    } catch {}
+  }
+  showToast(`✅ 共导入 ${total} 条联系人`, 'ok');
+  try { await CS.refreshContacts(); } catch {}
+  updateBottomBar();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 筛选条件保存/加载
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function saveFilter() {
+  const name = prompt('筛选条件名称（如：哥伦比亚货代）');
+  if (!name) return;
+
+  const filter = {
+    name,
+    countries: getCheckedChips('df-countries'),
+    sizes: getCheckedChips('df-sizes'),
+    nameKeywords: S._nameTags || [],
+    titleKeywords: S._titleTags || [],
+    updatedAt: new Date().toISOString(),
+  };
+
+  const all = await getSavedFilters();
+  all[name] = filter;
+  localStorage.setItem('discover-filters', JSON.stringify(all));
+  await loadSavedFiltersList();
+  showToast('已保存', 'ok');
+}
+
+async function loadFilter(name) {
+  const all = await getSavedFilters();
+  const f = all[name];
+  if (!f) return;
+
+  // 恢复 chip 选择
+  document.querySelectorAll('#df-countries .chip').forEach(chip => {
+    chip.classList.toggle('active', (f.countries || []).includes(chip.dataset.val));
+  });
+  document.querySelectorAll('#df-sizes .chip').forEach(chip => {
+    chip.classList.toggle('active', (f.sizes || []).includes(chip.dataset.val));
+  });
+  // 恢复 tag
+  S._nameTags = f.nameKeywords || [];
+  S._titleTags = f.titleKeywords || [];
+  renderTags('df-name-tags', 'df-name-input', 'nameTags');
+  renderTags('df-title-tags', 'df-title-input', 'titleTags');
+
+  document.getElementById('df-delete-filter').style.display = '';
+}
+
+async function deleteFilter() {
+  const sel = document.getElementById('df-saved-filters');
+  const name = sel.value;
+  if (!name) return;
+  const ok = await showConfirm(`删除筛选条件 "${name}"？`);
+  if (!ok) return;
+
+  const all = await getSavedFilters();
+  delete all[name];
+  localStorage.setItem('discover-filters', JSON.stringify(all));
+  await loadSavedFiltersList();
+  document.getElementById('df-delete-filter').style.display = 'none';
+  showToast('已删除', 'ok');
+}
+
+async function getSavedFilters() {
+  try { return JSON.parse(localStorage.getItem('discover-filters') || '{}'); } catch { return {}; }
+}
+
+async function loadSavedFiltersList() {
+  const sel = document.getElementById('df-saved-filters');
+  if (!sel) return;
+  const all = await getSavedFilters();
+  const names = Object.keys(all);
+  sel.innerHTML = '<option value="">已保存...</option>' + names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 工具
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function toggleAll() {
+  const cbs = document.querySelectorAll('#df-results input[type=checkbox]');
   const all = [...cbs].every(cb => cb.checked);
   cbs.forEach(cb => { cb.checked = !all; });
 }
 
-export async function importSelectedDiscover() {
-  const container = S.discoverActiveTab === 'find'
-    ? document.getElementById('df-results')
-    : document.getElementById('dl-results');
-  if (!container) return;
-  const checked = container.querySelectorAll('input[type=checkbox]:checked');
-  if (!checked.length) { showToast('请先勾选公司', 'warn'); return; }
-
-  const clients = [...checked].map(cb => ({
-    company: cb.dataset.name,
-    website: cb.dataset.site,
-    email: cb.dataset.site?.includes('@') ? cb.dataset.site : '',
-    contactName: '',
-    position: cb.dataset.snippet?.includes('@') ? '' : cb.dataset.snippet,
-  }));
-
-  const result = await window.electronAPI.importContacts(clients);
-  showToast(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`, 'ok');
-  updateDiscoverBottomBar();
-
-  // 刷新当前选中项的详情
-  if (S.discoverSelectedIdx != null && S.discoverResults[S.discoverSelectedIdx]) {
-    selectDiscoverResult(S.discoverSelectedIdx);
-  }
+function goBackcheck() {
+  document.querySelector('[data-page="backcheck"]')?.click();
+}
+function goSend() {
+  document.querySelector('[data-page="email-send"]')?.click();
 }
 
-// ── 右侧详情面板 ──────────────────────────────────────────────────
-export function selectDiscoverResult(idx) {
-  S.discoverSelectedIdx = idx;
-  // 高亮结果行
-  const activeContainer = S.discoverActiveTab === 'find'
-    ? document.getElementById('df-results')
-    : document.getElementById('dl-results');
-  if (activeContainer) {
-    activeContainer.querySelectorAll('.discover-result-item').forEach(el => {
-      el.classList.toggle('active', parseInt(el.dataset.idx) === idx);
-    });
-  }
-  renderDiscoverDetail(idx);
-}
+async function updateBottomBar() {
+  const contacts = S.contactsData || await window.electronAPI.getContacts().catch(() => []);
+  const resultNames = new Set((S._searchResult?.companies || []).map(c => (c.name || '').trim()).filter(Boolean));
+  const imported = contacts.filter(c => resultNames.has((c.company || '').trim()));
 
-export async function renderDiscoverDetail(idx) {
-  const item = S.discoverResults[idx];
-  if (!item) return;
-
-  const emptyEl = document.getElementById('discover-detail-empty');
-  const contentEl = document.getElementById('discover-detail-content');
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (contentEl) contentEl.style.display = 'flex';
-
-  // 公司基本信息
-  document.getElementById('discover-detail-name').textContent = item.company;
-  const website = item.website || item.extra?.email || '';
-  document.getElementById('discover-detail-fields').innerHTML = `
-    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">${lucide('globe',11)} 官网</span><span style="word-break:break-all">${escapeHtml(website) || '--'}</span></div>
-    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">${lucide('pin',11)} 来源</span><span>${item.source} · 置信度 ${(item.confidence || 0).toFixed(1)}</span></div>
-    <div style="display:flex;gap:6px;margin-bottom:4px"><span style="color:var(--text-secondary);min-width:48px;font-size:11px;font-weight:600">${lucide('file-text',11)} 摘要</span><span style="color:var(--text-secondary)">${escapeHtml(item.snippet || '--')}</span></div>
-  `;
-
-  // 查询工作流状态
-  const status = await getWorkflowStatus(item.company);
-
-  // 操作按钮
-  const actions = document.getElementById('discover-action-btns');
-  let btns = '';
-  if (!status.imported) {
-    btns += `<button id="discover-btn-import">${lucide('download',12)} 导入到联系人</button>`;
-  } else {
-    btns += `<button class="secondary" disabled>${lucide('check-circle',11)} 已导入 (${status.contactCount} 位联系人)</button>`;
-  }
-  if (status.imported && !status.backcheckDone && !status.backcheckActive) {
-    btns += `<button id="discover-btn-backcheck">${lucide('search',12)} 开始背调</button>`;
-  }
-  if (status.backcheckActive) {
-    btns += `<button class="secondary" disabled>${lucide('loader-circle',11,'spin')} 背调进行中...</button>`;
-  }
-  if (status.backcheckDone) {
-    btns += `<button class="secondary" disabled>${lucide('check-circle',11)} 背调完成 ${ratingStars(status.rating)}</button>`;
-  }
-  if (status.imported && !status.isArchived) {
-    btns += `<button id="discover-btn-send" class="secondary">${lucide('mail',12)} 去发送邮件</button>`;
-  }
-  if (website && !website.includes('@')) {
-    btns += `<button id="discover-btn-deepsearch" class="secondary" style="font-size:12px">🔎 查找决策人</button>`;
-  }
-  actions.innerHTML = btns;
-
-  // Pipeline
-  renderWorkflowPipeline(status);
-}
-
-export async function getWorkflowStatus(companyName) {
-  let contacts = S.contactsData;
-  if (!contacts || !contacts.length) {
-    try { contacts = await window.electronAPI.getContacts(); } catch { contacts = []; }
-  }
-  const backcheckStatus = await window.electronAPI.getBackcheckStatus();
-  const sh = (typeof S.contactsSendHistory !== 'undefined' ? S.contactsSendHistory : null)
-    || await window.electronAPI.getSendHistory().catch(() => ({}))
-    || {};
-
-  const companyContacts = contacts.filter(c => (c.company || '').trim() === (companyName || '').trim());
-  const bcSt = backcheckStatus[companyName];
-  const sendSt = sh[companyName];
-
-  return {
-    imported: companyContacts.length > 0,
-    contactCount: companyContacts.length,
-    backcheckDone: bcSt?.status === 'done',
-    backcheckActive: bcSt?.status === 'researching' || bcSt?.status === 'pending',
-    rating: bcSt?.rating || 0,
-    sendStage: sendSt?.stage || null,
-    isArchived: sendSt?.stage === 'archived',
-  };
-}
-
-export function renderWorkflowPipeline(status) {
-  const pipeline = document.getElementById('discover-pipeline');
-  if (!pipeline) return;
-  const steps = [
-    { key: 'discovered', label: '已发现', done: true, active: false, meta: '' },
-    { key: 'imported', label: '已导入', done: status.imported, active: false,
-      meta: status.imported ? `${status.contactCount} 位联系人` : '' },
-    { key: 'backcheck', label: '背调完成', done: status.backcheckDone, active: status.backcheckActive,
-      meta: status.backcheckDone ? ratingStars(status.rating) : (status.backcheckActive ? '进行中...' : '') },
-    { key: 'sending', label: '开发信中', done: !!status.sendStage, active: false,
-      meta: status.sendStage ? (status.isArchived ? '📦 已归档' : '阶段: ' + status.sendStage.toUpperCase()) : '' },
-  ];
-
-  pipeline.innerHTML = steps.map(step => {
-    let cls = 'pending';
-    if (step.done) cls = 'done';
-    else if (step.active) cls = 'active';
-    const dot = step.done ? '✓' : (step.active ? '●' : '○');
-    return `<div class="discover-pipeline-step ${cls}">
-      <div class="step-dot">${dot}</div>
-      <span class="step-label">${step.label}</span>
-      <span class="step-meta">${step.meta}</span>
-    </div>`;
-  }).join('');
-}
-
-// ── 工作流操作 ────────────────────────────────────────────────────
-export async function importSingleCompany(item) {
-  const client = {
-    company: item.company,
-    website: item.website || item.extra?.email || '',
-    email: (item.website || '').includes('@') ? item.website : (item.extra?.email || ''),
-    contactName: '',
-    position: item.snippet || item.extra?.title || '',
-  };
-  const result = await window.electronAPI.importContacts([client]);
-  showToast(`导入完成: 新增 ${result?.added || 0}, 已存在 ${result?.skipped || 0}`, 'ok');
-
-  // 刷新联系人数据
-  try { await CS.refreshContacts(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
-
-  // 刷新详情面板
-  if (S.discoverSelectedIdx != null) selectDiscoverResult(S.discoverSelectedIdx);
-  updateDiscoverBottomBar();
-}
-
-export async function startBackcheckFromDiscover(companyName) {
-  const contacts = S.contactsData && S.contactsData.length ? S.contactsData : await window.electronAPI.getContacts();
-  const contact = contacts.find(c => (c.company || '').trim() === (companyName || '').trim());
-  if (!contact) { showToast('未找到联系人数据，请先导入', 'err'); return; }
-
-  showToast(`正在启动 ${companyName} 背调...`, 'ok');
-  const result = await window.electronAPI.startResearch(contact, 'deep-research');
-  if (!result.ok) { showToast(result.message || '启动失败', 'err'); return; }
-
-  // 刷新详情面板
-  if (S.discoverSelectedIdx != null) selectDiscoverResult(S.discoverSelectedIdx);
-  updateDiscoverBottomBar();
-
-  // 自动跳转背调页面
-  const nav = document.querySelector('[data-page="backcheck"]');
-  if (nav) nav.click();
-}
-
-export function goToSend(companyName) {
-  // 预添加到选中集合
-  if (typeof S.selectedCompanySet !== 'undefined') {
-    S.selectedCompanySet.add(companyName);
-  }
-  const nav = document.querySelector('[data-page="email-send"]');
-  if (nav) nav.click();
-}
-
-export async function deepSearchFromDiscover(item) {
-  const btn = document.getElementById('discover-btn-deepsearch');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 搜索中...`;
-
-  const website = item.website || item.extra?.email || '';
-  try {
-    const result = await window.electronAPI.deepSearchContacts(website, item.company);
-    if (result?.people?.length) {
-      const peopleList = result.people.slice(0, 8).map(p =>
-        `<div style="padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:12px">
-          <span style="font-weight:600">${escapeHtml(p.name || '未知')}</span>
-          <span style="color:var(--text-secondary)"> · ${escapeHtml(p.title || '')}</span>
-          ${p.email ? `<span style="color:var(--primary)"> · ${escapeHtml(p.email)}</span>` : ''}
-          <span style="font-size:10px;color:var(--text-secondary)"> [${p.source}]</span>
-        </div>`
-      ).join('');
-      const fields = document.getElementById('discover-detail-fields');
-      if (fields) {
-        fields.insertAdjacentHTML('beforeend',
-          `<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-            <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">🔎 决策人搜索结果:</span>
-            ${peopleList}
-          </div>`);
-      }
-    } else {
-      showToast('未找到决策人信息', 'warn');
-    }
-  } catch (e) {
-    showToast('决策人搜索失败: ' + e.message, 'err');
-  }
-  btn.disabled = false;
-  btn.textContent = '🔎 查找决策人';
-}
-
-export function updateDiscoverBottomBar() {
   const bar = document.getElementById('discover-bottom-bar');
   const summary = document.getElementById('discover-import-summary');
-  if (!bar || !summary) return;
-
-  // 统计当前搜索结果中已导入的联系人
-  let totalContacts = 0;
-  try {
-    const names = new Set(S.discoverResults.map(r => (r.company || '').trim()).filter(Boolean));
-    const allContacts = S.contactsData || [];
-    totalContacts = allContacts.filter(c => names.has((c.company || '').trim())).length;
-  } catch { /* 渲染层降级：操作失败不影响 UI */ }
-
-  if (totalContacts > 0) {
-    bar.style.display = 'flex';
-    const uniqueCompanies = new Set();
-    try {
-      (S.contactsData || []).forEach(c => {
-        if (S.discoverResults.some(r => (r.company || '').trim() === (c.company || '').trim())) {
-          uniqueCompanies.add(c.company);
-        }
-      });
-    } catch { /* 渲染层降级：操作失败不影响 UI */ }
-    summary.textContent = `已导入 ${uniqueCompanies.size} 家公司 · ${totalContacts} 位联系人`;
-  } else {
-    bar.style.display = 'none';
-  }
+  if (bar) bar.style.display = 'flex';
+  if (summary) summary.textContent = imported.length ? `已导入 ${imported.length} 位联系人` : '';
 }
 
 window.__pageHandlers['discover'] = initDiscover;

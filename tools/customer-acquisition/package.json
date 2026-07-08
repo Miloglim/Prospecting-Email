@@ -1,0 +1,20 @@
+{
+  "name": "customer-acquisition",
+  "version": "1.0.0",
+  "private": true,
+  "description": "通用客户开发引擎 — 多数据源、可配置搜索画像、独立模块",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node tests/runner.js",
+    "test:unit": "node tests/runner.js unit",
+    "test:integration": "node tests/runner.js integration",
+    "test:e2e": "node tests/runner.js e2e",
+    "review": "node review/runner.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "status": "idle",
+  "lastScanAt": null,
+  "nextScanAt": null,
+  "todaySent": 0,
+  "todayDate": "",
+  "rules": {
+    "cold_to_f1_days": 3,
+    "f1_to_f2_days": 4,
+    "f2_to_f3_days": 5,
+    "f3_to_f4_days": 6,
+    "dailyLimit": 1600,
+    "scanIntervalMinutes": 5
+  },
+  "contactStageCache": {},
+  "decisionLog": [],
+  "logIndex": 0
+}

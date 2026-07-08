@@ -124,9 +124,7 @@ function register(ipcMain, deps) {
     return { proxy: proxy ? `${proxy.hostname}:${proxy.port}` : null, results };
   });
 
-  // ── 客户开发（需 Python 环境，当前暂不可用） ──
-  ipcMain.handle('discover:search', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
-  ipcMain.handle('discover:lookup', async () => ({ ok: false, error: '此功能需要 Python 抓取服务，当前版本暂未包含' }));
+  // ── 客户开发 → 已迁移到 electron/modules/acquisition-ipc.js ──
 
   // ── 系统功能 ──
   const { app, shell } = require('electron');

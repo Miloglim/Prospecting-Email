@@ -201,9 +201,12 @@ function renderInbox() {
         }
         if (!allMatched.length) { showToast('所选邮件无匹配联系人', 'warn'); return; }
         if (!await showConfirm(`确定删除 ${selected.length} 封选中邮件的全部 ${allMatched.length} 个匹配联系人？`)) return;
+        // 批量删除联系人（一次读写）
+        const contacts = await window.electronAPI.getContacts();
+        const delIds = allMatched.map(c => c.id || (contacts.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
+        if (delIds.length) await window.electronAPI.deleteContactsMany(delIds);
+        // 清除缓存中匹配状态
         for (const c of allMatched) {
-          const delId = c.id || (await window.electronAPI.getContacts().then(ct => (ct.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || ''));
-          if (delId) await window.electronAPI.deleteContact(delId);
           await window.electronAPI.removeInboxMatchedContact(c.mailIdx, c.email);
           const mi = _mails[c.mailIdx];
           if (mi?.matchedContacts) mi.matchedContacts = mi.matchedContacts.filter(mc => mc.email !== c.email);

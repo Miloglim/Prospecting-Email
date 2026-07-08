@@ -62,7 +62,7 @@ function _loadKeywords() {
     bounce_senders: ['mailer-daemon','postmaster','mail delivery subsystem','mailadmin@','mailer@'],
     bounce_body: ['address rejected','user unknown','mailbox not found','no such user','invalid recipient','mailbox unavailable','does not like recipient','not accepting mail','unrouteable address','recipient rejected','status: 5','over quota','mailbox exceeded','message blocked','smtp error','delivery failed permanently','unable to deliver','recipient unknown',"couldn't be delivered","couldn't deliver to","weren't found at","unknown to address","the following recipients","action required","recipients weren't found"],
     bounce_left: ['no longer','has left','left the company','no longer with','is no longer at','no longer works','不再该公司','已离职','no longer employed'],
-    auto_reply: ['automatic reply','auto-reply','auto reply','out of office','out of the office','vacation','vacaciones','feriado','holiday notice','ooo -','[ooo]','ausente','ausência','fuera de la oficina','fora do escritório','respuesta automática','resposta automática','away from office','no estaré','estare ausente','estoy fuera','licença maternidade','maternity leave','acceso limitado'],
+    auto_reply: ['automatic reply','auto-reply','auto reply','out of office','out of the office','vacation','vacaciones','feriado','holiday notice','ooo -','[ooo]','ausente','ausência','fuera de la oficina','fora do escritório','respuesta automática','resposta automática','away from office','no estaré','estare ausente','estoy fuera','licença maternidade','maternity leave','acceso limitado','automaattinen vastaus'],
     reply_prefix: ['re:','resp:','rv:','ref:','回复:','答复:','转发:','fw:','fwd:'],
     inquiry: ['solicitud','consulta','cotización','cotizacion','información','info.','request for quote','rfq','presupuesto','orçamento','budget request','shipping quote','freight quote','logistics inquiry','cargo quote','transport quote'],
   };
@@ -153,6 +153,7 @@ function _extractBodyContacts(plainText, htmlText, extraText) {
   return _extractBodyContactsFromIdx(plainText, htmlText, extraText, _buildContactsIndex());
 }
 function _extractBodyContactsFromIdx(plainText, htmlText, extraText, idx) {
+  const text = (plainText || '') + ' ' + (htmlText || '').replace(/<[^>]+>/g, ' ') + ' ' + (extraText || '').replace(/<[^>]+>/g, ' ');
   const seen = new Set();
   const result = [];
   const emails = text.match(EMAIL_RE) || [];
@@ -252,7 +253,7 @@ async function _parseRaw(rawSource, uid, accountId) {
     const fromName = parsed.from?.value?.[0]?.name || parsed.from?.text || fromAddr;
     const subject = parsed.subject || '(无主题)';
     const bodySnippet = parsed.text ? parsed.text.slice(0, 1000) : '';
-    const type = _classify(subject, fromAddr, bodySnippet);
+    let type = _classify(subject, fromAddr, bodySnippet);
     const contactIdx = _buildContactsIndex(); // 一次读盘，下面共用
     const contact = _matchContactFromIdx(fromAddr, fromName, contactIdx);
     // 正文中提取邮箱 → 匹配联系人
@@ -261,9 +262,9 @@ async function _parseRaw(rawSource, uid, accountId) {
     if (type === 'bounce') {
       Log.info('[收件箱]', `退信提取: parsed.text=${(parsed.text||'').length}字 html=${(parsed.html||'').length}字 raw=${extraText.length}字 → 找到${matchedContacts.length}个邮箱`);
     }
-    // ponytail: 匹配到联系人的邮件不可能是 other，也不是退信（除非是自动回复）
+    // 匹配到联系人的 unknown 邮件升级为 reply；已分类为 bounce/auto-reply 的不覆盖
     const hasMatch = contact || (matchedContacts || []).some(c => c.matched);
-    if (hasMatch && type !== 'auto-reply') type = 'reply';
+    if (hasMatch && type === 'other') type = 'reply';
 
     const body = parsed.html || parsed.text || '';
     if (!fromAddr && !parsed.subject) {
