@@ -589,6 +589,17 @@ function toggleImportant(index) {
   const mails = _readCache();
   if (mails[index]) { mails[index].important = !mails[index].important; _writeCache(mails); }
 }
+function toggleImportantByKey(mailKey) {
+  const mails = _readCache();
+  const m = mails.find(x => `${x.accountId}|${x.uid}|${x.from}|${x.subject}` === mailKey);
+  if (m) {
+    m.important = !m.important;
+    _writeCache(mails);
+    Log.info('[收件箱]', `toggleImportant: key=${mailKey} → important=${m.important}`);
+  } else {
+    Log.warn('[收件箱]', `toggleImportant: 未找到 key=${mailKey} (缓存共${mails.length}封)`);
+  }
+}
 
 function linkContact(index, contactId, company) {
   const mails = _readCache();
@@ -625,4 +636,4 @@ function syncAllTags() {
   return { ok: true, synced: 1, message: `已扫描 ${mails.length} 封缓存邮件` };
 }
 
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, syncAllTags, getBounceCount, toggleImportant };
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey };

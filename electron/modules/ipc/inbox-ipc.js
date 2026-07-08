@@ -45,7 +45,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('inbox:syncTags', async () => inbox.syncAllTags());
   ipcMain.handle('inbox:removeMatchedContact', async (_e, index, email) => { inbox.removeMatchedContact(index, email); return { ok: true }; });
   ipcMain.handle('inbox:getBounceCount', async () => inbox.getBounceCount());
-  ipcMain.handle('inbox:toggleImportant', async (_e, i) => { inbox.toggleImportant(i); return { ok: true }; });
+  ipcMain.handle('inbox:toggleImportant', async (_e, i, key) => { inbox.toggleImportantByKey(key); return { ok: true }; });
   ipcMain.handle('inbox:clear', async () => {
     const cachePath = path.join(APP_ROOT, 'data', 'inbox-cache.json');
     const cursorPath = path.join(APP_ROOT, 'data', 'inbox-cursor.json');

@@ -189,21 +189,21 @@ function renderInbox() {
         for (const i of selected) {
           const m = _mails[i];
           if (!m) continue;
-          if (m.contactDbId && !seen.has(m.from)) {
-            seen.add(m.from);
-            allMatched.push({ mailIdx: i, email: m.from, id: m.contactDbId });
-          }
+          const addIfMatched = (email, dbId) => {
+            if (!email || seen.has(email)) return;
+            seen.add(email);
+            allMatched.push({ mailIdx: i, email, id: dbId || '' });
+          };
+          if (m.contactCompany && m.from) addIfMatched(m.from, m.contactDbId);
           for (const c of (m.matchedContacts || [])) {
-            if (c.matched && c.contactId && !seen.has(c.email)) {
-              seen.add(c.email);
-              allMatched.push({ mailIdx: i, email: c.email, id: c.contactId });
-            }
+            if (c.matched && c.email) addIfMatched(c.email, c.contactId);
           }
         }
         if (!allMatched.length) { showToast('所选邮件无匹配联系人', 'warn'); return; }
         if (!await showConfirm(`确定删除 ${selected.length} 封选中邮件的全部 ${allMatched.length} 个匹配联系人？`)) return;
         for (const c of allMatched) {
-          await window.electronAPI.deleteContact(c.id);
+          const delId = c.id || (await window.electronAPI.getContacts().then(ct => (ct.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || ''));
+          if (delId) await window.electronAPI.deleteContact(delId);
           await window.electronAPI.removeInboxMatchedContact(c.mailIdx, c.email);
           const mi = _mails[c.mailIdx];
           if (mi?.matchedContacts) mi.matchedContacts = mi.matchedContacts.filter(mc => mc.email !== c.email);
@@ -218,8 +218,11 @@ function renderInbox() {
       menu.querySelector('[data-action="important"]').addEventListener('click', async () => {
         menu.remove();
         for (const i of selected) {
-          await window.electronAPI.toggleInboxImportant(i);
-          if (_mails[i]) _mails[i].important = !_mails[i].important;
+          const m = _mails[i];
+          if (!m) continue;
+          const key = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+          await window.electronAPI.toggleInboxImportant(i, key);
+          m.important = !m.important;
         }
         _selectedSet.clear();
         renderInbox();
