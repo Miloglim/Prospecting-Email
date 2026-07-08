@@ -63,17 +63,22 @@ function register(ipcMain, deps) {
   }
 
   function writeContacts(contacts, caller) {
-    // ponytail: 写入前重读磁盘，合并保留并发写入 + 正确删除
+    // ponytail: 写入前重读磁盘，合并保留并发写入 + 正确删除 + 正确新增
     try {
       if (fs.existsSync(contactsPath)) {
         const onDisk = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
         const idMap = new Map(contacts.map(c => [c.id, c]));
-        // 只保留传入数组中存在的 id（支持删除）
         const keepIds = new Set(contacts.map(c => c.id));
+        // 更新已存在的，保留被删除的
         const merged = onDisk.filter(c => keepIds.has(c.id));
         for (const c of merged) {
           const incoming = idMap.get(c.id);
           if (incoming) Object.assign(c, incoming);
+        }
+        // 添加盘上没有的新联系人
+        const onDiskIds = new Set(onDisk.map(c => c.id));
+        for (const c of contacts) {
+          if (!onDiskIds.has(c.id)) merged.push(c);
         }
         contacts = merged;
       }
@@ -562,6 +567,23 @@ function register(ipcMain, deps) {
     Log.info('[AI分类]', `完成: ${updated} 人 / ${companies.length} 家公司重新分类`);
     if (updated > 0) deps.mainWindow?.webContents.send('contacts:changed');
     return { ok: true, updated, total: companies.length };
+  });
+
+  // ── 跟进备注 ──────────────────────────────────────────────────────────────
+  ipcMain.handle('contacts:saveFollowup', async (_e, contactId, text) => {
+    if (!text || !text.trim()) return { ok: false, error: '内容为空' };
+    const contacts = readContacts();
+    const c = contacts.find(x => x.id === contactId);
+    if (!c) return { ok: false, error: '联系人不存在' };
+    c.followups = c.followups || [];
+    c.followups.push({ text: text.trim(), ts: Date.now() });
+    writeContacts(contacts, 'contacts-ipc');
+    return { ok: true, followups: c.followups };
+  });
+  ipcMain.handle('contacts:getFollowups', async (_e, contactId) => {
+    const contacts = readContacts();
+    const c = contacts.find(x => x.id === contactId);
+    return c?.followups || [];
   });
 
   // ── 读取删除记录 ──────────────────────────────────────────────────────────

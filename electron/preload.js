@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deepSearchContacts: (website, company) => ipcRenderer.invoke('contacts:deepSearch', website, company),
   upsertContact: (contact) => ipcRenderer.invoke('contacts:upsert', contact),
   getDeletedContactsLog: () => ipcRenderer.invoke('contacts:deletedLog'),
+  saveFollowup: (contactId, text) => ipcRenderer.invoke('contacts:saveFollowup', contactId, text),
+  getFollowups: (contactId) => ipcRenderer.invoke('contacts:getFollowups', contactId),
 
   // 模板
   getTemplateLibrary: () => ipcRenderer.invoke('template:getLibrary'),

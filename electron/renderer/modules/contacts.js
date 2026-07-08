@@ -27,7 +27,7 @@ export async function doImport(file) {
   const filePath = window.electronAPI.getFilePath(file);
   const result = await window.electronAPI.importFile(filePath);
   if (result.error) { await showAlert('导入失败: ' + result.error); return; }
-  S.clientsData = result.clients;
+  S.clientsData = result.clients || [];
   S.clientsPage = 1;
   let msg = `成功导入 ${S.clientsData.length} 条记录`;
   if (result.invalidEmails?.length) {
@@ -120,7 +120,7 @@ document.getElementById('feishu-import-btn')?.addEventListener('click', async ()
     const result = await window.electronAPI.importFeishu(baseToken, tableId);
     if (result.error) { await showAlert('导入失败:\n' + result.error + '\n\n请将显示内容反馈给开发者'); }
     else {
-      S.clientsData = result.clients;
+      S.clientsData = result.clients || [];
       S.clientsPage = 1;
       let msg = `✅ ${S.clientsData.length} 条`;
       if (result.suspiciousCount > 0) {
@@ -323,38 +323,23 @@ export function renderContactDetail(company) {
     </div>
     <div class="contacts-detail-body">
       <table>
-        <thead><tr><th>国家</th><th>品类</th><th>姓名</th><th>邮箱</th><th>发信账号</th><th>状态</th><th>标签</th><th>操作</th></tr></thead>
+        <thead><tr><th>国家</th><th>品类</th><th>姓名</th><th>邮箱</th><th>发信账号</th><th>状态</th><th>跟进备注</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
-            // 兼容旧 tag 字段：tags 数组优先，回退到单值 tag
-	            const contactTags = m.tags || [];
-	            const TAG_DISPLAY = {
-	              autoreply: { label: '自动回复', color: '#e6a817' },
-	              reached: { label: '已触达', color: '#22a644' },
-	              replied: { label: '有回复', color: '#3b82f6' },
-	              bounced_by_contact: { label: '退回', color: '#8b8b8b' },
-	              auto_reply: { label: '自动回复', color: '#e6a817' },
-		              left_company: { label: '已离职', color: '#d93025' },
-	            };
-	            // ── 状态列（优先级取最高）────────────────────────────────────
+            const contactTags = m.tags || [];
             const STATUS_PRIORITY = ['left_company','bounced_by_contact','replied','autoreply','auto_reply','reached'];
             const topTag = STATUS_PRIORITY.find(t => contactTags.includes(t));
             const STATUS_MAP = {
               left_company: { label: '已离职', dot: '#d93025' },
-              bounced_by_contact: { label: '退信', dot: '#8b8b8b' },
-              replied: { label: '有回复', dot: '#3b82f6' },
+              bounced_by_contact: { label: '退信', dot: '#e5484d' },
+              replied: { label: '有回复', dot: '#22a644' },
               autoreply: { label: '自动回复', dot: '#e6a817' },
               auto_reply: { label: '自动回复', dot: '#e6a817' },
-              reached: { label: '已触达', dot: '#22a644' },
+              reached: { label: '已触达', dot: '#3b82f6' },
             };
             const st = STATUS_MAP[topTag] || { label: '未触达', dot: 'var(--text-secondary)' };
             const statusHtml = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${st.dot};flex-shrink:0"></span>${st.label}</span>`;
-            const tagsHtml = contactTags.length
-	              ? contactTags.map(t => {
-	                  const info = TAG_DISPLAY[t] || { label: t, color: 'var(--text-secondary)' };
-	                  return `<span style="font-size:10px;padding:1px 6px;border-radius:10px;background:${info.color}18;color:${info.color};white-space:nowrap" title="右键切换标签">${info.label}</span>`;
-	                }).join(' ')
-	              : `<span style="font-size:10px;color:var(--text-secondary)">—</span>`;
+            const hasFollowups = (m.followups || []).length > 0;
             const nameDisplay = (m.firstName || m.lastName) ? `${m.firstName || ''} ${m.lastName || ''}`.trim() : (m.contactName || '—');
             return `
             <tr data-contact-id="${m.id}" style="${m.bounced ? 'opacity:.5' : ''}">
@@ -364,7 +349,7 @@ export function renderContactDetail(company) {
               <td>${escapeHtml(m.email)}</td>
               <td style="font-size:11px;color:var(--text-secondary)">${m._sentAccount ? escapeHtml(m._sentAccount) + ' · ' + (m._sentAt||'').slice(0,10) : '—'}</td>
               <td>${statusHtml}</td>
-              <td>${tagsHtml}</td>
+              <td>${hasFollowups ? `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--primary);font-weight:600">${m.followups.length}条</span>` : `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span>`}</td>
               <td><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
             </tr>
           `}).join('')}
@@ -373,6 +358,16 @@ export function renderContactDetail(company) {
       ${isArchived ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:8px"><span style="font-size:13px">${lucide('archive',13)} 已归档 — 不参与常规序列</span><button id="btn-reactivate-contact" style="margin-left:auto;font-size:12px;padding:4px 12px">${lucide('refresh-cw',12)} 重新激活</button></div>` : ''}
     </div>
   `;
+
+  // 跟进备注按钮
+  detail.querySelectorAll('.followup-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const contact = members.find(m => m.id === id);
+      if (contact) showFollowupEditor(contact);
+    });
+  });
 
   // 删除按钮（支持10分钟免提示）
   detail.querySelectorAll('.btn-delete:not(#btn-delete-company)').forEach(btn => {
@@ -611,6 +606,7 @@ document.getElementById('contacts-search')?.addEventListener('input', async (e) 
 document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
   showModal({
     title: '添加联系人',
+    closeOnOverlay: false,
     message: `
       <style>
         .ac-form { display:flex; flex-direction:column; gap:12px; }
@@ -696,9 +692,47 @@ document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', a
   renderContactsList();
 });
 // ── 编辑联系人弹窗 ──────────────────────────────────────────────────────────
+// ── 跟进备注弹窗 ──────────────────────────────────────────────────────────
+function showFollowupEditor(contact) {
+  const notes = contact.followups || [];
+  showModal({
+    title: `跟进备注 — ${escapeHtml(contact.firstName || contact.contactName || contact.email)}`,
+    closeOnOverlay: false,
+    message: `
+      <style>
+        .fu-list { max-height:200px; overflow-y:auto; margin-bottom:12px; }
+        .fu-item { padding:8px 10px; border-bottom:1px solid var(--border); font-size:12px; line-height:1.5; }
+        .fu-item:last-child { border-bottom:none; }
+        .fu-time { font-size:10px; color:var(--text-secondary); margin-bottom:2px; }
+        .fu-input { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:var(--bg); color:var(--text); outline:none; resize:vertical; min-height:60px; }
+        .fu-input:focus { border-color:var(--primary); }
+      </style>
+      ${notes.length ? `<div class="fu-list">${notes.slice().reverse().map(n => `<div class="fu-item"><div class="fu-time">${new Date(n.ts).toLocaleString('zh-CN')}</div>${escapeHtml(n.text)}</div>`).join('')}</div>` : '<div style="color:var(--text-secondary);font-size:12px;margin-bottom:12px">暂无跟进记录</div>'}
+      <textarea class="fu-input" id="fu-input" placeholder="输入跟进备注..."></textarea>`,
+    buttons: [
+      { text: '取消', value: false },
+      { text: '保存', value: 'ok', primary: true },
+    ],
+    onClose: async (val) => {
+      if (val !== 'ok') return;
+      const text = document.getElementById('fu-input')?.value?.trim();
+      if (!text) { showToast('内容为空', 'warn'); return false; }
+      const r = await window.electronAPI.saveFollowup(contact.id, text);
+      if (r.ok) {
+        contact.followups = r.followups;
+        renderContactDetail(contact.company);
+        showToast('已保存', 'ok');
+      } else {
+        showToast(r.error || '保存失败', 'err');
+      }
+    },
+  });
+}
+
 function showContactEditor(contact) {
   showModal({
     title: '编辑联系人',
+    closeOnOverlay: false,
     message: `
       <style>
         .ec-form { display:flex; flex-direction:column; gap:12px; }

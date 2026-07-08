@@ -110,18 +110,15 @@ function _classify(subject, from, bodySnippet) {
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 // ── 联系人匹配 ───────────────────────────────────────────────────────────────
-let _contactsIndex = null;
-let _contactsIndexTime = 0;
-
+// ponytail: 每次强制读盘重建索引，确保联系人删除后立即生效
 function _buildContactsIndex() {
-  if (_contactsIndex && Date.now() - _contactsIndexTime < 60000) return _contactsIndex;
-  _contactsIndex = {};
+  const idx = {};
   try {
     const cp = path.join(APP_ROOT, 'data', 'contacts.json');
     if (fs.existsSync(cp)) {
       const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
       for (const c of contacts) {
-        if (c.email) _contactsIndex[c.email.toLowerCase().trim()] = {
+        if (c.email) idx[c.email.toLowerCase().trim()] = {
           id: c.id || '', company: c.company || '', companyId: c.companyId || '',
           contactName: c.contactName || '', firstName: c.firstName || '', lastName: c.lastName || '',
           clientType: c.clientType || '', tags: c.tags || [],
@@ -129,15 +126,13 @@ function _buildContactsIndex() {
       }
     }
   } catch { /* 联系人文件损坏 → 空索引 */ }
-  _contactsIndexTime = Date.now();
-  return _contactsIndex;
+  return idx;
 }
 
-function _matchContact(fromEmail, fromName) {
-  const idx = _buildContactsIndex();
+function _matchContact(fromEmail, fromName, idx) {
+  idx = idx || _buildContactsIndex();
   const emailMatch = idx[(fromEmail || '').toLowerCase().trim()];
   if (emailMatch) return emailMatch;
-  // ponytail: 邮箱没匹配到时，尝试姓名匹配（O(n) 遍历，仅在邮箱失配时触发）
   if (fromName) {
     const nameLower = fromName.toLowerCase().trim();
     for (const contact of Object.values(idx)) {
@@ -151,11 +146,13 @@ function _matchContact(fromEmail, fromName) {
   }
   return null;
 }
+function _matchContactFromIdx(fromEmail, fromName, idx) { return _matchContact(fromEmail, fromName, idx); }
 
 // ── 从正文提取邮箱 → 匹配联系人 ───────────────────────────────────────────
 function _extractBodyContacts(plainText, htmlText, extraText) {
-  const idx = _buildContactsIndex();
-  const text = (plainText || '') + ' ' + (htmlText || '').replace(/<[^>]+>/g, ' ') + ' ' + (extraText || '').replace(/<[^>]+>/g, ' ');
+  return _extractBodyContactsFromIdx(plainText, htmlText, extraText, _buildContactsIndex());
+}
+function _extractBodyContactsFromIdx(plainText, htmlText, extraText, idx) {
   const seen = new Set();
   const result = [];
   const emails = text.match(EMAIL_RE) || [];
@@ -256,14 +253,18 @@ async function _parseRaw(rawSource, uid, accountId) {
     const subject = parsed.subject || '(无主题)';
     const bodySnippet = parsed.text ? parsed.text.slice(0, 1000) : '';
     const type = _classify(subject, fromAddr, bodySnippet);
-    const contact = _matchContact(fromAddr, fromName);
+    const contactIdx = _buildContactsIndex(); // 一次读盘，下面共用
+    const contact = _matchContactFromIdx(fromAddr, fromName, contactIdx);
     // 正文中提取邮箱 → 匹配联系人
-    // 退信邮件额外扫原始来源（MIME 头中可能含被退回的邮箱）
     const extraText = type === 'bounce' ? (typeof rawSource === 'string' ? rawSource : Buffer.from(rawSource).toString('utf-8')) : '';
-    const matchedContacts = _extractBodyContacts(parsed.text || '', parsed.html || '', extraText);
+    const matchedContacts = _extractBodyContactsFromIdx(parsed.text || '', parsed.html || '', extraText, contactIdx);
     if (type === 'bounce') {
       Log.info('[收件箱]', `退信提取: parsed.text=${(parsed.text||'').length}字 html=${(parsed.html||'').length}字 raw=${extraText.length}字 → 找到${matchedContacts.length}个邮箱`);
     }
+    // ponytail: 匹配到联系人的邮件不可能是 other，也不是退信（除非是自动回复）
+    const hasMatch = contact || (matchedContacts || []).some(c => c.matched);
+    if (hasMatch && type !== 'auto-reply') type = 'reply';
+
     const body = parsed.html || parsed.text || '';
     if (!fromAddr && !parsed.subject) {
       Log.warn('[收件箱]', `mailparser 无发件人+主题 — len=${input.length} 前200字: ${input.slice(0, 200)}`);
@@ -537,7 +538,40 @@ async function _fetchInbox(configPath) {
 }
 
 function listInbox() {
-  return _readCache();
+  const mails = _readCache();
+  const idx = _buildContactsIndex();
+  const idxSize = Object.keys(idx).length;
+  const beforeMatched = mails.filter(m => m.contactCompany || (m.matchedContacts || []).some(c => c.matched)).length;
+  let changed = false;
+  for (const m of mails) {
+    const senderKey = (m.from || '').toLowerCase().trim();
+    const senderMatch = !!(senderKey && idx[senderKey]);
+    if (!senderMatch && m.contactCompany) {
+      m.contactCompany = '';
+      m.contactId = '';
+      m.contactDbId = '';
+      changed = true;
+    }
+    if (senderMatch && !m.contactCompany) {
+      m.contactCompany = idx[senderKey].company || '';
+      m.contactId = idx[senderKey].companyId || '';
+      m.contactDbId = idx[senderKey].id || '';
+      changed = true;
+    }
+    if (m.matchedContacts) {
+      for (const c of m.matchedContacts) {
+        const was = c.matched;
+        c.matched = !!idx[(c.email || '').toLowerCase().trim()];
+        if (was !== c.matched) changed = true;
+      }
+    }
+  }
+  if (changed) _writeCache(mails);
+  const afterMatched = mails.filter(m => m.contactCompany || (m.matchedContacts || []).some(c => c.matched)).length;
+  if (beforeMatched !== afterMatched || changed) {
+    Log.info('[收件箱]', `listInbox验证: 索引${idxSize}人, 匹配${beforeMatched}→${afterMatched}, 变更=${changed}`);
+  }
+  return mails;
 }
 
 function getBody(index) {
@@ -576,9 +610,11 @@ function deleteMail(index) {
 
 function removeMatchedContact(mailIndex, email) {
   const mails = _readCache();
+  const before = mails[mailIndex]?.matchedContacts?.length || 0;
   if (mails[mailIndex]?.matchedContacts) {
     mails[mailIndex].matchedContacts = mails[mailIndex].matchedContacts.filter(c => c.email !== email);
     _writeCache(mails);
+    Log.info('[收件箱]', `removeMatchedContact[${mailIndex}] ${email}: ${before}→${mails[mailIndex].matchedContacts.length}条`);
   }
 }
 
