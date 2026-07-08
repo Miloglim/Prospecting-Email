@@ -56,14 +56,27 @@ console.warn  = (...a) => { Log.warn('主进程', _joinArgs(a)); };
 console.error = (...a) => { Log.error('主进程', _joinArgs(a)); };
 
 // ── 全局异常兜底 ──────────────────────────────────────────────────────────
-process.on('uncaughtException', (err) => {
-  Log.error('进程', 'uncaughtException', err);
-  _error('FATAL:', err.stack || err.message);
+process.on("uncaughtException", (err) => {
+  Log.error("进程", "uncaughtException", err);
+  _error("FATAL:", err.stack || err.message);
+  try {
+    const { dialog } = require("electron");
+    dialog.showErrorBox(
+      "程序启动失败",
+      `发生未捕获的异常，程序即将退出。\n\n${err.message}\n\n详细信息已写入日志文件。`,
+    );
+  } catch {
+    /* dialog 不可用时静默 */
+  }
   setTimeout(() => process.exit(1), 500);
 });
-process.on('unhandledRejection', (reason) => {
-  Log.error('进程', 'unhandledRejection', reason instanceof Error ? reason : new Error(String(reason)));
-  _error('FATAL(unhandled):', reason?.stack || reason);
+process.on("unhandledRejection", (reason) => {
+  Log.error(
+    "进程",
+    "unhandledRejection",
+    reason instanceof Error ? reason : new Error(String(reason)),
+  );
+  _error("FATAL(unhandled):", reason?.stack || reason);
 });
 
 // ── 导出（兼容旧引用：send-ipc.js 需要 logDir）────────────────────────────

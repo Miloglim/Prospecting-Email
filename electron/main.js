@@ -54,9 +54,17 @@ function setupIPC() {
   require("./modules/ipc/account-ipc").register(ipcMain);
   require("./modules/ipc/inbox-ipc").register(ipcMain, deps);
   require("./modules/send-ipc").register(ipcMain, deps);
-  require("./modules/acquisition-ipc").register(ipcMain, deps);  // 客户开发
+  try {
+    require("./modules/acquisition-ipc").register(ipcMain, deps); // 客户开发
+  } catch (e) {
+    Log.error("main", "客户开发模块加载失败", e);
+  }
   _sendCleanup = require("./modules/send-ipc").cleanup;
-  require("./modules/auto-send/ipc").register(ipcMain, deps);
+  try {
+    require("./modules/auto-send/ipc").register(ipcMain, deps);
+  } catch (e) {
+    Log.error("main", "自动发送模块加载失败", e);
+  }
   registerTableImportHandlers();
 
   // 无边框窗口控制

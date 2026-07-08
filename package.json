@@ -42,6 +42,7 @@
       "dist/**",
       "electron/**",
       "templates/**",
+      "tools/**",
       "send/config.example.json",
       "send/signature.html",
       "assets/**",
