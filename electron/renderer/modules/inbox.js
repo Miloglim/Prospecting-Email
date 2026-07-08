@@ -183,19 +183,19 @@ function renderInbox() {
       `;
       menu.querySelector('[data-action="del-matched"]')?.addEventListener('click', async () => {
         menu.remove();
-        // 收集所有选中邮件的匹配联系人
+        // 收集所有选中邮件的匹配联系人（按邮箱去重）
         const allMatched = [];
         const seen = new Set();
         for (const i of selected) {
           const m = _mails[i];
           if (!m) continue;
-          if (m.contactDbId && !seen.has(m.contactDbId)) {
-            seen.add(m.contactDbId);
+          if (m.contactDbId && !seen.has(m.from)) {
+            seen.add(m.from);
             allMatched.push({ mailIdx: i, email: m.from, id: m.contactDbId });
           }
           for (const c of (m.matchedContacts || [])) {
-            if (c.matched && c.contactId && !seen.has(c.contactId)) {
-              seen.add(c.contactId);
+            if (c.matched && c.contactId && !seen.has(c.email)) {
+              seen.add(c.email);
               allMatched.push({ mailIdx: i, email: c.email, id: c.contactId });
             }
           }
