@@ -293,10 +293,10 @@ export function renderContactsList(filtered) {
 
     });
 
-    // 如果之前有选中，恢复选中状态；否则自动选第一个
+    // 搜索模式下不自动选第一个公司，保留搜索结果列表让用户自己点
     if (S.selectedContactCompany && S.contactsGroupMap.has(S.selectedContactCompany)) {
       renderContactDetail(S.selectedContactCompany);
-    } else {
+    } else if (!filtered) {
       S.selectedContactCompany = groups[0]?.[0] || null;
       if (S.selectedContactCompany) {
         const firstItem = sidebar.querySelector(`[data-company="${escapeHtml(S.selectedContactCompany)}"]`);

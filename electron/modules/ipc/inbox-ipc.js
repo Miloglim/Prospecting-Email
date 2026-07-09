@@ -13,7 +13,7 @@ const NORMAL_INTERVAL_MS = 5 * 60 * 1000;     // 静默时 5 分钟
 const FAST_COOLDOWN_MS = 5 * 60 * 1000;       // 冷却 5 分钟
 
 function _pushNextFetch(deps) {
-  deps?.mainWindow?.webContents.send('inbox:nextFetch', _nextFetchAt);
+  deps?.mainWindow?.webContents.send('inbox:nextFetch', { nextFetchAt: _nextFetchAt });
 }
 
 function register(ipcMain, deps) {
@@ -55,6 +55,7 @@ function register(ipcMain, deps) {
   ipcMain.handle('inbox:delete', async (_e, i) => { inbox.deleteMail(i); return { ok: true }; });
   ipcMain.handle('inbox:syncTags', async () => inbox.syncAllTags());
   ipcMain.handle('inbox:removeMatchedContact', async (_e, index, email) => { inbox.removeMatchedContact(index, email); return { ok: true }; });
+  ipcMain.handle('inbox:removeMatchedContactsBatch', async (_e, items) => { inbox.removeMatchedContactsBatch(items); return { ok: true }; });
   ipcMain.handle('inbox:getBounceCount', async () => inbox.getBounceCount());
   ipcMain.handle('inbox:toggleImportant', async (_e, i, key) => { inbox.toggleImportantByKey(key); return { ok: true }; });
   ipcMain.handle('inbox:clear', async () => {

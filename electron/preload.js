@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   syncInboxTags: () => ipcRenderer.invoke("inbox:syncTags"),
   removeInboxMatchedContact: (index, email) =>
     ipcRenderer.invoke("inbox:removeMatchedContact", index, email),
+  removeInboxMatchedContactsBatch: (items) => ipcRenderer.invoke("inbox:removeMatchedContactsBatch", items),
   getBounceCount: () => ipcRenderer.invoke("inbox:getBounceCount"),
   toggleInboxImportant: (index, key) =>
     ipcRenderer.invoke("inbox:toggleImportant", index, key),

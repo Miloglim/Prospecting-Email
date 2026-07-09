@@ -357,6 +357,8 @@ body {
 .nav-sub.active { background: rgba(255,255,255,0.14); color: #fff; font-weight: 600; }
 .nav-icon { width: 20px; height: 20px; text-align: center; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
 .nav-icon svg { flex-shrink: 0; }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--danger,#e5484d); margin-left: 4px; flex-shrink: 0; opacity: 0; transition: opacity .25s; }
+.nav-dot.show { opacity: 1; }
 .nav-arrow { margin-left: auto; transition: transform 0.2s; display: inline-flex; }
 .nav-arrow svg { width: 14px; height: 14px; }
 .nav-parent.open .nav-arrow svg { transform: rotate(180deg); }

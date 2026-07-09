@@ -215,14 +215,22 @@ function _syncTagsToContacts(newMails) {
   const updates = {}; // contactDbId → tag
   for (const m of newMails) {
     const tag = TYPE_TAG[m.type];
-    if (!tag || !m.contactDbId) continue;
-    if (!m.contactTags.includes(tag)) updates[m.contactDbId] = tag;
+    if (!tag) continue;
+    // 发件人匹配到的联系人
+    if (m.contactDbId && !(m.contactTags || []).includes(tag)) {
+      updates[m.contactDbId] = tag;
+    }
+    // 正文提取到的联系人（退信的核心来源）
+    for (const c of (m.matchedContacts || [])) {
+      if (c.matched && c.contactId && !updates[c.contactId]) {
+        updates[c.contactId] = tag;
+      }
+    }
   }
   if (!Object.keys(updates).length) return;
   try {
     const cp = path.join(APP_ROOT, 'data', 'contacts.json');
     if (!fs.existsSync(cp)) return;
-    // ponytail: 读取 → 修改 → 原子写入，始终基于盘上最新版本
     const onDisk = JSON.parse(fs.readFileSync(cp, 'utf-8'));
     let synced = 0;
     for (const c of onDisk) {
@@ -236,7 +244,6 @@ function _syncTagsToContacts(newMails) {
       const tmp = cp + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(onDisk));
       fs.renameSync(tmp, cp);
-      Log.info('[写盘]', `收件箱标签 → ${cp} (agent=${onDisk.filter(c=>c.clientType==='agent').length})`);
       Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
     }
   } catch (e) { Log.error('[收件箱]', '标签同步失败', e.stack); }
@@ -266,7 +273,13 @@ async function _parseRaw(rawSource, uid, accountId) {
     const hasMatch = contact || (matchedContacts || []).some(c => c.matched);
     if (hasMatch && type === 'other') type = 'reply';
 
-    const body = parsed.html || parsed.text || '';
+    let body = parsed.html || parsed.text || '';
+    // mailparser 解析失败时用 raw 原文兜底，防止正文完全空白
+    if (!body && input) {
+      const rawStr = typeof input === 'string' ? input : Buffer.from(input).toString('utf-8');
+      const escaped = rawStr.slice(0, 50000).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      body = '<pre style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#666">' + escaped + '</pre>';
+    }
     if (!fromAddr && !parsed.subject) {
       Log.warn('[收件箱]', `mailparser 无发件人+主题 — len=${input.length} 前200字: ${input.slice(0, 200)}`);
     }
@@ -666,10 +679,24 @@ function removeMatchedContact(mailIndex, email) {
   const mails = _readCache();
   const before = mails[mailIndex]?.matchedContacts?.length || 0;
   if (mails[mailIndex]?.matchedContacts) {
-    mails[mailIndex].matchedContacts = mails[mailIndex].matchedContacts.filter(c => c.email !== email);
+    mails[mailIndex].matchedContacts = mails[mailIndex].matchedContacts.filter(c => c.email.toLowerCase() !== email.toLowerCase());
     _writeCache(mails);
     Log.info('[收件箱]', `removeMatchedContact[${mailIndex}] ${email}: ${before}→${mails[mailIndex].matchedContacts.length}条`);
   }
+}
+
+function removeMatchedContactsBatch(items) {
+  if (!items || !items.length) return;
+  const mails = _readCache();
+  for (const { mailIdx, email } of items) {
+    if (mails[mailIdx]?.matchedContacts) {
+      const lower = (email || '').toLowerCase();
+      const before = mails[mailIdx].matchedContacts.length;
+      mails[mailIdx].matchedContacts = mails[mailIdx].matchedContacts.filter(c => (c.email || '').toLowerCase() !== lower);
+      Log.info('[收件箱]', `removeMatched[${mailIdx}] ${email}: ${before}→${mails[mailIdx].matchedContacts.length}条`);
+    }
+  }
+  _writeCache(mails);
 }
 
 function syncAllTags() {
@@ -679,4 +706,4 @@ function syncAllTags() {
   return { ok: true, synced: 1, message: `已扫描 ${mails.length} 封缓存邮件` };
 }
 
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey };
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey };
