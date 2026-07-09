@@ -546,17 +546,20 @@ function initAccountManager() {
         </div>`;
       }).join('');
     }
-    // 绑定卡片按钮事件
-    listEl.querySelectorAll('.acct-action').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    // 事件委托：只绑一次，后续 innerHTML 重建不需要重新绑
+    if (!listEl._actionsBound) {
+      listEl._actionsBound = true;
+      listEl.addEventListener("click", async (e) => {
+        const btn = e.target.closest(".acct-action");
+        if (!btn) return;
         e.stopPropagation();
         const action = btn.dataset.action;
         const id = btn.dataset.id;
-        if (action === 'edit') openEditor(id);
-        else if (action === 'toggle') { await window.electronAPI.toggleAccount(id); render(); }
-        else if (action === 'delete') { if (await showConfirm('确定删除该账号？')) { await window.electronAPI.deleteAccount(id); render(); } }
+        if (action === "edit") openEditor(id);
+        else if (action === "toggle") { await window.electronAPI.toggleAccount(id); render(); }
+        else if (action === "delete") { if (await showConfirm("确定删除该账号？")) { await window.electronAPI.deleteAccount(id); render(); } }
       });
-    });
+    }
   }
 
   // IMAP 自动推导
@@ -567,6 +570,7 @@ function initAccountManager() {
 
   // 打开编辑框
   async function openEditor(id) {
+    try {
     document.getElementById('acct-edit-id').value = id || '';
     // 清空 IMAP 字段
     ['acct-imap-host','acct-imap-port','acct-imap-user','acct-imap-pass'].forEach(f => document.getElementById(f).value = '');
@@ -599,8 +603,11 @@ function initAccountManager() {
       document.getElementById('acct-active').checked = true;
     }
     const tr = document.getElementById('acct-test-result');
-    tr.className = ''; tr.innerHTML = '';
+    if (tr) { tr.className = ''; tr.innerHTML = ''; }
     modal.style.display = 'flex';
+    } catch (e) {
+      showToast('编辑失败: ' + (e.message || ''), 'error');
+    }
   }
 
   function closeEditor() { modal.style.display = 'none'; }

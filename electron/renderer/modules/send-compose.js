@@ -795,7 +795,7 @@ async function addToQueue() {
         continue;
       }
       if (bouncedMembers.length) {
-        await showAlert(`' + lucide('alert-triangle',12) + ' ${name} 所有联系人已退信（${members.length} 人），跳过`);
+        await showAlert(`${lucide('alert-triangle',12)} ${name} 所有联系人已退信（${bouncedMembers.length}/${members.length} 人），跳过`);
         skippedDupOrBounced += members.length;
         continue;
       }

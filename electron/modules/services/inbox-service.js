@@ -290,36 +290,73 @@ async function _parseRaw(rawSource, uid, accountId) {
   }
 }
 
-// ── IMAP 拉取（拿 raw source → mailparser）───────────────────────────────────
-function _imapFetch(cfg, sinceDays) {
-  const Imap = require('imap');
+// ── IMAP 拉取（UID 增量，游标自动推进）─────────────────────────────────────
+function _imapFetch(cfg) {
+  const Imap = require("imap");
   return new Promise((resolve) => {
     const imap = new Imap({
-      user: cfg.user, password: cfg.pass,
-      host: cfg.host, port: cfg.port || 993, tls: true,
+      user: cfg.user,
+      password: cfg.pass,
+      host: cfg.host,
+      port: cfg.port || 993,
+      tls: true,
       tlsOptions: { rejectUnauthorized: false },
-      connTimeout: 15000, authTimeout: 10000,
+      connTimeout: 15000,
+      authTimeout: 10000,
     });
     const rawSources = [];
-    imap.once('ready', () => {
-      imap.openBox('INBOX', false, () => {
-        const since = new Date(Date.now() - sinceDays * 86400000);
-        imap.search([['SINCE', since]], (err, results) => {
-          if (err || !results?.length) { imap.end(); return resolve(rawSources); }
-          const toFetch = results.slice(-30);
-          // ponytail: 取完整 raw source，mailparser 自动处理所有 MIME
-          const fetch = imap.fetch(toFetch, { bodies: '', struct: true });
-          fetch.on('message', (msg) => {
-            const chunks = [];
-            msg.on('body', (stream) => { stream.on('data', c => chunks.push(c)); });
-            msg.once('end', () => { if (chunks.length) rawSources.push(Buffer.concat(chunks)); });
+    imap.once("ready", () => {
+      imap.openBox("INBOX", true, () => {
+        const cursorKey = `imap:${cfg.user}@${cfg.host}`;
+        const cursor = _readCursor();
+        const lastUid = parseInt(cursor[cursorKey]) || 0;
+
+        const searchCriteria = lastUid
+          ? [["UID", `${lastUid + 1}:*`]]
+          : [["ALL"]];
+        const batchLimit = lastUid ? 30 : 40;
+
+        imap.search(searchCriteria, (err, results) => {
+          if (err || !results?.length) {
+            imap.end();
+            return resolve(rawSources);
+          }
+          // results 是 UID（因为用了 UID search key）
+          const toFetch = results.slice(-batchLimit);
+          let maxUid = lastUid;
+
+          const fetch = imap.fetch(toFetch, {
+            bodies: "",
+            struct: true,
           });
-          fetch.once('error', () => { imap.end(); resolve(rawSources); });
-          fetch.once('end', () => { imap.end(); resolve(rawSources); });
+          fetch.on("message", (msg) => {
+            const chunks = [];
+            msg.on("body", (stream) => {
+              stream.on("data", (c) => chunks.push(c));
+            });
+            msg.once("attributes", (attrs) => {
+              if (attrs?.uid > maxUid) maxUid = attrs.uid;
+            });
+            msg.once("end", () => {
+              if (chunks.length) rawSources.push(Buffer.concat(chunks));
+            });
+          });
+          fetch.once("error", () => {
+            imap.end();
+            resolve(rawSources);
+          });
+          fetch.once("end", () => {
+            if (maxUid > lastUid) {
+              cursor[cursorKey] = String(maxUid);
+              _writeCursor(cursor);
+            }
+            imap.end();
+            resolve(rawSources);
+          });
         });
       });
     });
-    imap.once('error', () => resolve(rawSources));
+    imap.once("error", () => resolve(rawSources));
     imap.connect();
   });
 }
@@ -412,35 +449,40 @@ async function _pop3Fetch(cfg, sinceDays) {
     if (!total) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
 
     const cursor = _readCursor();
-    const lastUid = cursor[cfg.user] || '';
+    const lastNum = parseInt(cursor[cfg.user]) || 0; // 游标存最大序号，新邮件序号一定更大
     const uidlRes = await _pop3Cmd(sock, 'UIDL');
-    // UIDL 返回格式: "msgNum uid"，每行一条
-    // ponytail: pop3Cmd 对 UIDL 走 readMulti，返回行数组
     const uidMap = {};
+    let maxServerNum = 0;
     for (const line of uidlRes) {
       const parts = line.split(/\s+/);
-      if (parts.length >= 2 && /^\d+$/.test(parts[0])) uidMap[parseInt(parts[0])] = parts[1];
+      if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+        const n = parseInt(parts[0]);
+        uidMap[n] = parts[1];
+        if (n > maxServerNum) maxServerNum = n;
+      }
     }
-    let ids = Object.entries(uidMap)
-      .filter(([, uid]) => uid !== lastUid)
-      .map(([n]) => parseInt(n))
+    let ids = Object.keys(uidMap)
+      .map(Number)
+      .filter((n) => n > lastNum) // 只要序号 > 游标的新邮件
       .sort((a, b) => b - a)
-      .slice(0, 30);
-    // ponytail: 有游标说明不是第一次拉，没新邮件直接返回
+      .slice(0, lastNum ? 30 : 40);
     if (!ids.length) {
-      if (lastUid) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
-      ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 30);
+      if (lastNum) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
+      ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 40);
     }
-    let newUid = lastUid;
+    let newCursorNum = lastNum;
     for (const n of ids) {
       try {
         const raw = await _pop3Cmd(sock, `RETR ${n}`);
         raw._pop3Seq = String(n);
         rawSources.push(raw);
-        if (!newUid || uidMap[n]) newUid = uidMap[n];
+        if (n > newCursorNum) newCursorNum = n;
       } catch { continue; }
     }
-    if (newUid) { cursor[cfg.user] = newUid; _writeCursor(cursor); }
+    if (newCursorNum > lastNum) {
+      cursor[cfg.user] = String(newCursorNum);
+      _writeCursor(cursor);
+    }
     sock.write('QUIT\r\n'); sock.end();
   } catch (e) {
     try { sock?.end(); } catch { /* 清理 */ }
@@ -490,7 +532,7 @@ async function _fetchInbox(configPath) {
     try {
       let rawSources = [];
       if (cfg.host.includes('imap') || cfg.port === 993) {
-        rawSources = await _imapFetch(cfg, 2);
+        rawSources = await _imapFetch(cfg);
       } else {
         rawSources = await _pop3Fetch(cfg, 2);
       }
