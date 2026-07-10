@@ -59,10 +59,12 @@
     ]
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "electron-updater": "^6.6.2",
     "imap": "^0.8.19",
     "mailparser": "^3.9.12",
     "nodemailer": "^6.9.0",
+    "uuid": "^14.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

@@ -20,38 +20,8 @@ function register(ipcMain, deps) {
 
   // ── 仪表盘统计 ──
   ipcMain.handle('dashboard:getStats', async () => {
-    const now = Date.now();
-    if (_statsCache && now - _statsCacheTime < 5000) return _statsCache;
-    const lp = path.join(APP_ROOT, 'send', 'send-log.json');
-    const cp = path.join(APP_ROOT, 'send', 'config.json');
-    let sentToday = 0, totalSent = 0, totalFailed = 0, dailyLimit = 500;
-    const allSent = [];
-    try {
-      if (fs.existsSync(lp)) {
-        const raw = await fs.promises.readFile(lp, 'utf-8');
-        allSent.push(...(JSON.parse(raw).sent || []));
-      }
-    } catch { /* 非关键 I/O 失败不影响主流程 */ }
-    const t = beijingToday();
-    sentToday = allSent.filter(r => r.status === 'sent' && (r.time_beijing === t || (!r.time_beijing && r.time && beijingDateFromISO(r.time) === t))).length;
-    totalSent = allSent.filter(r => r.status === 'sent').length;
-    totalFailed = allSent.filter(r => r.status === 'failed').length;
-    try {
-      if (fs.existsSync(cp)) {
-        const raw = await fs.promises.readFile(cp, 'utf-8');
-        const config = JSON.parse(raw);
-        // 多账号：合计所有活跃账号的每日限额
-        const accounts = config.smtpAccounts || [];
-        if (accounts.length > 0) {
-          dailyLimit = accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0);
-        } else {
-          dailyLimit = config.schedule?.max_per_day || 500;
-        }
-      }
-    } catch { /* 非关键 I/O 失败不影响主流程 */ }
-    _statsCache = { sentToday, dailyLimit, remaining: Math.max(0, dailyLimit - sentToday), totalSent, totalFailed, queueLength: deps.sendQueue.length };
-    _statsCacheTime = now;
-    return _statsCache;
+    const dashboard = require('../services/dashboard-service');
+    return dashboard.getStats(deps);
   });
 
   // 应用版本号
@@ -147,57 +117,65 @@ function register(ipcMain, deps) {
   ipcMain.handle('data:export', async () => {
     const XLSX = require('xlsx');
     const wb = XLSX.utils.book_new();
+    const contactsDb = require('../services/contacts-db');
 
-    // Sheet1: 联系人
-    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-    if (fs.existsSync(cp)) {
-      try {
-        const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-        const rows = contacts.map(c => ({
-          '公司': c.company || '', '国家': c.country || '', '分类': c.category || '',
-          '邮箱': c.email || '', '网站': c.website || '',
-          '名': c.firstName || '', '姓': c.lastName || '', '联系人': c.contactName || '',
-          '职位': c.position || '', '电话': c.phone || '', '客户类型': c.clientType || '',
-          '标签': (c.tags||[]).join(', '), '添加时间': (c.addedAt||'').slice(0,10),
-        }));
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
-      } catch { /* 非关键 I/O 失败不影响主流程 */ }
-    }
-
-    // Sheet2: 发送记录
-    const lp = path.join(APP_ROOT, 'send', 'send-log.json');
-    if (fs.existsSync(lp)) {
-      try {
-        const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
-        const rows = (log.sent || []).map(r => ({
-          '时间': r.time ? new Date(r.time).toISOString().slice(0,16).replace('T',' ') : '',
-          '公司': r.company || '', '收件人': r.to || '',
-          '主题': r.subject || '', '发信账号': r._accountId || '',
-          '状态': r.status === 'sent' ? '已发送' : r.status === 'failed' ? '失败' : r.status,
-          '错误信息': r.error || '', '阶段': r._stage || '',
-        }));
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '发送记录');
-      } catch { /* 非关键 I/O 失败不影响主流程 */ }
-    }
-
-    // Sheet3: 跟进状态（联系人 + 发送历史合并）
+    // Sheet1: 联系人（SQLite 完整字段）
     try {
-      let contacts = [];
-      if (fs.existsSync(cp)) contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-      const sp = path.join(APP_ROOT, 'data', 'send-history.json');
-      let history = {};
-      if (fs.existsSync(sp)) history = JSON.parse(fs.readFileSync(sp, 'utf-8'));
-      const rows = contacts.map(c => {
-        const h = history[c.company] || {};
-        return {
-          '公司': c.company || '', '邮箱': c.email || '', '国家': c.country || '',
-          '阶段': h.stage || '', '最后发送': (h.lastSent||'').slice(0,10),
-          '发送次数': h.sentCount || 0, '已退信': c.bounced ? '是' : '',
-          '已回复': c.replied ? '是' : '',
-        };
-      });
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '跟进状态');
-    } catch { /* 非关键 I/O 失败不影响主流程 */ }
+      const contacts = contactsDb.listAll();
+      const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
+      const rows = contacts.map(c => ({
+        '公司': c.company_name || c.company || '',
+        '国家': c.company_country || c.country || '',
+        '分类': c.category || '',
+        '邮箱': c.email || '',
+        '网站': c.company_website || c.website || '',
+        '名': c.first_name || c.firstName || (c.contact_name || c.contactName || '').split(' ')[0] || ((c.email || '').split('@')[0] || ''),
+        '姓': c.last_name || c.lastName || (c.contact_name || c.contactName || '').split(' ').slice(1).join(' ') || '',
+        '职位': c.title || c.position || '',
+        '电话': c.phone || '',
+        '领英': c.linkedin || '',
+        '客户类型': c.client_type || c.clientType || '',
+        '标签': (c.tags || []).join(', '),
+        '阶段': STAGE_LABEL[c.stage] || c.stage || 'cold',
+        '退信': c.is_bounced ? '是' : '',
+        '退信原因': c.bounce_reason || c.bounceReason || '',
+        '最后发送': (c.last_sent_at || c._sentAt || '').slice(0, 10),
+        '发信账号': c.last_sent_acct || c._sentAccount || '',
+        '跟进人': c.assignee || '',
+        '跟进备注': c.followup_note || '',
+        '机会阶段': c.opp_stage || '',
+        '添加时间': (c.created_at || '').slice(0, 10),
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
+    } catch { /* 降级 */ }
+
+    // Sheet2: 发送记录（SQLite）
+    try {
+      const sendLog = require('../services/send-log-db');
+      const { records } = sendLog.list({ limit: 50000 });
+      const rows = records.map(r => ({
+        '时间': r.time ? new Date(r.time).toISOString().slice(0, 16).replace('T', ' ') : '',
+        '公司': r.company || '', '收件人': r.to || '',
+        '主题': r.subject || '', '发信账号': r._accountId || '',
+        '状态': r.status === 'sent' ? '已发送' : r.status === 'failed' ? '失败' : r.status,
+        '错误信息': r.error || '', '阶段': r._stage || '',
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '发送记录');
+    } catch { /* 降级 */ }
+
+    // Sheet3: 互动记录
+    try {
+      const interactionsDb = require('../services/interactions-db');
+      const interactions = interactionsDb.list({ limit: 5000 });
+      const rows = interactions.map(i => ({
+        '时间': (i.created_at || '').slice(0, 16).replace('T', ' '),
+        '类型': i.type === 'sent' ? '发信' : i.type === 'received' ? '收信' : i.type === 'bounced' ? '退信' : i.type,
+        '方向': i.direction === 'outbound' ? '发出' : '收到',
+        '主题': i.subject || '',
+        '摘要': (i.snippet || '').slice(0, 200),
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '互动记录');
+    } catch { /* 降级 */ }
 
     // 保存到桌面
     const desktop = path.join(require('os').homedir(), 'Desktop');

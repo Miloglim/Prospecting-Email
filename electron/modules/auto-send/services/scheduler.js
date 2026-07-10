@@ -330,6 +330,13 @@ class AutoScheduler {
             lastSentAt: rules.beijingToday(),
           };
 
+          // 同步阶段到 contacts 表
+          try {
+            const contactsDb = require("../../services/contacts-db");
+            const contact = contactsDb.getByEmail(recipientEmail);
+            if (contact && email._stage) contactsDb.setStage(contact.id, email._stage, "auto:send");
+          } catch { /* 降级 */ }
+
           s.todaySent = (s.todaySent || 0) + 1;
 
           this._state.addLog({
@@ -470,6 +477,60 @@ class AutoScheduler {
     } finally {
       this._deps._sendInProgress = false;
       this._deps.sendQueue.length = 0;
+    }
+  }
+
+  // ── 内部：同步 send-history.json ──────────────────────────────────────────
+
+  /**
+   * 将自动发送结果写入 send-history.json，确保 compose 页面能正确判断已发送。
+   */
+  _syncSendHistory(emails) {
+    try {
+      const shp = path.join(APP_ROOT, "data", "send-history.json");
+      let hist = {};
+      try {
+        if (fs.existsSync(shp)) hist = JSON.parse(fs.readFileSync(shp, "utf-8"));
+      } catch { /* 文件损坏 → 重建 */ }
+      const now = new Date().toISOString();
+      // 按公司分组
+      const byCompany = {};
+      for (const e of emails) {
+        const name = e.company || "未命名";
+        if (!byCompany[name]) byCompany[name] = [];
+        byCompany[name].push(e.to || "");
+      }
+      for (const [name, recipients] of Object.entries(byCompany)) {
+        const existing = hist[name] || {};
+        const sentContacts = [
+          ...new Set([
+            ...(existing.sentContacts || []),
+            ...recipients.map((r) => r.toLowerCase().trim()),
+          ]),
+        ];
+        // 取该公司的最高已发阶段
+        const companyEmails = emails.filter((e) => (e.company || "未命名") === name);
+        const maxStage = companyEmails.reduce(
+          (max, e) => {
+            const order = ["cold", "f1", "f2", "f3", "f4"];
+            return order.indexOf(e._stage) > order.indexOf(max) ? e._stage : max;
+          },
+          existing.stage || "cold",
+        );
+        hist[name] = {
+          ...existing,
+          stage: maxStage,
+          lastSent: now,
+          sentCount: (existing.sentCount || 0) + recipients.length,
+          sentContacts,
+          startedAt: existing.startedAt || now,
+        };
+      }
+      const dir = path.dirname(shp);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(shp, JSON.stringify(hist, null, 2));
+    } catch (e) {
+      Log.error("auto-scheduler", "同步发送历史失败", e);
     }
   }
 

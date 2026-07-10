@@ -29,6 +29,33 @@ const {
   ensureRuntimeDirs,
 } = require("./modules/config");
 ensureRuntimeDirs();
+
+// SQLite 迁移：首次启动从 contacts.json + send-log.json 导入
+try {
+  const { Log: _Log } = require("./modules/core/logger");
+  const contactsDb = require("./modules/services/contacts-db");
+  const r = contactsDb.migrateFromJson(
+    path.join(APP_ROOT, "data", "contacts.json"),
+    path.join(APP_ROOT, "send", "send-log.json"),
+  );
+  if (r.migrated) _Log.info("启动", `SQLite 联系人迁移: ${r.migrated} 人`);
+  else if (r.message) _Log.info("启动", "SQLite: " + r.message);
+} catch (e) { require("./modules/core/logger").Log.error("启动", "SQLite 联系人迁移失败", e); }
+
+// send-log 迁移
+try {
+  const sendLogDb = require("./modules/services/send-log-db");
+  const r2 = sendLogDb.migrateFromJson(path.join(APP_ROOT, "send", "send-log.json"));
+  if (r2.migrated) _Log.info("启动", `send-log 迁移: ${r2.migrated} 条`);
+} catch (e) { /* 静默 */ }
+
+// inbox 迁移
+try {
+  const inboxMigrate = require("./modules/services/inbox-service")._migrateInboxFromJson;
+  const r3 = inboxMigrate();
+  if (r3) _Log.info("启动", `inbox 迁移: ${r3} 封`);
+} catch (e) { /* 静默 */ }
+
 app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
 app.commandLine.appendSwitch("disable-gpu-sandbox");
 
@@ -54,17 +81,9 @@ function setupIPC() {
   require("./modules/ipc/account-ipc").register(ipcMain);
   require("./modules/ipc/inbox-ipc").register(ipcMain, deps);
   require("./modules/send-ipc").register(ipcMain, deps);
-  try {
-    require("./modules/acquisition-ipc").register(ipcMain, deps); // 客户开发
-  } catch (e) {
-    Log.error("main", "客户开发模块加载失败", e);
-  }
+  // try { require("./modules/acquisition-ipc").register(ipcMain, deps); } catch (e) { Log.error("main", "客户开发模块加载失败", e); }
   _sendCleanup = require("./modules/send-ipc").cleanup;
-  try {
-    require("./modules/auto-send/ipc").register(ipcMain, deps);
-  } catch (e) {
-    Log.error("main", "自动发送模块加载失败", e);
-  }
+  // try { require("./modules/auto-send/ipc").register(ipcMain, deps); } catch (e) { Log.error("main", "自动发送模块加载失败", e); }
   registerTableImportHandlers();
 
   // 无边框窗口控制
@@ -126,88 +145,80 @@ function registerTableImportHandlers() {
         }
       }
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-      const getStr = (obj, ...keys) => {
+      // 归一化：trim + 小写 + 去空格 → "First Name" 和 "firstname" 对上
+      const norm = (s) => String(s || "").trim().replace(/\s+/g, "").toLowerCase();
+      // 字段候选词表（中英）
+      const FIELD_KEYS = {
+        company: ["公司", "公司名称", "公司全称", "公司名", "客户名称", "客户", "company"],
+        email: ["邮箱", "邮箱地址", "邮件", "收件人", "email", "e-mail", "to"],
+        country: ["国家", "country"],
+        category: ["品类", "行业", "分类", "category", "industry"],
+        website: ["网站", "网址", "官网", "website", "url"],
+        linkedin: ["linkedin", "领英"],
+        firstName: ["名", "firstname", "first_name"],
+        lastName: ["姓", "lastname", "last_name"],
+        contactName: ["姓名", "联系人", "姓名职位", "contact"],
+        position: ["职位", "职务", "title", "position"],
+        phone: ["电话", "手机", "phone", "tel", "mobile"],
+        assignee: ["跟进人", "负责人", "assignee", "owner"],
+        contactPerson: ["对接人", "contact_person"],
+        stage: ["阶段", "stage"],
+      };
+      // 建立 归一化key → 字段名 索引
+      const keyToField = {};
+      const allKnownKeys = new Set();
+      for (const [field, keys] of Object.entries(FIELD_KEYS)) {
         for (const k of keys) {
-          const v = obj[k];
-          if (v !== undefined && v !== null && String(v).trim())
-            return String(v).trim();
+          keyToField[norm(k)] = field;
+          allKnownKeys.add(norm(k));
+        }
+      }
+      const getStr = (obj, field) => {
+        // 遍历实际表头，找归一化后匹配的
+        for (const rawKey of Object.keys(obj)) {
+          if (keyToField[norm(rawKey)] === field) {
+            const v = obj[rawKey];
+            if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+          }
         }
         return "";
       };
-      const EMAIL_RE =
-        /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/;
+      const EMAIL_RE = /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/;
       const clients = [];
       const invalidEmails = [];
+      const unrecognizedCols = new Set();
+      // 首行扫描：收集未识别列名
+      if (rows.length) {
+        for (const rawKey of Object.keys(rows[0])) {
+          if (!allKnownKeys.has(norm(rawKey))) unrecognizedCols.add(rawKey);
+        }
+      }
       rows.forEach((r) => {
-        const company = getStr(
-          r,
-          "公司全称",
-          "公司名称",
-          "公司名",
-          "公司",
-          "Company",
-          "company",
-          "empresa",
-          "客户名称",
-          "客户",
-        );
+        const company = getStr(r, "company");
         if (!company) return;
-        const rawEmail = getStr(
-          r,
-          "联系方式",
-          "邮箱",
-          "邮箱地址",
-          "Email",
-          "email",
-          "收件人",
-          "to",
-          "邮件",
-        );
+        const rawEmail = getStr(r, "email");
         if (rawEmail && !EMAIL_RE.test(rawEmail)) {
           invalidEmails.push({ company, email: rawEmail });
         }
         clients.push({
           company,
-          country: getStr(r, "国家", "Country", "country"),
-          category: getStr(
-            r,
-            "公司类型",
-            "品类",
-            "Category",
-            "category",
-            "rubro",
-            "行业",
-          ),
+          country: getStr(r, "country"),
+          category: getStr(r, "category"),
           email: rawEmail,
-          website: getStr(r, "网站", "Website", "website", "官网", "网址"),
-          linkedin: getStr(r, "LinkedIn"),
-          firstName: getStr(r, "名", "FirstName", "first_name", "firstname"),
-          lastName: getStr(r, "姓", "LastName", "last_name", "lastname"),
-          contactName: getStr(
-            r,
-            "姓名 | 职位",
-            "姓名",
-            "联系人",
-            "Contact",
-            "contact",
-          ),
-          position: getStr(r, "职位", "Position", "position", "title"),
-          phone: getStr(r, "Phone", "phone", "电话", "Tel", "tel"),
-          clientType: classifyClient(
-            company,
-            getStr(
-              r,
-              "公司类型",
-              "品类",
-              "Category",
-              "category",
-              "rubro",
-              "行业",
-            ),
-          ),
+          website: getStr(r, "website"),
+          linkedin: getStr(r, "linkedin"),
+          firstName: getStr(r, "firstName"),
+          lastName: getStr(r, "lastName"),
+          contactName: getStr(r, "contactName"),
+          position: getStr(r, "position"),
+          phone: getStr(r, "phone"),
+          assignee: getStr(r, "assignee"),
+          contactPerson: getStr(r, "contactPerson"),
+          stage: getStr(r, "stage"),
+          clientType: classifyClient(company, getStr(r, "category")),
         });
       });
-      return { clients, total: clients.length, invalidEmails };
+      return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols] };
     } catch (e) {
       return { error: e.message };
     }

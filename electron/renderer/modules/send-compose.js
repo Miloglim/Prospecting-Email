@@ -894,5 +894,15 @@ async function addToQueue() {
 // ── 用户模板匹配 ────────────────────────────────────────────────────
 // ponytail: 返回匹配的模板列表。自适应模式：按类型+阶段+语言匹配；通用模式：只用含"general"的
 
+// 热更新：发送历史变更时自动刷新公司列表（自动发送跑完/阶段推进）
+window.electronAPI.onHistoryChanged(() => {
+  if (document.getElementById('page-email-send')?.classList.contains('active')) {
+    CS.refreshSendHistory();
+    buildCompanyList();
+    updateSelectedCount();
+    renderSelectedCards();
+  }
+});
+
 window.__pageHandlers['email-send'] = initEmailSend;
 window.__pageHandlers['template-preview'] = initTemplatePreview;

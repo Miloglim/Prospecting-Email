@@ -20,25 +20,19 @@ let _autoBounceTimer = null;
 // ── 联系人标签回写：发送成功后标记 _sentBy / _sentAccount / _sentAt ─────
 const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
 
-function _tagContacts(emails, accountId, accountLabel) {
+function _tagContacts(emails, accountId, accountLabel, stage) {
   try {
-    if (!fs.existsSync(contactsPath)) return;
-    const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
+    const contactsDb = require('./contacts-db');
     const now = new Date().toISOString();
-    let changed = false;
     for (const addr of emails) {
-      const key = addr.toLowerCase().trim();
-      for (const c of contacts) {
-        if ((c.email || '').toLowerCase().trim() === key) {
-          c._sentBy = accountId;
-          c._sentAccount = accountLabel || '';
-          c._sentAt = now;
-          changed = true;
-        }
+      const existing = contactsDb.getByEmail(addr);
+      if (!existing) continue;
+      contactsDb.update(existing.id, { last_sent_at: now, last_sent_acct: accountLabel || '' });
+      if (stage && stage !== (existing.stage || 'cold')) {
+        contactsDb.setStage(existing.id, stage, 'send');
       }
     }
-    if (changed) { const tmp = contactsPath + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, contactsPath); }
-  } catch { /* 联系人文件锁或损坏，静默跳过 */ }
+  } catch { /* 静默跳过 */ }
 }
 
 // ── 正文存储（供 _logRecord 使用）─────────────────────────────────────────
@@ -222,12 +216,22 @@ async function _sendOne(ctx, email, log, deps) {
       : await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
     for (const r of toList) {
       // ponytail: 只存模板正文（不含签名），签名由显示层从 signature.html 加载
-      log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email));
+      const lr = _logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email);
+      log.sent.push(lr);
+      try { require('./send-log-db').add(lr); } catch { /* 降级 */ }
     }
     if (!log.daily_counts) log.daily_counts = {};
     log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
     log.daily_count = (log.daily_count || 0) + toList.length; // ponytail: 同步总量，兼容 send:status 读取
-    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
+    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '', email._stage);
+    // 记录互动
+    try {
+      const contactsDb = require('./contacts-db');
+      for (const r of toList) {
+        const contact = contactsDb.getByEmail(r);
+        if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (email.body || '').slice(0, 200) });
+      }
+    } catch { /* 互动记录不影响发送 */ }
     return { ok: true, n: toList.length };
   } catch (err) {
     const em = err.message || '';
@@ -528,7 +532,7 @@ async function runSendBatch(deps, sendProgress) {
       failed += result.n;
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
     }
-    try { fs.writeFileSync(ctx.logPath, JSON.stringify(log, null, 2)); } catch { /* 日志写入失败不阻塞发送循环 */ }
+    // ponytail: SQLite 已持久化，不再写 JSON
     sendProgress(result.skipped
       ? { type: 'skipped', id: email.id }
       : result.ok

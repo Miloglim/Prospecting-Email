@@ -22,37 +22,31 @@ function _dualWrite(h, name, value) {
 }
 
 function register(ipcMain, deps) {
-  // ── 发送历史 ──
-  ipcMain.handle('history:get', async () => rsh());
+  // ── 发送历史（从 SQLite 实时派生）──
+  ipcMain.handle('history:get', async () => {
+    try {
+      const contactsDb = require('./contacts-db');
+      const contacts = contactsDb.listAll();
+      const hist = {};
+      for (const c of contacts) {
+        const name = c.company_name || c.company || "未命名";
+        if (!hist[name]) hist[name] = { stage: "cold", lastSent: "", sentCount: 0, sentContacts: [], startedAt: c.created_at };
+        const entry = hist[name];
+        if (c.last_sent_at && c.last_sent_at > entry.lastSent) entry.lastSent = c.last_sent_at;
+        if (c.last_sent_at) { entry.sentContacts.push(c.email.toLowerCase().trim()); entry.sentCount++; }
+        const order = ["cold", "f1", "f2", "f3", "f4"];
+        if (order.indexOf(c.stage || "cold") > order.indexOf(entry.stage)) entry.stage = c.stage;
+      }
+      return hist;
+    } catch { return {}; }
+  });
   ipcMain.handle('history:advance', async (_e, companies) => {
     const h = rsh(); const now = new Date().toISOString(); const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
     for (const name of companies) { const cur = h[name]?.stage || 'cold'; const idx = STAGES.indexOf(cur); const ni = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; const next = STAGES[ni]; const u = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] }; if (!h[name]?.startedAt) u.startedAt = now; if (next === 'archived') u.archivedAt = now; _dualWrite(h, name, u); }
     wsh(h); return h;
   });
 
-  // ── 批次统计：按日期分组计数 ────────────────────────────────────────
-  ipcMain.handle('history:getDates', async () => {
-    const logPaths = [
-      path.join(APP_ROOT, 'send', 'send-log.json'),
-      path.join(APP_ROOT, 'send', 'send-log-test.json'),
-    ];
-    const dateMap = {};
-    try {
-      for (const lp of logPaths) {
-        if (fs.existsSync(lp)) {
-          const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
-          (log.sent || []).forEach(r => {
-            const d = (r.time_beijing || r.time || '').slice(0, 10); // YYYY-MM-DD
-            if (d) dateMap[d] = (dateMap[d] || 0) + 1;
-          });
-        }
-      }
-    } catch { /* 日志损坏 → 空 */ }
-    const dates = Object.entries(dateMap)
-      .sort((a, b) => b[0].localeCompare(a[0])) // 最新在前
-      .map(([date, count]) => ({ date, count }));
-    return { ok: true, data: dates };
-  });
+  // ── 批次统计：按日期分组计数（已迁移到 SQLite）
 
   // ── 阶段追回：扫描已发记录，将 cold 阶段已发公司推进到 f1 ──────────
   ipcMain.handle('history:catchup', async () => {
@@ -89,39 +83,32 @@ function register(ipcMain, deps) {
   ipcMain.handle('history:recordSentences', async (_e, c, sids) => { const h = rsh(); const e = h[c] || {}; const u = e.usedSentences || []; _dualWrite(h, c, { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:reactivate', async (_e, c) => { const h = rsh(); _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined }); wsh(h); return { ok: true }; });
   ipcMain.handle('history:getLog', async (_e, params) => {
-    const { limit, offset, search, type, lang, country, stage, date } = params || {};
-    const logPaths = [
-      path.join(APP_ROOT, 'send', 'send-log.json'),
-      path.join(APP_ROOT, 'send', 'send-log-test.json'),
-    ];
     try {
-      let records = [];
-      for (const lp of logPaths) {
-        if (fs.existsSync(lp)) {
-          try { records.push(...(JSON.parse(fs.readFileSync(lp, 'utf-8')).sent || [])); } catch { /* 发送日志文件读取失败 → 跳过该文件 */ }
-        }
-      }
-      records.sort((a, b) => (b.time || '').localeCompare(a.time || '')); // 最新在前
-      if (search) { const q = search.toLowerCase(); records = records.filter(r => (r.company || '').toLowerCase().includes(q) || (r.subject || '').toLowerCase().includes(q)); }
-      if (type) records = records.filter(r => (r._type || 'unlabeled') === type);
-      if (lang) records = records.filter(r => (r._lang || '') === lang);
-      if (country) records = records.filter(r => (r._country || '') === country);
-      if (stage) records = records.filter(r => r._stage === stage);
-      if (date) records = records.filter(r => (r.time_beijing || r.time || '').slice(0, 10) === date);
-      const total = records.length; records = records.slice(offset || 0, (offset || 0) + (limit || 50));
-      return { total, records: records.map(r => { const { body, ...rest } = r; return rest; }) };
+      const sendLog = require('./send-log-db');
+      return sendLog.list(params || {});
     } catch (e) { return { total: 0, records: [] }; }
   });
-  ipcMain.handle('history:getBody', async (_e, bodyId) => { if (!bodyId) return ''; return loadBodies()[bodyId] || ''; });
+  ipcMain.handle('history:getDates', async () => {
+    try {
+      const sendLog = require('./send-log-db');
+      return { ok: true, data: sendLog.getDates() };
+    } catch { return { ok: true, data: [] }; }
+  });
+  ipcMain.handle('history:getBody', async (_e, bodyId) => {
+    if (!bodyId) return '';
+    const sendLog = require('./send-log-db');
+    return sendLog.getBody(bodyId);
+  });
   ipcMain.handle('history:delete', async (_e, indices) => {
     if (!indices?.length) return { ok: false };
     if (deps?._sendInProgress) return { ok: false, error: '发送进行中，无法清除记录' };
-    for (const lp of [path.join(APP_ROOT, 'send', 'send-log.json'), path.join(APP_ROOT, 'send', 'send-log-test.json')]) {
-      if (!fs.existsSync(lp)) continue;
-      if (indices[0] === '__ALL__') { fs.writeFileSync(lp, JSON.stringify({ sent: [], daily_count: 0, last_date_beijing: '' }, null, 2)); continue; }
-      const log = JSON.parse(fs.readFileSync(lp, 'utf-8')); const iset = new Set(indices.map(String)); log.sent = log.sent.filter(r => !iset.has(String(r.index))); fs.writeFileSync(lp, JSON.stringify(log, null, 2));
-    }
-    return { ok: true, deleted: indices[0] === '__ALL__' ? -1 : indices.length };
+    try {
+      const db = require('./db').getDb();
+      if (indices[0] === '__ALL__') { db.exec("DELETE FROM send_log"); return { ok: true }; }
+      const ph = indices.map(() => "?").join(",");
+      db.prepare(`DELETE FROM send_log WHERE row_index IN (${ph})`).run(...indices);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
   });
 }
 

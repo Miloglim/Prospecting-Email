@@ -7,10 +7,10 @@ import './modules/backcheck.js';
 import './modules/send-compose.js';
 import './modules/send-queue.js';
 import './modules/send-history.js';
-import './modules/discover.js';
+// import './modules/discover.js';
 import './modules/settings.js';
 import './modules/inbox.js';
-import { initAutoSend, teardownAutoSend } from './modules/auto-send.js';
+// import { initAutoSend, teardownAutoSend } from './modules/auto-send.js';
 import { initQueue } from './modules/send-queue.js';
 
 document.getElementById('tb-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
@@ -55,6 +55,14 @@ initNavigation();
   }
 })();
 initQueue();  // 队列后台并行恢复
+// 预加载联系人数据到内存，避免切页时等待
+(async () => {
+  try {
+    const r = await window.electronAPI.getContacts();
+    const data = Array.isArray(r) ? r : (r?.data || []);
+    if (data.length) window.S.contactsData = data;
+  } catch { /* 预加载失败不影响启动 */ }
+})();
 setTimeout(() => initDashboardEditor(), 200);  // 等 DOM 稳定后初始化布局编辑器
 
 // ── 全局更新检测 + 右下角通知卡片 ──────────────────────────────

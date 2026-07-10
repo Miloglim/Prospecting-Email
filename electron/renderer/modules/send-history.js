@@ -6,7 +6,7 @@ import { lucide,showToast,escapeHtml,formatDate,daysSince,renderPagination,statu
 export async function loadHistoryPage() {
   const q = (document.getElementById('history-search')?.value || '').trim();
   const params = {
-    limit: Math.max(S.HISTORY_PAGE_SIZE, 500), offset: 0, // ponytail: 一次取足够多用于日期分组
+    limit: 200000, offset: 0,
     search: q || undefined,
     type: S.historyFilters.type || undefined,
     lang: S.historyFilters.lang || undefined,

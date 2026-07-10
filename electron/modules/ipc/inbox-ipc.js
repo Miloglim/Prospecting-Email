@@ -59,10 +59,11 @@ function register(ipcMain, deps) {
   ipcMain.handle('inbox:getBounceCount', async () => inbox.getBounceCount());
   ipcMain.handle('inbox:toggleImportant', async (_e, i, key) => { inbox.toggleImportantByKey(key); return { ok: true }; });
   ipcMain.handle('inbox:clear', async () => {
-    const cachePath = path.join(APP_ROOT, 'data', 'inbox-cache.json');
-    const cursorPath = path.join(APP_ROOT, 'data', 'inbox-cursor.json');
-    try { if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath); } catch { /* 静默 */ }
-    try { if (fs.existsSync(cursorPath)) fs.unlinkSync(cursorPath); } catch { /* 静默 */ }
+    try {
+      const db = require('../services/db').getDb();
+      db.exec("DELETE FROM inbox");
+    } catch { /* 降级 */ }
+    try { if (fs.existsSync(path.join(APP_ROOT, 'data', 'inbox-cursor.json'))) fs.unlinkSync(path.join(APP_ROOT, 'data', 'inbox-cursor.json')); } catch { /* 静默 */ }
     return { ok: true };
   });
 

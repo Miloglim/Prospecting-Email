@@ -21,6 +21,31 @@ function _readBounceCount() {
   } catch { /* 静默 */ }
   return { today: 0, total: 0, date: '' };
 }
+function _logInboxInteractions(newMails) {
+  try {
+    const contactsDb = require('./contacts-db');
+    const interactionsDb = require('./interactions-db');
+    for (const m of newMails) {
+      let contactId = m.contactDbId || '';
+      if (!contactId && m.from) {
+        const c = contactsDb.getByEmail(m.from);
+        if (c) contactId = c.id;
+      }
+      if (!contactId) continue;
+      const itype = m.type === 'bounce' ? 'bounced' : m.type === 'reply' ? 'received' : m.type === 'auto-reply' ? 'received' : 'noted';
+      interactionsDb.add({
+        contact_id: contactId,
+        company_id: m.contactId || '',
+        type: itype,
+        direction: 'inbound',
+        subject: m.subject || '',
+        snippet: (m.body || '').slice(0, 200),
+        email_uid: m.uid || '',
+      });
+    }
+  } catch { /* 互动记录不影响收件箱 */ }
+}
+
 function _incrementBounceCount(n) {
   const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10);
   const c = _readBounceCount();
@@ -175,78 +200,76 @@ function _extractBodyContactsFromIdx(plainText, htmlText, extraText, idx) {
   return result;
 }
 
-// ── 缓存读写 ──────────────────────────────────────────────────────────────────
+// ── 缓存读写（SQLite）──────────────────────────────────────────────────────────
+const CACHE_PATH_JSON = CACHE_PATH;
+
 function _readCache() {
-  try { return fs.existsSync(CACHE_PATH) ? JSON.parse(fs.readFileSync(CACHE_PATH, 'utf-8')) : []; }
-  catch { return []; }
+  try {
+    const { getDb } = require('./db');
+    const rows = getDb().prepare('SELECT * FROM inbox ORDER BY important DESC, date DESC LIMIT 500').all();
+    return rows.map(r => {
+      try { r.contactTags = JSON.parse(r.contact_tags || '[]'); } catch { r.contactTags = []; }
+      try { r.matchedContacts = JSON.parse(r.matched_contacts || '[]'); } catch { r.matchedContacts = []; }
+      r.from = r.from_addr;
+      r.fromName = r.from_name;
+      r.contactCompany = r.contact_company;
+      r.contactId = r.contact_id;
+      r.contactDbId = r.contact_db_id;
+      r.accountLabel = r.account_label;
+      return r;
+    });
+  } catch { return []; }
 }
+
 function _writeCache(mails) {
-  const dir = path.dirname(CACHE_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  // ponytail: 保留重要邮件，其余最多 500 封
-  const important = mails.filter(m => m.important);
-  const rest = mails.filter(m => !m.important).slice(-500);
-  fs.writeFileSync(CACHE_PATH, JSON.stringify([...important, ...rest]));
+  try {
+    const { getDb } = require('./db');
+    const db = getDb();
+    const insert = db.prepare('INSERT OR REPLACE INTO inbox (uid, account_id, subject, from_addr, from_name, date, body, type, contact_company, contact_id, contact_db_id, contact_tags, matched_contacts, processed, important, account_label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    const batch = db.transaction(() => {
+      for (const m of mails.slice(-500)) {
+        insert.run(m.uid||'', m.accountId||'', m.subject||'', m.from||'', m.fromName||'', m.date||'', m.body||'', m.type||'other', m.contactCompany||'', m.contactId||'', m.contactDbId||'', JSON.stringify(m.contactTags||[]), JSON.stringify(m.matchedContacts||[]), m.processed?1:0, m.important?1:0, m.accountLabel||'');
+      }
+    });
+    batch();
+  } catch { /* 降级 */ }
 }
-function _readDeleted() {
-  try { return fs.existsSync(DELETED_PATH) ? new Set(JSON.parse(fs.readFileSync(DELETED_PATH, 'utf-8'))) : new Set(); }
-  catch { return new Set(); }
-}
-function _writeDeleted(set) {
-  const dir = path.dirname(DELETED_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  // 只保留最近 1000 条，限制文件大小
-  const arr = [...set].slice(-1000);
-  fs.writeFileSync(DELETED_PATH, JSON.stringify(arr));
-}
-function _readCursor() {
-  try { return fs.existsSync(CURSOR_PATH) ? JSON.parse(fs.readFileSync(CURSOR_PATH, 'utf-8')) : {}; }
-  catch { return {}; }
-}
-function _writeCursor(data) {
-  const dir = path.dirname(CURSOR_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(CURSOR_PATH, JSON.stringify(data));
+
+function _migrateInboxFromJson() {
+  try {
+    if (!fs.existsSync(CACHE_PATH_JSON)) return 0;
+    const mails = JSON.parse(fs.readFileSync(CACHE_PATH_JSON, 'utf-8'));
+    if (!mails.length) return 0;
+    const { getDb } = require('./db');
+    const existing = getDb().prepare('SELECT COUNT(*) as n FROM inbox').get().n;
+    if (existing > 0) return 0;
+    _writeCache(mails);
+    Log.info('[收件箱]', 'inbox 迁移: ' + mails.length + ' 封');
+    return mails.length;
+  } catch { return 0; }
 }
 
 // ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
 function _syncTagsToContacts(newMails) {
+  const contactsDb = require('./contacts-db');
   const TYPE_TAG = { bounce: 'bounced_by_contact', reply: 'replied', 'auto-reply': 'autoreply' };
-  const updates = {}; // contactDbId → tag
+  let synced = 0;
   for (const m of newMails) {
     const tag = TYPE_TAG[m.type];
     if (!tag) continue;
-    // 发件人匹配到的联系人
-    if (m.contactDbId && !(m.contactTags || []).includes(tag)) {
-      updates[m.contactDbId] = tag;
-    }
-    // 正文提取到的联系人（退信的核心来源）
+    const ids = new Set();
+    if (m.contactDbId) ids.add(m.contactDbId);
     for (const c of (m.matchedContacts || [])) {
-      if (c.matched && c.contactId && !updates[c.contactId]) {
-        updates[c.contactId] = tag;
+      if (c.matched && c.contactId) ids.add(c.contactId);
+    }
+    for (const id of ids) {
+      if (contactsDb.addTag(id, tag)) synced++;
+      if (m.type === 'bounce') {
+        contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
       }
     }
   }
-  if (!Object.keys(updates).length) return;
-  try {
-    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-    if (!fs.existsSync(cp)) return;
-    const onDisk = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-    let synced = 0;
-    for (const c of onDisk) {
-      const tag = updates[c.id];
-      if (tag) {
-        c.tags = c.tags || [];
-        if (!c.tags.includes(tag)) { c.tags.push(tag); synced++; }
-      }
-    }
-    if (synced > 0) {
-      const tmp = cp + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(onDisk));
-      fs.renameSync(tmp, cp);
-      Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
-    }
-  } catch (e) { Log.error('[收件箱]', '标签同步失败', e.stack); }
+  if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
 }
 
 // ── 用 mailparser 解析 raw source → 统一格式 ────────────────────────────────
@@ -577,11 +600,12 @@ async function _fetchInbox(configPath) {
     newMails.push(m);
   }
 
-  // 同步分类标签到联系人表 + 退信计数
+  // 同步分类标签到联系人表 + 退信计数 + 互动记录
   if (newMails.length) {
     _syncTagsToContacts(newMails);
     const bounceN = newMails.filter(m => m.type === 'bounce').length;
     if (bounceN > 0) _incrementBounceCount(bounceN);
+    _logInboxInteractions(newMails);
   }
 
   // ponytail: 直接返回内存数据，避免写完又读
@@ -706,4 +730,4 @@ function syncAllTags() {
   return { ok: true, synced: 1, message: `已扫描 ${mails.length} 封缓存邮件` };
 }
 
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey };
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey, _migrateInboxFromJson };

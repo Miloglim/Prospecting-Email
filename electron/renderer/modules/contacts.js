@@ -35,6 +35,9 @@ export async function doImport(file) {
     const more = result.invalidEmails.length > 10 ? `\n...等共 ${result.invalidEmails.length} 个` : '';
     msg += `\n\n⚠️ ${result.invalidEmails.length} 个邮箱格式异常：\n${list}${more}`;
   }
+  if (result.unrecognizedCols?.length) {
+    msg += `\n\n🔍 未识别的列（${result.unrecognizedCols.length}）：${result.unrecognizedCols.join('、')}`;
+  }
   await showAlert(msg);
   renderClientsTable();
 }
@@ -142,7 +145,6 @@ document.getElementById('clients-clear-btn')?.addEventListener('click', () => {
 
 // ===== 联系人 ========================================================
 
-
 export async function loadContacts() {
   await CS.refreshContacts();
   await CS.refreshContactsSendHistory();
@@ -169,6 +171,9 @@ export async function loadContacts() {
     });
   }
   renderContactsList();
+  // 如果有预设搜索词（如从收件箱跳转过来），自动触发搜索
+  const si = document.getElementById('contacts-search');
+  if (si && si.value.trim()) si.dispatchEvent(new Event('input'));
 }
 
 // clientTypeTag / groupByCompany 从 shared.js 导入
@@ -293,8 +298,15 @@ export function renderContactsList(filtered) {
 
     });
 
-    // 搜索模式下不自动选第一个公司，保留搜索结果列表让用户自己点
-    if (S.selectedContactCompany && S.contactsGroupMap.has(S.selectedContactCompany)) {
+    
+
+// 搜索结果只有一家公司时自动展开，方便查看
+    if (filtered && groups.length === 1) {
+      S.selectedContactCompany = groups[0][0];
+      const item = sidebar.querySelector(`[data-company="${escapeHtml(S.selectedContactCompany)}"]`);
+      if (item) item.classList.add('active');
+      renderContactDetail(S.selectedContactCompany);
+    } else if (S.selectedContactCompany && S.contactsGroupMap.has(S.selectedContactCompany)) {
       renderContactDetail(S.selectedContactCompany);
     } else if (!filtered) {
       S.selectedContactCompany = groups[0]?.[0] || null;
@@ -310,7 +322,13 @@ export function renderContactsList(filtered) {
 export function renderContactDetail(company) {
   const detail = document.getElementById('contacts-detail');
   if (!detail) return;
-  const members = S.contactsGroupMap.get(company) || [];
+  let members = S.contactsGroupMap.get(company) || [];
+  // 有搜索词时仅显示命中的联系人
+  if (S._searchQuery) {
+    const q = S._searchQuery.toLowerCase();
+    members = members.filter(m => (m.email || '').toLowerCase().includes(q) || (m.firstName || '').toLowerCase().includes(q) || (m.lastName || '').toLowerCase().includes(q) || (m.contactName || '').toLowerCase().includes(q));
+    if (!members.length) return; // 无匹配则不渲染
+  }
   const ctype = members[0]?.clientType || 'unlabeled';
   const hist = S.contactsSendHistory[company];
   const isArchived = hist?.stage === 'archived';
@@ -321,36 +339,45 @@ export function renderContactDetail(company) {
       <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px;margin-left:auto">背调</button>
       ${S.contactsFilter === 'tag:bounced_by_contact' ? `<button id="btn-delete-bounced" class="secondary" style="font-size:11px;padding:3px 10px;color:#e5484d;border-color:#e5484d">删除全部退信</button>` : ''}
     </div>
-    <div class="contacts-detail-body">
-      <table>
-        <thead><tr><th>国家</th><th>品类</th><th>姓名</th><th>邮箱</th><th>发信账号</th><th>状态</th><th>跟进备注</th><th>操作</th></tr></thead>
+    <div class="contacts-detail-body" style="overflow-x:auto">
+      <table style="white-space:nowrap">
+        <thead><tr><th>公司</th><th>名</th><th>姓</th><th>邮箱</th><th>职位</th><th>电话</th><th>领英</th><th>国家</th><th>品类</th><th>客户类型</th><th>阶段</th><th>状态</th><th>机会</th><th>标签</th><th>对接人</th><th>跟进人</th><th>备注</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
             const contactTags = m.tags || [];
             const STATUS_PRIORITY = ['left_company','bounced_by_contact','replied','autoreply','auto_reply','reached'];
             const topTag = STATUS_PRIORITY.find(t => contactTags.includes(t));
-            const STATUS_MAP = {
-              left_company: { label: '已离职', dot: '#d93025' },
-              bounced_by_contact: { label: '退信', dot: '#e5484d' },
-              replied: { label: '有回复', dot: '#22a644' },
-              autoreply: { label: '自动回复', dot: '#e6a817' },
-              auto_reply: { label: '自动回复', dot: '#e6a817' },
-              reached: { label: '已触达', dot: '#3b82f6' },
-            };
-            const st = STATUS_MAP[topTag] || { label: '未触达', dot: 'var(--text-secondary)' };
+            const STATUS_MAP = { left_company: { label: '已离职', dot: '#d93025' }, bounced_by_contact: { label: '退信', dot: '#e5484d' }, replied: { label: '有回复', dot: '#22a644' }, autoreply: { label: '自动回复', dot: '#e6a817' }, auto_reply: { label: '自动回复', dot: '#e6a817' }, reached: { label: '已触达', dot: '#3b82f6' } };
+            let st = STATUS_MAP[topTag];
+            if (!st && (m.is_bounced || m.bounced)) st = { label: '退信', dot: '#e5484d' };
+            if (!st) st = { label: '未触达', dot: 'var(--text-secondary)' };
             const statusHtml = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${st.dot};flex-shrink:0"></span>${st.label}</span>`;
             const hasFollowups = (m.followups || []).length > 0;
-            const nameDisplay = (m.firstName || m.lastName) ? `${m.firstName || ''} ${m.lastName || ''}`.trim() : (m.contactName || '—');
+            const nameDisplay = (m.firstName || m.lastName) ? `${m.firstName||''} ${m.lastName||''}`.trim() : (m.contactName || '—');
+            const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
+            const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
+            const OPP_LABEL = { '待开发':'待开发','触达中':'触达中','报价中':'报价中','试单':'试单','合作中':'合作中','已流失':'已流失' };
+            const tagStr = (m.tags || []).join(',');
             return `
-            <tr data-contact-id="${m.id}" style="${m.bounced ? 'opacity:.5' : ''}">
-              <td>${escapeHtml(m.country)}</td>
-              <td>${escapeHtml(m.category)}</td>
-              <td>${escapeHtml(nameDisplay)}</td>
+            <tr data-contact-id="${m.id}">
+              <td>${escapeHtml(m.company || m.company_name || '')}</td>
+              <td>${escapeHtml(m.firstName || m.first_name || '')}</td>
+              <td>${escapeHtml(m.lastName || m.last_name || '')}</td>
               <td>${escapeHtml(m.email)}</td>
-              <td style="font-size:11px;color:var(--text-secondary)">${m._sentAccount ? escapeHtml(m._sentAccount) + ' · ' + (m._sentAt||'').slice(0,10) : '—'}</td>
+              <td>${escapeHtml(m.title || m.position || '')}</td>
+              <td>${escapeHtml(m.phone || '')}</td>
+              <td>${escapeHtml(m.linkedin || '')}</td>
+              <td>${escapeHtml(m.country || m.company_country || '')}</td>
+              <td>${escapeHtml(m.category || '')}</td>
+              <td>${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>
+              <td><span class="stage-badge stage-${m.stage||m._stage||'cold'}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[m.stage||m._stage]||'cold'}</span></td>
               <td>${statusHtml}</td>
+              <td>${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>
+              <td style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(tagStr)}</td>
+              <td>${escapeHtml(m.contact_person || '')}</td>
+              <td>${escapeHtml(m.assignee||'')}</td>
               <td>${hasFollowups ? `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--primary);font-weight:600">${m.followups.length}条</span>` : `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span>`}</td>
-              <td><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
+              <td><button class="btn-edit-contact" data-id="${m.id}" style="margin-right:4px">${lucide('pencil',13)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
             </tr>
           `}).join('')}
         </tbody>
@@ -358,6 +385,14 @@ export function renderContactDetail(company) {
       ${isArchived ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:8px"><span style="font-size:13px">${lucide('archive',13)} 已归档 — 不参与常规序列</span><button id="btn-reactivate-contact" style="margin-left:auto;font-size:12px;padding:4px 12px">${lucide('refresh-cw',12)} 重新激活</button></div>` : ''}
     </div>
   `;
+  // 编辑按钮
+  detail.querySelectorAll('.btn-edit-contact').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const contact = members.find(m => m.id === btn.dataset.id);
+      if (contact) showContactEditor(contact);
+    });
+  });
 
   // 跟进备注按钮
   detail.querySelectorAll('.followup-btn').forEach(btn => {
@@ -590,12 +625,96 @@ export function renderContactDetail(company) {
       setTimeout(() => document.addEventListener('click', close), 0);
     });
   }
-}
 
+    // ── 行内编辑：单击编辑、下拉切换 ────────────────────────────────────────
+  const tbody = detail.querySelector('tbody');
+  if (!tbody) return;
+
+  const EDITABLE_COLS = new Set([1, 2, 3, 4, 5, 6, 8, 14, 15]);
+  const SELECT_COLS = {
+    7: { type: 'country', opts: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'] },
+    9: { type: 'client_type', opts: ['agent','direct','unlabeled'], labels: {agent:'代理',direct:'直客',unlabeled:'通用'} },
+    10: { type: 'stage', opts: ['cold','f1','f2','f3','f4'], labels: {cold:'冷开发',f1:'F1',f2:'F2',f3:'F3',f4:'F4'} },
+    12: { type: 'opp_stage', opts: ['待开发','触达中','报价中','试单','合作中','已流失'] },
+  };
+
+  tbody.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    const td = e.target.closest('td');
+    const tr = e.target.closest('tr');
+    if (!td || !tr) return;
+    const cells = tr.querySelectorAll('td');
+    const colIdx = Array.from(cells).indexOf(td);
+    const contactId = tr.dataset.contactId;
+    if (!contactId || td.querySelector('input,select')) return;
+
+    const sel = SELECT_COLS[colIdx];
+    if (sel) {
+      const orig = td.textContent.trim();
+      const select = document.createElement('select');
+      select.style.cssText = 'width:100%;padding:1px 2px;border:1px solid var(--accent);border-radius:3px;font-size:10px;background:var(--bg);color:var(--text)';
+      sel.opts.forEach((o) => {
+        const opt = document.createElement('option'); opt.value = o;
+        opt.textContent = sel.labels ? sel.labels[o] || o : o;
+        const cur = (sel.labels ? sel.labels[o] : o);
+        if (cur === orig || o === orig) opt.selected = true;
+        select.appendChild(opt);
+      });
+      td.textContent = ''; td.appendChild(select); select.focus();
+      let _selectSaved = false;
+      const saveSelect = async (val) => {
+        if (_selectSaved) return; _selectSaved = true;
+        td.textContent = sel.labels ? sel.labels[val] || val : val;
+        if (!val || val === orig) return;
+        const ref = S.contactsData.find(c => c.id === contactId);
+        if (!ref) return;
+        if (sel.type === 'client_type') {
+          const company = ref.company || ref.company_name || '';
+          const members = S.contactsData.filter(c => (c.company || c.company_name) === company);
+          if (members.length > 1 && !await showConfirm('「' + company + '」下 ' + members.length + ' 位联系人将全部改为「' + (sel.labels?.[val] || val) + '」？')) { td.textContent = orig; return; }
+          for (const m of members) await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val });
+        } else if (sel.type === 'country') {
+          const contact = S.contactsData.find(c => c.id === contactId);
+          if (contact?.company_id) await window.electronAPI.updateCompany(contact.company_id, { country: val });
+        } else {
+          const ref2 = S.contactsData.find(c => c.id === contactId);
+          if (ref2) await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [sel.type]: val });
+        }
+        await CS.refreshContacts(); renderContactsList();
+      };
+      select.addEventListener('change', () => saveSelect(select.value));
+      select.addEventListener('blur', () => { setTimeout(() => saveSelect(select.value), 100); });
+      return;
+    }
+
+    if (EDITABLE_COLS.has(colIdx)) {
+      const orig = td.textContent.trim();
+      const input = document.createElement('input');
+      input.value = orig === '—' ? '' : orig;
+      input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--accent);border-radius:3px;font-size:11px;background:var(--bg);color:var(--text)';
+      td.textContent = ''; td.appendChild(input); input.focus(); input.select();
+      const saveInput = async () => {
+        const val = input.value.trim(); input.remove();
+        td.textContent = val || orig;
+        if (val === orig) return;
+        const fields = ['_','first_name','last_name','email','title','phone','linkedin','_','category','_','_','_','_','_','contact_person','assignee'];
+        const field = fields[colIdx];
+        if (!field || field === '_') return;
+        const ref3 = S.contactsData.find(c => c.id === contactId);
+        if (ref3) await window.electronAPI.upsertContact({ id: contactId, email: ref3.email, [field]: val });
+        await CS.refreshContacts();
+      };
+      input.addEventListener('blur', saveInput);
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveInput(); } if (ev.key === 'Escape') { input.remove(); td.textContent = orig; } });
+    }
+  });
+
+}
 
 // 搜索
 document.getElementById('contacts-search')?.addEventListener('input', async (e) => {
   const q = e.target.value.trim();
+  S._searchQuery = q || '';
   if (!q) { renderContactsList(); return; }
   const results = await window.electronAPI.searchContacts(q);
   S.selectedContactCompany = null; // 搜索后重置选中
@@ -727,7 +846,33 @@ function showFollowupEditor(contact) {
       }
     },
   });
+
+// 热刷新：主进程通知联系人数据变化时自动更新
+window.electronAPI.onContactsChanged(() => {
+  if (document.getElementById('page-contacts')?.classList.contains('active')) {
+    CS.refreshContacts();
+    renderContactsList();
+  }
+});
 }
+// 编辑器 Tab 切换（模块级事件委托）
+// 编辑器 Tab 切换（mousedown 避免被 modal 按钮处理拦截）
+document.addEventListener('mousedown', (e) => {
+  const tab = e.target.closest('.ec-tab');
+  if (!tab) return;
+  const tabs = tab.parentElement;
+  if (!tabs?.classList.contains('ec-tabs')) return;
+  e.preventDefault();
+  tabs.querySelectorAll('.ec-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  const form = tabs.parentElement;
+  form.querySelectorAll('.ec-panel').forEach(p => p.classList.remove('active'));
+  const panel = form.querySelector('[data-panel="' + tab.dataset.tab + '"]');
+  if (panel) panel.classList.add('active');
+});
+
+window.__pageHandlers['contacts'] = loadContacts;
+window.__pageHandlers['clients'] = renderClientsTable;
 
 function showContactEditor(contact) {
   showModal({
@@ -735,26 +880,76 @@ function showContactEditor(contact) {
     closeOnOverlay: false,
     message: `
       <style>
-        .ec-form { display:flex; flex-direction:column; gap:12px; }
-        .ec-row { display:flex; gap:12px; }
+        .modal-card { max-height:85vh; width:460px; }
+        .modal-body { overflow-y:auto; min-height:240px; }
+        .ec-form { display:flex; flex-direction:column; gap:10px; position:relative; min-height:260px; }
+        .ec-field input, .ec-field select { width:100%; box-sizing:border-box; }
+        .ec-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:12px; }
+        .ec-tab { padding:7px 14px; font-size:12px; cursor:pointer; user-select:none; background:transparent; color:var(--text-secondary); border-bottom:2px solid transparent; transition:color .15s,border-color .15s; display:inline-block; }
+        .ec-tab.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
+        .ec-panel { position:absolute; visibility:hidden; flex-direction:column; gap:10px; width:100%; }
+        .ec-panel.active { position:relative; visibility:visible; }
+        .ec-row { display:flex; gap:10px; }
         .ec-field { flex:1; display:flex; flex-direction:column; gap:3px; }
         .ec-field label { font-size:11px; font-weight:500; color:var(--text-secondary); }
-        .ec-field input { padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:var(--bg); color:var(--text); outline:none; transition:border-color .15s; }
-        .ec-field input:focus { border-color:var(--primary); }
+        .ec-field input, .ec-field select { padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:12px; background:var(--bg); color:var(--text); outline:none; }
+        .ec-field input:focus, .ec-field select:focus { border-color:var(--primary); }
       </style>
+      <div class="ec-tabs">
+        <span class="ec-tab active" data-tab="basic">基本信息</span>
+        <span class="ec-tab" data-tab="contact">联系</span>
+        <span class="ec-tab" data-tab="tracking">客户去向</span>
+        <span class="ec-tab" data-tab="status">状态</span>
+      </div>
       <div class="ec-form">
-        <div class="ec-row">
-          <div class="ec-field"><label>名</label><input id="ec-firstname" value="${escapeHtml(contact.firstName || '')}" placeholder="如 Julio"></div>
-          <div class="ec-field"><label>姓</label><input id="ec-lastname" value="${escapeHtml(contact.lastName || '')}" placeholder="如 Gallegos"></div>
+        <div class="ec-panel active" data-panel="basic">
+          <div class="ec-row">
+            <div class="ec-field"><label>名</label><input id="ec-firstname" value="${escapeHtml(contact.firstName || '')}"></div>
+            <div class="ec-field"><label>姓</label><input id="ec-lastname" value="${escapeHtml(contact.lastName || '')}"></div>
+          </div>
+          <div class="ec-field"><label>邮箱</label><input id="ec-email" value="${escapeHtml(contact.email || '')}"></div>
+          <div class="ec-field"><label>公司</label><input id="ec-company" value="${escapeHtml(contact.company || contact.company_name || '')}"></div>
+          <div class="ec-row">
+            <div class="ec-field"><label>国家</label><input id="ec-country" value="${escapeHtml(contact.country || '')}"></div>
+            <div class="ec-field"><label>品类</label><input id="ec-category" value="${escapeHtml(contact.category || '')}"></div>
+          </div>
+          <div class="ec-field"><label>网站</label><input id="ec-website" value="${escapeHtml(contact.website || contact.company_website || '')}"></div>
         </div>
-        <div class="ec-field"><label>邮箱</label><input id="ec-email" value="${escapeHtml(contact.email || '')}" placeholder="email@example.com"></div>
-        <div class="ec-row">
-          <div class="ec-field"><label>国家</label><input id="ec-country" value="${escapeHtml(contact.country || '')}" placeholder="如 Mexico"></div>
-          <div class="ec-field"><label>品类</label><input id="ec-category" value="${escapeHtml(contact.category || '')}" placeholder="如 freight forwarder"></div>
+        <div class="ec-panel" data-panel="contact">
+          <div class="ec-row">
+            <div class="ec-field"><label>职位</label><input id="ec-position" value="${escapeHtml(contact.position || contact.title || '')}"></div>
+            <div class="ec-field"><label>电话</label><input id="ec-phone" value="${escapeHtml(contact.phone || '')}"></div>
+          </div>
+          <div class="ec-field"><label>领英</label><input id="ec-linkedin" value="${escapeHtml(contact.linkedin || '')}"></div>
         </div>
-        <div class="ec-row">
-          <div class="ec-field"><label>职位</label><input id="ec-position" value="${escapeHtml(contact.position || '')}" placeholder="如 Manager"></div>
-          <div class="ec-field"><label>电话</label><input id="ec-phone" value="${escapeHtml(contact.phone || '')}" placeholder="如 +52 555..."></div>
+        <div class="ec-panel" data-panel="tracking">
+          <div class="ec-field"><label>对接人</label><input id="ec-contact-person" value="${escapeHtml(contact.contact_person || '')}" placeholder="对方公司的联系人"></div>
+          <div class="ec-field"><label>跟进人</label><input id="ec-assignee" value="${escapeHtml(contact.assignee || '')}" placeholder="我方跟进人员"></div>
+        </div>
+        <div class="ec-panel" data-panel="status">
+          <div class="ec-row">
+            <div class="ec-field"><label>客户类型</label><select id="ec-client-type">
+              <option value="unlabeled" ${contact.clientType === 'unlabeled' ? 'selected' : ''}>未标签</option>
+              <option value="agent" ${contact.clientType === 'agent' ? 'selected' : ''}>代理</option>
+              <option value="direct" ${contact.clientType === 'direct' ? 'selected' : ''}>直客</option>
+            </select></div>
+            <div class="ec-field"><label>阶段</label><select id="ec-stage">
+              <option value="cold" ${(contact.stage || contact._stage) === 'cold' ? 'selected' : ''}>冷开发</option>
+              <option value="f1" ${(contact.stage || contact._stage) === 'f1' ? 'selected' : ''}>F1</option>
+              <option value="f2" ${(contact.stage || contact._stage) === 'f2' ? 'selected' : ''}>F2</option>
+              <option value="f3" ${(contact.stage || contact._stage) === 'f3' ? 'selected' : ''}>F3</option>
+              <option value="f4" ${(contact.stage || contact._stage) === 'f4' ? 'selected' : ''}>F4</option>
+            </select></div>
+          </div>
+          <div class="ec-field"><label>机会阶段</label><select id="ec-opp-stage">
+            <option value="待开发" ${(contact.opp_stage || '待开发') === '待开发' ? 'selected' : ''}>待开发</option>
+            <option value="触达中" ${contact.opp_stage === '触达中' ? 'selected' : ''}>触达中</option>
+            <option value="报价中" ${contact.opp_stage === '报价中' ? 'selected' : ''}>报价中</option>
+            <option value="试单" ${contact.opp_stage === '试单' ? 'selected' : ''}>试单</option>
+            <option value="合作中" ${contact.opp_stage === '合作中' ? 'selected' : ''}>合作中</option>
+            <option value="已流失" ${contact.opp_stage === '已流失' ? 'selected' : ''}>已流失</option>
+          </select></div>
+          <div class="ec-field"><label>跟进备注</label><input id="ec-followup" value="${escapeHtml(contact.followup_note || contact.followupNote || '')}"></div>
         </div>
       </div>`,
     buttons: [
@@ -765,15 +960,22 @@ function showContactEditor(contact) {
       if (val !== 'ok') return;
       const updated = {
         id: contact.id,
-        company: contact.company,
+        company: document.getElementById('ec-company')?.value?.trim() || contact.company,
         email: document.getElementById('ec-email')?.value?.trim() || contact.email,
         firstName: document.getElementById('ec-firstname')?.value?.trim() || '',
         lastName: document.getElementById('ec-lastname')?.value?.trim() || '',
         country: document.getElementById('ec-country')?.value?.trim() || '',
+        website: document.getElementById('ec-website')?.value?.trim() || '',
         category: document.getElementById('ec-category')?.value?.trim() || '',
         position: document.getElementById('ec-position')?.value?.trim() || '',
         phone: document.getElementById('ec-phone')?.value?.trim() || '',
-        clientType: contact.clientType,
+        linkedin: document.getElementById('ec-linkedin')?.value?.trim() || '',
+        clientType: document.getElementById('ec-client-type')?.value || 'unlabeled',
+        stage: document.getElementById('ec-stage')?.value || 'cold',
+        opp_stage: document.getElementById('ec-opp-stage')?.value || '待开发',
+        contact_person: document.getElementById('ec-contact-person')?.value?.trim() || '',
+        assignee: document.getElementById('ec-assignee')?.value?.trim() || '',
+        followup_note: document.getElementById('ec-followup')?.value?.trim() || '',
         tags: contact.tags,
       };
       await window.electronAPI.upsertContact(updated);
@@ -783,12 +985,3 @@ function showContactEditor(contact) {
     },
   });
 }
-// 热刷新：主进程通知联系人数据变化时自动更新
-window.electronAPI.onContactsChanged(() => {
-  if (document.getElementById('page-contacts')?.classList.contains('active')) {
-    CS.refreshContacts();
-    renderContactsList();
-  }
-});
-window.__pageHandlers['contacts'] = loadContacts;
-window.__pageHandlers['clients'] = renderClientsTable;

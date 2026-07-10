@@ -5,210 +5,31 @@ const { APP_ROOT } = require('./config');
 const { Log } = require("./core/logger");
 const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
 const { getCompanyMeta, deleteCompanyMeta, resolveCompanyId, buildIndexFromContacts } = require('./services/company-store');
-
-// ── 标签迁移状态（一次写入后标记，避免每次 contacts:list 都扫描）─────────
-let _tagsMigrated = false;
-
-// 预定义标签（contacts:setTags 可传的合法值）
-const PREDEFINED_TAGS = ['autoreply', 'reached', 'replied', 'bounced_by_contact'];
-
-/** 智能拆分全名为 firstName + lastName */
-function _splitName(fullName) {
-  if (!fullName || !fullName.trim()) return { firstName: '', lastName: '' };
-  // 移除括号内备注（如 "Michel Braverman (director de marketing)"）
-  const cleaned = fullName.replace(/\(.*?\)/g, '').replace(/\s{2,}/g, ' ').trim();
-  if (!cleaned) return { firstName: '', lastName: '' };
-  const parts = cleaned.split(/\s+/);
-  if (parts.length === 1) {
-    // 单字/无空格（中文名等）→ 全放 firstName
-    return { firstName: parts[0], lastName: '' };
-  }
-  // 首段 = firstName，末段 = lastName
-  return { firstName: parts[0], lastName: parts[parts.length - 1] };
-}
-
-/**
- * 删除旧 tag 单值字段（一次迁移，标记后不再扫描）
- * 调用时机：contacts:list 首次发现 tag 字段时
- */
-function _cleanupTagField(contacts) {
-  if (_tagsMigrated) return false;
-  let changed = false;
-  for (const c of contacts) {
-    if (typeof c.tag === 'string') {
-      if (c.tag && !Array.isArray(c.tags)) c.tags = [c.tag];
-      if (c.tag && Array.isArray(c.tags) && !c.tags.includes(c.tag)) c.tags.push(c.tag);
-      delete c.tag;
-      changed = true;
-    }
-  }
-  _tagsMigrated = true; // 无论是否有残留 tag，扫过一次就标记完成
-  return changed;
-}
+const { splitName: _splitName, normalizeCountry: _normalizeCountry } = require('./services/contacts-service');
 
 function register(ipcMain, deps) {
-  const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
-  let contactsCache = null;
-  let _writeQueue = Promise.resolve(); // 写入队列，串行化所有写操作
+  const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json'); // 保留兼容旧引用
+  const db = require('./services/contacts-db');
 
+  // ponytail: SQLite 替代 JSON，不再需要缓存和手动写盘
   function readContacts() {
-    if (contactsCache) return contactsCache;
-    try {
-      if (fs.existsSync(contactsPath)) {
-        contactsCache = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
-        return contactsCache;
-      }
-    } catch (e) { Log.error('联系人', '读取 contacts.json 失败', e.stack); }
-    return [];
+    return db.listAll();
   }
 
   function writeContacts(contacts, caller) {
-    // ponytail: 写入前重读磁盘，合并保留并发写入 + 正确删除 + 正确新增
-    try {
-      if (fs.existsSync(contactsPath)) {
-        const onDisk = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
-        const idMap = new Map(contacts.map(c => [c.id, c]));
-        const keepIds = new Set(contacts.map(c => c.id));
-        // 更新已存在的，保留被删除的
-        const merged = onDisk.filter(c => keepIds.has(c.id));
-        for (const c of merged) {
-          const incoming = idMap.get(c.id);
-          if (incoming) Object.assign(c, incoming);
-        }
-        // 添加盘上没有的新联系人
-        const onDiskIds = new Set(onDisk.map(c => c.id));
-        for (const c of contacts) {
-          if (!onDiskIds.has(c.id)) merged.push(c);
-        }
-        contacts = merged;
-      }
-    } catch { /* 读盘失败用传入数据 */ }
-    Log.info('[写盘]', `${caller} → ${contactsPath} (${contacts.length}条, agent=${contacts.filter(c=>c.clientType==='agent').length})`);
-    contactsCache = contacts;
-    try {
-      const dir = path.dirname(contactsPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      // 原子写入：先写临时文件，再 rename
-      const tmp = contactsPath + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2));
-      // 备份轮转
-      const bakBase = contactsPath.replace('.json', '.bak');
-      for (let i = 2; i >= 0; i--) {
-        const src = i === 0 ? contactsPath : `${bakBase}${i}`;
-        const dst = `${bakBase}${i + 1}`;
-        if (fs.existsSync(src)) {
-          try { fs.copyFileSync(src, dst); } catch { /* 备份轮转失败不阻塞写入 */ }
-        }
-      }
-      fs.renameSync(tmp, contactsPath);
-    } finally { /* noop */ }
+    // SQLite 模式下 writeContacts 仅用于批量覆盖场景（如导入后全量替换）
+    // 日常增删改走 db.upsert / db.update / db.remove
+    Log.info('[DB]', `${caller}: 批量写入 ${contacts.length} 条`);
+    for (const c of contacts) {
+      try { db.upsert(c); } catch (e) { Log.warn('[DB]', `写入失败: ${c.email}`, e.stack); }
+    }
   }
 
-  // ── 国家名标准化映射（中文/西语 → 英文）──────────────────────────────
-  function _normalizeCountry(raw) {
-    if (!raw || !raw.trim()) return '';
-    const m = {
-      '巴西':'Brazil','brasil':'Brazil',
-      '葡萄牙':'Portugal',
-      '安哥拉':'Angola',
-      '莫桑比克':'Mozambique','moçambique':'Mozambique',
-      '佛得角':'Cape Verde','cabo verde':'Cape Verde',
-      '几内亚比绍':'Guinea-Bissau','guiné-bissau':'Guinea-Bissau','guine-bissau':'Guinea-Bissau',
-      '圣多美':'São Tomé','são tomé':'São Tomé','sao tome':'São Tomé',
-      '东帝汶':'East Timor','timor-leste':'East Timor',
-      '墨西哥':'Mexico','méxico':'Mexico',
-      '哥伦比亚':'Colombia',
-      '智利':'Chile',
-      '秘鲁':'Peru','perú':'Peru',
-      '阿根廷':'Argentina',
-      '厄瓜多尔':'Ecuador',
-      '玻利维亚':'Bolivia',
-      '巴拉圭':'Paraguay',
-      '乌拉圭':'Uruguay',
-      '巴拿马':'Panama','panamá':'Panama',
-      '哥斯达黎加':'Costa Rica',
-      '委内瑞拉':'Venezuela',
-      '危地马拉':'Guatemala',
-      '洪都拉斯':'Honduras',
-      '萨尔瓦多':'El Salvador',
-      '尼加拉瓜':'Nicaragua',
-      '多米尼加':'Dominican Republic',
-      '古巴':'Cuba',
-      '波多黎各':'Puerto Rico',
-      '美国':'United States','usa':'United States','us':'United States',
-      '英国':'United Kingdom','uk':'United Kingdom','england':'United Kingdom',
-      '加拿大':'Canada',
-      '澳大利亚':'Australia',
-      '新西兰':'New Zealand',
-      '德国':'Germany','deutschland':'Germany',
-      '法国':'France',
-      '意大利':'Italy','italia':'Italy',
-      '西班牙':'Spain','españa':'Spain',
-      '荷兰':'Netherlands','holland':'Netherlands',
-      '比利时':'Belgium',
-      '日本':'Japan',
-      '韩国':'South Korea','korea':'South Korea',
-      '中国':'China',
-      '印度':'India',
-      '新加坡':'Singapore',
-      '阿联酋':'UAE','迪拜':'UAE','dubai':'UAE',
-    };
-    const key = raw.trim();
-    // 精确匹配优先
-    if (m[key] !== undefined) return m[key];
-    // 大小写不敏感
-    const lower = key.toLowerCase();
-    for (const [k, v] of Object.entries(m)) {
-      if (k.toLowerCase() === lower) return v;
-    }
-    return raw.trim();
-  }
+
 
   ipcMain.handle('contacts:list', async () => {
-    const contacts = readContacts();
-    let changed = false;
-
-    // 一次性迁移：删除旧 tag 字段 → tags 数组
-    if (_cleanupTagField(contacts)) changed = true;
-
-    for (const c of contacts) {
-      // 旧数据迁移：contactName 自动拆分 firstName/lastName
-      if (!c.firstName && !c.lastName && c.contactName) {
-        const split = _splitName(c.contactName);
-        c.firstName = split.firstName;
-        c.lastName = split.lastName;
-        changed = true;
-      }
-
-      // 旧数据迁移：无 companyId 的联系人自动分配
-      if (!c.companyId && c.company) {
-        const { companyId } = resolveCompanyId(c.company);
-        if (companyId) { c.companyId = companyId; changed = true; }
-      }
-
-      // 国家名标准化：中文/西语 → 英文
-      if (c.country) {
-        const normalized = _normalizeCountry(c.country);
-        if (normalized !== c.country) { c.country = normalized; changed = true; }
-      }
-
-      // 公司级元数据：手动设置了类型的公司，跳过自动分类
-      const meta = getCompanyMeta(c.company);
-      if (meta._manualType) {
-        if (c.clientType !== meta.clientType) {
-          c.clientType = meta.clientType;
-          changed = true;
-        }
-      } else {
-        const newType = classifyClient(c.company, c.category);
-        if (c.clientType !== newType) {
-          c.clientType = newType;
-          changed = true;
-        }
-      }
-    }
-    if (changed) writeContacts(contacts, 'contacts-ipc');
-    return contacts;
+    // ponytail: SQLite 迁移已完成，旧 JSON 清理逻辑不再需要
+    return readContacts();
   });
 
   ipcMain.handle('contacts:import', async (_e, clients) => {
@@ -258,6 +79,9 @@ function register(ipcMain, deps) {
         existingContact.contactName = c.contactName || existingContact.contactName;
         existingContact.position = c.position || existingContact.position;
         existingContact.phone = c.phone || existingContact.phone;
+        existingContact.assignee = c.assignee || existingContact.assignee || '';
+        existingContact.contactPerson = c.contactPerson || existingContact.contactPerson || '';
+        if (c.stage && c.stage !== (existingContact.stage || 'cold')) db.setStage(existingContact.id, c.stage, 'manual:import');
         // firstName/lastName：优先用导入值，否则从 contactName 拆分填充
         if (c.firstName || c.lastName) {
           existingContact.firstName = c.firstName || existingContact.firstName || '';
@@ -290,6 +114,8 @@ function register(ipcMain, deps) {
           lastName: c.lastName || split.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
           clientType: c.clientType || classifyClient(c.company, c.category),
+          assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          stage: c.stage || 'cold',
           tags: [],  // 新联系人默认空标签
           _suspicious, addedAt: new Date().toISOString(),
         });
@@ -406,54 +232,31 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('contacts:updateBounce', async (_e, email, bounceData) => {
-    const contacts = readContacts();
-    const key = (email || '').toLowerCase().trim();
-    let updated = 0;
-    for (const c of contacts) {
-      if ((c.email || '').toLowerCase().trim() === key) {
-        c.bounced = true;
-        c.bounceType = bounceData.type || 'unknown';
-        c.bounceReason = bounceData.reason || '';
-        c.bouncedAt = c.bouncedAt || new Date().toISOString();
-        updated++;
-      }
-    }
-    if (updated) writeContacts(contacts, 'contacts-ipc');
-    return { ok: true, updated };
-  });
-
-  ipcMain.handle('contacts:clearBounce', async (_e, email) => {
-    const contacts = readContacts();
-    const key = (email || '').toLowerCase().trim();
-    for (const c of contacts) {
-      if ((c.email || '').toLowerCase().trim() === key) {
-        c.bounced = false; c.bounceType = ''; c.bounceReason = ''; c.bouncedAt = '';
-      }
-    }
-    writeContacts(contacts, 'contacts-ipc');
+    const existing = db.getByEmail(email);
+    if (existing) db.update(existing.id, { is_bounced: true, bounce_type: bounceData.type || 'unknown', bounce_reason: bounceData.reason || '', bounced_at: new Date().toISOString() });
     return { ok: true };
   });
 
-  // 旧 API：单值标签（向后兼容，内部转为数组）
+  ipcMain.handle('contacts:clearBounce', async (_e, email) => {
+    const existing = db.getByEmail(email);
+    if (existing) db.update(existing.id, { is_bounced: false, bounce_type: '', bounce_reason: '', bounced_at: '' });
+    return { ok: true };
+  });
+
+  // 旧 API：单值标签（向后兼容）
   ipcMain.handle('contacts:setTag', async (_e, id, tag) => {
-    contactsCache = null;
-    const contacts = readContacts();
-    const c = contacts.find(x => x.id === id);
-    if (!c) return { ok: false, error: '联系人不存在' };
-    const tagStr = tag || '';
-    c.tags = tagStr ? [tagStr] : [];
-    writeContacts(contacts, 'contacts-ipc');
+    if (tag) db.addTag(id, tag); else { const c = db.getById(id); if (c) db.update(id, { tags: [] }); }
     return { ok: true };
   });
 
   // 多标签设置（新 API）
   ipcMain.handle('contacts:setTags', async (_e, id, tags) => {
-    contactsCache = null;
-    const contacts = readContacts();
-    const c = contacts.find(x => x.id === id);
+    const c = db.getById(id);
     if (!c) return { ok: false, error: '联系人不存在' };
-    c.tags = Array.isArray(tags) ? [...tags] : [];
-    writeContacts(contacts, 'contacts-ipc');
+    const arr = Array.isArray(tags) ? tags : [];
+    const old = c.tags || [];
+    for (const t of old) { if (!arr.includes(t)) db.removeTag(id, t); }
+    for (const t of arr) { if (!old.includes(t)) db.addTag(id, t); }
     return { ok: true };
   });
 
@@ -535,58 +338,9 @@ function register(ipcMain, deps) {
     const cfgPath = path.join(APP_ROOT, 'send', 'config.json');
     let apiKey = '';
     try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')); apiKey = cfg.translate?.deepseek?.apiKey || ''; } } catch (e) { Log.error('[AI分类]', '读取配置失败', e.stack); }
-    if (!apiKey) { Log.warn('[AI分类]', '缺少 DeepSeek API Key，跳过'); return { ok: false, error: '请先配置 DeepSeek API Key' }; }
-
-    const { classifyClientAI } = require('./classify-client');
-    const contacts = readContacts();
-    const unlabeled = contacts.filter(c => c.clientType === 'unlabeled');
-    if (!unlabeled.length) { Log.info('[AI分类]', '所有联系人已分类，无需 AI'); return { ok: true, updated: 0, message: '所有联系人已分类' }; }
-
-    // ponytail: 按公司去重，同一家公司只调一次 AI，避免 1729 个联系人重复请求
-    const companyMap = new Map(); // company → contacts
-    for (const c of unlabeled) {
-      const key = c.company || '';
-      if (!companyMap.has(key)) companyMap.set(key, []);
-      companyMap.get(key).push(c);
-    }
-    const companies = [...companyMap.keys()].slice(0, 20);
-    Log.info('[AI分类]', `开始 AI 分类，未标签 ${unlabeled.length} 个联系人 × ${companies.length} 家公司（单次上限20）`);
-
-    let updated = 0;
-    try {
-      for (const company of companies) {
-        const members = companyMap.get(company);
-        // ponytail: 限速保护，避免连续调用触发 DeepSeek 429
-        await new Promise(r => setTimeout(r, 1000));
-        const newType = await classifyClientAI(company, members[0]?.category || '', apiKey);
-        if (newType !== 'unlabeled') {
-          for (const c of members) {
-            if (c.clientType !== newType) {
-              c.clientType = newType;
-              updated++;
-            }
-          }
-          Log.info('[AI分类]', `${company} → ${newType}（${members.length}人）`);
-        }
-      }
-    } catch (e) {
-      if (e.message === 'DeepSeek_API_Key_Invalid') {
-        return { ok: false, error: 'DeepSeek API Key 无效，请到设置页更新' };
-      }
-      throw e;
-    }
-    if (updated > 0) {
-      Log.info('[AI分类]', `准备写入 ${updated} 条变更到 ${contactsPath}...`);
-      writeContacts(contacts, 'AI分类');
-      contactsCache = null; // 强制后续读取从磁盘加载
-      const diskVerify = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
-      const dvAgent = diskVerify.filter(c => c.clientType === 'agent').length;
-      const dvDirect = diskVerify.filter(c => c.clientType === 'direct').length;
-      Log.info('[AI分类]', `磁盘验证: ${dvAgent} agent, ${dvDirect} direct`);
-    }
-    Log.info('[AI分类]', `完成: ${updated} 人 / ${companies.length} 家公司重新分类`);
-    if (updated > 0) deps.mainWindow?.webContents.send('contacts:changed');
-    return { ok: true, updated, total: companies.length };
+    const result = await require('./services/contacts-service').classifyUnlabeled(apiKey);
+    if (result.updated > 0) deps.mainWindow?.webContents.send('contacts:changed');
+    return result;
   });
 
   // ── 跟进备注 ──────────────────────────────────────────────────────────────
@@ -617,6 +371,15 @@ function register(ipcMain, deps) {
       }
     } catch { /* 静默 */ }
     return [];
+  });
+
+  ipcMain.handle('companies:update', async (_e, id, data) => {
+    try {
+      const cdb = require('./services/contacts-db');
+      const db = require('./services/db').getDb();
+      db.prepare('UPDATE companies SET country=?, updated_at=? WHERE id=?').run(data.country||'', new Date().toISOString(), id);
+    } catch (e) { return { ok: false, error: e.message }; }
+    return { ok: true };
   });
 
   // ── 单个联系人 upsert（email 唯一）─────────────────────────────────────

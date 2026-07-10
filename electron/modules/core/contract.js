@@ -11,20 +11,20 @@
 /**
  * 构建成功响应。
  * @param {*} [data] - 响应载荷（可选）
- * @returns {{ success: true, data?: * }}
+ * @returns {{ ok: true, data?: * }}
  */
 function ok(data) {
-  if (arguments.length === 0) return { success: true };
-  return { success: true, data: data };
+  if (arguments.length === 0) return { ok: true };
+  return { ok: true, data: data };
 }
 
 /**
  * 构建失败响应。
  * @param {string} message - 错误描述
- * @returns {{ success: false, error: string }}
+ * @returns {{ ok: false, error: string }}
  */
 function fail(message) {
-  return { success: false, error: String(message) };
+  return { ok: false, error: String(message) };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -274,6 +274,12 @@ const REPLY = {
   DETECTED: "reply:detected",
 };
 
+// ── 公司（company）───────────────────────────────────────────────────────────
+const COMPANY = {
+  /** 更新公司信息 */
+  UPDATE: "companies:update",
+};
+
 // ── 自动发送（auto-send）─────────────────────────────────────────────────────
 const AUTO_SEND = {
   /** 启动调度器 */
@@ -334,6 +340,7 @@ const IPC = {
   DISCOVER,
   TABLE,
   AUTO_SEND,
+  COMPANY,
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -344,8 +351,8 @@ const IPC = {
  * ─── 通用 ────────────────────────────────────────────────────────────────────
  *
  * 所有 invoke 通道的响应统一为：
- * @typedef  {{ success: true, data?: * }} IpcOk
- * @typedef  {{ success: false, error: string }} IpcFail
+ * @typedef  {{ ok: true, data?: * }} IpcOk
+ * @typedef  {{ ok: false, error: string }} IpcFail
  * @typedef  {IpcOk|IpcFail} IpcResponse
  *
  * 发送事件（main → renderer，通过 onXxx 回调）不在 invoke 响应模型内，
@@ -553,4 +560,5 @@ module.exports = {
   DISCOVER,
   TABLE,
   AUTO_SEND,
+  COMPANY,
 };

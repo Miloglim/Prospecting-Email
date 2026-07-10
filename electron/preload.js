@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteAllContacts: () => ipcRenderer.invoke("contacts:deleteAll"),
   deleteCompany: (company) =>
     ipcRenderer.invoke("contacts:deleteCompany", company),
+  updateCompany: (id, data) => ipcRenderer.invoke('companies:update', id, data),
   updateCompanyCountry: (company, newCountry) =>
     ipcRenderer.invoke("contacts:updateCountry", company, newCountry),
   searchContacts: (query) => ipcRenderer.invoke("contacts:search", query),
