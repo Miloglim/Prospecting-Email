@@ -16,20 +16,9 @@ send/send-log.json
 send/send-log-test.json
 send/session-log.json
 send/send-batch.json
-# 用户个人数据（含邮箱、姓名、手机号）
-data/contacts.json
-data/contacts.bak*
-data/signatures.json
-data/send-history.json
-data/backcheck-status.json
-data/bounce-log.json
-data/bounce-check-cursor.json
-data/send-state.json
-data/email-queue.json
-data/template-overrides.json
-data/user-templates.json
-data/companies.json
-data/reply-log.json
+# 用户运行时数据（数据库、缓存、收件箱、发送状态等，全部不进版本控制）
+data/*
+!data/.gitkeep
 
 # 背调报告（含邮箱、地址）
 reports/
