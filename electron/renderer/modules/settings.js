@@ -570,40 +570,45 @@ function initAccountManager() {
 
   // 打开编辑框
   async function openEditor(id) {
+    // ponytail: 单个字段缺失（旧 HTML 与新 JS 不同步）不再整个崩，只记录缺哪个
+    const missing = [];
+    const setVal = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; else missing.push(elId); };
+    const setChk = (elId, v) => { const el = document.getElementById(elId); if (el) el.checked = v; else missing.push(elId); };
     try {
-    document.getElementById('acct-edit-id').value = id || '';
+    setVal('acct-edit-id', id || '');
     // 清空 IMAP 字段
-    ['acct-imap-host','acct-imap-port','acct-imap-user','acct-imap-pass'].forEach(f => document.getElementById(f).value = '');
+    ['acct-imap-host','acct-imap-port','acct-imap-user','acct-imap-pass'].forEach(f => setVal(f, ''));
     if (id) {
       const result = await window.electronAPI.listAccounts();
       const acc = (result.data || []).find(a => a.id === id);
       if (acc) {
-        document.getElementById('acct-label').value = acc.label || '';
-        document.getElementById('acct-host').value = acc.smtp?.host || '';
-        document.getElementById('acct-port').value = acc.smtp?.port || 465;
-        document.getElementById('acct-secure').value = acc.smtp?.secure !== false ? 'true' : 'false';
-        document.getElementById('acct-user').value = acc.smtp?.user || '';
-        document.getElementById('acct-pass').value = acc.smtp?.pass || '';
-        document.getElementById('acct-limit').value = acc.dailyLimit || 500;
-        document.getElementById('acct-active').checked = acc.active !== false;
+        setVal('acct-label', acc.label || '');
+        setVal('acct-host', acc.smtp?.host || '');
+        setVal('acct-port', acc.smtp?.port || 465);
+        setVal('acct-secure', acc.smtp?.secure !== false ? 'true' : 'false');
+        setVal('acct-user', acc.smtp?.user || '');
+        setVal('acct-pass', acc.smtp?.pass || '');
+        setVal('acct-limit', acc.dailyLimit || 500);
+        setChk('acct-active', acc.active !== false);
         // 已有 IMAP 配置则回填
         if (acc.imap) {
-          document.getElementById('acct-imap-host').value = acc.imap.host || '';
-          document.getElementById('acct-imap-port').value = acc.imap.port || 993;
-          document.getElementById('acct-imap-user').value = acc.imap.user || '';
-          document.getElementById('acct-imap-pass').value = acc.imap.pass || '';
+          setVal('acct-imap-host', acc.imap.host || '');
+          setVal('acct-imap-port', acc.imap.port || 993);
+          setVal('acct-imap-user', acc.imap.user || '');
+          setVal('acct-imap-pass', acc.imap.pass || '');
         }
       }
     } else {
       // 新账号：清空表单
       ['acct-label','acct-host','acct-port','acct-user','acct-pass','acct-limit'].forEach(f => {
-        document.getElementById(f).value = f === 'acct-port' ? '465' : f === 'acct-limit' ? '100' : '';
+        setVal(f, f === 'acct-port' ? '465' : f === 'acct-limit' ? '100' : '');
       });
-      document.getElementById('acct-secure').value = 'true';
-      document.getElementById('acct-active').checked = true;
+      setVal('acct-secure', 'true');
+      setChk('acct-active', true);
     }
     const tr = document.getElementById('acct-test-result');
     if (tr) { tr.className = ''; tr.innerHTML = ''; }
+    if (missing.length) showToast('账号表单缺少字段: ' + missing.join(', ') + '（请重装/更新客户端）', 'error');
     modal.style.display = 'flex';
     } catch (e) {
       showToast('编辑失败: ' + (e.message || ''), 'error');

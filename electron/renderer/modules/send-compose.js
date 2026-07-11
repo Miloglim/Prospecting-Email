@@ -29,7 +29,7 @@ export async function initEmailSend() {
       cfgModeSel.addEventListener('change', () => { tplModeSel.value = cfgModeSel.value; });
     }
   }
-  document.getElementById('ws-add-queue').addEventListener('click', addToQueue);
+  document.getElementById('ws-add-queue')?.addEventListener('click', addToQueue);
   document.getElementById('monthly-generate-btn')?.addEventListener('click', generateMonthlyReports);
   // 搜索 & 选择工具
   document.getElementById('send-search')?.addEventListener('input', (e) => {
