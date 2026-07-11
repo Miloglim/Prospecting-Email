@@ -26,6 +26,7 @@
 | **Edit 工具匹配失败无告警** | Prettier 格式化后双引号、行尾空格变了，Edit 的 `old_string` 匹配不上，工具静默返回 error 但 CC 没检查就继续。 | Edit 调用后必须检查返回值，失败时立即 Read 目标文件确认实际内容，必要时用 Bash/Python 做替换。 |
 | **Windows CRLF 导致字符串匹配失败** | `electron/preload.js` 使用 `\r\n` 行尾，Edit 工具用 `\n` 的 `old_string` 永远匹配不上。 | 跨平台文件编辑优先用 `sed` 或 Python；Edit 失败后先用 `cat -A` 检查不可见字符。 |
 | **写完代码不实际运行** | 只跑 `node --check` 语法检查，不实际启动 app 验证功能。语法正确 ≠ 逻辑正确。 | 核心功能改动后，必须在 `npm run dev` 里实际触发一次目标功能，确认无报错再交付。 |
+| **gitignore 忽略目录漏了占位文件（2026-07-11）** | 想忽略 `data/` 整个目录但保留 `.gitkeep`，写成 `data/` 会让 git 根本不进目录，`!data/.gitkeep` 例外失效，`git add data/.gitkeep` 直接报 ignored 错。 | 要忽略目录内容却保留占位文件时，用 `data/*` + `!data/.gitkeep`，绝不用 `data/`。 |
 
 ---
 
