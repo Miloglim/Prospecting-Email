@@ -68,7 +68,7 @@ function register(ipcMain, deps) {
   });
 
   // ── 长短时自动拉取 ────────────────────────────────────────────────────
-  exports.triggerInboxFetch = () => {
+  module.exports.triggerInboxFetch = () => {
     clearTimeout(_cooldownTimer);
     _startPolling(FAST_INTERVAL_MS);
     _doFetch(); // 立即拉一次

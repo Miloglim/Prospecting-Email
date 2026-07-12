@@ -226,7 +226,9 @@ function _writeCache(mails) {
     const { getDb } = require('./db');
     const db = getDb();
     const insert = db.prepare('INSERT OR REPLACE INTO inbox (uid, account_id, subject, from_addr, from_name, date, body, type, contact_company, contact_id, contact_db_id, contact_tags, matched_contacts, processed, important, account_label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    // ponytail: 事务内先清表再写入，与内存缓存完全同步，防止旧记录累积
     const batch = db.transaction(() => {
+      db.exec('DELETE FROM inbox');
       for (const m of mails.slice(-500)) {
         insert.run(m.uid||'', m.accountId||'', m.subject||'', m.from||'', m.fromName||'', m.date||'', m.body||'', m.type||'other', m.contactCompany||'', m.contactId||'', m.contactDbId||'', JSON.stringify(m.contactTags||[]), JSON.stringify(m.matchedContacts||[]), m.processed?1:0, m.important?1:0, m.accountLabel||'');
       }
@@ -247,6 +249,30 @@ function _migrateInboxFromJson() {
     Log.info('[收件箱]', 'inbox 迁移: ' + mails.length + ' 封');
     return mails.length;
   } catch { return 0; }
+}
+
+// ── 删除记录 & 游标（JSON 文件，与 SQLite 缓存独立）──────────────────────
+function _readDeleted() {
+  try { return fs.existsSync(DELETED_PATH) ? new Set(JSON.parse(fs.readFileSync(DELETED_PATH, 'utf-8'))) : new Set(); }
+  catch { return new Set(); }
+}
+function _writeDeleted(set) {
+  try {
+    const dir = path.dirname(DELETED_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DELETED_PATH, JSON.stringify([...set].slice(-1000)));
+  } catch { /* 静默 */ }
+}
+function _readCursor() {
+  try { return fs.existsSync(CURSOR_PATH) ? JSON.parse(fs.readFileSync(CURSOR_PATH, 'utf-8')) : {}; }
+  catch { return {}; }
+}
+function _writeCursor(data) {
+  try {
+    const dir = path.dirname(CURSOR_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CURSOR_PATH, JSON.stringify(data));
+  } catch { /* 静默 */ }
 }
 
 // ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
@@ -694,6 +720,8 @@ function deleteMail(index) {
     const deletedSet = _readDeleted();
     deletedSet.add(key);
     _writeDeleted(deletedSet);
+    // ponytail: SQLite 层同步删除，防止重启后重现
+    try { const { getDb } = require('./db'); getDb().prepare('DELETE FROM inbox WHERE account_id=? AND uid=?').run(m.accountId, m.uid); } catch { /* 降级 */ }
   }
   mails.splice(index, 1);
   _writeCache(mails);

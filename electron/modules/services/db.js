@@ -20,7 +20,13 @@ function getDb() {
 }
 
 function closeDb() {
-  if (_db) { _db.close(); _db = null; }
+  if (_db) {
+    // ponytail: 退出前 WAL checkpoint，合并 -wal 文件回主 DB
+    try { _db.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* 静默 */ }
+    _db.close();
+    _db = null;
+    Log.info("DB", "SQLite 已关闭");
+  }
 }
 
 module.exports = { getDb, closeDb };

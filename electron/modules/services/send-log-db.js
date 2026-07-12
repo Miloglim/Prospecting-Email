@@ -82,7 +82,7 @@ function migrateFromJson(logPath) {
     batch();
     Log.info("DB", `send-log 迁移: ${entries.length} 条`);
     return { migrated: entries.length };
-  } catch (e) { Log.error("DB", "send-log 迁移失败", e); return { migrated: 0, error: e.message }; }
+  } catch (e) { Log.error("DB", "send-log 迁移失败", e.stack); return { migrated: 0, error: e.message }; }
 }
 
 module.exports = { add, list, getDates, getBody, migrateFromJson };

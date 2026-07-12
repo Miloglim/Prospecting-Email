@@ -533,6 +533,11 @@ app.on("before-quit", () => {
   } catch {
     /* 回复检测未启动 */
   }
+  try {
+    require("./modules/services/db").closeDb();
+  } catch {
+    /* 数据库未初始化 */
+  }
 });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

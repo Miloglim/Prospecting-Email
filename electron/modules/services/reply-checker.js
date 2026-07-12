@@ -113,7 +113,7 @@ async function _aiAsk(prompt, maxTokens) {
     const content = (result?.choices?.[0]?.message?.content || '').trim().toLowerCase();
     if (result && !content) Log.warn('[回复AI]', '返回空');
     return content;
-  } catch (e) { Log.warn('[回复AI]', '异常: ' + (e.message || 'unknown')); return ''; }
+  } catch (e) { Log.error('[回复AI]', 'AI 调用异常', e.stack); return ''; }
 }
 
 // 关键词快速匹配
@@ -340,6 +340,7 @@ async function pop3CheckReplies(cfg, senderEmail) {
     sock.end();
     return { ok: true, replies };
   } catch (e) {
+    Log.error('[回复]', 'POP3 检测异常', e.stack);
     try { sock.end(); } catch { /* 清理操作失败不影响主流程 */ }
     return { ok: false, error: 'POP3 失败: ' + (e.message || String(e)) };
   }
@@ -399,7 +400,7 @@ async function checkReplies() {
         allReplies.push(...result.replies);
       }
     } catch (e) {
-      Log.warn(`[回复] 账号 ${acc.label || senderEmail} 检测异常:`, e.message);
+      Log.error('[回复]', `账号 ${acc.label || senderEmail} 检测异常`, e.stack);
     }
   }
 
@@ -492,7 +493,7 @@ function scheduleAutoReplyCheck(mainWindow, tray) {
         }
       }
       scheduleAutoReplyCheck(mainWindow, tray); // 下一轮
-    } catch (e) { Log.warn("回复", "自动检测异常: " + e.message); }
+    } catch (e) { Log.error("回复", "自动检测异常", e.stack); }
   }, REPLY_CHECK_INTERVAL);
 }
 

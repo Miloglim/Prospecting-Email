@@ -4,6 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('../config');
+const { Log } = require('../core/logger');
 
 // 引用 send-engine 的 loadBodies（两个模块共享同一数据文件）
 const { loadBodies } = require('./send-engine');
@@ -86,13 +87,13 @@ function register(ipcMain, deps) {
     try {
       const sendLog = require('./send-log-db');
       return sendLog.list(params || {});
-    } catch (e) { return { total: 0, records: [] }; }
+    } catch (e) { Log.error("历史", "查询发送日志失败", e.stack); return { total: 0, records: [] }; }
   });
   ipcMain.handle('history:getDates', async () => {
     try {
       const sendLog = require('./send-log-db');
       return { ok: true, data: sendLog.getDates() };
-    } catch { return { ok: true, data: [] }; }
+    } catch (e) { Log.error("历史", "查询发送日期失败", e.stack); return { ok: true, data: [] }; }
   });
   ipcMain.handle('history:getBody', async (_e, bodyId) => {
     if (!bodyId) return '';
@@ -108,7 +109,7 @@ function register(ipcMain, deps) {
       const ph = indices.map(() => "?").join(",");
       db.prepare(`DELETE FROM send_log WHERE row_index IN (${ph})`).run(...indices);
       return { ok: true };
-    } catch (e) { return { ok: false, error: e.message }; }
+    } catch (e) { Log.error("历史", "删除发送记录失败", e.stack); return { ok: false, error: e.message }; }
   });
 }
 

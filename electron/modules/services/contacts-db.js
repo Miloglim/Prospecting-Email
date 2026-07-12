@@ -2,7 +2,7 @@
 "use strict";
 
 const { getDb } = require("./db");
-const { v4: uuid } = require("uuid");
+const { randomUUID: uuid } = require("crypto");
 const { Log } = require("../core/logger");
 
 const CONTACT_SELECT = `
@@ -43,7 +43,10 @@ function _row(r) {
 /** 全部联系人列表 */
 function listAll() {
   const db = getDb();
-  return db.prepare(`SELECT ${CONTACT_SELECT} FROM ${CONTACT_FROM} ORDER BY c.created_at DESC`).all().map(_row);
+  const rows = db.prepare(`SELECT ${CONTACT_SELECT} FROM ${CONTACT_FROM} ORDER BY c.created_at DESC`).all().map(_row);
+  // ponytail: 全量加载无分页，超 5000 条时预警（暂不强制截断，避免破坏 UI 完整性）
+  if (rows.length > 5000) Log.warn("DB", `联系人已达 ${rows.length} 条，考虑 contacts:list 加分页`);
+  return rows;
 }
 
 /** 按条件查询 */
@@ -187,13 +190,18 @@ function removeTag(contactId, tag) {
 }
 
 function remove(id) {
-  getDb().prepare("DELETE FROM contacts WHERE id = ?").run(id);
+  const db = getDb();
+  // ponytail: 级联清理 opportunities（contacts 有 ON DELETE CASCADE 但 opportunities 没有）
+  db.prepare("DELETE FROM opportunities WHERE contact_id = ?").run(id);
+  db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
 }
 
 function removeMany(ids) {
   if (!ids?.length) return;
   const ph = ids.map(() => "?").join(",");
-  getDb().prepare(`DELETE FROM contacts WHERE id IN (${ph})`).run(...ids);
+  const db = getDb();
+  db.prepare(`DELETE FROM opportunities WHERE contact_id IN (${ph})`).run(...ids);
+  db.prepare(`DELETE FROM contacts WHERE id IN (${ph})`).run(...ids);
 }
 
 // ── 公司 ──────────────────────────────────────────────────────────────────────

@@ -39,6 +39,8 @@ const CONTACTS = {
   IMPORT: "contacts:import",
   /** 删除单个联系人 */
   DELETE: "contacts:delete",
+  /** 批量删除联系人 */
+  DELETE_MANY: "contacts:deleteMany",
   /** 更新退信标记 */
   UPDATE_BOUNCE: "contacts:updateBounce",
   /** 清除退信标记 */
@@ -59,6 +61,16 @@ const CONTACTS = {
   DEEP_SEARCH: "contacts:deepSearch",
   /** 按 email 插入或更新联系人（email 为唯一键） */
   UPSERT: "contacts:upsert",
+  /** AI 分类未标记联系人 */
+  CLASSIFY_AI: "contacts:classifyAI",
+  /** 获取已删除联系人日志 */
+  DELETED_LOG: "contacts:deletedLog",
+  /** 保存跟进备注 */
+  SAVE_FOLLOWUP: "contacts:saveFollowup",
+  /** 获取跟进备注列表 */
+  GET_FOLLOWUPS: "contacts:getFollowups",
+  /** 联系人变更事件（main → renderer） */
+  CHANGED: "contacts:changed",
 };
 
 // ── 发送（send）──────────────────────────────────────────────────────────────
@@ -133,6 +145,8 @@ const HISTORY = {
   GET_LOG: "history:getLog",
   /** 获取某封邮件的正文 */
   GET_BODY: "history:getBody",
+  /** 获取有发送记录的日期列表 */
+  GET_DATES: "history:getDates",
   /** 删除历史记录 */
   DELETE: "history:delete",
   /** 推进公司阶段 */
@@ -143,6 +157,8 @@ const HISTORY = {
   REACTIVATE: "history:reactivate",
   /** 阶段追回：扫描已发记录补推进 */
   CATCHUP: "history:catchup",
+  /** 发送历史变更事件（main → renderer） */
+  CHANGED: "history:changed",
 };
 
 // ── 队列持久化（queue）───────────────────────────────────────────────────────
@@ -183,6 +199,22 @@ const INBOX = {
   LINK_CONTACT: "inbox:linkContact",
   /** 删除邮件记录 */
   DELETE: "inbox:delete",
+  /** 获取下次拉取时间 */
+  NEXT_FETCH: "inbox:nextFetch",
+  /** 同步标签到联系人 */
+  SYNC_TAGS: "inbox:syncTags",
+  /** 移除单个匹配联系人 */
+  REMOVE_MATCHED_CONTACT: "inbox:removeMatchedContact",
+  /** 批量移除匹配联系人 */
+  REMOVE_MATCHED_CONTACTS_BATCH: "inbox:removeMatchedContactsBatch",
+  /** 获取退信计数 */
+  GET_BOUNCE_COUNT: "inbox:getBounceCount",
+  /** 切换重要标记 */
+  TOGGLE_IMPORTANT: "inbox:toggleImportant",
+  /** 清空收件箱 */
+  CLEAR: "inbox:clear",
+  /** 收件箱变更事件（main → renderer） */
+  CHANGED: "inbox:changed",
 };
 
 // ── 系统（system）────────────────────────────────────────────────────────────
@@ -230,6 +262,10 @@ const SYSTEM = {
   AUTO_LAUNCH_SET: "general:setAutoLaunch",
   /** 获取开机自启状态 */
   AUTO_LAUNCH_GET: "general:getAutoLaunch",
+  /** 获取应用版本号 */
+  APP_VERSION: "app:getVersion",
+  /** 导出全部数据为 XLSX */
+  DATA_EXPORT: "data:export",
 };
 
 // ── 自动更新（updater）────────────────────────────────────────────────────────
@@ -244,6 +280,8 @@ const UPDATE = {
   CHECK: "update:check",
   /** 渲染进程触发安装 */
   INSTALL: "update:install",
+  /** 渲染进程触发下载更新 */
+  DOWNLOAD: "update:download",
 };
 
 // ── 发信账号（account）─────────────────────────────────────────────────────────
@@ -304,8 +342,22 @@ const AUTO_SEND = {
 const DISCOVER = {
   /** 搜索潜在客户 */
   SEARCH: "discover:search",
-  /** 查询公司详细信息 */
+  /** @deprecated 已由 COMPANY_DETAIL 替代，无 handler */
   LOOKUP: "discover:lookup",
+  /** 查询公司详细信息（替代 LOOKUP） */
+  COMPANY_DETAIL: "discover:companyDetail",
+  /** 获取搜索配置列表 */
+  PROFILES: "discover:profiles",
+  /** 获取单个搜索配置 */
+  GET_PROFILE: "discover:getProfile",
+  /** 保存搜索配置 */
+  SAVE_PROFILE: "discover:saveProfile",
+  /** 删除搜索配置 */
+  DELETE_PROFILE: "discover:deleteProfile",
+  /** 获取可用数据源列表 */
+  PROVIDERS: "discover:providers",
+  /** 在资源管理器打开文件 */
+  REVEAL: "discover:reveal",
 };
 
 // ── 客户表（table）──────────────────────────────────────────────────────────

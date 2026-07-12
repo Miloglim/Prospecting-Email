@@ -560,7 +560,7 @@ async function runSendBatch(deps, sendProgress) {
     }
   }
 
-  } catch (e) { Log.error("发信", "循环异常", e); }
+  } catch (e) { Log.error("发信", "循环异常", e.stack); }
   finally {
     for (const t of transporterCache.values()) { try { await t.close(); } catch { /* 关闭失败不影响后续 */ } }
   }
@@ -594,7 +594,7 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
         if (tray) new (require('electron').Notification)({ title: '📨 退信检测', body: `发现 ${result.bounced.length} 封退信，已标记 ${matched} 个联系人` }).show();
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bounce:autoDetected', { count: result.bounced.length, matched });
       }
-    } catch (e) { Log.error("退信", "自动检测异常", e); }
+    } catch (e) { Log.error("退信", "自动检测异常", e.stack); }
   }, 10 * 60 * 1000);
 }
 
