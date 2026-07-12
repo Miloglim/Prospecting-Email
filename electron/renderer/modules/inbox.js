@@ -264,11 +264,17 @@ function renderInbox() {
   if (!_loading && !filtered.length) {
     listEl.innerHTML = '<div class="inbox-loading">暂无邮件，点击刷新拉取</div>';
   }
-  // 退信抽屉：有已匹配退信则滑出，无则收起
+  // 退信抽屉：有已匹配退信则渲染按钮，无则清空 DOM
   const drawer = document.getElementById('inbox-bounce-drawer');
   if (drawer) {
     const hasMatched = _filter === 'bounce' && _mails.some(m => m.type === 'bounce' && (m.contactCompany || (m.matchedContacts || []).some(c => c.matched)));
-    drawer.classList.toggle('open', hasMatched);
+    if (hasMatched) {
+      drawer.innerHTML = '<button id="inbox-delete-bounced">删除全部退信联系人</button>';
+      // ponytail: 动态绑定事件（按钮每次重建，需重新绑定）
+      document.getElementById('inbox-delete-bounced')?.addEventListener('click', _onDeleteBounced);
+    } else {
+      drawer.innerHTML = '';
+    }
   }
 }
 
@@ -333,7 +339,8 @@ async function renderDetail() {
     if (doc && doc.length > MAX_BODY) { doc = doc.slice(0, MAX_BODY); truncated = true; }
     if (!doc) doc = '<p style="color:#999">(无法加载正文)</p>';
     const truncNote = truncated ? '<p style="color:#e6a817;font-size:12px;padding:8px;background:#fff8e1;border-radius:4px;margin-bottom:8px">⚠ 正文过长（>500KB），仅显示前段。完整内容请用邮件客户端查看。</p>' : '';
-    iframe.src = URL.createObjectURL(new Blob([`<html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.7;color:#333;padding:0;margin:0;word-break:break-word}img{max-width:100%}a{color:#2563eb}</style></head><body>${truncNote}${doc}<script>function rpt(){parent.postMessage({h:document.body.scrollHeight},'*')};rpt();setTimeout(rpt,800)<\/script></body></html>`], {type: "text/html"}));
+    // ponytail: srcdoc 替代 blob URL — file:// 协议下 blob 被 Chromium 拦截
+    iframe.srcdoc = `<html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.7;color:#333;padding:0;margin:0;word-break:break-word}img{max-width:100%}a{color:#2563eb}</style></head><body>${truncNote}${doc}<script>function rpt(){parent.postMessage({h:document.body.scrollHeight},'*')};rpt();setTimeout(rpt,800)<\/script></body></html>`;
     // 自适应高度：收到 body 高度后撑开 iframe
     iframe.style.minHeight = '300px';
     const onMsg = (e) => {
@@ -474,7 +481,8 @@ document.getElementById('inbox-filter')?.addEventListener('click', (e) => {
   renderInbox();
 });
 
-document.getElementById('inbox-delete-bounced')?.addEventListener('click', async () => {
+// ── 退信批量删除按钮回调（动态绑定，由 renderInbox 挂载）──────────────────
+async function _onDeleteBounced() {
   // 收集所有退信中已匹配的联系人（对齐右键菜单删除逻辑）
   const allMatched = [];
   for (let i = 0; i < _mails.length; i++) {
@@ -506,7 +514,7 @@ document.getElementById('inbox-delete-bounced')?.addEventListener('click', async
   if (list.ok) { _mails = list.data || []; }
   _selectedIdx = -1;
   renderInbox();
-});
+}
 
 document.getElementById('inbox-refresh')?.addEventListener('click', doFetchInbox);
 document.getElementById('inbox-clear')?.addEventListener('click', async () => {

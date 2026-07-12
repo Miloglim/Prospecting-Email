@@ -27,56 +27,41 @@ function register(ipcMain, deps) {
   // 应用版本号
   ipcMain.handle('app:getVersion', async () => require('electron').app.getVersion());
 
-  // ── SMTP 状态（兼容旧 smtp + 新 smtpAccounts，含连通性测试结果）──
+  // ── SMTP 状态（业务逻辑下沉 account-manager）──
   ipcMain.handle('smtp:checkStatus', async () => {
     const cp = path.join(APP_ROOT, 'send', 'config.json');
     if (!fs.existsSync(cp)) return { ok: false, host: '未配置' };
     try {
-      const raw = await fs.promises.readFile(cp, 'utf-8');
-      const c = JSON.parse(raw);
+      const c = JSON.parse(await fs.promises.readFile(cp, 'utf-8'));
       // 新格式：smtpAccounts
       if (Array.isArray(c.smtpAccounts) && c.smtpAccounts.length > 0) {
-        // 读取熔断状态
-        let fusedIds = new Set();
+        let states = {};
         try {
           const lp = path.join(APP_ROOT, 'send', 'send-log.json');
           if (fs.existsSync(lp)) {
             const log = JSON.parse(await fs.promises.readFile(lp, 'utf-8'));
-            const acctMgr = require('../services/account-manager');
-            for (const a of c.smtpAccounts) {
-              if (acctMgr.isFused(a.id, log._accountStates || {})) fusedIds.add(a.id);
-            }
+            states = log._accountStates || {};
           }
-        } catch { /* 非关键 I/O 失败不影响主流程 */ }
+        } catch { /* 文件损坏不影响状态检查 */ }
 
-        const enabled = c.smtpAccounts.filter(a => a.active !== false);
-        if (!enabled.length) return { ok: false, host: '无活跃账号', user: '' };
-
-        const tested = enabled.filter(a => a._lastTest);
-        const passed = tested.filter(a => a._lastTest?.ok);
-        const failed = tested.filter(a => a._lastTest && !a._lastTest.ok);
-        const untested = enabled.filter(a => !a._lastTest);
-
-        // 活跃数 = 启用 且 非熔断 且 (未测试 或 测试通过)。失败/熔断视为停用
-        const active = enabled.filter(a =>
-          !fusedIds.has(a.id) && (!a._lastTest || a._lastTest.ok !== false)
-        );
-
-        if (!active.length) {
-          const reason = fusedIds.size > 0 ? '账号异常（熔断/离线）' : '无连通账号';
+        const acctMgr = require('../services/account-manager');
+        const status = acctMgr.getAccountsStatus(c.smtpAccounts, states);
+        if (!status) return { ok: false, host: '无账号配置', user: '' };
+        if (!status.activeCount) {
+          const reason = status.hasFused ? '账号异常（熔断/离线）' : '无连通账号';
           return { ok: false, host: reason, user: '' };
         }
-        const first = active[0];
+        const first = status.firstActive;
         return {
-          ok: passed.length > 0,
-          host: first.smtp?.host || '未配置',
-          user: first.smtp?.user || '',
-          accountCount: c.smtpAccounts.length,
-          activeCount: active.length,
-          testedCount: tested.length,
-          passedCount: passed.length,
-          failedCount: failed.length,
-          untestedCount: untested.length,
+          ok: status.anyPassed,
+          host: first?.smtp?.host || '未配置',
+          user: first?.smtp?.user || '',
+          accountCount: status.accountCount,
+          activeCount: status.activeCount,
+          testedCount: status.testedCount,
+          passedCount: status.passedCount,
+          failedCount: status.failedCount,
+          untestedCount: status.untestedCount,
         };
       }
       // 旧格式：smtp（兼容）
@@ -115,74 +100,10 @@ function register(ipcMain, deps) {
 
   // ── 数据导出 ──
   ipcMain.handle('data:export', async () => {
-    const XLSX = require('xlsx');
-    const wb = XLSX.utils.book_new();
-    const contactsDb = require('../services/contacts-db');
-
-    // Sheet1: 联系人（SQLite 完整字段）
     try {
-      const contacts = contactsDb.listAll();
-      const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
-      const rows = contacts.map(c => ({
-        '公司': c.company_name || c.company || '',
-        '国家': c.company_country || c.country || '',
-        '分类': c.category || '',
-        '邮箱': c.email || '',
-        '网站': c.company_website || c.website || '',
-        '名': c.first_name || c.firstName || (c.contact_name || c.contactName || '').split(' ')[0] || ((c.email || '').split('@')[0] || ''),
-        '姓': c.last_name || c.lastName || (c.contact_name || c.contactName || '').split(' ').slice(1).join(' ') || '',
-        '职位': c.title || c.position || '',
-        '电话': c.phone || '',
-        '领英': c.linkedin || '',
-        '客户类型': c.client_type || c.clientType || '',
-        '标签': (c.tags || []).join(', '),
-        '阶段': STAGE_LABEL[c.stage] || c.stage || 'cold',
-        '退信': c.is_bounced ? '是' : '',
-        '退信原因': c.bounce_reason || c.bounceReason || '',
-        '最后发送': (c.last_sent_at || c._sentAt || '').slice(0, 10),
-        '发信账号': c.last_sent_acct || c._sentAccount || '',
-        '跟进人': c.assignee || '',
-        '跟进备注': c.followup_note || '',
-        '机会阶段': c.opp_stage || '',
-        '添加时间': (c.created_at || '').slice(0, 10),
-      }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
-    } catch { /* 降级 */ }
-
-    // Sheet2: 发送记录（SQLite）
-    try {
-      const sendLog = require('../services/send-log-db');
-      const { records } = sendLog.list({ limit: 50000 });
-      const rows = records.map(r => ({
-        '时间': r.time ? new Date(r.time).toISOString().slice(0, 16).replace('T', ' ') : '',
-        '公司': r.company || '', '收件人': r.to || '',
-        '主题': r.subject || '', '发信账号': r._accountId || '',
-        '状态': r.status === 'sent' ? '已发送' : r.status === 'failed' ? '失败' : r.status,
-        '错误信息': r.error || '', '阶段': r._stage || '',
-      }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '发送记录');
-    } catch { /* 降级 */ }
-
-    // Sheet3: 互动记录
-    try {
-      const interactionsDb = require('../services/interactions-db');
-      const interactions = interactionsDb.list({ limit: 5000 });
-      const rows = interactions.map(i => ({
-        '时间': (i.created_at || '').slice(0, 16).replace('T', ' '),
-        '类型': i.type === 'sent' ? '发信' : i.type === 'received' ? '收信' : i.type === 'bounced' ? '退信' : i.type,
-        '方向': i.direction === 'outbound' ? '发出' : '收到',
-        '主题': i.subject || '',
-        '摘要': (i.snippet || '').slice(0, 200),
-      }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '互动记录');
-    } catch { /* 降级 */ }
-
-    // 保存到桌面
-    const desktop = path.join(require('os').homedir(), 'Desktop');
-    const filename = `Milogin数据导出_${new Date().toISOString().slice(0,10)}.xlsx`;
-    const dest = path.join(desktop, filename);
-    XLSX.writeFile(wb, dest);
-    return { ok: true, data: { path: dest, filename } };
+      const { exportAll } = require('../services/export-service');
+      return exportAll();
+    } catch (e) { return { ok: false, error: e.message }; }
   });
 
   // ── 回复检测 ──

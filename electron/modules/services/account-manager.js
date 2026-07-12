@@ -176,6 +176,39 @@ function createTransporter(account) {
   });
 }
 
+// ── 账号状态汇总（供 smtp:checkStatus 使用）────────────────────────────────
+function getAccountsStatus(accounts, states) {
+  if (!Array.isArray(accounts) || !accounts.length) return null;
+
+  const fusedIds = new Set();
+  for (const a of accounts) {
+    if (isFused(a.id, states || {})) fusedIds.add(a.id);
+  }
+
+  const enabled = accounts.filter(a => a.active !== false);
+  if (!enabled.length) return { activeCount: 0, reason: '无活跃账号' };
+
+  const tested = enabled.filter(a => a._lastTest);
+  const passed = tested.filter(a => a._lastTest?.ok);
+  const failed = tested.filter(a => a._lastTest && !a._lastTest.ok);
+  const untested = enabled.filter(a => !a._lastTest);
+  const active = enabled.filter(a =>
+    !fusedIds.has(a.id) && (!a._lastTest || a._lastTest.ok !== false)
+  );
+
+  return {
+    activeCount: active.length,
+    accountCount: accounts.length,
+    testedCount: tested.length,
+    passedCount: passed.length,
+    failedCount: failed.length,
+    untestedCount: untested.length,
+    firstActive: active[0] || null,
+    anyPassed: passed.length > 0,
+    hasFused: fusedIds.size > 0,
+  };
+}
+
 module.exports = {
   generateAccountId,
   validateAccount,
@@ -185,6 +218,7 @@ module.exports = {
   isFused,
   recordSuccess,
   recordFailure,
+  getAccountsStatus,
   FUSE_THRESHOLD,
   FUSE_COOLDOWN_BASE,
   FUSE_COOLDOWN_MAX,

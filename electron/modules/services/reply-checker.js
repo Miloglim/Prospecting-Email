@@ -372,15 +372,13 @@ async function checkReplies() {
 
   if (!checkAccounts.length) return { ok: false, error: '无可用邮箱（请在账号中配置 IMAP/POP3 收件箱）' };
 
-  // 预加载联系人邮箱集合（用于匹配发件人）
+  // 预加载联系人邮箱集合（用于匹配发件人，从 SQLite 读取）
   const contactEmails = new Set();
   try {
-    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-    if (fs.existsSync(cp)) {
-      const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-      for (const c of contacts) {
-        if (c.email) contactEmails.add(c.email.toLowerCase().trim());
-      }
+    const contactsDb = require('./contacts-db');
+    const contacts = contactsDb.listAll();
+    for (const c of contacts) {
+      if (c.email) contactEmails.add(c.email.toLowerCase().trim());
     }
   } catch { /* 联系人加载失败不影响检测 */ }
 
@@ -440,32 +438,22 @@ async function checkReplies() {
 function applyReplies(replies) {
   if (!replies?.length) return { matched: 0 };
 
-  const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-  if (!fs.existsSync(cp)) return { matched: 0 };
-  let contacts;
-  try { contacts = JSON.parse(fs.readFileSync(cp, 'utf-8')); } catch { return { matched: 0 }; }
-
   // 只处理真实回复，跳过自动回复
   const realReplies = replies.filter(r => r.type === 'reply');
   if (!realReplies.length) return { matched: 0 };
 
+  const contactsDb = require('./contacts-db');
   let matched = 0;
   for (const r of realReplies) {
     if (!r.from) continue;
     const key = r.from.toLowerCase().trim();
-    for (const c of contacts) {
-      if ((c.email || '').toLowerCase().trim() === key && !c.replied) {
-        c.replied = true;
-        c.repliedAt = c.repliedAt || new Date().toISOString();
-        c.replySnippet = (r.snippet || '').slice(0, 200);
-        matched++;
-      }
+    const contact = contactsDb.getByEmail(key);
+    if (contact) {
+      // ponytail: 用 tags 系统标记已回复（contacts 表无 replied 列）
+      if (contactsDb.addTag(contact.id, 'replied')) matched++;
     }
   }
 
-  if (matched > 0) {
-    { const tmp = cp + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, cp); }
-  }
   return { matched };
 }
 

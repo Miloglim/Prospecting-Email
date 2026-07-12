@@ -135,22 +135,26 @@ function _classify(subject, from, bodySnippet) {
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 // ── 联系人匹配 ───────────────────────────────────────────────────────────────
-// ponytail: 每次强制读盘重建索引，确保联系人删除后立即生效
+// ponytail: 每次强制从 SQLite 重建索引，确保联系人删除后立即生效
 function _buildContactsIndex() {
   const idx = {};
   try {
-    const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-    if (fs.existsSync(cp)) {
-      const contacts = JSON.parse(fs.readFileSync(cp, 'utf-8'));
-      for (const c of contacts) {
-        if (c.email) idx[c.email.toLowerCase().trim()] = {
-          id: c.id || '', company: c.company || '', companyId: c.companyId || '',
-          contactName: c.contactName || '', firstName: c.firstName || '', lastName: c.lastName || '',
-          clientType: c.clientType || '', tags: c.tags || [],
-        };
-      }
+    const contactsDb = require('./contacts-db');
+    const contacts = contactsDb.listAll();
+    for (const c of contacts) {
+      const email = (c.email || '').toLowerCase().trim();
+      if (email) idx[email] = {
+        id: c.id || '',
+        company: c.company_name || c.company || '',
+        companyId: c.company_id || '',
+        contactName: c.contact_name || c.contactName || '',
+        firstName: c.first_name || c.firstName || '',
+        lastName: c.last_name || c.lastName || '',
+        clientType: c.client_type || c.clientType || '',
+        tags: c.tags || [],
+      };
     }
-  } catch { /* 联系人文件损坏 → 空索引 */ }
+  } catch { /* 联系人读取失败 → 空索引 */ }
   return idx;
 }
 
@@ -658,12 +662,8 @@ function listInbox() {
       m.contactDbId = '';
       changed = true;
     }
-    if (senderMatch && !m.contactCompany) {
-      m.contactCompany = idx[senderKey].company || '';
-      m.contactId = idx[senderKey].companyId || '';
-      m.contactDbId = idx[senderKey].id || '';
-      changed = true;
-    }
+    // ponytail: 不自动重设 contactCompany — 匹配仅在拉取新邮件时发生
+    // 已由 removeMatchedContact 清理的匹配不应被 listInbox 复活
     if (m.matchedContacts) {
       for (const c of m.matchedContacts) {
         const was = c.matched;
@@ -729,23 +729,39 @@ function deleteMail(index) {
 
 function removeMatchedContact(mailIndex, email) {
   const mails = _readCache();
-  const before = mails[mailIndex]?.matchedContacts?.length || 0;
-  if (mails[mailIndex]?.matchedContacts) {
-    mails[mailIndex].matchedContacts = mails[mailIndex].matchedContacts.filter(c => c.email.toLowerCase() !== email.toLowerCase());
-    _writeCache(mails);
-    Log.info('[收件箱]', `removeMatchedContact[${mailIndex}] ${email}: ${before}→${mails[mailIndex].matchedContacts.length}条`);
+  const m = mails[mailIndex];
+  if (!m) return;
+  const before = m.matchedContacts?.length || 0;
+  if (m.matchedContacts) {
+    m.matchedContacts = m.matchedContacts.filter(c => c.email.toLowerCase() !== email.toLowerCase());
   }
+  // ponytail: 如果删的是发件人本身的匹配，同步清除 contactCompany
+  if (m.from && m.from.toLowerCase() === (email || '').toLowerCase()) {
+    m.contactCompany = '';
+    m.contactId = '';
+    m.contactDbId = '';
+  }
+  _writeCache(mails);
+  Log.info('[收件箱]', `removeMatchedContact[${mailIndex}] ${email}: ${before}→${m.matchedContacts?.length || 0}条`);
 }
 
 function removeMatchedContactsBatch(items) {
   if (!items || !items.length) return;
   const mails = _readCache();
   for (const { mailIdx, email } of items) {
-    if (mails[mailIdx]?.matchedContacts) {
-      const lower = (email || '').toLowerCase();
-      const before = mails[mailIdx].matchedContacts.length;
-      mails[mailIdx].matchedContacts = mails[mailIdx].matchedContacts.filter(c => (c.email || '').toLowerCase() !== lower);
-      Log.info('[收件箱]', `removeMatched[${mailIdx}] ${email}: ${before}→${mails[mailIdx].matchedContacts.length}条`);
+    const m = mails[mailIdx];
+    if (!m) continue;
+    const lower = (email || '').toLowerCase();
+    if (m.matchedContacts) {
+      const before = m.matchedContacts.length;
+      m.matchedContacts = m.matchedContacts.filter(c => (c.email || '').toLowerCase() !== lower);
+      Log.info('[收件箱]', `removeMatched[${mailIdx}] ${email}: ${before}→${m.matchedContacts.length}条`);
+    }
+    // ponytail: 如果删的是发件人本身的匹配，同步清除 contactCompany
+    if (m.from && m.from.toLowerCase() === lower) {
+      m.contactCompany = '';
+      m.contactId = '';
+      m.contactDbId = '';
     }
   }
   _writeCache(mails);

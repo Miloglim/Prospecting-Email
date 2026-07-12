@@ -1,5 +1,5 @@
-// ── 发送历史持久化 ──
-// 从 send-ipc.js 拆分：发送历史、阶段管理、日志查询、正文读取
+// ── 发送历史 IPC 路由 ──
+// 从 services/history-store.js 搬迁：发送历史、阶段管理、日志查询、正文读取
 
 const path = require('path');
 const fs = require('fs');
@@ -7,8 +7,8 @@ const { APP_ROOT } = require('../config');
 const { Log } = require('../core/logger');
 
 // 引用 send-engine 的 loadBodies（两个模块共享同一数据文件）
-const { loadBodies } = require('./send-engine');
-const { resolveCompanyId } = require('./company-store');
+const { loadBodies } = require('../services/send-engine');
+const { resolveCompanyId } = require('../services/company-store');
 
 // ── 发送历史读写 ──
 const shp = path.join(APP_ROOT, 'data', 'send-history.json');
@@ -26,7 +26,7 @@ function register(ipcMain, deps) {
   // ── 发送历史（从 SQLite 实时派生）──
   ipcMain.handle('history:get', async () => {
     try {
-      const contactsDb = require('./contacts-db');
+      const contactsDb = require('../services/contacts-db');
       const contacts = contactsDb.listAll();
       const hist = {};
       for (const c of contacts) {
@@ -43,11 +43,27 @@ function register(ipcMain, deps) {
   });
   ipcMain.handle('history:advance', async (_e, companies) => {
     const h = rsh(); const now = new Date().toISOString(); const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
-    for (const name of companies) { const cur = h[name]?.stage || 'cold'; const idx = STAGES.indexOf(cur); const ni = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; const next = STAGES[ni]; const u = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] }; if (!h[name]?.startedAt) u.startedAt = now; if (next === 'archived') u.archivedAt = now; _dualWrite(h, name, u); }
+    const contactsDb = require('../services/contacts-db');
+    for (const name of companies) {
+      const cur = h[name]?.stage || 'cold'; const idx = STAGES.indexOf(cur);
+      const ni = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; const next = STAGES[ni];
+      const u = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
+      if (!h[name]?.startedAt) u.startedAt = now;
+      if (next === 'archived') u.archivedAt = now;
+      _dualWrite(h, name, u);
+      // ponytail: 同步更新 SQLite 中该公司所有联系人的阶段
+      try {
+        const all = contactsDb.listAll();
+        for (const c of all) {
+          const cn = c.company_name || c.company || '';
+          if (cn === name || cn === (c.company || '')) {
+            contactsDb.setStage(c.id, next, 'advance');
+          }
+        }
+      } catch { /* 降级 */ }
+    }
     wsh(h); return h;
   });
-
-  // ── 批次统计：按日期分组计数（已迁移到 SQLite）
 
   // ── 阶段追回：扫描已发记录，将 cold 阶段已发公司推进到 f1 ──────────
   ipcMain.handle('history:catchup', async () => {
@@ -70,6 +86,7 @@ function register(ipcMain, deps) {
     // 推进 cold 阶段的已发公司
     let caught = 0;
     const now = new Date().toISOString();
+    const contactsDb2 = require('../services/contacts-db');
     for (const name of sentCompanies) {
       const cur = h[name]?.stage || 'cold';
       if (cur !== 'cold') continue;
@@ -77,34 +94,56 @@ function register(ipcMain, deps) {
       if (!h[name]?.startedAt) u.startedAt = now;
       _dualWrite(h, name, u);
       caught++;
+      // ponytail: 同步更新 SQLite 联系人阶段
+      try {
+        const all = contactsDb2.listAll();
+        for (const c of all) {
+          const cn = c.company_name || c.company || '';
+          if (cn === name) contactsDb2.setStage(c.id, 'f1', 'catchup');
+        }
+      } catch { /* 降级 */ }
     }
     if (caught > 0) wsh(h);
     return { caught, total: sentCompanies.size };
   });
   ipcMain.handle('history:recordSentences', async (_e, c, sids) => { const h = rsh(); const e = h[c] || {}; const u = e.usedSentences || []; _dualWrite(h, c, { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] }); wsh(h); return { ok: true }; });
-  ipcMain.handle('history:reactivate', async (_e, c) => { const h = rsh(); _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined }); wsh(h); return { ok: true }; });
+  ipcMain.handle('history:reactivate', async (_e, c) => {
+    const h = rsh();
+    _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined });
+    wsh(h);
+    // ponytail: 同步重置 SQLite 中该公司联系人的阶段
+    try {
+      const contactsDb3 = require('../services/contacts-db');
+      const all = contactsDb3.listAll();
+      for (const ct of all) {
+        const cn = ct.company_name || ct.company || '';
+        if (cn === c) contactsDb3.setStage(ct.id, 'cold', 'manual:reactivate');
+      }
+    } catch { /* 降级 */ }
+    return { ok: true };
+  });
   ipcMain.handle('history:getLog', async (_e, params) => {
     try {
-      const sendLog = require('./send-log-db');
+      const sendLog = require('../services/send-log-db');
       return sendLog.list(params || {});
     } catch (e) { Log.error("历史", "查询发送日志失败", e.stack); return { total: 0, records: [] }; }
   });
   ipcMain.handle('history:getDates', async () => {
     try {
-      const sendLog = require('./send-log-db');
+      const sendLog = require('../services/send-log-db');
       return { ok: true, data: sendLog.getDates() };
     } catch (e) { Log.error("历史", "查询发送日期失败", e.stack); return { ok: true, data: [] }; }
   });
   ipcMain.handle('history:getBody', async (_e, bodyId) => {
     if (!bodyId) return '';
-    const sendLog = require('./send-log-db');
+    const sendLog = require('../services/send-log-db');
     return sendLog.getBody(bodyId);
   });
   ipcMain.handle('history:delete', async (_e, indices) => {
     if (!indices?.length) return { ok: false };
     if (deps?._sendInProgress) return { ok: false, error: '发送进行中，无法清除记录' };
     try {
-      const db = require('./db').getDb();
+      const db = require('../services/db').getDb();
       if (indices[0] === '__ALL__') { db.exec("DELETE FROM send_log"); return { ok: true }; }
       const ph = indices.map(() => "?").join(",");
       db.prepare(`DELETE FROM send_log WHERE row_index IN (${ph})`).run(...indices);

@@ -17,9 +17,7 @@ let _delayTotal = 0;
 // ── 自动退信定时器 ──
 let _autoBounceTimer = null;
 
-// ── 联系人标签回写：发送成功后标记 _sentBy / _sentAccount / _sentAt ─────
-const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json');
-
+// ── 联系人标签回写：发送成功后标记 last_sent_at / last_sent_acct ─────
 function _tagContacts(emails, accountId, accountLabel, stage) {
   try {
     const contactsDb = require('./contacts-db');
@@ -385,14 +383,13 @@ async function runSendBatch(deps, sendProgress) {
   const totalLimit = ctx.maxPerDay;
   const totalDailyCount = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || log.daily_count || 0;
 
-  // ponytail: 加载联系人账号标签，供 pickNextAccount 复用原账号
+  // ponytail: 加载联系人账号标签，供 pickNextAccount 复用原账号（从 SQLite 读取）
   let contactAccountMap = {};
   try {
-    if (fs.existsSync(contactsPath)) {
-      const contacts = JSON.parse(fs.readFileSync(contactsPath, 'utf-8'));
-      for (const c of contacts) {
-        if (c._sentBy && c.email) contactAccountMap[c.email.toLowerCase().trim()] = c._sentBy;
-      }
+    const contactsDb = require('./contacts-db');
+    const contacts = contactsDb.listAll();
+    for (const c of contacts) {
+      if (c.last_sent_acct && c.email) contactAccountMap[c.email.toLowerCase().trim()] = c.last_sent_acct;
     }
   } catch { /* 联系人数据无法读取 → 不影响发送，仅丢失账号映射信息 */ }
 
@@ -582,15 +579,23 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
       const { checkBounces } = require('../../bounce-checker');
       const result = await checkBounces();
       if (!result.ok || !result.bounced?.length) return;
-      const cp = path.join(APP_ROOT, 'data', 'contacts.json');
-      if (!fs.existsSync(cp)) return;
-      let contacts = JSON.parse(fs.readFileSync(cp, 'utf-8')); let matched = 0;
+      const contactsDb = require('./contacts-db');
+      let matched = 0;
       for (const b of result.bounced) {
-        if (!b.bouncedEmail) continue; const key = b.bouncedEmail.toLowerCase().trim();
-        for (const c of contacts) { if ((c.email || '').toLowerCase().trim() === key) { c.bounced = true; c.bounceType = b.type || 'unknown'; c.bounceReason = b.reason || ''; c.bouncedAt = c.bouncedAt || new Date().toISOString(); matched++; } }
+        if (!b.bouncedEmail) continue;
+        const key = b.bouncedEmail.toLowerCase().trim();
+        const contact = contactsDb.getByEmail(key);
+        if (contact) {
+          contactsDb.update(contact.id, {
+            is_bounced: true,
+            bounce_type: b.type || 'unknown',
+            bounce_reason: b.reason || '',
+            bounced_at: contact.bounced_at || new Date().toISOString(),
+          });
+          matched++;
+        }
       }
       if (matched > 0) {
-        { const tmp = cp + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(contacts, null, 2)); fs.renameSync(tmp, cp); }
         if (tray) new (require('electron').Notification)({ title: '📨 退信检测', body: `发现 ${result.bounced.length} 封退信，已标记 ${matched} 个联系人` }).show();
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('bounce:autoDetected', { count: result.bounced.length, matched });
       }

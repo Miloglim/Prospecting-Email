@@ -15,7 +15,7 @@ const assembler = require("./assembler");
 const engine = require("../../services/send-engine");
 
 // ── 常量 ─────────────────────────────────────────────────────────────────────
-const CONTACTS_PATH = path.join(APP_ROOT, "data", "contacts.json");
+// ponytail: contacts 已迁移到 SQLite，通过 contacts-db 读取
 const CONFIG_PATH = path.join(APP_ROOT, "send", "config.json");
 
 // ── AutoScheduler 类 ─────────────────────────────────────────────────────────
@@ -539,9 +539,8 @@ class AutoScheduler {
   /** @returns {object[]} */
   _loadContacts() {
     try {
-      if (fs.existsSync(CONTACTS_PATH)) {
-        return JSON.parse(fs.readFileSync(CONTACTS_PATH, "utf-8"));
-      }
+      const contactsDb = require("../../services/contacts-db");
+      return contactsDb.listAll();
     } catch (e) {
       Log.warn("auto-scheduler", "联系人加载失败", e.stack);
     }
