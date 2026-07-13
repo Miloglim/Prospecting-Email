@@ -714,6 +714,19 @@ function toggleImportantByKey(mailKey) {
     Log.warn('[收件箱]', `toggleImportant: 未找到 key=${mailKey} (缓存共${mails.length}封)`);
   }
 }
+function setMailType(index, newType) {
+  const VALID_TYPES = ['bounce', 'reply', 'auto-reply', 'other'];
+  if (!VALID_TYPES.includes(newType)) return false;
+  const mails = _readCache();
+  if (!mails[index]) return false;
+  const oldType = mails[index].type;
+  mails[index].type = newType;
+  _writeCache(mails);
+  Log.info('[收件箱]', `手动分类: [${index}] ${oldType} → ${newType}`);
+  // 同步标签到联系人
+  _syncTagsToContacts([mails[index]]);
+  return true;
+}
 
 function linkContact(index, contactId, company) {
   const mails = _readCache();
@@ -775,11 +788,4 @@ function removeMatchedContactsBatch(items) {
   _writeCache(mails);
 }
 
-function syncAllTags() {
-  const mails = _readCache();
-  if (!mails.length) return { ok: true, synced: 0, message: '缓存为空' };
-  const n = _syncTagsToContacts(mails);
-  return { ok: true, synced: n, message: `已扫描 ${mails.length} 封邮件，同步 ${n} 个标签` };
-}
-
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey, _migrateInboxFromJson };
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, getBounceCount, toggleImportant, toggleImportantByKey, setMailType, _migrateInboxFromJson };

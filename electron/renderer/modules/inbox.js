@@ -17,8 +17,6 @@ function _saveViewedKeys() {
 }
 const _viewedKeys = _loadViewedKeys();
 let _initialLoadDone = false;
-const _selectedSet = new Set(); // 多选集合
-let _lastClickIdx = -1;       // Shift 范围选择起点
 
 const TYPE_LABELS = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
 const TYPE_DOT = { bounce: '#e5484d', reply: '#22a644', 'auto-reply': '#e6a817', other: '#8b8b8b' };
@@ -92,8 +90,7 @@ function renderInbox() {
   // 左侧列表
   listEl.innerHTML = filtered.map((m, i) => {
     const realIdx = _mails.indexOf(m);
-    const selCls = _selectedSet.has(realIdx) ? ' inbox-selected' : '';
-    const cls = realIdx === _selectedIdx ? 'inbox-item active' + selCls : 'inbox-item' + selCls;
+    const cls = realIdx === _selectedIdx ? 'inbox-item active' : 'inbox-item';
     const time = _shortTime(m.date);
     const mkey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
     const isNew = !_viewedKeys.has(mkey);
@@ -115,31 +112,9 @@ function renderInbox() {
     el.addEventListener('click', (e) => {
       const idx = parseInt(el.dataset.idx);
       const mkey = el.dataset.mkey;
-      // Ctrl+点击 → 切换多选
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        if (_selectedSet.has(idx)) _selectedSet.delete(idx);
-        else _selectedSet.add(idx);
-        renderInbox();
-        return;
-      }
-      // Shift+点击 → 范围多选
-      if (e.shiftKey && _lastClickIdx >= 0) {
-        e.preventDefault();
-        const from = Math.min(_lastClickIdx, idx);
-        const to = Math.max(_lastClickIdx, idx);
-        const visible = [...listEl.querySelectorAll('.inbox-item')].map(el2 => parseInt(el2.dataset.idx));
-        for (const vi of visible) { if (vi >= from && vi <= to) _selectedSet.add(vi); else _selectedSet.delete(vi); }
-        renderInbox();
-        return;
-      }
-      // 普通点击 → 单选 + 查看详情
-      _lastClickIdx = idx;
-      _selectedSet.clear();
-      _selectedSet.add(idx);
       _selectedIdx = idx;
-      listEl.querySelectorAll('.inbox-item').forEach(e => e.classList.remove('active','inbox-selected'));
-      el.classList.add('active','inbox-selected');
+      listEl.querySelectorAll('.inbox-item').forEach(e => e.classList.remove('active'));
+      el.classList.add('active');
       const dot = el.querySelector('.inbox-dot-new');
       if (dot && mkey) {
         dot.classList.remove('inbox-dot-new');
@@ -159,96 +134,73 @@ function renderInbox() {
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const idx = parseInt(el.dataset.idx);
-      // 右键项加入多选（原地标记，不重渲）
-      if (!_selectedSet.has(idx)) { _selectedSet.add(idx); el.classList.add('inbox-selected'); }
-      const selected = [..._selectedSet].sort((a, b) => b - a);
+      const m = _mails[idx];
+      if (!m) return;
       document.getElementById('ctx-menu')?.remove();
       const menu = document.createElement('div');
       menu.id = 'ctx-menu';
       menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
-      const selCount = selected.length > 1 ? ` (${selected.length}封)` : '';
-      const isImportant = _mails[selected[0]]?.important;
-      const hasMatched = selected.some(i => {
-        const mi = _mails[i];
-        return mi?.contactCompany || (mi?.matchedContacts || []).some(c => c.matched);
-      });
+      const isImportant = m.important;
+      const hasMatched = m.contactCompany || (m.matchedContacts || []).some(c => c.matched);
+      const curType = m.type || 'other';
+      const TYPE_LABEL = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
       menu.innerHTML = `
-        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}${selCount}</div>
-        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读${selCount}</div>
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}</div>
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读</div>
         ${hasMatched ? `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="del-matched" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除匹配联系人</div>` : ''}
         <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除邮件${selCount}</div>
+        ${['bounce','reply','auto-reply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
+        <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+        <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除邮件</div>
       `;
+      menu.querySelectorAll('[data-action="set-type"]').forEach(el => el.addEventListener('click', async () => {
+        menu.remove();
+        await window.electronAPI.setInboxType(idx, el.dataset.type);
+        if (_mails[idx]) _mails[idx].type = el.dataset.type;
+        renderInbox();
+      }));
       menu.querySelector('[data-action="del-matched"]')?.addEventListener('click', async () => {
         menu.remove();
-        // 收集所有选中邮件的匹配联系人（按邮箱去重）
         const allMatched = [];
-        const seen = new Set();
-        for (const i of selected) {
-          const m = _mails[i];
-          if (!m) continue;
-          const addIfMatched = (email, dbId) => {
-            if (!email || seen.has(email)) return;
-            seen.add(email);
-            allMatched.push({ mailIdx: i, email, id: dbId || '' });
-          };
-          if (m.contactCompany && m.from) addIfMatched(m.from, m.contactDbId);
-          for (const c of (m.matchedContacts || [])) {
-            if (c.matched && c.email) addIfMatched(c.email, c.contactId);
-          }
+        if (m.contactCompany && m.from) allMatched.push({ mailIdx: idx, email: m.from, id: m.contactDbId || '' });
+        for (const c of (m.matchedContacts || [])) {
+          if (c.matched && c.email) allMatched.push({ mailIdx: idx, email: c.email, id: c.contactId || '' });
         }
-        if (!allMatched.length) { showToast('所选邮件无匹配联系人', 'warn'); return; }
-        if (!await showConfirm(`确定删除 ${selected.length} 封选中邮件的全部 ${allMatched.length} 个匹配联系人？`)) return;
-        // 批量删除联系人（一次读写）
+        if (!allMatched.length) { showToast('无匹配联系人', 'warn'); return; }
+        if (!await showConfirm(`确定删除 ${allMatched.length} 个匹配联系人？`)) return;
         const contacts = await window.electronAPI.getContacts();
         const delIds = allMatched.map(c => c.id || (contacts.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
         if (delIds.length) await window.electronAPI.deleteContactsMany(delIds);
-        // 清除缓存中匹配状态
         for (const c of allMatched) {
           await window.electronAPI.removeInboxMatchedContact(c.mailIdx, c.email);
-          const mi = _mails[c.mailIdx];
-          if (mi?.matchedContacts) mi.matchedContacts = mi.matchedContacts.filter(mc => mc.email !== c.email);
-          if (c.email === mi?.from) { mi.contactCompany = ''; mi.contactId = ''; mi.contactDbId = ''; }
         }
-        _selectedSet.clear();
+        if (m.from && allMatched.some(c => c.email.toLowerCase() === m.from.toLowerCase())) { m.contactCompany = ''; m.contactId = ''; m.contactDbId = ''; }
+        if (m.matchedContacts) m.matchedContacts = m.matchedContacts.filter(mc => !allMatched.some(c => c.email.toLowerCase() === mc.email.toLowerCase()));
         renderDetail();
         renderInbox();
         showToast(`已删除 ${allMatched.length} 个联系人`, 'ok');
       });
-
       menu.querySelector('[data-action="important"]').addEventListener('click', async () => {
         menu.remove();
-        for (const i of selected) {
-          const m = _mails[i];
-          if (!m) continue;
-          const key = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
-          await window.electronAPI.toggleInboxImportant(i, key);
-          m.important = !m.important;
-        }
-        _selectedSet.clear();
+        const key = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+        await window.electronAPI.toggleInboxImportant(idx, key);
+        m.important = !m.important;
         renderInbox();
       });
       menu.querySelector('[data-action="read"]').addEventListener('click', () => {
         menu.remove();
-        for (const i of selected) {
-          const m = _mails[i];
-          if (m) {
-            const mk = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
-            _viewedKeys.add(mk);
-          }
-        }
+        const mk = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
+        _viewedKeys.add(mk);
         _saveViewedKeys();
-        _selectedSet.clear();
         renderInbox();
       });
       menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
         menu.remove();
-        for (const i of selected) { await window.electronAPI.deleteInboxMail(i); }
-        for (const i of selected) { _mails.splice(i, 1); }
-        if (_selectedIdx >= 0 && !_mails[_selectedIdx]) _selectedIdx = -1;
-        _selectedSet.clear();
+        await window.electronAPI.deleteInboxMail(idx);
+        _mails.splice(idx, 1);
+        if (_selectedIdx >= _mails.length) _selectedIdx = -1;
         renderInbox();
       });
       document.body.appendChild(menu);
@@ -508,6 +460,14 @@ async function _onDeleteBounced() {
     if (delEmails.has((m.from || '').toLowerCase())) { m.contactCompany = ''; m.contactId = ''; m.contactDbId = ''; }
     if (m.matchedContacts) m.matchedContacts = m.matchedContacts.filter(c => !delEmails.has((c.email || '').toLowerCase()));
   }
+  // ponytail: 删除后自动标记这些退信为已读
+  for (let i = 0; i < _mails.length; i++) {
+    const m = _mails[i];
+    if (m.type === 'bounce' && (m.contactCompany || (m.matchedContacts || []).some(c => c.matched))) {
+      _viewedKeys.add(`${m.accountId}|${m.uid}|${m.from}|${m.subject}`);
+    }
+  }
+  _saveViewedKeys();
   showToast(`已删除 ${allMatched.length} 个联系人`, 'ok');
   // listInbox 回读磁盘做二次校验，保证前后端状态一致
   const list = await window.electronAPI.listInbox();
@@ -525,14 +485,6 @@ document.getElementById('inbox-clear')?.addEventListener('click', async () => {
   renderInbox();
   showToast('已清除，下次拉取重新下载', 'ok');
 });
-document.getElementById('inbox-sync-tags')?.addEventListener('click', async () => {
-  const btn = document.getElementById('inbox-sync-tags');
-  btn.disabled = true; btn.textContent = '同步中...';
-  const r = await window.electronAPI.syncInboxTags();
-  showToast(r.ok ? (r.message || '同步完成') : ('同步失败: ' + (r.error || '')), r.ok ? 'ok' : 'err');
-  btn.disabled = false; btn.textContent = '同步标签';
-});
-
 // 热刷新：后台拉到新邮件时自动更新列表 + 导航红点
 window.electronAPI.onInboxChanged(async () => {
   if (document.getElementById('page-inbox')?.classList.contains('active')) {
@@ -552,26 +504,6 @@ window.electronAPI.onContactsChanged(async () => {
   }
 });
 // 快捷键：Ctrl+A 全选、Esc 取消、Ctrl+D 取消全选
-window._inboxKeyHandler = (e) => {
-  const page = document.getElementById('page-inbox');
-  if (!page || !page.classList.contains('active')) return;
-  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-    e.preventDefault();
-    const listEl = document.getElementById('inbox-list');
-    if (!listEl) return;
-    listEl.querySelectorAll('.inbox-item').forEach(el => {
-      const i = parseInt(el.dataset.idx);
-      if (!isNaN(i)) _selectedSet.add(i);
-    });
-    renderInbox();
-  }
-  if (e.key === 'Escape' && _selectedSet.size) {
-    e.preventDefault();
-    _selectedSet.clear();
-    renderInbox();
-  }
-};
-document.addEventListener('keydown', window._inboxKeyHandler);
 
 // ── 自动拉取倒计时 ───────────────────────────────────────────────────────────
 let _inboxNextFetchAt = 0;

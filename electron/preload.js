@@ -55,7 +55,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deepSearchContacts: (website, company) =>
     ipcRenderer.invoke("contacts:deepSearch", website, company),
   upsertContact: (contact) => ipcRenderer.invoke("contacts:upsert", contact),
-  getDeletedContactsLog: () => ipcRenderer.invoke("contacts:deletedLog"),
   saveFollowup: (contactId, text) =>
     ipcRenderer.invoke("contacts:saveFollowup", contactId, text),
   getFollowups: (contactId) =>
@@ -115,13 +114,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   linkInboxContact: (index, contactId, company) =>
     ipcRenderer.invoke("inbox:linkContact", index, contactId, company),
   deleteInboxMail: (index) => ipcRenderer.invoke("inbox:delete", index),
-  syncInboxTags: () => ipcRenderer.invoke("inbox:syncTags"),
   removeInboxMatchedContact: (index, email) =>
     ipcRenderer.invoke("inbox:removeMatchedContact", index, email),
   removeInboxMatchedContactsBatch: (items) => ipcRenderer.invoke("inbox:removeMatchedContactsBatch", items),
   getBounceCount: () => ipcRenderer.invoke("inbox:getBounceCount"),
   toggleInboxImportant: (index, key) =>
     ipcRenderer.invoke("inbox:toggleImportant", index, key),
+  setInboxType: (index, newType) =>
+    ipcRenderer.invoke("inbox:setType", index, newType),
   clearInbox: () => ipcRenderer.invoke("inbox:clear"),
 
   onContactsChanged: (cb) => {

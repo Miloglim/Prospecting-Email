@@ -63,8 +63,6 @@ const CONTACTS = {
   UPSERT: "contacts:upsert",
   /** AI 分类未标记联系人 */
   CLASSIFY_AI: "contacts:classifyAI",
-  /** 获取已删除联系人日志 */
-  DELETED_LOG: "contacts:deletedLog",
   /** 保存跟进备注 */
   SAVE_FOLLOWUP: "contacts:saveFollowup",
   /** 获取跟进备注列表 */
@@ -201,8 +199,6 @@ const INBOX = {
   DELETE: "inbox:delete",
   /** 获取下次拉取时间 */
   NEXT_FETCH: "inbox:nextFetch",
-  /** 同步标签到联系人 */
-  SYNC_TAGS: "inbox:syncTags",
   /** 移除单个匹配联系人 */
   REMOVE_MATCHED_CONTACT: "inbox:removeMatchedContact",
   /** 批量移除匹配联系人 */

@@ -1,143 +1,126 @@
 // ── 发送历史 IPC 路由 ──
-// 从 services/history-store.js 搬迁：发送历史、阶段管理、日志查询、正文读取
+// v2.9.10: 统一到 SQLite，send-history.json 仅保留 usedSentences（句库去重）
 
 const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('../config');
 const { Log } = require('../core/logger');
-
-// 引用 send-engine 的 loadBodies（两个模块共享同一数据文件）
 const { loadBodies } = require('../services/send-engine');
 const { resolveCompanyId } = require('../services/company-store');
 
-// ── 发送历史读写 ──
+// ── 句库去重（仅此一项保留 JSON，无 SQLite 对应列）──
 const shp = path.join(APP_ROOT, 'data', 'send-history.json');
-function rsh() { try { return fs.existsSync(shp) ? JSON.parse(fs.readFileSync(shp, 'utf-8')) : {}; } catch { return {}; } }
-function wsh(h) { const d = path.dirname(shp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(shp, JSON.stringify(h, null, 2)); }
+function _readSentences() { try { return fs.existsSync(shp) ? JSON.parse(fs.readFileSync(shp, 'utf-8')) : {}; } catch { return {}; } }
+function _writeSentences(h) { const d = path.dirname(shp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(shp, JSON.stringify(h, null, 2)); }
 
-/** 双写：同时写公司名 key 和 companyId key（Phase 3 过渡） */
-function _dualWrite(h, name, value) {
-  h[name] = value;
-  const { companyId } = resolveCompanyId(name);
-  if (companyId && companyId !== name) h[companyId] = value;
+/** 从 SQLite 联系人重建公司级历史（与 history:get 共用） */
+function _buildHist() {
+  const contactsDb = require('../services/contacts-db');
+  const contacts = contactsDb.listAll();
+  const hist = {};
+  for (const c of contacts) {
+    const name = c.company_name || c.company || "未命名";
+    if (!hist[name]) hist[name] = { stage: "cold", lastSent: "", sentCount: 0, sentContacts: [], startedAt: c.created_at };
+    const entry = hist[name];
+    if (c.last_sent_at && c.last_sent_at > entry.lastSent) entry.lastSent = c.last_sent_at;
+    if (c.last_sent_at) { entry.sentContacts.push(c.email.toLowerCase().trim()); entry.sentCount++; }
+    const order = ["cold", "f1", "f2", "f3", "f4"];
+    if (order.indexOf(c.stage || "cold") > order.indexOf(entry.stage)) entry.stage = c.stage;
+  }
+  return hist;
+}
+
+/** 推进公司阶段：更新该公司所有联系人的 stage */
+function _advanceCompany(name, newStage, reason) {
+  const contactsDb = require('../services/contacts-db');
+  const all = contactsDb.listAll();
+  let updated = 0;
+  for (const c of all) {
+    const cn = c.company_name || c.company || '';
+    if (cn === name) {
+      contactsDb.setStage(c.id, newStage, reason);
+      updated++;
+    }
+  }
+  return updated;
 }
 
 function register(ipcMain, deps) {
-  // ── 发送历史（从 SQLite 实时派生）──
+  // ── 发送历史（纯 SQLite）──
   ipcMain.handle('history:get', async () => {
-    try {
-      const contactsDb = require('../services/contacts-db');
-      const contacts = contactsDb.listAll();
-      const hist = {};
-      for (const c of contacts) {
-        const name = c.company_name || c.company || "未命名";
-        if (!hist[name]) hist[name] = { stage: "cold", lastSent: "", sentCount: 0, sentContacts: [], startedAt: c.created_at };
-        const entry = hist[name];
-        if (c.last_sent_at && c.last_sent_at > entry.lastSent) entry.lastSent = c.last_sent_at;
-        if (c.last_sent_at) { entry.sentContacts.push(c.email.toLowerCase().trim()); entry.sentCount++; }
-        const order = ["cold", "f1", "f2", "f3", "f4"];
-        if (order.indexOf(c.stage || "cold") > order.indexOf(entry.stage)) entry.stage = c.stage;
-      }
-      return hist;
-    } catch { return {}; }
-  });
-  ipcMain.handle('history:advance', async (_e, companies) => {
-    const h = rsh(); const now = new Date().toISOString(); const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
-    const contactsDb = require('../services/contacts-db');
-    for (const name of companies) {
-      const cur = h[name]?.stage || 'cold'; const idx = STAGES.indexOf(cur);
-      const ni = idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx; const next = STAGES[ni];
-      const u = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
-      if (!h[name]?.startedAt) u.startedAt = now;
-      if (next === 'archived') u.archivedAt = now;
-      _dualWrite(h, name, u);
-      // ponytail: 同步更新 SQLite 中该公司所有联系人的阶段
-      try {
-        const all = contactsDb.listAll();
-        for (const c of all) {
-          const cn = c.company_name || c.company || '';
-          if (cn === name || cn === (c.company || '')) {
-            contactsDb.setStage(c.id, next, 'advance');
-          }
-        }
-      } catch { /* 降级 */ }
-    }
-    wsh(h); return h;
+    try { return _buildHist(); } catch { return {}; }
   });
 
-  // ── 阶段追回：扫描已发记录，将 cold 阶段已发公司推进到 f1 ──────────
-  ipcMain.handle('history:catchup', async () => {
-    const h = rsh();
+  ipcMain.handle('history:advance', async (_e, companies) => {
+    const h = _buildHist();
     const STAGES = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
-    // 从发送日志提取已发公司
-    const logPaths = [
-      path.join(APP_ROOT, 'send', 'send-log.json'),
-      path.join(APP_ROOT, 'send', 'send-log-test.json'),
-    ];
+    const now = new Date().toISOString();
+    for (const name of companies) {
+      const cur = (h[name]?.stage || 'cold');
+      const idx = STAGES.indexOf(cur);
+      const next = STAGES[idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx];
+      _advanceCompany(name, next, 'advance');
+      // 更新内存 hist 供返回值
+      h[name] = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
+      if (!h[name]?.startedAt) h[name].startedAt = now;
+    }
+    return h;
+  });
+
+  // ── 阶段追回 ──
+  ipcMain.handle('history:catchup', async () => {
+    const h = _buildHist();
+    const logPaths = [path.join(APP_ROOT, 'send', 'send-log.json'), path.join(APP_ROOT, 'send', 'send-log-test.json')];
     const sentCompanies = new Set();
     for (const lp of logPaths) {
-      try {
-        if (fs.existsSync(lp)) {
-          const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));
-          (log.sent || []).forEach(r => { if (r.company) sentCompanies.add(r.company); });
-        }
-      } catch { /* 文件损坏跳过 */ }
+      try { if (fs.existsSync(lp)) { const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));(log.sent || []).forEach(r => { if (r.company) sentCompanies.add(r.company); }); } } catch { /* 跳过 */ }
     }
-    // 推进 cold 阶段的已发公司
     let caught = 0;
-    const now = new Date().toISOString();
-    const contactsDb2 = require('../services/contacts-db');
     for (const name of sentCompanies) {
-      const cur = h[name]?.stage || 'cold';
-      if (cur !== 'cold') continue;
-      const u = { ...h[name], stage: 'f1', lastSent: h[name]?.lastSent || now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
-      if (!h[name]?.startedAt) u.startedAt = now;
-      _dualWrite(h, name, u);
+      if ((h[name]?.stage || 'cold') !== 'cold') continue;
+      _advanceCompany(name, 'f1', 'catchup');
       caught++;
-      // ponytail: 同步更新 SQLite 联系人阶段
-      try {
-        const all = contactsDb2.listAll();
-        for (const c of all) {
-          const cn = c.company_name || c.company || '';
-          if (cn === name) contactsDb2.setStage(c.id, 'f1', 'catchup');
-        }
-      } catch { /* 降级 */ }
     }
-    if (caught > 0) wsh(h);
     return { caught, total: sentCompanies.size };
   });
-  ipcMain.handle('history:recordSentences', async (_e, c, sids) => { const h = rsh(); const e = h[c] || {}; const u = e.usedSentences || []; _dualWrite(h, c, { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] }); wsh(h); return { ok: true }; });
+
+  // ── 句库去重（保留 JSON）──
+  ipcMain.handle('history:recordSentences', async (_e, c, sids) => {
+    const h = _readSentences();
+    const e = h[c] || {};
+    const u = e.usedSentences || [];
+    h[c] = { ...e, usedSentences: (e.sentCount || 0) >= 5 ? [...(sids || [])] : [...new Set([...u, ...(sids || [])])] };
+    _writeSentences(h);
+    return { ok: true };
+  });
+
+  // ── 重新激活 ──
   ipcMain.handle('history:reactivate', async (_e, c) => {
-    const h = rsh();
-    _dualWrite(h, c, { ...h[c], stage: 'cold', usedSentences: [], sentContacts: [], lastSent: new Date().toISOString(), archivedAt: undefined });
-    wsh(h);
-    // ponytail: 同步重置 SQLite 中该公司联系人的阶段
     try {
-      const contactsDb3 = require('../services/contacts-db');
-      const all = contactsDb3.listAll();
+      const contactsDb = require('../services/contacts-db');
+      const all = contactsDb.listAll();
       for (const ct of all) {
-        const cn = ct.company_name || ct.company || '';
-        if (cn === c) contactsDb3.setStage(ct.id, 'cold', 'manual:reactivate');
+        if ((ct.company_name || ct.company || '') === c) {
+          contactsDb.setStage(ct.id, 'cold', 'manual:reactivate');
+          contactsDb.update(ct.id, { last_sent_at: '', last_sent_acct: '' });
+        }
       }
     } catch { /* 降级 */ }
     return { ok: true };
   });
+
+  // ── 日志查询（SQLite）──
   ipcMain.handle('history:getLog', async (_e, params) => {
-    try {
-      const sendLog = require('../services/send-log-db');
-      return sendLog.list(params || {});
-    } catch (e) { Log.error("历史", "查询发送日志失败", e.stack); return { total: 0, records: [] }; }
+    try { return require('../services/send-log-db').list(params || {}); }
+    catch (e) { Log.error("历史", "查询发送日志失败", e.stack); return { total: 0, records: [] }; }
   });
   ipcMain.handle('history:getDates', async () => {
-    try {
-      const sendLog = require('../services/send-log-db');
-      return { ok: true, data: sendLog.getDates() };
-    } catch (e) { Log.error("历史", "查询发送日期失败", e.stack); return { ok: true, data: [] }; }
+    try { return { ok: true, data: require('../services/send-log-db').getDates() }; }
+    catch (e) { Log.error("历史", "查询发送日期失败", e.stack); return { ok: true, data: [] }; }
   });
   ipcMain.handle('history:getBody', async (_e, bodyId) => {
     if (!bodyId) return '';
-    const sendLog = require('../services/send-log-db');
-    return sendLog.getBody(bodyId);
+    return require('../services/send-log-db').getBody(bodyId);
   });
   ipcMain.handle('history:delete', async (_e, indices) => {
     if (!indices?.length) return { ok: false };

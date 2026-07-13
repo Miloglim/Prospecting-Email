@@ -17,8 +17,9 @@ let _delayTotal = 0;
 // ── 自动退信定时器 ──
 let _autoBounceTimer = null;
 
-// ── 联系人标签回写：发送成功后标记 last_sent_at / last_sent_acct ─────
-function _tagContacts(emails, accountId, accountLabel, stage) {
+// ── 联系人标签回写：发送成功后自动推进阶段 + 标记 last_sent_at ─────
+const STAGE_ORDER = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
+function _tagContacts(emails, accountId, accountLabel, currentStage) {
   try {
     const contactsDb = require('./contacts-db');
     const now = new Date().toISOString();
@@ -26,8 +27,12 @@ function _tagContacts(emails, accountId, accountLabel, stage) {
       const existing = contactsDb.getByEmail(addr);
       if (!existing) continue;
       contactsDb.update(existing.id, { last_sent_at: now, last_sent_acct: accountLabel || '' });
-      if (stage && stage !== (existing.stage || 'cold')) {
-        contactsDb.setStage(existing.id, stage, 'send');
+      // ponytail: 每封发成功后自动推进到下一阶段
+      const cur = existing.stage || 'cold';
+      const idx = STAGE_ORDER.indexOf(cur);
+      if (idx >= 0 && idx < STAGE_ORDER.length - 1) {
+        const next = STAGE_ORDER[idx + 1];
+        if (next !== cur) contactsDb.setStage(existing.id, next, 'send');
       }
     }
   } catch { /* 静默跳过 */ }

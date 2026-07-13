@@ -40,18 +40,6 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:import', async (_e, clients) => {
     contactsCache = null;
     const existing = readContacts();
-    // 读取删除记录，5天内删除的邮箱跳过
-    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
-    let deletedEmails = new Set();
-    try {
-      if (fs.existsSync(delLogPath)) {
-        const delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
-        const cutoff = Date.now() - 5 * 86400000;
-        for (const e of delLog) {
-          if (e.ts > cutoff) deletedEmails.add(e.email.toLowerCase().trim());
-        }
-      }
-    } catch { /* 静默 */ }
     // email 为唯一去重键（对齐 HubSpot 标准）
     const emailIndex = new Map();
     for (const c of existing) {
@@ -64,7 +52,6 @@ function register(ipcMain, deps) {
       const cleanEmail = (c.email || '').trim();
       if (!cleanEmail) { skipped++; continue; }
       if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; invalidEmails.push({ company: c.company || '未知', email: cleanEmail }); continue; }
-      if (deletedEmails.has(cleanEmail.toLowerCase().trim())) { skipped++; continue; }
       // 国家名标准化
       if (c.country) c.country = _normalizeCountry(c.country);
 
@@ -153,38 +140,22 @@ function register(ipcMain, deps) {
     const target = readContacts().find(c => c.id === id);
     if (target?.company && target?.email) {
       removeFromSendHistory(target.company, [target.email]);
-      _logDeletion(target.email, target.company);
     }
     db.remove(id);
     return { ok: true };
   });
 
-  // 批量删除
   ipcMain.handle('contacts:deleteMany', async (_e, ids) => {
     const idSet = new Set(ids || []);
-    const contacts = readContacts();
-    const toDelete = contacts.filter(c => idSet.has(c.id));
+    const toDelete = readContacts().filter(c => idSet.has(c.id));
     for (const target of toDelete) {
       if (target.company && target.email) {
         removeFromSendHistory(target.company, [target.email]);
-        _logDeletion(target.email, target.company);
       }
     }
     db.removeMany([...idSet]);
     return { ok: true, deleted: toDelete.length };
   });
-
-  function _logDeletion(email, company) {
-    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
-    try {
-      let delLog = [];
-      if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
-      const cutoff = Date.now() - 5 * 86400000;
-      delLog = delLog.filter(e => e.ts > cutoff);
-      delLog.push({ email, company, ts: Date.now() });
-      fs.writeFileSync(delLogPath, JSON.stringify(delLog));
-    } catch { /* 静默 */ }
-  }
 
   ipcMain.handle('contacts:deleteAll', async () => {
     Log.warn("联系人", "全部清除");
@@ -198,7 +169,6 @@ function register(ipcMain, deps) {
     db.pragma("foreign_keys = ON");
     // ponytail: 删掉迁移源文件，防止重启后 migrateFromJson 重新导入
     try { fs.unlinkSync(path.join(APP_ROOT, 'data', 'contacts.json')); } catch { /* 文件已删 */ }
-    try { fs.unlinkSync(path.join(APP_ROOT, 'data', 'deleted-contacts.json')); } catch { /* 文件已删 */ }
     return { ok: true };
   });
 
@@ -209,18 +179,6 @@ function register(ipcMain, deps) {
     const emails = targets.map(c => c.email).filter(Boolean);
     // ponytail: SQLite 模式用 db.remove 真删，writeContacts（upsert）不会删
     db.removeMany(targets.map(c => c.id).filter(Boolean));
-    // 记录删除日志
-    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
-    try {
-      let delLog = [];
-      if (fs.existsSync(delLogPath)) delLog = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
-      const cutoff = Date.now() - 5 * 86400000;
-      delLog = delLog.filter(e => e.ts > cutoff);
-      for (const t of targets) {
-        if (t.email) delLog.push({ email: t.email, company: t.company, ts: Date.now() });
-      }
-      fs.writeFileSync(delLogPath, JSON.stringify(delLog));
-    } catch { /* 静默 */ }
 
     // 级联清理公司状态
     removeFromSendHistory(company, emails);
@@ -358,18 +316,6 @@ function register(ipcMain, deps) {
     return (contact?.followup_note || '').split('\n').filter(Boolean);
   });
 
-  // ── 读取删除记录 ──────────────────────────────────────────────────────────
-  ipcMain.handle('contacts:deletedLog', async () => {
-    const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
-    try {
-      if (fs.existsSync(delLogPath)) {
-        const log = JSON.parse(fs.readFileSync(delLogPath, 'utf-8'));
-        const cutoff = Date.now() - 5 * 86400000;
-        return log.filter(e => e.ts > cutoff).sort((a, b) => b.ts - a.ts);
-      }
-    } catch { /* 静默 */ }
-    return [];
-  });
 
   ipcMain.handle('companies:update', async (_e, id, data) => {
     try {

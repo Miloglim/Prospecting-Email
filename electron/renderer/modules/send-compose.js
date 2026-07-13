@@ -665,12 +665,7 @@ export async function renderSelectedCards() {
       const card = S.selectedCards[name];
       const members = S.sendCompanies[name] || [];
       const emailCount = members.filter(m => m.email).length;
-      const sentSet = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
-      const sentCount = members.filter(m => sentSet.has((m.email || '').toLowerCase().trim())).length;
-      const unsentCount = emailCount - sentCount;
-      const countHtml = unsentCount < emailCount && sentCount > 0
-        ? `<span style="color:var(--accent);font-weight:600">${unsentCount}</span><span style="color:var(--text-secondary)">/${emailCount}人待发</span>`
-        : `<span>${emailCount}人</span>`;
+      const countHtml = `<span>${emailCount}人</span>`;
       const ctry = escapeHtml(members[0]?.country || '');
       const nextLabel = S.STAGE_LABELS_SEND[S.STAGE_NEXT_SEND[card.stage]] || 'F1';
       const typeTag = clientTypeTag(card.type);

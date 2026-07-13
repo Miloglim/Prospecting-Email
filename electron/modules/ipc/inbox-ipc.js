@@ -53,11 +53,11 @@ function register(ipcMain, deps) {
   ipcMain.handle('inbox:markProcessed', async (_e, i) => { inbox.markProcessed(i); return { ok: true }; });
   ipcMain.handle('inbox:linkContact', async (_e, i, cid, co) => { inbox.linkContact(i, cid, co); return { ok: true }; });
   ipcMain.handle('inbox:delete', async (_e, i) => { inbox.deleteMail(i); return { ok: true }; });
-  ipcMain.handle('inbox:syncTags', async () => inbox.syncAllTags());
   ipcMain.handle('inbox:removeMatchedContact', async (_e, index, email) => { inbox.removeMatchedContact(index, email); return { ok: true }; });
   ipcMain.handle('inbox:removeMatchedContactsBatch', async (_e, items) => { inbox.removeMatchedContactsBatch(items); return { ok: true }; });
   ipcMain.handle('inbox:getBounceCount', async () => inbox.getBounceCount());
   ipcMain.handle('inbox:toggleImportant', async (_e, i, key) => { inbox.toggleImportantByKey(key); return { ok: true }; });
+  ipcMain.handle('inbox:setType', async (_e, index, newType) => ({ ok: inbox.setMailType(index, newType) }));
   ipcMain.handle('inbox:clear', async () => {
     try {
       const db = require('../services/db').getDb();
@@ -79,12 +79,9 @@ function register(ipcMain, deps) {
     }, FAST_COOLDOWN_MS);
   };
 
-  // 启动：常规模式，30 秒后首次拉；拉完后执行一次全量标签同步
+  // 启动：常规模式，30 秒后首次拉
   _startPolling(NORMAL_INTERVAL_MS);
   setTimeout(() => _doFetch(), 30000);
-  setTimeout(() => {
-    try { inbox.syncAllTags(); } catch { /* 降级 */ }
-  }, 60000); // 首次拉取完成后 30 秒缓冲
 }
 
 module.exports = { register };

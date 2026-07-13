@@ -342,7 +342,7 @@ export function renderContactDetail(company) {
     </div>
     <div class="contacts-detail-body" style="overflow-x:auto">
       <table style="white-space:nowrap">
-        <thead><tr><th>公司</th><th>名</th><th>姓</th><th>邮箱</th><th>职位</th><th>电话</th><th>领英</th><th>国家</th><th>品类</th><th>客户类型</th><th>阶段</th><th>状态</th><th>机会</th><th>标签</th><th>对接人</th><th>跟进人</th><th>备注</th><th>操作</th></tr></thead>
+        <thead><tr><th>名</th><th>姓</th><th>邮箱</th><th>职位</th><th>电话</th><th>领英</th><th>国家</th><th>品类</th><th>客户类型</th><th>阶段</th><th>状态</th><th>机会</th><th>标签</th><th>对接人</th><th>跟进人</th><th>备注</th><th>操作</th></tr></thead>
         <tbody>
           ${members.map(m => {
             const contactTags = m.tags || [];
@@ -361,7 +361,6 @@ export function renderContactDetail(company) {
             const tagStr = (m.tags || []).join(',');
             return `
             <tr data-contact-id="${m.id}">
-              <td>${escapeHtml(m.company || m.company_name || '')}</td>
               <td>${escapeHtml(m.firstName || m.first_name || '')}</td>
               <td>${escapeHtml(m.lastName || m.last_name || '')}</td>
               <td>${escapeHtml(m.email)}</td>
@@ -784,19 +783,6 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
       renderContactsList();
       showToast(`已添加 ${company}`, 'ok');
     },
-  });
-});
-// ── 删除记录按钮 ──────────────────────────────────────────────────────────
-document.getElementById('contacts-del-log-btn')?.addEventListener('click', async () => {
-  const log = await window.electronAPI.getDeletedContactsLog();
-  if (!log.length) { showToast('暂无删除记录', 'info'); return; }
-  showModal({
-    title: `删除记录 (${log.length}条，保留5天)`,
-    message: `
-      <style>.dl-table{width:100%;border-collapse:collapse;font-size:12px}.dl-table th,.dl-table td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}.dl-table th{color:var(--text-secondary);font-weight:500}</style>
-      <table class="dl-table"><thead><tr><th>邮箱</th><th>公司</th><th>删除时间</th></tr></thead>
-      <tbody>${log.map(e => `<tr><td>${escapeHtml(e.email)}</td><td>${escapeHtml(e.company)}</td><td>${new Date(e.ts).toLocaleString('zh-CN')}</td></tr>`).join('')}</tbody></table>`,
-    buttons: [{ text: '关闭', value: true, primary: true }],
   });
 });
 // ── AI 分类按钮 ──────────────────────────────────────────────────────────
