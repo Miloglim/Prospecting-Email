@@ -79,9 +79,12 @@ function register(ipcMain, deps) {
     }, FAST_COOLDOWN_MS);
   };
 
-  // 启动：常规模式，30 秒后首次拉
+  // 启动：常规模式，30 秒后首次拉；拉完后执行一次全量标签同步
   _startPolling(NORMAL_INTERVAL_MS);
   setTimeout(() => _doFetch(), 30000);
+  setTimeout(() => {
+    try { inbox.syncAllTags(); } catch { /* 降级 */ }
+  }, 60000); // 首次拉取完成后 30 秒缓冲
 }
 
 module.exports = { register };

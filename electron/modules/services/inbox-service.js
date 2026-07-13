@@ -219,6 +219,7 @@ function _readCache() {
       r.contactCompany = r.contact_company;
       r.contactId = r.contact_id;
       r.contactDbId = r.contact_db_id;
+      r.accountId = r.account_id;
       r.accountLabel = r.account_label;
       return r;
     });
@@ -287,10 +288,16 @@ function _syncTagsToContacts(newMails) {
   for (const m of newMails) {
     const tag = TYPE_TAG[m.type];
     if (!tag) continue;
+    // ponytail: 实时从 SQLite 按邮箱匹配联系人，不依赖缓存的 contactDbId（可能过期/为空）
     const ids = new Set();
-    if (m.contactDbId) ids.add(m.contactDbId);
+    const addByEmail = (email) => {
+      if (!email) return;
+      const contact = contactsDb.getByEmail(email);
+      if (contact) ids.add(contact.id);
+    };
+    addByEmail(m.from);
     for (const c of (m.matchedContacts || [])) {
-      if (c.matched && c.contactId) ids.add(c.contactId);
+      addByEmail(c.email);
     }
     for (const id of ids) {
       if (contactsDb.addTag(id, tag)) synced++;
@@ -300,6 +307,7 @@ function _syncTagsToContacts(newMails) {
     }
   }
   if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
+  return synced;
 }
 
 // ── 用 mailparser 解析 raw source → 统一格式 ────────────────────────────────
@@ -770,8 +778,8 @@ function removeMatchedContactsBatch(items) {
 function syncAllTags() {
   const mails = _readCache();
   if (!mails.length) return { ok: true, synced: 0, message: '缓存为空' };
-  _syncTagsToContacts(mails);
-  return { ok: true, synced: 1, message: `已扫描 ${mails.length} 封缓存邮件` };
+  const n = _syncTagsToContacts(mails);
+  return { ok: true, synced: n, message: `已扫描 ${mails.length} 封邮件，同步 ${n} 个标签` };
 }
 
 module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, syncAllTags, getBounceCount, toggleImportant, toggleImportantByKey, _migrateInboxFromJson };
