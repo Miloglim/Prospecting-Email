@@ -40,7 +40,7 @@ function register(ipcMain) {
       const norm = (s) => String(s || "").trim().replace(/\s+/g, "").toLowerCase();
       const FIELD_KEYS = {
         company: ["公司", "公司名称", "公司全称", "公司名", "客户名称", "客户", "company"],
-        email: ["邮箱", "邮箱地址", "邮件", "收件人", "email", "e-mail", "to"],
+        email: ["邮箱", "邮箱地址", "邮件", "收件人", "联系方式", "email", "e-mail", "to"],
         country: ["国家", "country"],
         category: ["品类", "行业", "分类", "category", "industry"],
         website: ["网站", "网址", "官网", "website", "url"],
