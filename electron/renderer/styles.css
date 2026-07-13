@@ -270,24 +270,6 @@
   --sidebar-bg: #1a1a1a;
   --sidebar-text: #ffffff;
 }
-[data-theme="dark"] {
-  --primary: #e0e0e0;
-  --primary-light: #9e9e9e;
-  --accent: #26a69a;
-  --bg: #121212;
-  --card-bg: #1e1e1e;
-  --text: #e0e0e0;
-  --text-secondary: #9e9e9e;
-  --border: #2e2e2e;
-  --input-bg: #262626;
-  --success: #4caf50;
-  --warning: #ff9800;
-  --danger: #ef5350;
-  --nav-bg: #181818;
-  --sidebar-bg: #1a1a1a;
-  --sidebar-text: #ffffff;
-}
-
 /* ── Apple 风格滚动条 ───────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

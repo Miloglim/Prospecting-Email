@@ -6,9 +6,15 @@ function splitName(fullName) {
   if (!fullName || !fullName.trim()) return { firstName: "", lastName: "" };
   const cleaned = fullName.replace(/\(.*?\)/g, "").replace(/\s{2,}/g, " ").trim();
   if (!cleaned) return { firstName: "", lastName: "" };
+  // ponytail: first.last 邮箱式用户名 → 拆开并首字母大写
+  if (/^[a-z]+\.[a-z]+$/i.test(cleaned)) {
+    const [fn, ln] = cleaned.split(".");
+    return { firstName: fn.charAt(0).toUpperCase() + fn.slice(1).toLowerCase(), lastName: ln.charAt(0).toUpperCase() + ln.slice(1).toLowerCase() };
+  }
   const parts = cleaned.split(/\s+/);
   if (parts.length === 1) return { firstName: parts[0], lastName: "" };
-  return { firstName: parts[0], lastName: parts[parts.length - 1] };
+  // ponytail: 西语名惯例 — 前面所有词为名，最后一个词为姓
+  return { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1] };
 }
 
 /** 国家名标准化映射（中文/西语 → 英文） */

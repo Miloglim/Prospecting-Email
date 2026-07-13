@@ -86,29 +86,35 @@ function upsert(data) {
   const email = (data.email || "").toLowerCase().trim();
   if (!email) return null;
 
-  // 处理公司：有 company 名但无 company_id → 自动创建公司
-  let companyId = data.company_id || data.companyId || "";
+  // 处理公司：只用公司名走 ensureCompany（不信任外部短 ID），否则邮箱域名兜底
   const companyName = data.company_name || data.company || "";
-  if (!companyId && companyName) companyId = ensureCompany(companyName, { country: data.country || data.company_country || "", website: data.website || "" });
+  const companyId = ensureCompany(
+    companyName || (email.split('@')[1] || '未知公司').trim(),
+    { country: data.country || data.company_country || "", website: data.website || "" }
+  );
 
   const existing = db.prepare("SELECT id FROM contacts WHERE email = ?").get(email);
   if (existing) return update(existing.id, data);
 
   const id = data.id || uuid();
   const now = new Date().toISOString();
+  // ponytail: 完整 INSERT（关外键避免 company_id 空值报错），字段名兼容新旧两种命名
+  db.pragma("foreign_keys = OFF");
   db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,created_at,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    id, data.company_id || "", email, data.first_name || "", data.last_name || "",
-    data.title || "", data.phone || "", data.linkedin || "", data.position || "",
-    data.contactName || data.contact_name || "",
-    data.client_type || "unlabeled", data.category || "",
+    id, companyId, email,
+    data.first_name || data.firstName || "", data.last_name || data.lastName || "",
+    data.title || data.position || "", data.phone || "", data.linkedin || "",
+    data.position || "", data.contact_name || data.contactName || "",
+    data.client_type || data.clientType || "unlabeled", data.category || "",
     data.stage || "cold", data.last_sent_at || data._sentAt || "",
     data.last_sent_acct || data._sentAccount || "",
     data.is_bounced || data.bounced ? 1 : 0,
     data.bounce_type || data.bounceType || "", data.bounce_reason || data.bounceReason || "",
-    JSON.stringify(data.tags || []), data._suspicious ? 1 : 0,
-    data.followup_note || "", now, now,
+    JSON.stringify(data.tags || []), data.assignee || "",
+    data._suspicious ? 1 : 0, data.followup_note || "", now, now
   );
+  db.pragma("foreign_keys = ON");
   return getById(id);
 }
 
@@ -228,8 +234,15 @@ function listCompanies() {
 function migrateFromJson(contactsPath, sendLogPath) {
   const fs = require("fs");
   const db = getDb();
+  // ponytail: 用 _schema 标记替代 COUNT 判断，防止清空联系人后重启反复迁移
+  const migrated = db.prepare("SELECT 1 FROM _schema WHERE version = 999").get();
+  if (migrated) return { migrated: 0, message: "已迁移，跳过" };
   const existing = db.prepare("SELECT COUNT(*) as n FROM contacts").get().n;
-  if (existing > 0) return { migrated: 0, message: "已有数据，跳过迁移" };
+  if (existing > 0) {
+    // 已有数据但缺标记 → 补写（兼容旧版本未写标记的情况）
+    db.prepare("INSERT OR IGNORE INTO _schema (version) VALUES (999)").run();
+    return { migrated: 0, message: "已有数据，跳过迁移" };
+  }
 
   let contacts = [];
   try { if (fs.existsSync(contactsPath)) contacts = JSON.parse(fs.readFileSync(contactsPath, "utf-8")); } catch { return { migrated: 0, error: "contacts.json 读取失败" }; }
@@ -280,6 +293,8 @@ function migrateFromJson(contactsPath, sendLogPath) {
     }
   });
   batch();
+  // ponytail: 迁移成功后写标记，防止清空联系人后重启反复迁移
+  db.prepare("INSERT OR IGNORE INTO _schema (version) VALUES (999)").run();
   Log.info("DB", `迁移完成: ${n} 条联系人`);
   return { migrated: n };
 }

@@ -95,6 +95,7 @@ document.getElementById('clients-import-btn')?.addEventListener('click', async (
   const result = await window.electronAPI.importContacts(S.clientsData);
   let msg = `新增 ${result.added} 位联系人（总计 ${result.total} 位）`;
   if (result.skipped > 0) msg += `\n跳过 ${result.skipped} 条重复记录`;
+  if (result.writeFailed > 0) msg += `\n❌ ${result.writeFailed} 条写入数据库失败（参数缺失，请检查导入数据）`;
   if (result.invalidEmail > 0) {
     const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
     const more = result.invalidEmail > 10 ? `\n...等共 ${result.invalidEmail} 个` : '';

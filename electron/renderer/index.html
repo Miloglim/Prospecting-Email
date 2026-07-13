@@ -2,8 +2,8 @@
 <html lang="es">
 <head>
   <script>
-    // 同步读取主题，避免页面闪烁
-    try { var t = JSON.parse(localStorage.getItem('app-theme') || '"light"'); document.documentElement.setAttribute('data-theme', t); } catch(e) {}
+    // 固定浅色模式
+    document.documentElement.setAttribute('data-theme', 'light');
   </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -687,12 +687,6 @@
         <div class="setting-card">
           <div class="setting-card-header"><h3><span data-icon="palette"></span> 外观</h3><span class="setting-status"></span></div>
           <div class="setting-card-body">
-            <div class="form-row"><label>主题</label>
-              <select id="cfg-general-theme">
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-              </select>
-            </div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-general-loader-anim"> 关闭加载动画（启动直接进入）</label></div>
           </div>
         </div>

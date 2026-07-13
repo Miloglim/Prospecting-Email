@@ -37,7 +37,6 @@ const CFG_KEYS = [
   { id: 'cfg-backcheck-filter', path: 'backcheck.filterEnabled', isBool: true },
   { id: 'cfg-general-auto-launch', path: 'general.autoLaunch', isBool: true },
   { id: 'cfg-general-close-action', path: 'general.closeAction' },
-  { id: 'cfg-general-theme', path: 'general.theme' },
   { id: 'cfg-general-loader-anim', path: 'general.loaderAnimDisabled', isBool: true },
 ];
 
@@ -54,7 +53,7 @@ export function loadSettingsIntoForm(config) {
     'cfg-schedule-batch-size': '12', 'cfg-schedule-batch-pause-min': '94',
     'cfg-schedule-batch-pause-max': '167',
     'cfg-schedule-batch-item-delay-min': '8', 'cfg-schedule-batch-item-delay-max': '16',
-    'cfg-general-close-action': 'tray', 'cfg-general-theme': 'light',
+    'cfg-general-close-action': 'tray',
     'cfg-template-mode': 'adaptive',
   };
   for (const key of CFG_KEYS) {
@@ -301,29 +300,12 @@ document.getElementById('cfg-general-auto-launch')?.addEventListener('change', a
   try { await window.electronAPI.setAutoLaunch(e.target.checked); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 });
 
-// 主题切换：即时生效 + 持久化
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme || 'light');
-  try { localStorage.setItem('app-theme', JSON.stringify(theme || 'light')); } catch { /* 渲染层降级：操作失败不影响 UI */ }
-}
-document.getElementById('cfg-general-theme')?.addEventListener('change', (e) => {
-  applyTheme(e.target.value);
-});
-
-// 初始化时回读系统自启状态 + 主题
+// 初始化时回读系统自启状态
 (async () => {
   try {
     const r = await window.electronAPI.getAutoLaunch();
     const el = document.getElementById('cfg-general-auto-launch');
     if (el && r?.enabled) el.checked = true;
-  } catch { /* 渲染层降级：操作失败不影响 UI */ }
-  // 主题从 config 加载后应用，如果没有配置则默认浅色
-  try {
-    const cfg = await window.electronAPI.loadConfig();
-    const theme = cfg?.general?.theme || 'light';
-    applyTheme(theme);
-    const themeEl = document.getElementById('cfg-general-theme');
-    if (themeEl) themeEl.value = theme;
   } catch { /* 渲染层降级：操作失败不影响 UI */ }
 })();
 

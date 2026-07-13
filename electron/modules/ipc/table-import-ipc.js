@@ -47,7 +47,7 @@ function register(ipcMain) {
         linkedin: ["linkedin", "领英"],
         firstName: ["名", "firstname", "first_name"],
         lastName: ["姓", "lastname", "last_name"],
-        contactName: ["姓名", "联系人", "姓名职位", "contact"],
+        contactName: ["姓名", "姓名 | 职位", "联系人", "姓名职位", "contact"],
         position: ["职位", "职务", "title", "position"],
         phone: ["电话", "手机", "phone", "tel", "mobile"],
         assignee: ["跟进人", "负责人", "assignee", "owner"],

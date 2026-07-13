@@ -17,12 +17,17 @@ function register(ipcMain, deps) {
   }
 
   function writeContacts(contacts, caller) {
-    // SQLite 模式下 writeContacts 仅用于批量覆盖场景（如导入后全量替换）
-    // 日常增删改走 db.upsert / db.update / db.remove
-    Log.info('[DB]', `${caller}: 批量写入 ${contacts.length} 条`);
+    // SQLite 模式下 writeContacts 用于批量导入场景
+    // 日常增删改用 db.upsert / db.update / db.remove
+    let ok = 0, fail = 0;
     for (const c of contacts) {
-      try { db.upsert(c); } catch (e) { Log.warn('[DB]', `写入失败: ${c.email}`, e.stack); }
+      try { db.upsert(c); ok++; } catch (e) {
+        fail++;
+        if (fail === 1) Log.error('[DB]', `首条失败样例: ${c.email} | 错误: ${e.message}`, e.stack);
+      }
     }
+    Log.info('[DB]', `${caller}: 批量写入 ${contacts.length} 条, 成功${ok}, 失败${fail}`);
+    return { ok, fail };
   }
 
 
@@ -123,9 +128,10 @@ function register(ipcMain, deps) {
         added++;
       }
     }
-    writeContacts(existing);
-    Log.info("联系人", "导入: +" + added + " 新增, " + updated + " 更新, " + skipped + " 跳过(无邮箱), " + invalidEmail + " 无效邮箱, 总计" + existing.length);
-    return { total: existing.length, added, updated, skipped, invalidEmail, invalidEmails };
+    const wr = writeContacts(existing, 'contacts-ipc');
+    const writeFailed = wr.fail || 0;
+    Log.info("联系人", `导入: +${added} 新增, ${updated} 更新, ${skipped} 跳过(无邮箱), ${invalidEmail} 无效邮箱, ${writeFailed} 写入失败, 总计${existing.length - writeFailed}`);
+    return { total: existing.length - writeFailed, added: added - writeFailed, updated, skipped, invalidEmail, invalidEmails, writeFailed };
   });
 
   // 清理 send-history 中指定公司的联系人
@@ -144,23 +150,19 @@ function register(ipcMain, deps) {
   }
 
   ipcMain.handle('contacts:delete', async (_e, id) => {
-    contactsCache = null;
-    let contacts = readContacts();
-    const target = contacts.find(c => c.id === id);
+    const target = readContacts().find(c => c.id === id);
     if (target?.company && target?.email) {
       removeFromSendHistory(target.company, [target.email]);
       _logDeletion(target.email, target.company);
     }
-    contacts = contacts.filter(c => c.id !== id);
-    writeContacts(contacts, 'contacts-ipc');
+    db.remove(id);
     return { ok: true };
   });
 
-  // 批量删除（一次读盘写盘）
+  // 批量删除
   ipcMain.handle('contacts:deleteMany', async (_e, ids) => {
-    contactsCache = null;
     const idSet = new Set(ids || []);
-    let contacts = readContacts();
+    const contacts = readContacts();
     const toDelete = contacts.filter(c => idSet.has(c.id));
     for (const target of toDelete) {
       if (target.company && target.email) {
@@ -168,8 +170,7 @@ function register(ipcMain, deps) {
         _logDeletion(target.email, target.company);
       }
     }
-    contacts = contacts.filter(c => !idSet.has(c.id));
-    writeContacts(contacts, 'contacts-ipc');
+    db.removeMany([...idSet]);
     return { ok: true, deleted: toDelete.length };
   });
 
@@ -187,18 +188,27 @@ function register(ipcMain, deps) {
 
   ipcMain.handle('contacts:deleteAll', async () => {
     Log.warn("联系人", "全部清除");
-    writeContacts([]);
+    const { getDb } = require('./services/db');
+    const db = getDb();
+    db.pragma("foreign_keys = OFF");
+    db.exec("DELETE FROM contacts");
+    db.exec("DELETE FROM opportunities");
+    db.exec("DELETE FROM companies");
+    db.exec("DELETE FROM interactions");
+    db.pragma("foreign_keys = ON");
+    // ponytail: 删掉迁移源文件，防止重启后 migrateFromJson 重新导入
+    try { fs.unlinkSync(path.join(APP_ROOT, 'data', 'contacts.json')); } catch { /* 文件已删 */ }
+    try { fs.unlinkSync(path.join(APP_ROOT, 'data', 'deleted-contacts.json')); } catch { /* 文件已删 */ }
     return { ok: true };
   });
 
   ipcMain.handle('contacts:deleteCompany', async (_e, company) => {
-    contactsCache = null;
-    let contacts = readContacts();
-    const before = contacts.length;
+    const contacts = readContacts();
     const targets = contacts.filter(c => c.company === company);
+    const deleted = targets.length;
     const emails = targets.map(c => c.email).filter(Boolean);
-    contacts = contacts.filter(c => c.company !== company);
-    writeContacts(contacts, 'contacts-ipc');
+    // ponytail: SQLite 模式用 db.remove 真删，writeContacts（upsert）不会删
+    db.removeMany(targets.map(c => c.id).filter(Boolean));
     // 记录删除日志
     const delLogPath = path.join(APP_ROOT, 'data', 'deleted-contacts.json');
     try {
@@ -227,8 +237,8 @@ function register(ipcMain, deps) {
       }
     } catch (e) { Log.error('联系人', '删除公司后更新背调状态失败', e.stack); }
 
-    Log.info("联系人", "删除公司: " + company + ", " + (before - contacts.length) + "人");
-    return { ok: true, deleted: before - contacts.length };
+    Log.info("联系人", `删除公司: ${company}, ${deleted}人`);
+    return { ok: true, deleted };
   });
 
   ipcMain.handle('contacts:updateBounce', async (_e, email, bounceData) => {
@@ -261,27 +271,15 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('contacts:search', async (_e, query) => {
-    const contacts = readContacts();
-    const q = query.toLowerCase();
-    return contacts.filter(c =>
-      c.company.toLowerCase().includes(q) ||
-      (c.country || '').toLowerCase().includes(q) ||
-      (c.category || '').toLowerCase().includes(q) ||
-      (c.email || '').toLowerCase().includes(q)
-    );
+    return db.search(query);
   });
 
   ipcMain.handle('contacts:updateCountry', async (_e, companyName, newCountry) => {
-    const contacts = readContacts();
-    let updated = 0;
-    for (const c of contacts) {
-      if ((c.company || '').trim() === companyName.trim()) {
-        c.country = newCountry;
-        updated++;
-      }
-    }
-    if (updated > 0) writeContacts(contacts, 'contacts-ipc');
-    return { ok: true, updated, total: contacts.filter(c => (c.company || '').trim() === companyName.trim()).length };
+    // ponytail: country 存在 companies 表，非 contacts 表
+    const { getDb } = require('./services/db');
+    const result = getDb().prepare("UPDATE companies SET country = ?, updated_at = ? WHERE name = ?")
+      .run(newCountry, new Date().toISOString(), companyName.trim());
+    return { ok: true, updated: result.changes };
   });
 
   // 决策人深挖
@@ -346,18 +344,18 @@ function register(ipcMain, deps) {
   // ── 跟进备注 ──────────────────────────────────────────────────────────────
   ipcMain.handle('contacts:saveFollowup', async (_e, contactId, text) => {
     if (!text || !text.trim()) return { ok: false, error: '内容为空' };
-    const contacts = readContacts();
-    const c = contacts.find(x => x.id === contactId);
-    if (!c) return { ok: false, error: '联系人不存在' };
-    c.followups = c.followups || [];
-    c.followups.push({ text: text.trim(), ts: Date.now() });
-    writeContacts(contacts, 'contacts-ipc');
-    return { ok: true, followups: c.followups };
+    const contact = db.getById(contactId);
+    if (!contact) return { ok: false, error: '联系人不存在' };
+    const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const entry = `[${ts}] ${text.trim()}`;
+    const prev = (contact.followup_note || '').trim();
+    const updated = prev ? prev + '\n' + entry : entry;
+    db.update(contactId, { followup_note: updated });
+    return { ok: true, text: updated };
   });
   ipcMain.handle('contacts:getFollowups', async (_e, contactId) => {
-    const contacts = readContacts();
-    const c = contacts.find(x => x.id === contactId);
-    return c?.followups || [];
+    const contact = db.getById(contactId);
+    return (contact?.followup_note || '').split('\n').filter(Boolean);
   });
 
   // ── 读取删除记录 ──────────────────────────────────────────────────────────
@@ -384,62 +382,28 @@ function register(ipcMain, deps) {
 
   // ── 单个联系人 upsert（email 唯一）─────────────────────────────────────
   ipcMain.handle('contacts:upsert', async (_e, contact) => {
-    contactsCache = null;
-    const contacts = readContacts();
     const email = (contact.email || '').toLowerCase().trim();
-    if (!email || !EMAIL_RE.test(contact.email)) {
-      return { ok: false, error: '无效邮箱' };
+    if (!email || !EMAIL_RE.test(contact.email)) return { ok: false, error: '无效邮箱' };
+
+    const existing = db.getByEmail(email);
+    // 预处理：名称拆分 + 公司解析
+    if (!contact.firstName && !contact.lastName && contact.contactName) {
+      const split = _splitName(contact.contactName);
+      contact.firstName = split.firstName;
+      contact.lastName = split.lastName;
+    }
+    if (contact.company) {
+      const { company, _suspicious } = markSuspicious(contact.company);
+      contact.company = company;
+      contact._suspicious = _suspicious;
+    }
+    if (!contact.clientType || contact.clientType === 'unlabeled') {
+      contact.clientType = classifyClient(contact.company || '', contact.category || '');
     }
 
-    const existing = contacts.find(c => (c.email || '').toLowerCase().trim() === email);
-    if (existing) {
-      // 更新已有记录
-      if (contact.company) {
-        existing.company = contact.company;
-        const { companyId } = resolveCompanyId(contact.company);
-        if (companyId) existing.companyId = companyId;
-      }
-      if (contact.country) existing.country = contact.country;
-      if (contact.category) existing.category = contact.category;
-      if (contact.website) existing.website = contact.website;
-      if (contact.linkedin) existing.linkedin = contact.linkedin;
-      if (contact.contactName) existing.contactName = contact.contactName;
-      if (contact.position) existing.position = contact.position;
-      if (contact.phone) existing.phone = contact.phone;
-      if (contact.firstName) existing.firstName = contact.firstName;
-      if (contact.lastName) existing.lastName = contact.lastName;
-      if (contact.clientType && contact.clientType !== 'unlabeled') existing.clientType = contact.clientType;
-      // 首次有 contactName 时自动拆分
-      if ((contact.contactName || contact.firstName) && !existing.firstName && !existing.lastName) {
-        const split = _splitName(contact.firstName
-          ? `${contact.firstName} ${contact.lastName || ''}`.trim()
-          : (contact.contactName || ''));
-        existing.firstName = split.firstName;
-        existing.lastName = split.lastName;
-      }
-      writeContacts(contacts, 'contacts-ipc');
-      return { ok: true, action: 'updated', contact: existing };
-    }
-
-    // 新建
-    const split = (contact.firstName || contact.lastName)
-      ? {} : _splitName(contact.contactName || '');
-    const { company, _suspicious } = markSuspicious(contact.company || '');
-    const { companyId } = resolveCompanyId(company);
-    const newContact = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      company, companyId, country: contact.country || '', category: contact.category || '',
-      email: contact.email.trim(), website: contact.website || '', linkedin: contact.linkedin || '',
-      firstName: contact.firstName || split.firstName || '',
-      lastName: contact.lastName || split.lastName || '',
-      contactName: contact.contactName || '', position: contact.position || '', phone: contact.phone || '',
-      clientType: contact.clientType || classifyClient(company, contact.category),
-      tags: [], tag: '',
-      _suspicious, addedAt: new Date().toISOString(),
-    };
-    contacts.push(newContact);
-    writeContacts(contacts, 'contacts-ipc');
-    return { ok: true, action: 'created', contact: newContact };
+    // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
+    const result = db.upsert(contact);
+    return { ok: true, action: existing ? 'updated' : 'created', contact: result };
   });
 
   // 暴露内部方法给其他模块使用
