@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { APP_ROOT } = require('./config');
 const { Log } = require("./core/logger");
-const { classifyClient, markSuspicious, EMAIL_RE } = require('./classify-client');
+const { classifyClient, markSuspicious, normalizeClientType, EMAIL_RE } = require('./classify-client');
 const { getCompanyMeta, deleteCompanyMeta, resolveCompanyId, buildIndexFromContacts } = require('./services/company-store');
 const { splitName: _splitName, normalizeCountry: _normalizeCountry } = require('./services/contacts-service');
 
@@ -53,7 +53,7 @@ function register(ipcMain, deps) {
 
       // 空邮箱 → 生成占位符入库，标记 no_email
       if (!cleanEmail) {
-        const placeholder = `no-email-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@placeholder.local`;
+        const placeholder = `--${noEmailImported + 1}@no.email`;
         const { company, _suspicious } = markSuspicious(c.company);
         const { companyId } = resolveCompanyId(company);
         existing.push({
@@ -62,8 +62,8 @@ function register(ipcMain, deps) {
           email: placeholder, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: c._noCompany ? 'no_company' : 'no_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
-          stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
+          clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          stage: c.stage || 'cold', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
         emailIndex.set(placeholder.toLowerCase(), existing[existing.length - 1]);
         noEmailImported++;
@@ -82,8 +82,8 @@ function register(ipcMain, deps) {
           email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: c._noCompany ? 'no_company' : 'invalid_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
-          stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
+          clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          stage: c.stage || 'cold', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
         emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
         continue;
@@ -119,9 +119,10 @@ function register(ipcMain, deps) {
           existingContact.firstName = split.firstName;
           existingContact.lastName = split.lastName;
         }
-        // 仅当手动指定 clientType 时覆盖
-        if (c.clientType && c.clientType !== 'unlabeled') {
-          existingContact.clientType = c.clientType;
+        // 仅当手动指定 clientType 时覆盖（先规范化中文/多语标签）
+        const normCT = normalizeClientType(c.clientType || c.client_type);
+        if (normCT && normCT !== 'unlabeled') {
+          existingContact.clientType = normCT;
         }
         if (!existingContact.firstName && !existingContact.lastName && existingContact.contactName) {
           const split = _splitName(existingContact.contactName);
@@ -141,11 +142,11 @@ function register(ipcMain, deps) {
           firstName: c.firstName || split.firstName || '',
           lastName: c.lastName || split.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: c._noCompany ? 'no_company' : (c.clientType && c.clientType !== 'unlabeled' ? c.clientType : classifyClient(c.company, c.category)),
+          clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company, c.category),
           assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold',
           tags: [],  // 新联系人默认空标签
-          _suspicious, addedAt: new Date().toISOString(),
+          _suspicious, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
         emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
         added++;
@@ -153,7 +154,7 @@ function register(ipcMain, deps) {
     }
     const wr = writeContacts(existing, 'contacts-ipc');
     const writeFailed = wr.fail || 0;
-    Log.info("联系人", `导入: +${added} 新增, ${updated} 更新, ${skipped} 跳过, ${invalidEmail} 异常邮箱, ${noEmailImported} 无邮箱, ${writeFailed} 写入失败, 总计${existing.length - writeFailed}`);
+    Log.info("联系人", `导入: +${added} 新增, ${updated} 表内重复合并, ${skipped} 跳过, ${invalidEmail} 异常邮箱, ${noEmailImported} 无邮箱, ${writeFailed} 写入失败, 总计${existing.length - writeFailed}`);
     return { total: existing.length - writeFailed, added: added - writeFailed, updated, skipped, invalidEmail, invalidEmails, noEmailImported, writeFailed };
   });
 

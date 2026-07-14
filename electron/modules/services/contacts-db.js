@@ -10,7 +10,7 @@ const CONTACT_SELECT = `
   c.phone, c.linkedin, c.position, c.contact_name,
   c.client_type, c.category, c.stage, c.last_sent_at, c.last_sent_acct,
   c.is_bounced, c.bounce_type, c.bounce_reason, c.bounced_at,
-  c.tags, c.opp_stage, c._suspicious, c.followup_note,
+  c.tags, c.opp_stage, c._suspicious, c.followup_note, c._extra,
   c.created_at, c.updated_at,
   co.name as company_name, co.country as company_country,
   co.website as company_website
@@ -35,6 +35,7 @@ function _row(r) {
   r.clientType = r.client_type || "unlabeled";
   r.bounceType = r.bounce_type || "";
   r.bounceReason = r.bounce_reason || "";
+  try { r._extra = JSON.parse(r._extra || "{}"); } catch { r._extra = {}; }
   return r;
 }
 
@@ -100,8 +101,8 @@ function upsert(data) {
   const now = new Date().toISOString();
   // ponytail: 完整 INSERT（关外键避免 company_id 空值报错），字段名兼容新旧两种命名
   db.pragma("foreign_keys = OFF");
-  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,_extra,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, companyId, email,
     data.first_name || data.firstName || "", data.last_name || data.lastName || "",
     data.title || data.position || "", data.phone || "", data.linkedin || "",
@@ -112,7 +113,7 @@ function upsert(data) {
     data.is_bounced || data.bounced ? 1 : 0,
     data.bounce_type || data.bounceType || "", data.bounce_reason || data.bounceReason || "",
     JSON.stringify(data.tags || []), data.assignee || "",
-    data._suspicious ? 1 : 0, data.followup_note || "", now, now
+    data._suspicious ? 1 : 0, data.followup_note || "", JSON.stringify(data._extra || data._extraData || {}), now, now
   );
   db.pragma("foreign_keys = ON");
   return getById(id);
@@ -126,20 +127,23 @@ function update(id, data) {
     "company_id", "email", "first_name", "last_name", "title", "phone", "linkedin",
     "position", "contact_name", "client_type", "category", "stage",
     "last_sent_at", "last_sent_acct", "is_bounced", "bounce_type", "bounce_reason",
-    "bounced_at", "tags", "tags_updated_at", "opp_stage", "assignee", "contact_person", "_suspicious", "followup_note",
+    "bounced_at", "tags", "tags_updated_at", "opp_stage", "assignee", "contact_person", "_suspicious", "followup_note", "_extra",
   ]);
   // ponytail: camelCase → snake_case 映射（contacts-ipc 传 camelCase，DB 列是 snake_case）
   const FIELD_ALIAS = { firstName: "first_name", lastName: "last_name", contactName: "contact_name", clientType: "client_type", contactPerson: "contact_person" };
-  const fields = []; const params = []; const seenCols = new Set();
+  // ponytail: 当 camelCase 别名和 snake_case 原始键同时存在时，camelCase 优先（代表 JS 层更新意图）
+  for (const [alias, target] of Object.entries(FIELD_ALIAS)) {
+    if (alias in data && target in data) delete data[target];
+  }
+  const fields = []; const params = [];
   for (let [k, v] of Object.entries(data)) {
     k = FIELD_ALIAS[k] || k;
     // 跳过 id、时间戳、JOIN 来的公司字段、旧 JSON 字段名
     if (k === "id" || k === "created_at" || k === "updated_at") continue;
-    if (k.startsWith("_") && k !== "_suspicious") continue; // 旧内部字段跳过，_suspicious 保留
+    if (k.startsWith("_") && k !== "_suspicious" && k !== "_extra") continue; // 旧内部字段跳过，_suspicious/_extra 保留
     if (!VALID_COLS.has(k)) continue;
-    if (seenCols.has(k)) continue; // ponytail: 防 camelCase + snake_case 双重 key 覆盖
-    seenCols.add(k);
     if (k === "tags") { fields.push("tags = ?"); params.push(JSON.stringify(v || [])); continue; }
+    if (k === "_extra") { fields.push("_extra = ?"); params.push(typeof v === 'object' ? JSON.stringify(v) : (v || '{}')); continue; }
     if (k === "is_bounced") { fields.push("is_bounced = ?"); params.push(v ? 1 : 0); continue; }
     if (k === "_suspicious") { fields.push("_suspicious = ?"); params.push(v ? 1 : 0); continue; }
     if (k === "email") { fields.push("email = ?"); params.push((v || "").toLowerCase().trim()); continue; }
@@ -270,7 +274,7 @@ function migrateFromJson(contactsPath, sendLogPath) {
     }
   } catch { /* 无 send-log 则全为 cold */ }
 
-  const insertContact = db.prepare(`INSERT OR IGNORE INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,_suspicious,followup_note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insertContact = db.prepare(`INSERT OR IGNORE INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,_suspicious,followup_note,_extra,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   let n = 0;
   const batch = db.transaction(() => {
@@ -292,6 +296,7 @@ function migrateFromJson(contactsPath, sendLogPath) {
         c.bounceType || c.bounce_type || "", c.bounceReason || c.bounce_reason || "",
         JSON.stringify(tags),
         c._suspicious ? 1 : 0, c.followup_note || c.followupNote || "",
+        JSON.stringify(c._extra || c._extraData || {}),
         c.addedAt || c.created_at || new Date().toISOString(),
       );
       n++;

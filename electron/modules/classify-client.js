@@ -161,4 +161,23 @@ async function classifyClientAI(company, category, apiKey) {
   return classifyClient(company, category);
 }
 
-module.exports = { classifyClient, classifyClientAI, markSuspicious, EMAIL_RE };
+// ponytail: Excel "客户类型" 列的中文/多语标签 → 系统英文代码
+const CTYPE_MAP = {
+  "代理": "agent", "货代": "agent", "货运代理": "agent",
+  "agente": "agent", "agencia": "agent", "forwarder": "agent",
+  "freight forwarder": "agent", "nvocc": "agent", "3pl": "agent",
+  "直客": "direct", "directo": "direct", "direct client": "direct",
+  "shipper": "direct", "importador": "direct", "exportador": "direct",
+  "manufacturer": "direct", "fabricante": "direct",
+  "通用": "unlabeled", "其他": "unlabeled",
+};
+// 系统内部合法值（已是英文代码，直接放行）
+const VALID_CTYPES = new Set(["agent", "direct", "unlabeled", "no_company", "no_email", "invalid_email"]);
+function normalizeClientType(raw) {
+  if (!raw) return "";
+  const t = raw.toLowerCase().trim();
+  if (VALID_CTYPES.has(t)) return t;          // 已是系统代码，直接返回
+  return CTYPE_MAP[raw] || CTYPE_MAP[t] || ""; // 中文/多语映射
+}
+
+module.exports = { classifyClient, classifyClientAI, markSuspicious, normalizeClientType, EMAIL_RE };

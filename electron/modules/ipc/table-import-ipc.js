@@ -4,7 +4,7 @@
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { classifyClient } = require('../classify-client');
+const { classifyClient, normalizeClientType } = require('../classify-client');
 
 function register(ipcMain) {
   ipcMain.handle("table:importFile", async (_e, filePath) => {
@@ -85,6 +85,7 @@ function register(ipcMain) {
       };
       const makeClient = (row, rawEmail, extra) => {
         const company = getStr(row, "company");
+        const rawCType = getStr(row, "clientType");
         const cl = {
           company,
           country: getStr(row, "country"),
@@ -100,7 +101,7 @@ function register(ipcMain) {
           assignee: getStr(row, "assignee"),
           contactPerson: getStr(row, "contactPerson"),
           stage: getStr(row, "stage"),
-          clientType: getStr(row, "clientType") || classifyClient(company, getStr(row, "category")),
+          clientType: normalizeClientType(rawCType) || classifyClient(company, getStr(row, "category")),
         };
         if (extra && Object.keys(extra).length) cl._extra = extra;
         return cl;
