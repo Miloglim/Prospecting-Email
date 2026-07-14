@@ -22,19 +22,25 @@ function classifyClient(company, category) {
     'courier', 'cargo express', 'carga express',
     'international movers', 'consolidator', 'consolidador',
     '代理', '货代', 'agente de cargas',
+    // 拉美常见货代强信号：公司名含这些词几乎都是物流公司
+    'logística', 'logistic', 'logistics',
+    'comércio exterior', 'comercio exterior',
+    'comex', 'despacho aduaneiro', 'despacho aduanero',
+    'assessoria aduaneira', 'consultoria aduaneira',
+    'carga internacional', 'cargas internacionais',
+    'transporte internacional', 'transportes internacionais',
+    'freight', 'cargo',
   ];
   if (agentStrong.some(kw => text.includes(kw))) return 'agent';
 
-  // ponytail: 仅当客户表有类型列时，才用弱信号（避免误伤公司名含 ship/cargo 等词）
+  // ponytail: 仅当客户表有类型列时，才用弱信号（避免误伤公司名含 ship/transport 等通用词）
   if (hasCategory) {
     const agentWeak = [
-      'logistics', 'logistic', 'logística', 'logistico', 'logístico',
-      'freight', 'forwarder', 'cargo', 'shipping',
-      'transport', 'transporte', 'transportes', 'transportadora',
+      'shipping', 'transport', 'transporte', 'transportes', 'transportadora',
       'agencia', 'agente', 'agência',
       'aduana', 'customs', 'carrier', 'maritime', 'marítimo',
       'ship', 'vessel', 'terminal', 'portuario', 'portuaria',
-      'armador',
+      'armador', 'forwarder', 'logistico', 'logístico',
     ];
     if (agentWeak.some(kw => text.includes(kw))) return 'agent';
   }

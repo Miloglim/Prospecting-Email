@@ -396,21 +396,21 @@ export function renderContactDetail(company) {
             const tagStr = (m.tags || []).join(',');
             return `
             <tr data-contact-id="${m.id}">
-              <td>${escapeHtml(m.firstName || m.first_name || '')}</td>
-              <td>${escapeHtml(m.lastName || m.last_name || '')}</td>
-              <td>${escapeHtml(m.email)}</td>
-              <td>${escapeHtml(m.title || m.position || '')}</td>
-              <td>${escapeHtml(m.phone || '')}</td>
-              <td>${escapeHtml(m.linkedin || '')}</td>
-              <td>${escapeHtml(m.country || m.company_country || '')}</td>
-              <td>${escapeHtml(m.category || '')}</td>
-              <td>${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>
-              <td><span class="stage-badge stage-${m.stage||m._stage||'cold'}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[m.stage||m._stage]||'cold'}</span></td>
+              <td data-field="first_name" class="editable">${escapeHtml(m.firstName || m.first_name || '')}</td>
+              <td data-field="last_name" class="editable">${escapeHtml(m.lastName || m.last_name || '')}</td>
+              <td data-field="email" class="editable">${escapeHtml(m.email)}</td>
+              <td data-field="title" class="editable">${escapeHtml(m.title || m.position || '')}</td>
+              <td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>
+              <td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>
+              <td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>
+              <td data-field="category" class="editable">${escapeHtml(m.category || '')}</td>
+              <td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>
+              <td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable"><span class="stage-badge stage-${m.stage||m._stage||'cold'}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[m.stage||m._stage]||'cold'}</span></td>
               <td>${statusHtml}</td>
-              <td>${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>
+              <td data-field="opp_stage" data-select="opp_stage" data-labels="${escapeHtml(JSON.stringify(OPP_LABEL))}" class="editable">${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>
               <td style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(tagStr)}</td>
-              <td>${escapeHtml(m.contact_person || '')}</td>
-              <td>${escapeHtml(m.assignee||'')}</td>
+              <td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>
+              <td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>
               <td>${hasFollowups ? `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--primary);font-weight:600">${m.followups.length}条</span>` : `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span>`}</td>
               <td><button class="btn-edit-contact" data-id="${m.id}" style="margin-right:4px">${lucide('pencil',13)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
             </tr>
@@ -665,83 +665,85 @@ export function renderContactDetail(company) {
   const tbody = detail.querySelector('tbody');
   if (!tbody) return;
 
-  const EDITABLE_COLS = new Set([1, 2, 3, 4, 5, 6, 8, 14, 15]);
-  const SELECT_COLS = {
-    7: { type: 'country', opts: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'] },
-    9: { type: 'client_type', opts: ['agent','direct','unlabeled'], labels: {agent:'代理',direct:'直客',unlabeled:'通用'} },
-    10: { type: 'stage', opts: ['cold','f1','f2','f3','f4'], labels: {cold:'冷开发',f1:'F1',f2:'F2',f3:'F3',f4:'F4'} },
-    12: { type: 'opp_stage', opts: ['待开发','触达中','报价中','试单','合作中','已流失'] },
+  const SELECT_OPTS = {
+    country: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'],
+    client_type: ['agent','direct','unlabeled'],
+    stage: ['cold','f1','f2','f3','f4'],
+    opp_stage: ['待开发','触达中','报价中','试单','合作中','已流失'],
   };
+
+  const INPUT_STYLE = 'width:100%;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
+  const SELECT_STYLE = 'width:100%;padding:4px 6px;border:2px solid var(--primary);border-radius:6px;font-size:11px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
 
   tbody.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
-    const td = e.target.closest('td');
+    const td = e.target.closest('td.editable');
     const tr = e.target.closest('tr');
     if (!td || !tr) return;
-    const cells = tr.querySelectorAll('td');
-    const colIdx = Array.from(cells).indexOf(td);
     const contactId = tr.dataset.contactId;
     if (!contactId || td.querySelector('input,select')) return;
 
-    const sel = SELECT_COLS[colIdx];
-    if (sel) {
+    const field = td.dataset.field;
+    const selType = td.dataset.select;
+
+    if (selType) {
+      // 下拉选择
       const orig = td.textContent.trim();
+      const opts = SELECT_OPTS[selType] || [];
+      const labels = td.dataset.labels ? JSON.parse(td.dataset.labels) : {};
       const select = document.createElement('select');
-      select.style.cssText = 'width:100%;padding:1px 2px;border:1px solid var(--accent);border-radius:3px;font-size:10px;background:var(--bg);color:var(--text)';
-      sel.opts.forEach((o) => {
+      select.style.cssText = SELECT_STYLE;
+      opts.forEach((o) => {
         const opt = document.createElement('option'); opt.value = o;
-        opt.textContent = sel.labels ? sel.labels[o] || o : o;
-        const cur = (sel.labels ? sel.labels[o] : o);
-        if (cur === orig || o === orig) opt.selected = true;
+        opt.textContent = labels[o] || o;
+        if ((labels[o] || o) === orig || o === orig) opt.selected = true;
         select.appendChild(opt);
       });
       td.textContent = ''; td.appendChild(select); select.focus();
-      let _selectSaved = false;
-      const saveSelect = async (val) => {
-        if (_selectSaved) return; _selectSaved = true;
-        td.textContent = sel.labels ? sel.labels[val] || val : val;
-        if (!val || val === orig) return;
+      let _saved = false;
+      const save = async (val) => {
+        if (_saved) return; _saved = true;
+        select.remove();
+        td.textContent = labels[val] || val;
+        if (!val || (labels[val] || val) === orig) return;
         const ref = S.contactsData.find(c => c.id === contactId);
         if (!ref) return;
-        if (sel.type === 'client_type') {
+        if (selType === 'client_type') {
           const company = ref.company || ref.company_name || '';
           const members = S.contactsData.filter(c => (c.company || c.company_name) === company);
-          if (members.length > 1 && !await showConfirm('「' + company + '」下 ' + members.length + ' 位联系人将全部改为「' + (sel.labels?.[val] || val) + '」？')) { td.textContent = orig; return; }
+          if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
           for (const m of members) await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val });
-        } else if (sel.type === 'country') {
+        } else if (selType === 'country') {
           const contact = S.contactsData.find(c => c.id === contactId);
           if (contact?.company_id) await window.electronAPI.updateCompany(contact.company_id, { country: val });
         } else {
           const ref2 = S.contactsData.find(c => c.id === contactId);
-          if (ref2) await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [sel.type]: val });
+          if (ref2) await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val });
         }
         await CS.refreshContacts(); renderContactsList();
       };
-      select.addEventListener('change', () => saveSelect(select.value));
-      select.addEventListener('blur', () => { setTimeout(() => saveSelect(select.value), 100); });
+      select.addEventListener('change', () => save(select.value));
+      select.addEventListener('blur', () => { setTimeout(() => save(select.value), 100); });
       return;
     }
 
-    if (EDITABLE_COLS.has(colIdx)) {
-      const orig = td.textContent.trim();
-      const input = document.createElement('input');
-      input.value = orig === '—' ? '' : orig;
-      input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--accent);border-radius:3px;font-size:11px;background:var(--bg);color:var(--text)';
-      td.textContent = ''; td.appendChild(input); input.focus(); input.select();
-      const saveInput = async () => {
-        const val = input.value.trim(); input.remove();
-        td.textContent = val || orig;
-        if (val === orig) return;
-        const fields = ['_','first_name','last_name','email','title','phone','linkedin','_','category','_','_','_','_','_','contact_person','assignee'];
-        const field = fields[colIdx];
-        if (!field || field === '_') return;
-        const ref3 = S.contactsData.find(c => c.id === contactId);
-        if (ref3) await window.electronAPI.upsertContact({ id: contactId, email: ref3.email, [field]: val });
-        await CS.refreshContacts();
-      };
-      input.addEventListener('blur', saveInput);
-      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveInput(); } if (ev.key === 'Escape') { input.remove(); td.textContent = orig; } });
-    }
+    // 文本输入
+    if (!field) return;
+    const orig = td.textContent.trim();
+    const input = document.createElement('input');
+    input.value = orig === '—' ? '' : orig;
+    input.style.cssText = INPUT_STYLE;
+    td.textContent = ''; td.appendChild(input); input.focus(); input.select();
+    const save = async () => {
+      const val = input.value.trim(); input.remove();
+      td.textContent = val || orig || '—';
+      if (val === orig || (val === '' && orig === '—')) return;
+      const ref = S.contactsData.find(c => c.id === contactId);
+      if (ref) await window.electronAPI.upsertContact({ id: contactId, email: ref.email, [field]: val });
+      await CS.refreshContacts();
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); save(); } if (ev.key === 'Escape') { input.remove(); td.textContent = orig; } });
   });
 
 }

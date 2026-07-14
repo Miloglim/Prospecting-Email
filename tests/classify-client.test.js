@@ -46,11 +46,26 @@ test('直客中文: 直客', () => {
   eq(classifyClient('直客贸易公司', ''), 'direct');
 });
 
-test('弱信号需品类列: logistics 无品类 → unlabeled', () => {
-  eq(classifyClient('ABC Logistics', ''), 'unlabeled');
+test('升级强信号: logistics 无品类 → agent', () => {
+  eq(classifyClient('ABC Logistics', ''), 'agent');
 });
-test('弱信号有品类列: logistics + 品类 → agent', () => {
-  eq(classifyClient('ABC Logistics', 'Freight'), 'agent');
+test('升级强信号: logística 无品类 → agent', () => {
+  eq(classifyClient('Logística Brasil', ''), 'agent');
+});
+test('升级强信号: cargo 无品类 → agent', () => {
+  eq(classifyClient('WAYLINE CARGO', ''), 'agent');
+});
+test('升级强信号: comex 无品类 → agent', () => {
+  eq(classifyClient('Comex Logistics', ''), 'agent');
+});
+test('升级强信号: freight 无品类 → agent', () => {
+  eq(classifyClient('Fortress Freight Co', ''), 'agent');
+});
+test('弱信号需品类列: shipping 无品类 → unlabeled', () => {
+  eq(classifyClient('Pacific Shipping', ''), 'unlabeled');
+});
+test('弱信号有品类列: shipping + 品类 → agent', () => {
+  eq(classifyClient('Pacific Shipping', 'Freight'), 'agent');
 });
 test('弱信号需品类列: import 无品类 → unlabeled', () => {
   eq(classifyClient('Global Import Co', ''), 'unlabeled');

@@ -52,6 +52,7 @@ function register(ipcMain) {
         assignee: ["跟进人", "负责人", "assignee", "owner"],
         contactPerson: ["对接人", "contact_person"],
         stage: ["阶段", "stage"],
+        clientType: ["客户类型", "类型", "type", "client_type", "clienttype"],
       };
       const keyToField = {};
       const allKnownKeys = new Set();
@@ -99,7 +100,7 @@ function register(ipcMain) {
           assignee: getStr(row, "assignee"),
           contactPerson: getStr(row, "contactPerson"),
           stage: getStr(row, "stage"),
-          clientType: classifyClient(company, getStr(row, "category")),
+          clientType: getStr(row, "clientType") || classifyClient(company, getStr(row, "category")),
         };
         if (extra && Object.keys(extra).length) cl._extra = extra;
         return cl;

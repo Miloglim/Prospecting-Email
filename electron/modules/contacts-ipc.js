@@ -141,7 +141,7 @@ function register(ipcMain, deps) {
           firstName: c.firstName || split.firstName || '',
           lastName: c.lastName || split.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: c._noCompany ? 'no_company' : (c.clientType || classifyClient(c.company, c.category)),
+          clientType: c._noCompany ? 'no_company' : (c.clientType && c.clientType !== 'unlabeled' ? c.clientType : classifyClient(c.company, c.category)),
           assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold',
           tags: [],  // 新联系人默认空标签

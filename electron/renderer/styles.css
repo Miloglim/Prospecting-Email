@@ -797,6 +797,11 @@ select option { font-size: 12px; }
 #clients-count { font-size: 13px; color: var(--text-secondary); }
 .toolbar-actions { display: flex; gap: 8px; }
 
+/* 联系人详情表：可编辑单元格 */
+.editable { cursor: text; transition: background .12s; border-radius: 4px; }
+.editable:hover { background: var(--bg-hover, #f0f0f2); }
+.editable:active { background: transparent; }
+
 /* ── 分页 ─────────────────────────────────────────────────────────── */
 .pagination { display: flex; justify-content: center; align-items: center; gap: 3px; margin-top: 16px; max-width: 100%; overflow: hidden; }
 .pagination button {
