@@ -69,6 +69,8 @@ const CONTACTS = {
   GET_FOLLOWUPS: "contacts:getFollowups",
   /** 联系人变更事件（main → renderer） */
   CHANGED: "contacts:changed",
+  /** 联系人已清空事件（main → renderer） */
+  CLEARED: "contacts:cleared",
 };
 
 // ── 发送（send）──────────────────────────────────────────────────────────────

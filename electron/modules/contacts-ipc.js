@@ -194,33 +194,73 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('contacts:deleteAll', async () => {
-    Log.warn("联系人", "全部清除");
+    Log.warn("联系人", "全部清除 — 开始");
     const { getDb } = require('./services/db');
     const db = getDb();
+
+    // ── 1. SQLite 全表清空 ──
     db.pragma("foreign_keys = OFF");
-    db.exec("DELETE FROM contacts");
-    db.exec("DELETE FROM opportunities");
-    db.exec("DELETE FROM companies");
-    db.exec("DELETE FROM interactions");
-    db.pragma("foreign_keys = ON");
-    // 级联清理关联的 JSON 文件，防止幽灵数据导致追回/背调等异常
-    const cleanupFiles = [
-      path.join(APP_ROOT, 'data', 'contacts.json'),
-      path.join(APP_ROOT, 'data', 'send-history.json'),
-      path.join(APP_ROOT, 'data', 'backcheck-status.json'),
-      path.join(APP_ROOT, 'data', 'company-meta.json'),
-      path.join(APP_ROOT, 'send', 'send-log.json'),
-      path.join(APP_ROOT, 'send', 'send-log-test.json'),
-    ];
-    for (const fp of cleanupFiles) {
-      try { fs.unlinkSync(fp); } catch { /* 文件不存在则跳过 */ }
+    const tables = ['contacts', 'opportunities', 'companies', 'interactions', 'send_log', 'inbox'];
+    for (const t of tables) {
+      try { db.exec(`DELETE FROM ${t}`); } catch { /* 表可能不存在 */ }
     }
-    // 清空队列持久化数据
+    db.pragma("foreign_keys = ON");
+
+    // ── 2. JSON 文件删除（联系人相关） ──
+    const dataDir = path.join(APP_ROOT, 'data');
+    const sendDir = path.join(APP_ROOT, 'send');
+    const deleteFiles = [
+      // 联系人核心
+      'contacts.json',
+      'send-history.json',
+      'backcheck-status.json',
+      'company-meta.json',
+      'companies.json',
+      // 发送相关
+      'send-queue.json',
+      'send-bodies.json',
+      'send-state.json',
+      'email-queue.json',
+      'template-overrides.json',
+      // 退信/背调
+      'bounce-check-cursor.json',
+      'bounce-log.json',
+      'dash-bounce-count.json',
+      // 收件箱（重置游标+缓存+删除记录）
+      'inbox-cursor.json',
+      'inbox-deleted.json',
+      'inbox-cache.json',
+      // 测试数据库
+      '_test_prospector.db',
+    ];
+    let deletedCount = 0;
+    for (const f of deleteFiles) {
+      const fp = path.join(dataDir, f);
+      try { if (fs.existsSync(fp)) { fs.unlinkSync(fp); deletedCount++; } } catch { /* 跳过 */ }
+    }
+    // send/ 目录下的日志文件
+    const sendFiles = ['send-log.json', 'send-log-test.json', 'send-batch.json', 'session-log.json'];
+    for (const f of sendFiles) {
+      const fp = path.join(sendDir, f);
+      try { if (fs.existsSync(fp)) { fs.unlinkSync(fp); deletedCount++; } } catch { /* 跳过 */ }
+    }
+    // 清理旧备份文件
     try {
-      const qp = path.join(APP_ROOT, 'data', 'send-queue.json');
-      if (fs.existsSync(qp)) fs.writeFileSync(qp, '[]');
+      const dataFiles = fs.readdirSync(dataDir);
+      for (const f of dataFiles) {
+        if (f.startsWith('contacts.bak')) {
+          try { fs.unlinkSync(path.join(dataDir, f)); deletedCount++; } catch { /* 跳过 */ }
+        }
+      }
+    } catch { /* 跳过 */ }
+
+    // ── 3. 通知渲染进程清空 localStorage ──
+    try {
+      deps.mainWindow?.webContents.send('contacts:cleared');
     } catch { /* 降级 */ }
-    return { ok: true };
+
+    Log.warn("联系人", `全部清除 — 完成: ${tables.length}表 + ${deletedCount}文件`);
+    return { ok: true, deletedFiles: deletedCount };
   });
 
   ipcMain.handle('contacts:deleteCompany', async (_e, company) => {

@@ -128,8 +128,11 @@ function update(id, data) {
     "last_sent_at", "last_sent_acct", "is_bounced", "bounce_type", "bounce_reason",
     "bounced_at", "tags", "tags_updated_at", "opp_stage", "assignee", "contact_person", "_suspicious", "followup_note",
   ]);
+  // ponytail: camelCase → snake_case 映射（contacts-ipc 传 camelCase，DB 列是 snake_case）
+  const FIELD_ALIAS = { firstName: "first_name", lastName: "last_name", contactName: "contact_name", clientType: "client_type", contactPerson: "contact_person" };
   const fields = []; const params = [];
-  for (const [k, v] of Object.entries(data)) {
+  for (let [k, v] of Object.entries(data)) {
+    k = FIELD_ALIAS[k] || k;
     // 跳过 id、时间戳、JOIN 来的公司字段、旧 JSON 字段名
     if (k === "id" || k === "created_at" || k === "updated_at") continue;
     if (k.startsWith("_") && k !== "_suspicious") continue; // 旧内部字段跳过，_suspicious 保留

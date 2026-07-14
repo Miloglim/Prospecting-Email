@@ -120,6 +120,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("contacts:changed", cb);
     return () => ipcRenderer.removeListener("contacts:changed", cb);
   },
+  onContactsCleared: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on("contacts:cleared", handler);
+    return () => ipcRenderer.removeListener("contacts:cleared", handler);
+  },
   onInboxChanged: (cb) => {
     ipcRenderer.on("inbox:changed", cb);
     return () => ipcRenderer.removeListener("inbox:changed", cb);

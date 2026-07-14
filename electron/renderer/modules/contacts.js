@@ -173,6 +173,19 @@ document.getElementById('clients-clear-btn')?.addEventListener('click', () => {
   renderClientsTable();
 });
 
+// 主进程通知清空 → 同步清理渲染进程缓存
+window.electronAPI?.onContactsCleared?.((_) => {
+  S.contactsData = [];
+  S.contactsGroupMap = new Map();
+  S.sendCompanies = {};
+  S.sendHistory = {};
+  try { localStorage.removeItem('inbox-viewed'); } catch { /* 降级 */ }
+  try { localStorage.removeItem('send-queue'); } catch { /* 降级 */ }
+  S.contactsFilter = 'all';
+  S.selectedContactCompany = null;
+  renderContactsList();
+});
+
 // ===== 联系人 ========================================================
 
 export async function loadContacts() {
