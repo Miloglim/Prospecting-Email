@@ -261,7 +261,7 @@ export async function showPreview(d) {
     <div class="hp-box" style="flex:1;display:flex;flex-direction:column">
       <div class="hp-box-head">${lucide('mail',14)} 信件内容${hasGroups ? ' <span style="font-weight:400;font-size:10px;color:var(--text-secondary)">— 点击上方组按钮切换</span>' : ''}</div>
       <div class="hp-box-body" style="flex:1;overflow-y:auto">
-        <div class="hp-body" id="hp-body-content">${d.bodyid ? '<span style="color:var(--text-secondary)">加载中...</span>' : '<span style="color:var(--text-secondary)">(无邮件正文)</span>'}</div>
+        <div class="hp-body allow-select" id="hp-body-content">${d.bodyid ? '<span style="color:var(--text-secondary)">加载中...</span>' : '<span style="color:var(--text-secondary)">(无邮件正文)</span>'}</div>
       </div>
     </div>`;
 

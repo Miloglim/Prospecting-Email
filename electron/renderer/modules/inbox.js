@@ -111,8 +111,8 @@ function _bindInboxDelegates() {
     item.classList.add('active');
     // 已读
     const dot = item.querySelector('.inbox-dot-new');
-    if (dot && mkey) { dot.classList.remove('inbox-dot-new'); _viewedKeys.add(mkey); _saveViewedKeys(); }
-    else if (mkey) { _viewedKeys.add(mkey); _saveViewedKeys(); }
+    if (dot && mkey) { dot.classList.remove('inbox-dot-new'); _viewedKeys.add(mkey); _saveViewedKeys(); _updateBadgesAfterView(mkey); }
+    else if (mkey) { _viewedKeys.add(mkey); _saveViewedKeys(); _updateBadgesAfterView(mkey); }
     // 更新选中样式
     listEl.querySelectorAll('.inbox-item').forEach(el => {
       const i = parseInt(el.dataset.idx);

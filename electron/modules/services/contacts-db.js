@@ -224,12 +224,31 @@ function removeMany(ids) {
 function ensureCompany(name, extra = {}) {
   if (!name?.trim()) return null;
   const db = getDb();
-  const existing = db.prepare("SELECT id FROM companies WHERE name = ?").get(name.trim());
-  if (existing) return existing.id;
+  const clean = name.trim().replace(/\s+/g, ' '); // 归一化：去首尾空格 + 合并连续空格
+  // ponytail: 大小写不敏感查找，避免 "AGL Cargo" 和 "agl cargo" 分成两个公司
+  let existing = db.prepare("SELECT id, name FROM companies WHERE LOWER(name) = LOWER(?)").get(clean);
+  // ponytail: 空格变体兜底 — "World Freight" vs "WorldFreight" 视为同一公司
+  if (!existing && clean.includes(' ')) {
+    const noSpace = clean.replace(/\s+/g, '');
+    existing = db.prepare("SELECT id, name FROM companies WHERE LOWER(REPLACE(name,' ','')) = LOWER(?)").get(noSpace);
+    if (existing) {
+      // 更新已存公司名为带空格的规范写法
+      db.prepare("UPDATE companies SET name = ?, updated_at = ? WHERE id = ?")
+        .run(clean, new Date().toISOString(), existing.id);
+    }
+  }
+  if (existing) {
+    // 如果只有大小写不同，更新为新写法（最新导入的写法优先）
+    if (existing.name !== clean) {
+      db.prepare("UPDATE companies SET name = ?, updated_at = ? WHERE id = ?")
+        .run(clean, new Date().toISOString(), existing.id);
+    }
+    return existing.id;
+  }
   const id = uuid();
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO companies (id,name,raw_name,country,website,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
-    .run(id, name.trim(), name.trim(), extra.country || "", extra.website || "", now, now);
+    .run(id, clean, clean, extra.country || "", extra.website || "", now, now);
   return id;
 }
 

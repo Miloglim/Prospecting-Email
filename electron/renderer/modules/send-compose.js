@@ -738,7 +738,8 @@ async function addToQueue() {
     const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
     const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
     const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
-    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m));
+    const noEmailMembers = members.filter(m => (m.email || '').endsWith('@no.email'));
+    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !noEmailMembers.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if (!stage || stage === 'cold') needReset.push({ name, count: members.length });
@@ -780,7 +781,8 @@ async function addToQueue() {
       }
     });
     const alreadyQueued = members.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !alreadyQueued.includes(m));
+    const noEmailMembers2 = members.filter(m => (m.email || '').endsWith('@no.email'));
+    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !alreadyQueued.includes(m) && !noEmailMembers2.includes(m));
     if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
     if (taggedSent.length) skippedDupOrBounced += taggedSent.length;
 

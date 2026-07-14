@@ -271,6 +271,11 @@ function register(ipcMain, deps) {
     const emails = targets.map(c => c.email).filter(Boolean);
     // ponytail: SQLite 模式用 db.remove 真删，writeContacts（upsert）不会删
     db.removeMany(targets.map(c => c.id).filter(Boolean));
+    // 无论有无联系人，都删掉 companies 表中的公司记录
+    try {
+      const { getDb } = require('./services/db');
+      getDb().prepare("DELETE FROM companies WHERE name = ?").run(company);
+    } catch { /* 降级 */ }
 
     // 级联清理公司状态
     removeFromSendHistory(company, emails);

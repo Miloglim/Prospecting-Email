@@ -191,7 +191,9 @@ function _logRecord(ctx, to, company, subject, bodyText, bodyId, msgId, status, 
 // ── 发送单封 ──────────────────────────────────────────────────────────────
 async function _sendOne(ctx, email, log, deps) {
   let toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
-  if (!toList.length) return { ok: false, n: 0 };
+  // ponytail: 防御性过滤 — 占位邮箱不可发送
+  toList = toList.filter(addr => !addr.endsWith('@no.email') && !addr.endsWith('@placeholder.local'));
+  if (!toList.length) { Log.warn("发信", "跳过: 所有收件人均无有效邮箱"); return { ok: false, n: 0, skippedNoEmail: true }; }
 
   // ponytail: 过滤已发送收件人，防止中断恢复后重复发信
   const alreadySent = new Set(
