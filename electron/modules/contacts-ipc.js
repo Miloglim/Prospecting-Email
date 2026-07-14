@@ -45,13 +45,49 @@ function register(ipcMain, deps) {
     for (const c of existing) {
       if (c.email) emailIndex.set(c.email.toLowerCase().trim(), c);
     }
-    let added = 0, updated = 0, skipped = 0, invalidEmail = 0;
+    let added = 0, updated = 0, skipped = 0, invalidEmail = 0, noEmailImported = 0;
     const invalidEmails = [];
     for (const c of clients) {
       if (!c.company && !c.email) { skipped++; continue; }
       const cleanEmail = (c.email || '').trim();
-      if (!cleanEmail) { skipped++; continue; }
-      if (!EMAIL_RE.test(cleanEmail)) { invalidEmail++; invalidEmails.push({ company: c.company || '未知', email: cleanEmail }); continue; }
+
+      // 空邮箱 → 生成占位符入库，标记 no_email
+      if (!cleanEmail) {
+        const placeholder = `no-email-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}@placeholder.local`;
+        const { company, _suspicious } = markSuspicious(c.company);
+        const { companyId } = resolveCompanyId(company);
+        existing.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          company, companyId, country: c.country || '', category: c.category || '',
+          email: placeholder, website: c.website || '', linkedin: c.linkedin || '',
+          firstName: c.firstName || '', lastName: c.lastName || '',
+          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          clientType: 'no_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
+        });
+        emailIndex.set(placeholder.toLowerCase(), existing[existing.length - 1]);
+        noEmailImported++;
+        continue;
+      }
+
+      // 格式异常邮箱 → 保留原文入库，标记 invalid_email
+      if (!EMAIL_RE.test(cleanEmail)) {
+        invalidEmail++;
+        invalidEmails.push({ company: c.company || '未知', email: cleanEmail });
+        const { company, _suspicious } = markSuspicious(c.company);
+        const { companyId } = resolveCompanyId(company);
+        existing.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          company, companyId, country: c.country || '', category: c.category || '',
+          email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
+          firstName: c.firstName || '', lastName: c.lastName || '',
+          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          clientType: 'invalid_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
+        });
+        emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
+        continue;
+      }
       // 国家名标准化
       if (c.country) c.country = _normalizeCountry(c.country);
 
@@ -117,8 +153,8 @@ function register(ipcMain, deps) {
     }
     const wr = writeContacts(existing, 'contacts-ipc');
     const writeFailed = wr.fail || 0;
-    Log.info("联系人", `导入: +${added} 新增, ${updated} 更新, ${skipped} 跳过(无邮箱), ${invalidEmail} 无效邮箱, ${writeFailed} 写入失败, 总计${existing.length - writeFailed}`);
-    return { total: existing.length - writeFailed, added: added - writeFailed, updated, skipped, invalidEmail, invalidEmails, writeFailed };
+    Log.info("联系人", `导入: +${added} 新增, ${updated} 更新, ${skipped} 跳过, ${invalidEmail} 异常邮箱, ${noEmailImported} 无邮箱, ${writeFailed} 写入失败, 总计${existing.length - writeFailed}`);
+    return { total: existing.length - writeFailed, added: added - writeFailed, updated, skipped, invalidEmail, invalidEmails, noEmailImported, writeFailed };
   });
 
   // 清理 send-history 中指定公司的联系人
@@ -167,8 +203,23 @@ function register(ipcMain, deps) {
     db.exec("DELETE FROM companies");
     db.exec("DELETE FROM interactions");
     db.pragma("foreign_keys = ON");
-    // ponytail: 删掉迁移源文件，防止重启后 migrateFromJson 重新导入
-    try { fs.unlinkSync(path.join(APP_ROOT, 'data', 'contacts.json')); } catch { /* 文件已删 */ }
+    // 级联清理关联的 JSON 文件，防止幽灵数据导致追回/背调等异常
+    const cleanupFiles = [
+      path.join(APP_ROOT, 'data', 'contacts.json'),
+      path.join(APP_ROOT, 'data', 'send-history.json'),
+      path.join(APP_ROOT, 'data', 'backcheck-status.json'),
+      path.join(APP_ROOT, 'data', 'company-meta.json'),
+      path.join(APP_ROOT, 'send', 'send-log.json'),
+      path.join(APP_ROOT, 'send', 'send-log-test.json'),
+    ];
+    for (const fp of cleanupFiles) {
+      try { fs.unlinkSync(fp); } catch { /* 文件不存在则跳过 */ }
+    }
+    // 清空队列持久化数据
+    try {
+      const qp = path.join(APP_ROOT, 'data', 'send-queue.json');
+      if (fs.existsSync(qp)) fs.writeFileSync(qp, '[]');
+    } catch { /* 降级 */ }
     return { ok: true };
   });
 

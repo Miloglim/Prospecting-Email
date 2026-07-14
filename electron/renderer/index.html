@@ -269,6 +269,8 @@
         <button type="button" class="cf-tab" data-filter="direct"><span data-icon="building"></span> 直客</button>
         <button type="button" class="cf-tab" data-filter="unlabeled"><span data-icon="help-circle"></span> 未标签</button>
         <span class="cf-sep">|</span>
+        <button type="button" class="cf-tab" data-filter="anomaly" style="color:#e65100">⚠️ 异常</button>
+        <span class="cf-sep">|</span>
         <button type="button" class="cf-tab" data-filter="tag:reached">已触达</button>
         <button type="button" class="cf-tab" data-filter="tag:left_company">已离职</button>
         <button type="button" class="cf-tab" data-filter="tag:replied">有回复</button>
@@ -903,6 +905,9 @@
   </div>
   <style>
     @keyframes toastIn { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+    /* ── 桌面级体验：全局禁止文字选中 ── */
+    * { user-select: none; }
+    input, textarea, [contenteditable], .allow-select { user-select: text; }
     /* 收件箱 */
     #page-inbox.active { display:flex; flex-direction:column; height:100%; overflow:hidden; }
     .inbox-toolbar { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; flex-shrink:0; }
@@ -924,10 +929,10 @@
     #inbox-list { flex:1; overflow-y:auto; min-height:0; }
     .inbox-right { width:60%; display:flex; flex-direction:column; background:var(--bg); overflow:hidden; border:1px solid var(--border); border-left:none; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; }
     .inbox-detail-body-wrap { flex:1; min-height:0; overflow-y:auto; padding:0 16px 12px; }
-    .inbox-item { display:flex; align-items:center; gap:10px; padding:11px 11px 11px 11px; cursor:pointer; border-bottom:1px solid var(--border); border-left:3px solid transparent; transition:background .12s,border-color .12s; }
+    .inbox-item { display:flex; align-items:center; gap:10px; padding:11px 11px 11px 8px; cursor:pointer; border-bottom:1px solid var(--border); border-left:3px solid transparent; transition:background .12s,border-color .12s; }
     .inbox-item:hover { background:var(--bg-hover); }
     .inbox-item.active { background:var(--primary-10); border-left-color:var(--primary); }
-    .inbox-item.inbox-selected { background:var(--primary-10); box-shadow:inset 3px 0 0 var(--border); }
+    .inbox-item.selected { border-left:2px solid #ccc; }
     .inbox-type { flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .inbox-dot { line-height:1; transition:transform .3s ease; display:inline-block; }
     .inbox-dot-new { transform:scale(1.6); }
@@ -939,6 +944,7 @@
     .inbox-loading { display:flex; align-items:center; justify-content:center; padding:40px; color:var(--text-secondary); gap:8px; font-size:13px; }
     .inbox-detail-empty { display:flex; align-items:center; justify-content:center; height:100%; color:var(--text-secondary); font-size:13px; }
     .inbox-detail-header { padding:0 16px; display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--border); border-radius:8px 8px 0 0; overflow:hidden; }
+    .inbox-detail-header * { user-select:text; }
     .inbox-detail-field { display:flex; align-items:center; gap:8px; font-size:12px; padding:7px 12px; border-bottom:1px solid var(--border); }
     .inbox-detail-field:last-child { border-bottom:none; }
     .inbox-detail-field.wide { grid-column:1/-1; }
@@ -966,7 +972,6 @@
     .inbox-detail-actions button { padding:6px 14px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px; transition:all .15s; }
     .inbox-detail-actions button:hover { background:var(--bg-hover); }
     #inbox-btn-delete:hover { background:#e5484d; color:#fff; border-color:#e5484d; }
-    #inbox-btn-processed.done { background:var(--primary-10); color:#22a644; border-color:#22a644; }
 
     /* 发送总览 */
     .history-split { display:flex; gap:0; height:calc(100vh - 200px); border:1px solid var(--border); border-radius:8px; overflow:hidden; }

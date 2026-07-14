@@ -31,11 +31,17 @@ export async function doImport(file) {
   S.clientsExtraCols = result.unrecognizedCols || [];
   S.clientsPage = 1;
   if (fileInput) fileInput.value = ''; // 重置 input，允许重复导入同一文件
-  let msg = `成功导入 ${S.clientsData.length} 条记录`;
+  let msg = `✅ 成功导入 ${S.clientsData.length} 条记录`;
+  if (result.noEmailCount > 0) {
+    msg += `\n\n📧 ${result.noEmailCount} 条无邮箱（保存后将标为"待补邮箱"）`;
+  }
+  if (result.splitCount > 0) {
+    msg += `\n\n✂️ 检测到 ${result.splitCount} 个多邮箱单元格，已自动拆分`;
+  }
   if (result.invalidEmails?.length) {
     const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
     const more = result.invalidEmails.length > 10 ? `\n...等共 ${result.invalidEmails.length} 个` : '';
-    msg += `\n\n⚠️ ${result.invalidEmails.length} 个邮箱格式异常：\n${list}${more}`;
+    msg += `\n\n⚠️ ${result.invalidEmails.length} 个邮箱格式异常（已标为"异常邮箱"）：\n${list}${more}`;
   }
   if (result.unrecognizedCols?.length) {
     msg += `\n\n🔍 未识别的列（${result.unrecognizedCols.length}）：${result.unrecognizedCols.join('、')}`;
@@ -118,7 +124,11 @@ export function renderClientsTable() {
         const extraStyle = col.isExtra ? 'color:#aaa;font-size:0.9em' : '';
         return `<td style="white-space:nowrap;${extraStyle}">${escapeHtml(String(val))}</td>`;
       }).join('');
-      return `<tr><td>${start + i + 1}</td>${cells}</tr>`;
+      // 异常行高亮：无邮箱=橙色，格式异常=红色
+      let rowStyle = '';
+      if (c._emailStatus === 'no_email') rowStyle = 'background:#fff8e1';
+      else if (c._emailStatus === 'invalid_email') rowStyle = 'background:#fce4ec';
+      return `<tr${rowStyle ? ` style="${rowStyle}"` : ''}><td>${start + i + 1}</td>${cells}</tr>`;
     }).join('');
   }
 
@@ -135,11 +145,12 @@ document.getElementById('clients-import-btn')?.addEventListener('click', async (
   const result = await window.electronAPI.importContacts(S.clientsData);
   let msg = `新增 ${result.added} 位联系人（总计 ${result.total} 位）`;
   if (result.skipped > 0) msg += `\n跳过 ${result.skipped} 条重复记录`;
+  if (result.noEmailImported > 0) msg += `\n📧 ${result.noEmailImported} 条无邮箱（已标为"待补邮箱"，可在「⚠️ 异常」中查看）`;
   if (result.writeFailed > 0) msg += `\n❌ ${result.writeFailed} 条写入数据库失败（参数缺失，请检查导入数据）`;
   if (result.invalidEmail > 0) {
     const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
     const more = result.invalidEmail > 10 ? `\n...等共 ${result.invalidEmail} 个` : '';
-    msg += `\n\n⚠️ ${result.invalidEmail} 个邮箱格式异常：\n${list}${more}`;
+    msg += `\n\n⚠️ ${result.invalidEmail} 个邮箱格式异常（可在「⚠️ 异常」中查看修正）：\n${list}${more}`;
   }
   await showAlert(msg);
 });
@@ -159,7 +170,7 @@ export async function loadContacts() {
   await CS.refreshContacts();
   await CS.refreshContactsSendHistory();
   // 诊断：打印分类统计
-  const diag = { agent: 0, direct: 0, unlabeled: 0, noField: 0 };
+  const diag = { agent: 0, direct: 0, unlabeled: 0, no_email: 0, invalid_email: 0, noField: 0 };
   const seen = new Set();
   for (const c of S.contactsData) {
     if (!seen.has(c.company)) { seen.add(c.company); diag[c.clientType || 'noField']++; }
@@ -194,6 +205,8 @@ export function renderContactsList(filtered) {
   // 应用筛选
   if (S.contactsFilter === 'archived') {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
+  } else if (S.contactsFilter === 'anomaly') {
+    data = data.filter(c => c.clientType === 'no_email' || c.clientType === 'invalid_email');
   } else if (S.contactsFilter?.startsWith('tag:')) {
     const tag = S.contactsFilter.slice(4);
     data = data.filter(c => (c.tags || []).includes(tag));
@@ -209,14 +222,17 @@ export function renderContactsList(filtered) {
   const statsBar = document.getElementById('contacts-summary');
 
   // 统计各类型公司数（始终基于全部数据，不受筛选影响）
-  const counts = { agent: 0, direct: 0, unlabeled: 0 };
+  const counts = { agent: 0, direct: 0, unlabeled: 0, no_email: 0, invalid_email: 0 };
+  let anomalyCount = 0;
   const seenCompanies = new Set();
   for (const c of S.contactsData) {
     const key = c.company;
+    const ct = c.clientType || 'unlabeled';
     if (!seenCompanies.has(key)) {
       seenCompanies.add(key);
-      counts[c.clientType || 'unlabeled']++;
+      counts[ct] = (counts[ct] || 0) + 1;
     }
+    if (ct === 'no_email' || ct === 'invalid_email') anomalyCount++;
   }
 
   // 更新筛选标签
@@ -231,6 +247,7 @@ export function renderContactsList(filtered) {
       agent: `代理 ${counts.agent}`,
       direct: `直客 ${counts.direct}`,
       unlabeled: `未标签 ${counts.unlabeled}`,
+      anomaly: `⚠️ 异常 ${anomalyCount}`,
       'tag:reached': `已触达 ${tagCounts.reached}`,
       'tag:left_company': `已离职 ${tagCounts.left_company}`,
       'tag:replied': `有回复 ${tagCounts.replied}`,
@@ -246,7 +263,7 @@ export function renderContactsList(filtered) {
   }
 
   if (!data.length) {
-    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter?.startsWith('tag:') ? '该标签暂无联系人' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
+    if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter === 'anomaly' ? '🎉 没有异常联系人' : S.contactsFilter?.startsWith('tag:') ? '该标签暂无联系人' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
     if (layout) layout.style.display = 'none';
     if (statsBar) statsBar.style.display = 'none';
     if (filterBar) filterBar.style.display = 'flex';

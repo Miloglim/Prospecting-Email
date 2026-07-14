@@ -385,18 +385,18 @@ function _imapFetch(cfg) {
         const cursor = _readCursor();
         const lastUid = parseInt(cursor[cursorKey]) || 0;
 
-        const searchCriteria = lastUid
+        const isIncremental = lastUid > 0;
+        const searchCriteria = isIncremental
           ? [["UID", `${lastUid + 1}:*`]]
           : [["ALL"]];
-        const batchLimit = lastUid ? 30 : 40;
 
         imap.search(searchCriteria, (err, results) => {
           if (err || !results?.length) {
             imap.end();
             return resolve(rawSources);
           }
-          // results 是 UID（因为用了 UID search key）
-          const toFetch = results.slice(-batchLimit);
+          // ponytail: 增量拉取不限制数量，避免漏邮件；首次拉取取最近 40 封
+          const toFetch = isIncremental ? results : results.slice(-40);
           let maxUid = lastUid;
 
           const fetch = imap.fetch(toFetch, {
@@ -535,11 +535,12 @@ async function _pop3Fetch(cfg, sinceDays) {
         if (n > maxServerNum) maxServerNum = n;
       }
     }
+    const isIncremental = lastNum > 0;
     let ids = Object.keys(uidMap)
       .map(Number)
       .filter((n) => n > lastNum) // 只要序号 > 游标的新邮件
-      .sort((a, b) => b - a)
-      .slice(0, lastNum ? 30 : 40);
+      .sort((a, b) => b - a);
+    if (!isIncremental) ids = ids.slice(0, 40); // 首次只取最近 40 封
     if (!ids.length) {
       if (lastNum) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
       ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 40);

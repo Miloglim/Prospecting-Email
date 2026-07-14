@@ -75,8 +75,13 @@ function register(ipcMain, deps) {
     for (const lp of logPaths) {
       try { if (fs.existsSync(lp)) { const log = JSON.parse(fs.readFileSync(lp, 'utf-8'));(log.sent || []).forEach(r => { if (r.company) sentCompanies.add(r.company); }); } } catch { /* 跳过 */ }
     }
+    // ponytail: 校验公司是否在 contacts 表中存在，防止幽灵数据
+    const contactsDb = require('../services/contacts-db');
+    const allContacts = contactsDb.listAll();
+    const existingCompanies = new Set(allContacts.map(c => c.company_name || c.company).filter(Boolean));
     let caught = 0;
     for (const name of sentCompanies) {
+      if (!existingCompanies.has(name)) continue; // 公司已被删除，跳过
       if ((h[name]?.stage || 'cold') !== 'cold') continue;
       _advanceCompany(name, 'f1', 'catchup');
       caught++;

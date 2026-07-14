@@ -71,9 +71,45 @@ function register(ipcMain) {
         return "";
       };
       const EMAIL_RE = /^[^\s@,"<>\[\]\\]+@[^\s@,"<>\[\]\\]+\.[^\s@,"<>\[\]\\]{2,}$/;
+      // 多邮箱分隔符：/ // , ; 换行
+      const EMAIL_SPLIT_RE = /\s*(?:\/\/+|\/|,|;|\n)\s*/;
+      const splitEmails = (raw) => {
+        const parts = raw.split(EMAIL_SPLIT_RE).map(s => s.trim()).filter(Boolean);
+        const seen = new Set();
+        return parts.filter(p => {
+          if (!EMAIL_RE.test(p) || seen.has(p.toLowerCase())) return false;
+          seen.add(p.toLowerCase());
+          return true;
+        });
+      };
+      const makeClient = (row, rawEmail, extra) => {
+        const company = getStr(row, "company");
+        const cl = {
+          company,
+          country: getStr(row, "country"),
+          category: getStr(row, "category"),
+          email: rawEmail,
+          website: getStr(row, "website"),
+          linkedin: getStr(row, "linkedin"),
+          firstName: getStr(row, "firstName"),
+          lastName: getStr(row, "lastName"),
+          contactName: getStr(row, "contactName"),
+          position: getStr(row, "position"),
+          phone: getStr(row, "phone"),
+          assignee: getStr(row, "assignee"),
+          contactPerson: getStr(row, "contactPerson"),
+          stage: getStr(row, "stage"),
+          clientType: classifyClient(company, getStr(row, "category")),
+        };
+        if (extra && Object.keys(extra).length) cl._extra = extra;
+        return cl;
+      };
+
       const clients = [];
       const invalidEmails = [];
       const unrecognizedCols = new Set();
+      let noEmailCount = 0;
+      let splitCount = 0;
       if (rows.length) {
         for (const rawKey of Object.keys(rows[0])) {
           if (!allKnownKeys.has(norm(rawKey))) unrecognizedCols.add(rawKey);
@@ -83,36 +119,47 @@ function register(ipcMain) {
       rows.forEach((r) => {
         const company = getStr(r, "company");
         if (!company) return;
-        const rawEmail = getStr(r, "email");
-        if (rawEmail && !EMAIL_RE.test(rawEmail)) {
-          invalidEmails.push({ company, email: rawEmail });
-        }
+
+        // 构建额外列数据
         const extra = {};
         for (const col of extraColsArr) {
           const v = r[col];
           if (v !== undefined && v !== null && String(v).trim()) extra[col] = String(v).trim();
         }
-        const client = {
-          company,
-          country: getStr(r, "country"),
-          category: getStr(r, "category"),
-          email: rawEmail,
-          website: getStr(r, "website"),
-          linkedin: getStr(r, "linkedin"),
-          firstName: getStr(r, "firstName"),
-          lastName: getStr(r, "lastName"),
-          contactName: getStr(r, "contactName"),
-          position: getStr(r, "position"),
-          phone: getStr(r, "phone"),
-          assignee: getStr(r, "assignee"),
-          contactPerson: getStr(r, "contactPerson"),
-          stage: getStr(r, "stage"),
-          clientType: classifyClient(company, getStr(r, "category")),
-        };
-        if (Object.keys(extra).length) client._extra = extra;
-        clients.push(client);
+
+        const rawEmail = getStr(r, "email");
+        if (!rawEmail) {
+          // 空邮箱 → 标记 no_email，预览中显示
+          const cl = makeClient(r, "", extra);
+          cl._emailStatus = "no_email";
+          clients.push(cl);
+          noEmailCount++;
+          return;
+        }
+
+        if (EMAIL_RE.test(rawEmail)) {
+          // 合法单邮箱 → 正常
+          clients.push(makeClient(r, rawEmail, extra));
+          return;
+        }
+
+        // 尝试拆分多邮箱
+        const parts = splitEmails(rawEmail);
+        if (parts.length >= 1) {
+          for (const email of parts) {
+            clients.push(makeClient(r, email, extra));
+          }
+          if (parts.length > 1) splitCount += parts.length - 1; // 增量
+          return;
+        }
+
+        // 确实格式异常 → 标记 invalid_email
+        invalidEmails.push({ company, email: rawEmail });
+        const cl = makeClient(r, rawEmail, extra);
+        cl._emailStatus = "invalid_email";
+        clients.push(cl);
       });
-      return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols] };
+      return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols], noEmailCount, splitCount };
     } catch (e) {
       return { error: e.message };
     }
