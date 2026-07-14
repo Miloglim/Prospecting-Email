@@ -4,9 +4,17 @@ import CS from './company-state.js';
 
 // ── 国家 → 模板语言映射 ──────────────────────────────────────────────────
 // ponytail: 统一入口，替换散落各处的 includes('Brasil') / === 'Brazil' 判断
+// 优先精确匹配 ISO 代码，避免 BR→English 等误判
 export function countryToLang(country) {
   const c = (country || '').toLowerCase().trim();
-  // 葡语国家（覆盖中/英/葡三种写法）
+  // ISO 代码精确匹配（优先，避免 "BR" 被漏掉）
+  const ISO_PT = ['br', 'pt', 'ao', 'mz', 'cv', 'gw', 'st', 'tl'];
+  const ISO_ES = ['mx', 'co', 'cl', 'pe', 'ar', 'ec', 'bo', 'py', 'uy', 'pa', 'cr', 've', 'gt', 'sv', 'hn', 'ni', 'do', 'cu', 'pr', 'es'];
+  const ISO_EN = ['us', 'gb', 'uk', 'ca', 'au', 'nz', 'de', 'fr', 'it', 'nl', 'be', 'jp', 'kr', 'cn', 'in', 'sg', 'ae'];
+  if (ISO_PT.includes(c)) return 'pt';
+  if (ISO_ES.includes(c)) return 'es';
+  if (ISO_EN.includes(c)) return 'en';
+  // 完整国名模糊匹配
   const ptCountries = [
     'brazil','brasil','巴西',
     'portugal','葡萄牙',
@@ -18,7 +26,6 @@ export function countryToLang(country) {
     'timor-leste','east timor','东帝汶',
   ];
   if (ptCountries.some(k => c.includes(k))) return 'pt';
-  // 西语拉美国家（覆盖中/英/西写法）
   const esCountries = [
     'mexico','méxico','墨西哥',
     'colombia','哥伦比亚',
@@ -42,10 +49,9 @@ export function countryToLang(country) {
     'spain','españa','西班牙',
   ];
   if (esCountries.some(k => c.includes(k))) return 'es';
-  // 英美加澳等 → 英语
   const enCountries = [
-    'usa','us','united states','美国',
-    'uk','united kingdom','england','英国',
+    'usa','united states','美国',
+    'united kingdom','england','英国',
     'canada','加拿大',
     'australia','澳大利亚',
     'new zealand','新西兰',
@@ -62,7 +68,7 @@ export function countryToLang(country) {
     'uae','dubai','阿联酋','迪拜',
   ];
   if (enCountries.some(k => c.includes(k))) return 'en';
-  // 非西语/葡语国家统一用英语
+  // 无法识别 → 英语
   return 'en';
 }
 export const lucide = window.lucide ? (n,s,c) => window.lucide(n,s,c) : () => '';
