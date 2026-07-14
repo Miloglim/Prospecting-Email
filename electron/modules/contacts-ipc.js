@@ -434,8 +434,12 @@ function register(ipcMain, deps) {
       contact.company = company;
       contact._suspicious = _suspicious;
     }
-    if (!contact.clientType || contact.clientType === 'unlabeled') {
+    // ponytail: 渲染层可能传 client_type（snake_case）或 clientType（camelCase），两者都检查
+    const ct = contact.clientType || contact.client_type;
+    if (!ct || ct === 'unlabeled') {
       contact.clientType = classifyClient(contact.company || '', contact.category || '');
+    } else {
+      contact.clientType = ct; // 统一到 camelCase，避免 update() 中双重 key 覆盖
     }
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射

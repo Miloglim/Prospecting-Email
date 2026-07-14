@@ -130,13 +130,15 @@ function update(id, data) {
   ]);
   // ponytail: camelCase → snake_case 映射（contacts-ipc 传 camelCase，DB 列是 snake_case）
   const FIELD_ALIAS = { firstName: "first_name", lastName: "last_name", contactName: "contact_name", clientType: "client_type", contactPerson: "contact_person" };
-  const fields = []; const params = [];
+  const fields = []; const params = []; const seenCols = new Set();
   for (let [k, v] of Object.entries(data)) {
     k = FIELD_ALIAS[k] || k;
     // 跳过 id、时间戳、JOIN 来的公司字段、旧 JSON 字段名
     if (k === "id" || k === "created_at" || k === "updated_at") continue;
     if (k.startsWith("_") && k !== "_suspicious") continue; // 旧内部字段跳过，_suspicious 保留
     if (!VALID_COLS.has(k)) continue;
+    if (seenCols.has(k)) continue; // ponytail: 防 camelCase + snake_case 双重 key 覆盖
+    seenCols.add(k);
     if (k === "tags") { fields.push("tags = ?"); params.push(JSON.stringify(v || [])); continue; }
     if (k === "is_bounced") { fields.push("is_bounced = ?"); params.push(v ? 1 : 0); continue; }
     if (k === "_suspicious") { fields.push("_suspicious = ?"); params.push(v ? 1 : 0); continue; }
