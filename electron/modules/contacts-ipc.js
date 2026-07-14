@@ -62,7 +62,7 @@ function register(ipcMain, deps) {
           email: placeholder, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: 'no_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          clientType: c._noCompany ? 'no_company' : 'no_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
         });
         emailIndex.set(placeholder.toLowerCase(), existing[existing.length - 1]);
@@ -82,7 +82,7 @@ function register(ipcMain, deps) {
           email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: 'invalid_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
+          clientType: c._noCompany ? 'no_company' : 'invalid_email', assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold', tags: [], _suspicious: 1, addedAt: new Date().toISOString(),
         });
         emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
@@ -141,7 +141,7 @@ function register(ipcMain, deps) {
           firstName: c.firstName || split.firstName || '',
           lastName: c.lastName || split.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
-          clientType: c.clientType || classifyClient(c.company, c.category),
+          clientType: c._noCompany ? 'no_company' : (c.clientType || classifyClient(c.company, c.category)),
           assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold',
           tags: [],  // 新联系人默认空标签

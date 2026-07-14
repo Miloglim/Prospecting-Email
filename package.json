@@ -11,6 +11,8 @@
     "pack": "electron-vite build && electron-builder --win",
     "build-only": "electron-vite build && electron-builder --win --publish never",
     "ship": "electron-vite build && electron-builder --win --publish never",
+    "test": "node tests/classify-client.test.js && node tests/email-parse.test.js",
+    "check": "node scripts/check.js",
     "upload": "node scripts/release.js",
     "sync-oss": "node scripts/sync-oss.js"
   },

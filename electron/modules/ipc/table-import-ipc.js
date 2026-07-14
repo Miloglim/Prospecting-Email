@@ -110,6 +110,8 @@ function register(ipcMain) {
       const unrecognizedCols = new Set();
       let noEmailCount = 0;
       let splitCount = 0;
+      let noCompanyCount = 0; // 无公司名跳过
+      let totalEmailsInSheet = 0; // 原表有邮箱的单元格数
       if (rows.length) {
         for (const rawKey of Object.keys(rows[0])) {
           if (!allKnownKeys.has(norm(rawKey))) unrecognizedCols.add(rawKey);
@@ -117,8 +119,12 @@ function register(ipcMain) {
       }
       const extraColsArr = [...unrecognizedCols];
       rows.forEach((r) => {
-        const company = getStr(r, "company");
-        if (!company) return;
+        const rawEmail = getStr(r, "email");
+        if (rawEmail) totalEmailsInSheet++; // 原表统计，不计公司名为空
+
+        let company = getStr(r, "company");
+        const noCompany = !company;
+        if (noCompany) { noCompanyCount++; company = '(未命名公司)'; }
 
         // 构建额外列数据
         const extra = {};
@@ -127,19 +133,21 @@ function register(ipcMain) {
           if (v !== undefined && v !== null && String(v).trim()) extra[col] = String(v).trim();
         }
 
-        const rawEmail = getStr(r, "email");
         if (!rawEmail) {
-          // 空邮箱 → 标记 no_email，预览中显示
           const cl = makeClient(r, "", extra);
+          cl.company = company;
           cl._emailStatus = "no_email";
+          if (noCompany) cl._noCompany = true;
           clients.push(cl);
           noEmailCount++;
           return;
         }
 
         if (EMAIL_RE.test(rawEmail)) {
-          // 合法单邮箱 → 正常
-          clients.push(makeClient(r, rawEmail, extra));
+          const cl = makeClient(r, rawEmail, extra);
+          cl.company = company;
+          if (noCompany) cl._noCompany = true;
+          clients.push(cl);
           return;
         }
 
@@ -147,19 +155,24 @@ function register(ipcMain) {
         const parts = splitEmails(rawEmail);
         if (parts.length >= 1) {
           for (const email of parts) {
-            clients.push(makeClient(r, email, extra));
+            const cl = makeClient(r, email, extra);
+            cl.company = company;
+            if (noCompany) cl._noCompany = true;
+            clients.push(cl);
           }
-          if (parts.length > 1) splitCount += parts.length - 1; // 增量
+          if (parts.length > 1) splitCount += parts.length - 1;
           return;
         }
 
-        // 确实格式异常 → 标记 invalid_email
+        // 确实格式异常
         invalidEmails.push({ company, email: rawEmail });
         const cl = makeClient(r, rawEmail, extra);
+        cl.company = company;
         cl._emailStatus = "invalid_email";
+        if (noCompany) cl._noCompany = true;
         clients.push(cl);
       });
-      return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols], noEmailCount, splitCount };
+      return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols], noEmailCount, noCompanyCount, splitCount, totalEmailsInSheet };
     } catch (e) {
       return { error: e.message };
     }

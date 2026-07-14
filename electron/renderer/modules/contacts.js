@@ -31,22 +31,28 @@ export async function doImport(file) {
   S.clientsExtraCols = result.unrecognizedCols || [];
   S.clientsPage = 1;
   if (fileInput) fileInput.value = ''; // 重置 input，允许重复导入同一文件
-  const parts = [`<b>✅ 成功导入 ${S.clientsData.length} 条记录</b>`];
-  if (result.noEmailCount > 0) {
-    parts.push(`<span style="color:#e65100">📧 ${result.noEmailCount} 条无邮箱（保存后标为"待补邮箱"）</span>`);
-  }
-  if (result.splitCount > 0) {
-    parts.push(`✂️ 检测到 ${result.splitCount} 个多邮箱单元格，已自动拆分`);
-  }
+  const valid = S.clientsData.length;
+  const flow = [];
+  if (result.totalEmailsInSheet != null) flow.push(`<b>${result.totalEmailsInSheet}</b> 个邮箱`);
+  if (result.noCompanyCount > 0) flow.push(`<span style="color:#e65100">${result.noCompanyCount} 无公司名</span>`);
+  if (result.noEmailCount > 0) flow.push(`<span style="color:#e65100">-${result.noEmailCount} 无邮箱</span>`);
+  if (result.splitCount > 0) flow.push(`<span style="color:#22a644">+${result.splitCount} 拆分</span>`);
+  const flowHtml = flow.length ? `<div style="font-size:12px;color:#888;margin-bottom:8px">${flow.join(' &nbsp;→&nbsp; ')}</div>` : '';
+  const items = [];
+  if (result.noEmailCount > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e65100">${lucide('mail',14)} ${result.noEmailCount} 条无邮箱 — 保存后标为「待补邮箱」</div>`);
+  if (result.noCompanyCount > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#888">${lucide('building',14)} ${result.noCompanyCount} 条无公司名 — 标为「未命名公司」</div>`);
+  if (result.splitCount > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#22a644">${lucide('scissors',14)} ${result.splitCount} 个多邮箱单元格已自动拆分</div>`);
   if (result.invalidEmails?.length) {
-    const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('<br>');
-    const more = result.invalidEmails.length > 10 ? `<br>...等共 ${result.invalidEmails.length} 个` : '';
-    parts.push(`<span style="color:#e5484d">⚠️ ${result.invalidEmails.length} 个邮箱格式异常：<br>${list}${more}</span>`);
+    const list = result.invalidEmails.slice(0, 8).map(e => `<div style="font-size:11px;padding:2px 0">${escapeHtml(e.company)} → ${escapeHtml(e.email)}</div>`).join('');
+    const more = result.invalidEmails.length > 8 ? `<div style="font-size:11px;color:#888">...等共 ${result.invalidEmails.length} 个</div>` : '';
+    items.push(`<div style="margin-top:4px"><div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e5484d;margin-bottom:4px">${lucide('alert-triangle',14)} ${result.invalidEmails.length} 个邮箱格式异常</div><div style="margin-left:22px;max-height:120px;overflow-y:auto;color:#666">${list}${more}</div></div>`);
   }
   if (result.unrecognizedCols?.length) {
-    parts.push(`<span style="color:#888">🔍 未识别的列（${result.unrecognizedCols.length}）：${result.unrecognizedCols.join('、')}</span>`);
+    items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#999;margin-top:4px">${lucide('search',14)} 未识别的列：${result.unrecognizedCols.map(c => escapeHtml(c)).join('、')}</div>`);
   }
-  await showAlert(parts.join('<br><br>'));
+  const itemsHtml = items.length ? `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">${items.join('')}</div>` : '';
+  const msg = `<div style="text-align:center;margin-bottom:4px"><b style="font-size:16px;color:#22a644">${lucide('check-circle',18)} ${valid} 条</b></div>${flowHtml}${itemsHtml}`;
+  await showAlert(msg);
   renderClientsTable();
 }
 
@@ -143,17 +149,19 @@ export function renderClientsTable() {
 document.getElementById('clients-import-btn')?.addEventListener('click', async () => {
   if (!S.clientsData.length) return await showAlert('没有可导入的数据');
   const result = await window.electronAPI.importContacts(S.clientsData);
-  const parts = [`<b>新增 ${result.added}</b> 位联系人（总计 ${result.total} 位）`];
-  if (result.updated > 0) parts.push(`更新 ${result.updated} 条（同邮箱覆盖旧数据）`);
-  if (result.skipped > 0) parts.push(`<span style="color:#e65100">跳过 ${result.skipped} 条（无邮箱）</span>`);
-  if (result.noEmailImported > 0) parts.push(`<span style="color:#e65100">📧 ${result.noEmailImported} 条无邮箱已标为"待补邮箱"（⚠️ 异常中查看）</span>`);
-  if (result.writeFailed > 0) parts.push(`<span style="color:#e5484d">❌ ${result.writeFailed} 条写入失败</span>`);
+  const items = [];
+  items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#22a644">${lucide('user-plus',16)} <b>${result.added}</b> 位新增</div>`);
+  if (result.updated > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#888">${lucide('refresh-cw',14)} ${result.updated} 条已存在并更新</div>`);
+  if (result.skipped > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e65100">${lucide('alert-circle',14)} ${result.skipped} 条无邮箱跳过</div>`);
+  if (result.noEmailImported > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e65100">${lucide('mail',14)} ${result.noEmailImported} 条标为「待补邮箱」</div>`);
+  if (result.writeFailed > 0) items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e5484d">${lucide('x-circle',14)} ${result.writeFailed} 条写入失败</div>`);
   if (result.invalidEmail > 0) {
-    const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('<br>');
-    const more = result.invalidEmail > 10 ? `<br>...等共 ${result.invalidEmail} 个` : '';
-    parts.push(`<span style="color:#e5484d">⚠️ ${result.invalidEmail} 个邮箱格式异常（⚠️ 异常中修正）：<br>${list}${more}</span>`);
+    const list = (result.invalidEmails || []).slice(0, 5).map(e => `<div style="font-size:11px;padding:1px 0">${escapeHtml(e.company)} → ${escapeHtml(e.email)}</div>`).join('');
+    const more = result.invalidEmail > 5 ? `<div style="font-size:11px;color:#888">...等共 ${result.invalidEmail} 个</div>` : '';
+    items.push(`<div style="margin-top:4px"><div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#e5484d;margin-bottom:2px">${lucide('alert-triangle',14)} ${result.invalidEmail} 个格式异常</div><div style="margin-left:22px;color:#666">${list}${more}</div></div>`);
   }
-  await showAlert(parts.join('<br><br>'));
+  const msg = `<div style="text-align:center;margin-bottom:6px"><b style="font-size:16px">${lucide('database',18)} 总计 ${result.total} 位联系人</b></div>${items.join('')}`;
+  await showAlert(msg);
 });
 
 // 「清除」
@@ -207,7 +215,7 @@ export function renderContactsList(filtered) {
   if (S.contactsFilter === 'archived') {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
   } else if (S.contactsFilter === 'anomaly') {
-    data = data.filter(c => c.clientType === 'no_email' || c.clientType === 'invalid_email');
+    data = data.filter(c => c.clientType === 'no_email' || c.clientType === 'invalid_email' || c.clientType === 'no_company');
   } else if (S.contactsFilter?.startsWith('tag:')) {
     const tag = S.contactsFilter.slice(4);
     data = data.filter(c => (c.tags || []).includes(tag));
@@ -233,7 +241,7 @@ export function renderContactsList(filtered) {
       seenCompanies.add(key);
       counts[ct] = (counts[ct] || 0) + 1;
     }
-    if (ct === 'no_email' || ct === 'invalid_email') anomalyCount++;
+    if (ct === 'no_email' || ct === 'invalid_email' || ct === 'no_company') anomalyCount++;
   }
 
   // 更新筛选标签
