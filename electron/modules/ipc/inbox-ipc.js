@@ -7,14 +7,9 @@ const { Log } = require('../core/logger');
 let _pollTimer = null;
 let _cooldownTimer = null;
 let _fetching = false;
-let _nextFetchAt = 0;
 const FAST_INTERVAL_MS = 2 * 60 * 1000;      // 发信时 2 分钟
 const NORMAL_INTERVAL_MS = 5 * 60 * 1000;     // 静默时 5 分钟
 const FAST_COOLDOWN_MS = 5 * 60 * 1000;       // 冷却 5 分钟
-
-function _pushNextFetch(deps) {
-  deps?.mainWindow?.webContents.send('inbox:nextFetch', { nextFetchAt: _nextFetchAt });
-}
 
 function register(ipcMain, deps) {
   const inbox = require('../services/inbox-service');
@@ -30,19 +25,13 @@ function register(ipcMain, deps) {
       if (after > before) deps?.mainWindow?.webContents.send('inbox:changed');
       deps?.mainWindow?.webContents.send('contacts:changed');
     } catch (e) { Log.warn('[收件箱]', '自动拉取失败: ' + e.message); }
-    _nextFetchAt = Date.now() + (_cooldownTimer ? FAST_INTERVAL_MS : NORMAL_INTERVAL_MS);
-    _pushNextFetch(deps);
     _fetching = false;
   }
 
   function _startPolling(intervalMs) {
     clearInterval(_pollTimer);
     _pollTimer = setInterval(_doFetch, intervalMs);
-    _nextFetchAt = Date.now() + intervalMs;
-    _pushNextFetch(deps);
   }
-
-  ipcMain.handle('inbox:nextFetch', async () => ({ nextFetchAt: _nextFetchAt }));
 
   ipcMain.handle('inbox:fetch', async () => {
     try { return { ok: true, data: await inbox.fetchInbox(configPath) }; }

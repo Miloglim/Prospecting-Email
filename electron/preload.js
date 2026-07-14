@@ -12,8 +12,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 客户表
   importFile: (filePath) => ipcRenderer.invoke("table:importFile", filePath),
-  importFeishu: (baseToken, tableId) =>
-    ipcRenderer.invoke("table:importFeishu", baseToken, tableId),
 
   // 背调
   getBackcheckReports: () => ipcRenderer.invoke("backcheck:getReports"),
@@ -101,12 +99,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 退信检查
   // 收件箱
   fetchInbox: () => ipcRenderer.invoke("inbox:fetch"),
-  inboxNextFetch: () => ipcRenderer.invoke("inbox:nextFetch"),
-  onInboxNextFetch: (callback) => {
-    const handler = (_event, data) => callback(data);
-    ipcRenderer.on("inbox:nextFetch", handler);
-    return () => ipcRenderer.removeListener("inbox:nextFetch", handler);
-  },
   listInbox: () => ipcRenderer.invoke("inbox:list"),
   getInboxBody: (index) => ipcRenderer.invoke("inbox:getBody", index),
   markInboxProcessed: (index) =>

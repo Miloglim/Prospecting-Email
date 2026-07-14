@@ -197,8 +197,6 @@ const INBOX = {
   LINK_CONTACT: "inbox:linkContact",
   /** 删除邮件记录 */
   DELETE: "inbox:delete",
-  /** 获取下次拉取时间 */
-  NEXT_FETCH: "inbox:nextFetch",
   /** 移除单个匹配联系人 */
   REMOVE_MATCHED_CONTACT: "inbox:removeMatchedContact",
   /** 批量移除匹配联系人 */
@@ -360,8 +358,6 @@ const DISCOVER = {
 const TABLE = {
   /** 从文件导入客户表 */
   IMPORT_FILE: "table:importFile",
-  /** 从飞书多维表格导入客户表 */
-  IMPORT_FEISHU: "table:importFeishu",
 };
 
 // ══════════════════════════════════════════════════════════════════════════════

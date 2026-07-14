@@ -505,31 +505,4 @@ window.electronAPI.onContactsChanged(async () => {
 });
 // 快捷键：Ctrl+A 全选、Esc 取消、Ctrl+D 取消全选
 
-// ── 自动拉取倒计时 ───────────────────────────────────────────────────────────
-let _inboxNextFetchAt = 0;
-let _inboxTimer = null;
-
-function _startInboxTimer() {
-  if (_inboxTimer) clearInterval(_inboxTimer);
-  _inboxTimer = setInterval(() => {
-    const el = document.getElementById('inbox-timer');
-    if (!el) return;
-    const remain = Math.max(0, Math.floor((_inboxNextFetchAt - Date.now()) / 1000));
-    if (_inboxNextFetchAt <= 0) { el.textContent = ''; return; }
-    if (remain <= 0) { el.textContent = '⏳ 拉取中...'; return; }
-    const m = Math.floor(remain / 60), s = remain % 60;
-    el.textContent = `⏳ ${m}:${String(s).padStart(2, '0')}`;
-  }, 1000);
-}
-
-window.electronAPI.onInboxNextFetch((data) => {
-  _inboxNextFetchAt = data?.nextFetchAt || 0;
-  _startInboxTimer();
-});
-// 启动时主动查询一次
-(async () => {
-  const r = await window.electronAPI.inboxNextFetch();
-  if (r?.nextFetchAt) { _inboxNextFetchAt = r.nextFetchAt; _startInboxTimer(); }
-})();
-
 window.__pageHandlers['inbox'] = initInbox;

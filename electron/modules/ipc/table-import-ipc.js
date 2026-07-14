@@ -1,11 +1,10 @@
 // ── 客户表导入 IPC 路由 ──
-// 从 main.js 抽离：Excel/CSV 文件导入 + 飞书多维表格导入
+// 从 main.js 抽离：Excel/CSV 文件导入
 
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { execSync } = require('child_process');
-const { classifyClient, markSuspicious } = require('../classify-client');
+const { classifyClient } = require('../classify-client');
 
 function register(ipcMain) {
   ipcMain.handle("table:importFile", async (_e, filePath) => {
@@ -80,6 +79,7 @@ function register(ipcMain) {
           if (!allKnownKeys.has(norm(rawKey))) unrecognizedCols.add(rawKey);
         }
       }
+      const extraColsArr = [...unrecognizedCols];
       rows.forEach((r) => {
         const company = getStr(r, "company");
         if (!company) return;
@@ -87,7 +87,12 @@ function register(ipcMain) {
         if (rawEmail && !EMAIL_RE.test(rawEmail)) {
           invalidEmails.push({ company, email: rawEmail });
         }
-        clients.push({
+        const extra = {};
+        for (const col of extraColsArr) {
+          const v = r[col];
+          if (v !== undefined && v !== null && String(v).trim()) extra[col] = String(v).trim();
+        }
+        const client = {
           company,
           country: getStr(r, "country"),
           category: getStr(r, "category"),
@@ -103,7 +108,9 @@ function register(ipcMain) {
           contactPerson: getStr(r, "contactPerson"),
           stage: getStr(r, "stage"),
           clientType: classifyClient(company, getStr(r, "category")),
-        });
+        };
+        if (Object.keys(extra).length) client._extra = extra;
+        clients.push(client);
       });
       return { clients, total: clients.length, invalidEmails, unrecognizedCols: [...unrecognizedCols] };
     } catch (e) {
@@ -111,106 +118,6 @@ function register(ipcMain) {
     }
   });
 
-  ipcMain.handle("table:importFeishu", async (_e, baseToken, tableId) => {
-    try {
-      const fieldOut = execSync(
-        `lark-cli base +field-list --base-token "${baseToken}" --table-id "${tableId}" --limit 200`,
-        { timeout: 15000, encoding: "utf-8", maxBuffer: 1024 * 1024 },
-      );
-      const fd = JSON.parse(fieldOut);
-      const fields = fd.data?.fields || fd.fields || [];
-      const allFieldNames = fields.map((f) => f.name);
-      const TARGETS = [
-        { keys: ["公司名称", "公司名", "公司", "Company", "company", "empresa", "客户名称"], field: "company" },
-        { keys: ["国家", "Country", "country"], field: "country" },
-        { keys: ["公司类型", "品类", "行业", "Category", "category", "rubro"], field: "category" },
-        { keys: ["邮箱", "联系方式", "邮箱地址", "Email", "email", "收件人"], field: "email" },
-        { keys: ["网站", "Website", "website", "官网", "LinkedIn"], field: "website" },
-        { keys: ["名", "FirstName", "first_name", "firstname"], field: "firstName" },
-        { keys: ["姓", "LastName", "last_name", "lastname"], field: "lastName" },
-        { keys: ["姓名", "联系人", "Contact", "contact"], field: "contactName" },
-        { keys: ["职位", "Position", "position"], field: "position" },
-        { keys: ["电话", "Phone", "phone", "Tel", "tel"], field: "phone" },
-      ];
-      const selectedNames = [];
-      for (const t of TARGETS) {
-        const name = allFieldNames.find((n) => t.keys.some((k) => n === k || (n && n.includes(k))));
-        selectedNames.push(name || "");
-      }
-      if (!selectedNames.some(Boolean)) {
-        selectedNames.splice(0, selectedNames.length, ...allFieldNames.slice(0, 3));
-        while (selectedNames.length < TARGETS.length) selectedNames.push("");
-      }
-      const validNames = selectedNames.filter(Boolean);
-      const allRecords = [];
-      const seenRecordIds = new Set();
-      const pageSize = 200;
-      let offset = 0;
-      const idArgs = validNames.map((n) => ` --field-id "${n}"`).join("");
-      while (true) {
-        const output = execSync(
-          `lark-cli base +record-list --base-token "${baseToken}" --table-id "${tableId}" --offset ${offset} --limit ${pageSize} --format json${idArgs}`,
-          { timeout: 30000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 },
-        );
-        const resp = JSON.parse(output);
-        const rows = resp.data?.data || resp.data || [];
-        if (!rows.length) break;
-        const ids = resp.data?.record_id_list || [];
-        for (let i = 0; i < rows.length; i++) {
-          const rid = ids[i] || String(i + offset);
-          if (seenRecordIds.has(rid)) continue;
-          seenRecordIds.add(rid);
-          const row = rows[i];
-          const colMap = {};
-          (resp.data?.fields || []).forEach((name, ci) => { colMap[name] = ci; });
-          const obj = {};
-          for (let ti = 0; ti < TARGETS.length; ti++) {
-            const an = selectedNames[ti];
-            if (!an) continue;
-            const ci = colMap[an];
-            const val = ci !== undefined && ci < row.length ? row[ci] : "";
-            let clean = "";
-            if (Array.isArray(val))
-              clean = String(val[0]?.link || val[0]?.text || val[0]?.url || val[0] || "");
-            else if (val && typeof val === "object")
-              clean = val.link || val.text || val.url || "";
-            else clean = String(val ?? "");
-            clean = clean.trim();
-            const md = clean.match(/^\[(.+?)\]\((.+?)\)$/);
-            if (md) {
-              const u = md[2];
-              clean = u.startsWith("mailto:") ? u.slice(7)
-                : u.startsWith("tel:") ? u.slice(4)
-                : u.includes("@") ? u.replace(/^https?:\/\//, "")
-                : u;
-            }
-            if (clean.startsWith("mailto:")) clean = clean.slice(7);
-            else if (clean.startsWith("tel:")) clean = clean.slice(4);
-            obj[TARGETS[ti].field] = clean.trim();
-          }
-          allRecords.push(obj);
-        }
-        if (!resp.data?.has_more || rows.length < pageSize) break;
-        offset += pageSize;
-      }
-      if (!allRecords.length) return { error: "未读取到任何记录" };
-      let suspiciousCount = 0;
-      for (const r of allRecords) {
-        const m = markSuspicious(r.company);
-        r.company = m.company;
-        r._suspicious = m._suspicious;
-        if (m._suspicious) suspiciousCount++;
-        r.clientType = classifyClient(r.company, r.category);
-      }
-      return { clients: allRecords, total: allRecords.length, suspiciousCount };
-    } catch (e) {
-      const msg = e.message || "";
-      if (msg.includes("not found")) return { error: "lark-cli 未安装" };
-      if (msg.includes("auth")) return { error: "飞书未授权" };
-      if (msg.includes("ETIMEDOUT")) return { error: "飞书请求超时" };
-      return { error: "飞书读取失败: " + msg };
-    }
-  });
 }
 
 module.exports = { register };

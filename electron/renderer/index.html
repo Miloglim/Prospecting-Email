@@ -238,7 +238,6 @@
         <input type="file" id="file-input" accept=".xlsx,.xls,.csv" hidden>
       </div>
       <div style="text-align:center;margin-bottom:16px">
-        <button id="feishu-import-btn" class="secondary"><span data-icon="file-spreadsheet"></span> 从飞书导入</button>
       </div>
       <div id="clients-toolbar" style="display:none">
         <span id="clients-count"></span>
@@ -247,7 +246,7 @@
           <button id="clients-clear-btn" class="secondary danger"><span data-icon="trash"></span> 清除</button>
         </div>
       </div>
-      <div class="table-wrapper">
+      <div class="table-wrapper" style="overflow-x:auto">
         <table id="clients-table" style="display:none">
           <thead><tr><th>#</th><th>公司名</th><th>姓名</th><th>国家</th><th>品类</th><th>邮箱</th></tr></thead>
           <tbody></tbody>
@@ -618,7 +617,6 @@
         <button id="inbox-refresh" style="min-width:90px"><span data-icon="refresh-cw"></span> 刷新</button>
         <button id="inbox-clear" class="secondary" style="font-size:12px;padding:4px 10px">清除记录</button>
         <span id="inbox-count" style="font-size:12px;color:var(--text-secondary)"></span>
-        <span id="inbox-timer" style="font-size:11px;color:var(--text-secondary);margin-left:auto" title="距离下次自动拉取">⏳ —</span>
       </div>
       <div class="inbox-container">
         <div class="inbox-left">
@@ -796,17 +794,6 @@
             <div class="form-row"><label>Serper</label><span class="input-with-link"><input type="password" id="cfg-search-serper-key" placeholder="Serper API Key"><a href="#" class="api-link" data-url="https://serper.dev/"><span data-icon="external-link"></span></a></span></div>
             <div class="form-row"><label>Agnes AI</label><span class="input-with-link"><input type="password" id="cfg-agnes-key" placeholder="sk-..."><a href="#" class="api-link" data-url="https://platform.agnes-ai.com/settings/apiKeys"><span data-icon="external-link"></span></a></span></div>
             <div class="form-row"><label>DeepSeek</label><span class="input-with-link"><input type="password" id="cfg-deepseek-key" placeholder="sk-..."><a href="#" class="api-link" data-url="https://platform.deepseek.com/api_keys"><span data-icon="external-link"></span></a></span></div>
-          </div>
-        </div>
-
-        <div class="setting-card">
-          <div class="setting-card-header">
-            <h3><span data-icon="file-spreadsheet"></span> 飞书表格</h3>
-            <span class="setting-status"></span>
-          </div>
-          <div class="setting-card-body">
-            <div class="form-row"><label>表格地址</label><input type="text" id="cfg-feishu-url" placeholder="粘贴飞书多维表格完整 URL"></div>
-            <div class="form-row form-row-inline"><div><label>Base ID</label><input type="text" id="cfg-feishu-base-extracted" readonly></div><div><label>Table ID</label><input type="text" id="cfg-feishu-table-extracted" readonly></div></div>
           </div>
         </div>
 

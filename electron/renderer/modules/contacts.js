@@ -28,7 +28,9 @@ export async function doImport(file) {
   const result = await window.electronAPI.importFile(filePath);
   if (result.error) { await showAlert('导入失败: ' + result.error); return; }
   S.clientsData = result.clients || [];
+  S.clientsExtraCols = result.unrecognizedCols || [];
   S.clientsPage = 1;
+  if (fileInput) fileInput.value = ''; // 重置 input，允许重复导入同一文件
   let msg = `成功导入 ${S.clientsData.length} 条记录`;
   if (result.invalidEmails?.length) {
     const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
@@ -42,9 +44,28 @@ export async function doImport(file) {
   renderClientsTable();
 }
 
+const KNOWN_FIELDS = [
+  { key: 'company', label: '公司名' },
+  { key: 'firstName', label: '名' },
+  { key: 'lastName', label: '姓' },
+  { key: 'contactName', label: '联系人' },
+  { key: 'email', label: '邮箱' },
+  { key: 'country', label: '国家' },
+  { key: 'category', label: '品类' },
+  { key: 'website', label: '网站' },
+  { key: 'linkedin', label: 'LinkedIn' },
+  { key: 'position', label: '职位' },
+  { key: 'phone', label: '电话' },
+  { key: 'assignee', label: '跟进人' },
+  { key: 'contactPerson', label: '对接人' },
+  { key: 'stage', label: '阶段' },
+  { key: 'clientType', label: '类型' },
+];
+
 export function renderClientsTable() {
   const table = document.getElementById('clients-table');
   const tbody = table?.querySelector('tbody');
+  const theadRow = table?.querySelector('thead tr');
   const empty = document.getElementById('clients-empty');
   const toolbar = document.getElementById('clients-toolbar');
   const count = document.getElementById('clients-count');
@@ -58,10 +79,31 @@ export function renderClientsTable() {
     return;
   }
 
+  // 检测哪些已知字段有实际数据（company/email 始终显示）
+  const CORE_KEYS = new Set(['company', 'email']);
+  const dataCols = KNOWN_FIELDS.filter(f => {
+    if (CORE_KEYS.has(f.key)) return true;
+    return S.clientsData.some(c => c[f.key] && String(c[f.key]).trim());
+  });
+  const extraCols = S.clientsExtraCols || [];
+  // 合并列顺序：已知字段 + 未识别字段
+  const allCols = [
+    ...dataCols.map(f => ({ ...f, isExtra: false })),
+    ...extraCols.map(col => ({ key: col, label: col, isExtra: true })),
+  ];
+
   if (empty) empty.style.display = 'none';
   if (table) table.style.display = '';
   if (toolbar) toolbar.style.display = 'flex';
   if (count) count.textContent = `共 ${S.clientsData.length} 条记录（第 ${S.clientsPage}/${Math.ceil(S.clientsData.length / S.PAGE_SIZE)} 页）`;
+
+  // 动态表头
+  if (theadRow) {
+    theadRow.innerHTML = '<th>#</th>' + allCols.map(col => {
+      const extraStyle = col.isExtra ? 'color:#999;font-weight:400' : '';
+      return `<th style="white-space:nowrap;${extraStyle}">${escapeHtml(col.label)}</th>`;
+    }).join('');
+  }
 
   // 分页切片
   const start = (S.clientsPage - 1) * S.PAGE_SIZE;
@@ -69,17 +111,15 @@ export function renderClientsTable() {
 
   if (tbody) {
     tbody.innerHTML = pageData.map((c, i) => {
-      const nameDisplay = (c.firstName || c.lastName) ? `${c.firstName || ''} ${c.lastName || ''}`.trim() : (c.contactName || '—');
-      return `
-      <tr>
-        <td>${start + i + 1}</td>
-        <td>${escapeHtml(c.company)}</td>
-        <td>${escapeHtml(nameDisplay)}</td>
-        <td>${escapeHtml(c.country)}</td>
-        <td>${escapeHtml(c.category)}</td>
-        <td>${escapeHtml(c.email)}</td>
-      </tr>
-    `}).join('');
+      const cells = allCols.map(col => {
+        const val = col.isExtra
+          ? ((c._extra && c._extra[col.key]) || '')
+          : (c[col.key] || '');
+        const extraStyle = col.isExtra ? 'color:#aaa;font-size:0.9em' : '';
+        return `<td style="white-space:nowrap;${extraStyle}">${escapeHtml(String(val))}</td>`;
+      }).join('');
+      return `<tr><td>${start + i + 1}</td>${cells}</tr>`;
+    }).join('');
   }
 
   // 分页控件
@@ -104,43 +144,12 @@ document.getElementById('clients-import-btn')?.addEventListener('click', async (
   await showAlert(msg);
 });
 
-// 「从飞书导入」
-document.getElementById('feishu-import-btn')?.addEventListener('click', async () => {
-  const btn = document.getElementById('feishu-import-btn');
-  btn.disabled = true; btn.innerHTML = `${lucide('refresh-cw',12,'spin')} 读取中...`;
-  try {
-    const config = await window.electronAPI.loadConfig();
-    const url = config?.feishu?.url;
-    // 从URL自动提取 baseToken 和 tableId
-    const baseMatch = url?.match(/\/base\/([a-zA-Z0-9_-]+)/);
-    const tableMatch = url?.match(/table[=\/]([a-zA-Z0-9_-]+)/);
-    const baseToken = baseMatch?.[1];
-    const tableId = tableMatch?.[1];
-    if (!baseToken || !tableId) {
-      await showAlert('请在设置页填写飞书多维表格完整地址（含 /base/xxx?table=xxx）');
-    btn.disabled = false; btn.innerHTML = `${lucide('file-spreadsheet',14)} 从飞书导入`;
-      return;
-    }
-    const result = await window.electronAPI.importFeishu(baseToken, tableId);
-    if (result.error) { await showAlert('导入失败:\n' + result.error + '\n\n请将显示内容反馈给开发者'); }
-    else {
-      S.clientsData = result.clients || [];
-      S.clientsPage = 1;
-      let msg = `✅ ${S.clientsData.length} 条`;
-      if (result.suspiciousCount > 0) {
-        msg += `\n\n📊 飞书共 ${result.rawCount} 行，${result.suspiciousCount} 行公司名异常已标记「待确认」`;
-      }
-      await showAlert(msg);
-      renderClientsTable();
-    }
-  } catch (e) { await showAlert('飞书导入异常: ' + e.message); }
-  btn.disabled = false; btn.innerHTML = `${lucide('file-spreadsheet',14)} 从飞书导入`;
-});
-
 // 「清除」
 document.getElementById('clients-clear-btn')?.addEventListener('click', () => {
   S.clientsData = [];
+  S.clientsExtraCols = [];
   S.clientsPage = 1;
+  if (fileInput) fileInput.value = '';
   renderClientsTable();
 });
 

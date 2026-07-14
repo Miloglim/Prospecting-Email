@@ -33,7 +33,6 @@ const CFG_KEYS = [
   { id: 'cfg-test-company', path: 'test.company' },
   { id: 'cfg-test-enabled', path: 'test.enabled', isBool: true },
   { id: 'cfg-dry-run', path: 'test.dryRun', isBool: true },
-  { id: 'cfg-feishu-url', path: 'feishu.url' },
   { id: 'cfg-backcheck-filter', path: 'backcheck.filterEnabled', isBool: true },
   { id: 'cfg-general-auto-launch', path: 'general.autoLaunch', isBool: true },
   { id: 'cfg-general-close-action', path: 'general.closeAction' },
@@ -69,12 +68,6 @@ export function loadSettingsIntoForm(config) {
     }
     if (key.isBool) el.checked = !!val;
     else el.value = val ?? '';
-  }
-  // 飞书 URL 加载时自动提取显示
-  const url = config?.feishu?.url || '';
-  if (url) {
-    document.getElementById('cfg-feishu-base-extracted').value = url.match(/\/base\/([a-zA-Z0-9_-]+)/)?.[1] || '';
-    document.getElementById('cfg-feishu-table-extracted').value = url.match(/table[=\/]([a-zA-Z0-9_-]+)/)?.[1] || '';
   }
 }
 
@@ -150,14 +143,6 @@ async function saveModeOnly(mode) {
 }
 
 
-// 飞书 URL 自动提取
-document.getElementById('cfg-feishu-url')?.addEventListener('input', (e) => {
-  const url = e.target.value;
-  const base = url.match(/\/base\/([a-zA-Z0-9_-]+)/)?.[1] || '';
-  const table = url.match(/table[=\/]([a-zA-Z0-9_-]+)/)?.[1] || '';
-  document.getElementById('cfg-feishu-base-extracted').value = base;
-  document.getElementById('cfg-feishu-table-extracted').value = table;
-});
 
 // 自动保存设置
 async function autoSaveSettings(el) {
