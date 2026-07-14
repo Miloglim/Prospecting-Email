@@ -31,22 +31,22 @@ export async function doImport(file) {
   S.clientsExtraCols = result.unrecognizedCols || [];
   S.clientsPage = 1;
   if (fileInput) fileInput.value = ''; // 重置 input，允许重复导入同一文件
-  let msg = `✅ 成功导入 ${S.clientsData.length} 条记录`;
+  const parts = [`<b>✅ 成功导入 ${S.clientsData.length} 条记录</b>`];
   if (result.noEmailCount > 0) {
-    msg += `\n\n📧 ${result.noEmailCount} 条无邮箱（保存后将标为"待补邮箱"）`;
+    parts.push(`<span style="color:#e65100">📧 ${result.noEmailCount} 条无邮箱（保存后标为"待补邮箱"）</span>`);
   }
   if (result.splitCount > 0) {
-    msg += `\n\n✂️ 检测到 ${result.splitCount} 个多邮箱单元格，已自动拆分`;
+    parts.push(`✂️ 检测到 ${result.splitCount} 个多邮箱单元格，已自动拆分`);
   }
   if (result.invalidEmails?.length) {
-    const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
-    const more = result.invalidEmails.length > 10 ? `\n...等共 ${result.invalidEmails.length} 个` : '';
-    msg += `\n\n⚠️ ${result.invalidEmails.length} 个邮箱格式异常（已标为"异常邮箱"）：\n${list}${more}`;
+    const list = result.invalidEmails.slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('<br>');
+    const more = result.invalidEmails.length > 10 ? `<br>...等共 ${result.invalidEmails.length} 个` : '';
+    parts.push(`<span style="color:#e5484d">⚠️ ${result.invalidEmails.length} 个邮箱格式异常：<br>${list}${more}</span>`);
   }
   if (result.unrecognizedCols?.length) {
-    msg += `\n\n🔍 未识别的列（${result.unrecognizedCols.length}）：${result.unrecognizedCols.join('、')}`;
+    parts.push(`<span style="color:#888">🔍 未识别的列（${result.unrecognizedCols.length}）：${result.unrecognizedCols.join('、')}</span>`);
   }
-  await showAlert(msg);
+  await showAlert(parts.join('<br><br>'));
   renderClientsTable();
 }
 
@@ -143,16 +143,17 @@ export function renderClientsTable() {
 document.getElementById('clients-import-btn')?.addEventListener('click', async () => {
   if (!S.clientsData.length) return await showAlert('没有可导入的数据');
   const result = await window.electronAPI.importContacts(S.clientsData);
-  let msg = `新增 ${result.added} 位联系人（总计 ${result.total} 位）`;
-  if (result.skipped > 0) msg += `\n跳过 ${result.skipped} 条重复记录`;
-  if (result.noEmailImported > 0) msg += `\n📧 ${result.noEmailImported} 条无邮箱（已标为"待补邮箱"，可在「⚠️ 异常」中查看）`;
-  if (result.writeFailed > 0) msg += `\n❌ ${result.writeFailed} 条写入数据库失败（参数缺失，请检查导入数据）`;
+  const parts = [`<b>新增 ${result.added}</b> 位联系人（总计 ${result.total} 位）`];
+  if (result.updated > 0) parts.push(`更新 ${result.updated} 条（同邮箱覆盖旧数据）`);
+  if (result.skipped > 0) parts.push(`<span style="color:#e65100">跳过 ${result.skipped} 条（无邮箱）</span>`);
+  if (result.noEmailImported > 0) parts.push(`<span style="color:#e65100">📧 ${result.noEmailImported} 条无邮箱已标为"待补邮箱"（⚠️ 异常中查看）</span>`);
+  if (result.writeFailed > 0) parts.push(`<span style="color:#e5484d">❌ ${result.writeFailed} 条写入失败</span>`);
   if (result.invalidEmail > 0) {
-    const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('\n');
-    const more = result.invalidEmail > 10 ? `\n...等共 ${result.invalidEmail} 个` : '';
-    msg += `\n\n⚠️ ${result.invalidEmail} 个邮箱格式异常（可在「⚠️ 异常」中查看修正）：\n${list}${more}`;
+    const list = (result.invalidEmails || []).slice(0, 10).map(e => `· ${e.company} → ${e.email}`).join('<br>');
+    const more = result.invalidEmail > 10 ? `<br>...等共 ${result.invalidEmail} 个` : '';
+    parts.push(`<span style="color:#e5484d">⚠️ ${result.invalidEmail} 个邮箱格式异常（⚠️ 异常中修正）：<br>${list}${more}</span>`);
   }
-  await showAlert(msg);
+  await showAlert(parts.join('<br><br>'));
 });
 
 // 「清除」
