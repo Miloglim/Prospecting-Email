@@ -1335,7 +1335,7 @@ select option { font-size: 12px; }
   background: transparent; border-bottom: 1px solid var(--border);
 }
 .modal-header.m-info { color: var(--text); }
-.modal-header.m-warn { color: var(--danger); }
+.modal-header.m-warn { background: var(--primary); color: #fff; border-bottom:none; }
 .modal-header.m-error { color: var(--danger); }
 .modal-header.m-success { color: var(--success); }
 .modal-body { padding: 16px 24px; font-size: 13px; line-height: 1.8; color: var(--text); }

@@ -746,9 +746,9 @@ async function addToQueue() {
   }
 
   if (needReset.length) {
-    const listStr = needReset.map(r => `· ${r.name} (${r.count}人)`).join('\n');
+    const listStr = needReset.map(r => `<div style="padding:2px 0">· ${escapeHtml(r.name)} &nbsp;<span style="color:#888">${r.count}人</span></div>`).join('');
     const choice = await showConfirm(
-      `以下 ${needReset.length} 家公司的联系人已标记为「已发送」，但开发阶段仍为冷开发：\n\n${listStr}\n\n点击「确定」全部重置并重新发送，点击「取消」跳过这些公司。`
+      `<div style="line-height:1.8">以下 <b>${needReset.length}</b> 家公司已发过但阶段未推进：<br><br>${listStr}<br>「确定」重置并重新发送 &nbsp;·&nbsp; 「取消」跳过</div>`
     );
     if (choice) {
       for (const r of needReset) {
@@ -804,7 +804,8 @@ async function addToQueue() {
     const invalid = emails.filter(e => !S.EMAIL_RE.test(e));
     if (!valid.length) { skippedInvalidEmail++; continue; }
     if (invalid.length) {
-      if (!await showConfirm(`' + lucide('alert-triangle',12) + ' ${name} 有 ${invalid.length} 个邮箱格式异常：\n${invalid.join('\n')}\n\n仅发送给 ${valid.length} 个有效邮箱，是否继续？`)) continue;
+      const invalidList = invalid.map(e => `<div style="padding:1px 0;color:#e5484d">· ${escapeHtml(e)}</div>`).join('');
+      if (!await showConfirm(`<div style="line-height:1.8"><b>${escapeHtml(name)}</b> 有 <span style="color:#e5484d">${invalid.length}</span> 个邮箱格式异常：<br><br>${invalidList}<br>仅发送 <b>${valid.length}</b> 个有效邮箱，是否继续？</div>`)) continue;
     }
     const lang = card.lang;
     const hist = S.sendHistory[name];
@@ -866,15 +867,17 @@ async function addToQueue() {
   }
   if (!added) {
     const reasons = [];
-    if (skippedNoEmail) reasons.push(`${skippedNoEmail} 家无邮箱`);
-    if (skippedInvalidEmail) reasons.push(`${skippedInvalidEmail} 家邮箱格式无效`);
-    if (skippedQueued) reasons.push(`${skippedQueued} 人已在队列中`);
-    if (skippedDupOrBounced) reasons.push(`${skippedDupOrBounced} 家已退信/已发送`);
-    return await showAlert(`所选公司无法加入队列：${reasons.join('，')}`);
+    if (skippedNoEmail) reasons.push(`<div>${lucide('mail',14)} ${skippedNoEmail} 家无邮箱</div>`);
+    if (skippedInvalidEmail) reasons.push(`<div>${lucide('alert-triangle',14)} ${skippedInvalidEmail} 家邮箱格式无效</div>`);
+    if (skippedQueued) reasons.push(`<div>${lucide('list',14)} ${skippedQueued} 人已在队列中</div>`);
+    if (skippedDupOrBounced) reasons.push(`<div>${lucide('x-circle',14)} ${skippedDupOrBounced} 家已退信/已发送</div>`);
+    return await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>所选公司无法加入队列</b></div>${reasons.join('')}`);
   }
-  if (reactivatedCount > 0) showToast(lucide('refresh-cw',12) + ` ${reactivatedCount} 个联系人已重置，${needReset.length} 家公司可重新发送`, 'ok');
+  if (reactivatedCount > 0) showToast(`${reactivatedCount} 个联系人已重置`, 'ok');
   saveQueue();
-  document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
+  const pendingCount = S.queue.filter(e => e.status === 'pending').length;
+  document.getElementById('stat-queue').textContent = pendingCount;
+  showToast(`已添加 ${added} 组 · 队列共 ${pendingCount} 组待发`, 'ok');
   // 清空选择，防止二次添加
   CS.clearSelection();
   // 跳转到发送队列

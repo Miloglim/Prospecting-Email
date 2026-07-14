@@ -132,10 +132,7 @@ export function f4FollowupText(lang, type) {
 
 export function assembleEmail(lang, hook, pain, proof, cta, followup, stage, type, senderName, firstName) {
   const t = (item) => item ? (item[lang] || '') : '';
-  // Phase 3: 有 firstName 时个性化问候
-  const greeting = firstName
-    ? (lang === 'es' ? `Buen día, ${firstName},` : lang === 'pt' ? `Bom dia, ${firstName},` : `Hello, ${firstName},`)
-    : (lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Hello,');
+  const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Glad to catch your interest,';
   const closing = lang === 'es' ? 'Saludos,' : lang === 'pt' ? 'Atenciosamente,' : 'Best,';
   const senderDisplay = senderName || 'YQN';
   const intros = [
@@ -199,7 +196,7 @@ export function assembleMonthlyReport(lang, hook, marketContext) {
   const t = (item) => item ? (item[lang] || '') : '';
   const lines = [];
 
-  const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Hello,';
+  const greeting = lang === 'es' ? 'Buen día,' : lang === 'pt' ? 'Bom dia,' : 'Glad to catch your interest,';
   lines.push(greeting);
   lines.push('');
 

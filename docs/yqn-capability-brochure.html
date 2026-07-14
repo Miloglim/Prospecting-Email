@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YQN Logistics — Capability Statement</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #fff;
+    --text: #000;
+    --muted: #555;
+    --faint: #888;
+    --border: #000;
+    --surface: #fff;
+    --black: #000;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 60px 32px 80px;
+  }
+
+  .header {
+    padding-bottom: 36px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+  .header .sub { font-size: 11px; color: var(--faint); margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
+
+  .intro {
+    font-size: 14px; color: var(--muted); line-height: 1.9; margin-bottom: 36px;
+  }
+  .intro strong { color: var(--text); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    margin-bottom: 44px;
+  }
+  .stat {
+    background: var(--bg);
+    text-align: center;
+    padding: 22px 12px 18px;
+  }
+  .stat .num { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+  .stat .lbl { font-size: 10px; color: var(--faint); margin-top: 4px; letter-spacing: 0.5px; text-transform: uppercase; }
+
+  .section {
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+    display: flex;
+  }
+  .section .icon-col {
+    width: 68px;
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    padding-top: 28px;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .section .icon-col svg { width: 22px; height: 22px; stroke: var(--black); }
+  .section .content { padding: 26px 28px 26px; flex: 1; }
+
+  .section .title-row { display: flex; align-items: center; margin-bottom: 14px; gap: 10px; }
+  .section .title-row h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.3px; }
+  .section .tag { font-size: 9px; color: var(--muted); border: 1px solid var(--border); padding: 2px 8px; letter-spacing: 0.5px; }
+
+  .section ul { list-style: none; }
+  .section ul li { font-size: 13px; color: var(--muted); padding: 3px 0; }
+
+  .sub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-top: 6px; }
+  .sub-item h3 { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+  .sub-item p { font-size: 13px; color: var(--faint); }
+
+  .cta {
+    margin-top: 44px; padding: 32px 36px; border: 1px solid var(--border);
+    text-align: center; font-size: 14px; line-height: 1.9; color: var(--text);
+  }
+  .cta strong { font-size: 16px; }
+
+  .footer { margin-top: 24px; text-align: center; font-size: 10px; color: var(--faint); letter-spacing: 0.5px; }
+
+  @media print {
+    body { background: #fff; --bg: #fff; --text: #000; --muted: #555; --faint: #888; --border: #000; --surface: #fff; --black: #000; }
+    .page { padding: 0; max-width: 100%; }
+    .section { break-inside: avoid; }
+  }
+  @media (max-width: 600px) {
+    .page { padding: 32px 16px 48px; }
+    .section { flex-direction: column; }
+    .section .icon-col { width: 100%; border-right: none; border-bottom: 1px solid var(--border); padding: 16px 0; }
+    .sub-grid { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="header">
+    <h1>YQN Logistics</h1>
+    <div class="sub">China's Largest Digital Logistics Platform &ensp;·&ensp; $1B Unicorn &ensp;·&ensp; Est. 2002</div>
+  </div>
+
+  <p class="intro">
+    <strong>YQN Logistics</strong> is China's largest digital international logistics platform — backed by <strong>Sequoia China</strong> and <strong>Coatue</strong>, valued at <strong>$1 billion</strong>. We connect <strong>300+ ocean carriers</strong> across <strong>95%+ of global shipping lanes</strong>, serving <strong>35,000+ enterprises</strong> worldwide. 20+ years specializing in Latin American trade lanes with our own offices, warehouses, and customs teams in Mexico.
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="num">1,500+</div><div class="lbl">Employees</div></div>
+    <div class="stat"><div class="num">300+</div><div class="lbl">Carriers</div></div>
+    <div class="stat"><div class="num">¥8B</div><div class="lbl">Annual Revenue</div></div>
+    <div class="stat"><div class="num">35,000+</div><div class="lbl">Enterprises</div></div>
+    <div class="stat"><div class="num">18</div><div class="lbl">Warehouses</div></div>
+    <div class="stat"><div class="num">95%+</div><div class="lbl">Global Coverage</div></div>
+  </div>
+
+  <!-- Sea Freight -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="1" y="5" width="22" height="14" rx="2"/>
+        <line x1="2" y1="14" x2="22" y2="14"/>
+        <line x1="7" y1="11" x2="17" y2="11"/>
+        <circle cx="7" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>
+        <line x1="4" y1="19" x2="5.5" y2="19"/><line x1="18.5" y1="19" x2="20" y2="19"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Sea Freight — Global Reach</h2></div>
+      <ul>
+        <li>FCL &amp; LCL across 95%+ of global lanes, 200+ countries</li>
+        <li>300+ carriers: MSK, COSCO, CMA CGM, MSC — weekly fixed space, even in peak season</li>
+        <li>Cross-trade, inland haulage, full container handling</li>
+        <li>18 overseas warehouses (6M+ sq ft) including Mexico</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Carrier Contracts -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+        <path d="M2 17l10 5 10-5"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Carrier Contracts &amp; Rate Advantages</h2><span class="tag">CORE STRENGTH</span></div>
+      <ul>
+        <li>Strategic contracts with world's top 10 carriers — priority space &amp; equipment year-round</li>
+        <li>Weekly fixed allocation — schedule stability even during peak season surges</li>
+        <li>AI-powered rate comparison across 300+ carriers — spot quotes in 30 minutes</li>
+        <li>Flexible payment terms backed by $1B valuation credit lines</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Certifications -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 12l2 2 4-4"/>
+        <circle cx="12" cy="12" r="10"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Certifications &amp; Compliance</h2></div>
+      <ul>
+        <li><strong>AEO</strong> Certified — lower inspection rates, priority customs clearance</li>
+        <li><strong>FIATA</strong> · <strong>IATA</strong> · <strong>CIFA</strong> — globally accredited</li>
+        <li><strong>JC Trans Premium</strong> · <strong>GLN</strong> · <strong>GLA</strong> · <strong>OLO</strong> — verified network, payment protection</li>
+        <li>High-Tech Enterprise · SRDI (专精特新) · Gazelle Enterprise</li>
+        <li>Forbes "Top 30 Overseas Leading Brands"</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Mexico -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
+        <circle cx="12" cy="10" r="2.5"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Mexico — On the Ground, Not Agents</h2><span class="tag">DIFFERENTIATOR</span></div>
+      <ul>
+        <li>Direct branch office + warehouse + in-house customs — <strong>zero outsourcing</strong></li>
+        <li>RFC formal clearance: <strong>3–5 days</strong>, &lt;5% inspection, &lt;1% return rate</li>
+        <li>Formal clearance pass rate: <strong>95%+</strong></li>
+        <li>Deep expertise in 2025–2026 tariff reforms &amp; grey clearance crackdown</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Digital -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2"/>
+        <line x1="8" y1="21" x2="16" y2="21"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Digital Capabilities</h2><span class="tag">TECH EDGE</span></div>
+      <ul>
+        <li>AI booking: pre-allocation in <strong>30 minutes</strong></li>
+        <li>Real-time rate comparison across 300+ carriers</li>
+        <li>End-to-end tracking + vessel schedule prediction + risk alerts</li>
+        <li>舱无忧 self-service mini-program for clients</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Specialized -->
+  <div class="section">
+    <div class="icon-col">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+    </div>
+    <div class="content">
+      <div class="title-row"><h2>Specialized &amp; Value-Added Services</h2></div>
+      <div class="sub-grid">
+        <div class="sub-item"><h3>Dangerous Goods</h3><p>EV &amp; lithium batteries — ADR, IMDG, IATA DGR</p></div>
+        <div class="sub-item"><h3>Transshipment &amp; Transit</h3><p>Reloading, storage, dispatch — bonded transit</p></div>
+        <div class="sub-item"><h3>Project Cargo &amp; Heavy Lift</h3><p>End-to-end planning, permits, route studies</p></div>
+        <div class="sub-item"><h3>Air Freight</h3><p>IATA-certified — door-to-door, AWB issuance</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CTA -->
+  <div class="cta">
+    <strong>We're here not for your cargo, but for your business.</strong><br><br>
+    We position ourselves as your long-term partner — not a transactional broker. 35,000+ enterprises trust us. We welcome the opportunity to act as your reliable representative in <strong>[region]</strong>.
+  </div>
+
+  <div class="footer">YQN LOGISTICS &ensp;·&ensp; $1B UNICORN &ensp;·&ensp; CHINA &ensp;·&ensp; EST. 2002</div>
+
+</div>
+
+</body>
+</html>
