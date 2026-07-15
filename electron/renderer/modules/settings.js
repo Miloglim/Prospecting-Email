@@ -537,10 +537,8 @@ function initAccountManager() {
 
   // 打开编辑框
   async function openEditor(id) {
-    // ponytail: 单个字段缺失（旧 HTML 与新 JS 不同步）不再整个崩，只记录缺哪个
-    const missing = [];
-    const setVal = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; else missing.push(elId); };
-    const setChk = (elId, v) => { const el = document.getElementById(elId); if (el) el.checked = v; else missing.push(elId); };
+    const setVal = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; };
+    const setChk = (elId, v) => { const el = document.getElementById(elId); if (el) el.checked = v; };
     try {
     setVal('acct-edit-id', id || '');
     // 清空 IMAP 字段
@@ -575,7 +573,7 @@ function initAccountManager() {
     }
     const tr = document.getElementById('acct-test-result');
     if (tr) { tr.className = ''; tr.innerHTML = ''; }
-    if (missing.length) showToast('账号表单缺少字段: ' + missing.join(', ') + '（请重装/更新客户端）', 'error');
+    // ponytail: missing 仅开发调试用，客户端静默降级
     modal.style.display = 'flex';
     } catch (e) {
       showToast('编辑失败: ' + (e.message || ''), 'error');
@@ -585,26 +583,30 @@ function initAccountManager() {
   function closeEditor() { modal.style.display = 'none'; }
 
   // 收集表单
+  // ponytail: 安全取值 — 客户端 DOM 可能未就绪，所有 getElementById 加兜底
+  const $ = (id, fallback) => { const el = document.getElementById(id); return el ? el.value : fallback; };
+  const $$ = (id, fallback) => { const el = document.getElementById(id); return el ? el.checked : fallback; };
+
   function collectAccount() {
-    const smtpHost = document.getElementById('acct-host').value.trim();
-    const smtpUser = document.getElementById('acct-user').value.trim();
-    const smtpPass = document.getElementById('acct-pass').value;
-    const imapHost = document.getElementById('acct-imap-host').value.trim() || autoDeriveImap(smtpHost);
-    const imapUser = document.getElementById('acct-imap-user').value.trim() || smtpUser;
-    const imapPass = document.getElementById('acct-imap-pass').value || smtpPass;
-    const imapPort = parseInt(document.getElementById('acct-imap-port').value) || 993;
+    const smtpHost = $('acct-host', '').trim();
+    const smtpUser = $('acct-user', '').trim();
+    const smtpPass = $('acct-pass', '');
+    const imapHost = $('acct-imap-host', '').trim() || autoDeriveImap(smtpHost);
+    const imapUser = $('acct-imap-user', '').trim() || smtpUser;
+    const imapPass = $('acct-imap-pass', '') || smtpPass;
+    const imapPort = parseInt($('acct-imap-port', '993')) || 993;
 
     const account = {
-      label: document.getElementById('acct-label').value.trim(),
+      label: $('acct-label', '').trim(),
       smtp: {
         host: smtpHost,
-        port: parseInt(document.getElementById('acct-port').value) || 465,
-        secure: document.getElementById('acct-secure').value === 'true',
+        port: parseInt($('acct-port', '465')) || 465,
+        secure: $('acct-secure', 'true') === 'true',
         user: smtpUser,
         pass: smtpPass,
       },
-      dailyLimit: parseInt(document.getElementById('acct-limit').value) || 500,
-      active: document.getElementById('acct-active').checked,
+      dailyLimit: parseInt($('acct-limit', '100')) || 500,
+      active: $$('acct-active', true),
     };
 
     // 有 IMAP 信息时附加
@@ -627,7 +629,7 @@ function initAccountManager() {
     const btn = document.getElementById('btn-acct-save');
     btn.disabled = true; btn.textContent = '保存中...';
     try {
-      const id = document.getElementById('acct-edit-id').value;
+      const id = $('acct-edit-id', '');
       let savedId = id;
       if (id) {
         await window.electronAPI.updateAccount(id, account);

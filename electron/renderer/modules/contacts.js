@@ -250,17 +250,16 @@ export async function loadContacts() {
 // clientTypeTag / groupByCompany 从 shared.js 导入
 
 export function renderContactsList(filtered) {
-  let data = filtered || S.contactsData;
-
-  // ponytail: 保留搜索状态 — 删除等操作后搜索框有值则自动重新检索
+  // ponytail: 保留搜索状态 — 搜索框有值时自动过滤，保持 filtered 模式避免自动选中
   const si = document.getElementById('contacts-search');
   if (!filtered && si && si.value.trim()) {
     const q = si.value.trim().toLowerCase();
-    data = S.contactsData.filter(c => (c.company || '').toLowerCase().includes(q));
     S._searchQuery = q;
+    filtered = S.contactsData.filter(c => (c.company || '').toLowerCase().includes(q));
   } else if (!filtered) {
     S._searchQuery = '';
   }
+  let data = filtered || S.contactsData;
 
   // 应用筛选
   if (S.contactsFilter === 'archived') {
