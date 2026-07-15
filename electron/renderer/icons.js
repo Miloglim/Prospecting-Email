@@ -1,4 +1,4 @@
-// ── Milogin's Outreacher — Lucide SVG 图标库 ──────────────────────────
+// ── Milogin's Prospector — Lucide SVG 图标库 ──────────────────────────
 // 内联 SVG path，零依赖。尺寸默认 16px，stroke 继承父级 color。
 
 const ICONS = {

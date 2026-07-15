@@ -1,4 +1,4 @@
-// ── Milogin's Outreacher — Preload（安全 IPC 桥接）────────────────────────
+// ── Milogin's Prospector — Preload（安全 IPC 桥接）────────────────────────
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {

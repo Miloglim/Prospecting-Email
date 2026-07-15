@@ -1,5 +1,5 @@
 {
-  "name": "outreacher",
+  "name": "prospecting-email-send",
   "version": "2.9.26",
   "description": "拉美开发信桌面工具 — 背调 + 模板 + 自动发送",
   "main": "electron/main.js",
@@ -20,8 +20,8 @@
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
-    "appId": "com.miloglim.outreacher",
-    "productName": "Milogin's Outreacher.",
+    "appId": "com.miloglim.prospecting-email",
+    "productName": "Milogin's Prospector.",
     "directories": {
       "output": "../dist-release"
     },

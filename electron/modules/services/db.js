@@ -1,4 +1,4 @@
-// ── Outreacher — 数据库单例 ─────────────────────────────────────────────────
+// ── Prospector — 数据库单例 ─────────────────────────────────────────────────
 "use strict";
 
 const path = require("path");
@@ -11,7 +11,7 @@ let _db = null;
 function getDb() {
   if (_db) return _db;
   ensureRuntimeDirs();
-  const dbPath = path.join(APP_ROOT, "data", "outreacher.db");
+  const dbPath = path.join(APP_ROOT, "data", "prospector.db");
   const Database = require("better-sqlite3");
   _db = new Database(dbPath);
   initSchema(_db);

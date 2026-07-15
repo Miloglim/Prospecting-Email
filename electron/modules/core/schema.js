@@ -1,4 +1,4 @@
-// ── Outreacher — SQLite 建表 + 迁移 ──────────────────────────────────────────
+// ── Prospector — SQLite 建表 + 迁移 ──────────────────────────────────────────
 "use strict";
 
 const SCHEMA_VERSION = 1;

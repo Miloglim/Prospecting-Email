@@ -563,7 +563,7 @@ async function runSendBatch(deps, sendProgress) {
   Log.info("发信", "完成: 成功" + sent + "封, 失败" + failed + "封");
   if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: queueLen, sent, failed, _testMode: ctx.testMode || undefined });
   if (!deps.isPaused && !deps.currentSendAbort) deps.mainWindow?.webContents.send('history:changed');
-  if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Outreacher", body: `发送完成: 成功 ${sent} 封` }).show();
+  if (deps.tray && !deps.isPaused && !deps.currentSendAbort && !ctx.testMode) new (require('electron').Notification)({ title: "Milogin's Prospector", body: `发送完成: 成功 ${sent} 封` }).show();
   // ponytail: 老退信/回复检测已由收件箱接管
   // scheduleAutoBounceCheck(deps.mainWindow, deps.tray);
   // require('./reply-checker').scheduleAutoReplyCheck(deps.mainWindow, deps.tray);

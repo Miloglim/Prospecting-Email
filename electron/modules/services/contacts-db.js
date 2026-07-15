@@ -1,4 +1,4 @@
-// ── Outreacher — 联系人 SQLite CRUD（替换 contacts.json）─────────────────────
+// ── Prospector — 联系人 SQLite CRUD（替换 contacts.json）─────────────────────
 "use strict";
 
 const { getDb } = require("./db");

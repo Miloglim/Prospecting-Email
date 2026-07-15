@@ -232,7 +232,7 @@ function register(ipcMain, deps) {
       'inbox-deleted.json',
       'inbox-cache.json',
       // 测试数据库
-      '_test_outreacher.db',
+      '_test_prospector.db',
     ];
     let deletedCount = 0;
     for (const f of deleteFiles) {
