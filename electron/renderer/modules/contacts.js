@@ -252,6 +252,16 @@ export async function loadContacts() {
 export function renderContactsList(filtered) {
   let data = filtered || S.contactsData;
 
+  // ponytail: 保留搜索状态 — 删除等操作后搜索框有值则自动重新检索
+  const si = document.getElementById('contacts-search');
+  if (!filtered && si && si.value.trim()) {
+    const q = si.value.trim().toLowerCase();
+    data = S.contactsData.filter(c => (c.company || '').toLowerCase().includes(q));
+    S._searchQuery = q;
+  } else if (!filtered) {
+    S._searchQuery = '';
+  }
+
   // 应用筛选
   if (S.contactsFilter === 'archived') {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
@@ -346,6 +356,8 @@ export function renderContactsList(filtered) {
 
   // 左侧公司列表
   if (sidebar) {
+    // 把 groups 暂存到 sidebar 上，供事件委托读取
+    sidebar._groups = groups;
     sidebar.innerHTML = groups.map(([company, members], i) => {
       const ctype = members[0]?.clientType || 'unlabeled';
       const tagHtml = clientTypeTag(ctype);
@@ -364,34 +376,80 @@ export function renderContactsList(filtered) {
       </div>`;
     }).join('');
 
-    // ponytail: 绕过 HTML 属性编码陷阱 — 用 JS 直接设 dataset，避免双引号等特殊字符破坏 DOM
+    // 设 dataset 供 CSS 选择器查询（事件委托不依赖此属性）
     sidebar.querySelectorAll('.contact-item').forEach((item, i) => {
-      item.dataset.company = groups[i] ? groups[i][0] : '';
+      if (groups[i]) item.dataset.company = groups[i][0];
     });
 
-    // 点击公司 → 右侧显示成员
-    sidebar.querySelectorAll('.contact-item').forEach(item => {
-      item.addEventListener('click', () => {
+    // ponytail: 事件委托 — 绑一次，永不因 DOM 重建失效
+    if (!sidebar._delegated) {
+      sidebar._delegated = true;
+      sidebar.addEventListener('click', (e) => {
+        const item = e.target.closest('.contact-item');
+        if (!item) return;
+        const idx = parseInt(item.dataset.idx);
+        const groups = sidebar._groups || [];
+        const company = groups[idx] ? groups[idx][0] : '';
+        if (!company) return;
         sidebar.querySelectorAll('.contact-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
-        S.selectedContactCompany = item.dataset.company;
-        try {
-          renderContactDetail(S.selectedContactCompany);
-        } catch (e) {
-          console.error('renderContactDetail 崩溃:', e);
-          const detail = document.getElementById('contacts-detail');
-          if (detail) detail.innerHTML = `<p style="color:#e5484d;padding:12px">渲染失败: ${escapeHtml(e.message)}</p>`;
-        }
+        S.selectedContactCompany = company;
+        try { renderContactDetail(company); } catch (err) { /* 静默降级 */ }
       });
 
-    });
+      // 右键菜单：删除公司
+      sidebar.addEventListener('contextmenu', async (e) => {
+        const item = e.target.closest('.contact-item');
+        if (!item) return;
+        e.preventDefault();
+        const idx = parseInt(item.dataset.idx);
+        const groups = sidebar._groups || [];
+        const company = groups[idx] ? groups[idx][0] : '';
+        if (!company) return;
+        const members = groups[idx] ? groups[idx][1] : [];
+
+        document.getElementById('ctx-menu')?.remove();
+        const menu = document.createElement('div');
+        menu.id = 'ctx-menu';
+        menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:160px;font-size:12px';
+        menu.style.left = e.clientX + 'px';
+        menu.style.top = e.clientY + 'px';
+        menu.innerHTML = `
+          <div style="padding:6px 14px;cursor:pointer;color:#e5484d;display:flex;align-items:center;gap:6px" data-action="delete" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">${lucide('trash-2',13)} 删除公司（${members.length} 人）</div>
+        `;
+        menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+          menu.remove();
+          if (!await showConfirm(`确定删除「${company}」及其全部 ${members.length} 位联系人？\n此操作不可恢复。`)) return;
+          const result = await window.electronAPI.deleteCompany(company);
+          showToast(`已删除 ${result.deleted} 位联系人`, 'ok');
+          S.contactsData = S.contactsData.filter(c => c.company !== company);
+          S.contactsGroupMap.delete(company);
+          if (S.selectedContactCompany === company) {
+            S.selectedContactCompany = null;
+            const detail = document.getElementById('contacts-detail');
+            if (detail) detail.innerHTML = '<p style="color:var(--text-secondary);padding:12px">选择左侧公司查看详情</p>';
+          }
+          renderContactsList();
+        });
+        document.body.appendChild(menu);
+        const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+        setTimeout(() => document.addEventListener('click', close), 0);
+      });
+    }
 
     
+
+// 通过公司名查找侧边栏项（基于 _groups 索引，避免 HTML 属性编码问题）
+    const _findItem = (companyName) => {
+      const idx = (sidebar._groups || []).findIndex(g => g[0] === companyName);
+      if (idx < 0) return null;
+      return sidebar.querySelector(`.contact-item[data-idx="${idx}"]`);
+    };
 
 // 搜索结果只有一家公司时自动展开，方便查看
     if (filtered && groups.length === 1) {
       S.selectedContactCompany = groups[0][0];
-      const item = sidebar.querySelector(`[data-company="${escapeHtml(S.selectedContactCompany)}"]`);
+      const item = _findItem(S.selectedContactCompany);
       if (item) item.classList.add('active');
       renderContactDetail(S.selectedContactCompany);
     } else if (S.selectedContactCompany && S.contactsGroupMap.has(S.selectedContactCompany)) {
@@ -399,7 +457,7 @@ export function renderContactsList(filtered) {
     } else if (!filtered) {
       S.selectedContactCompany = groups[0]?.[0] || null;
       if (S.selectedContactCompany) {
-        const firstItem = sidebar.querySelector(`[data-company="${escapeHtml(S.selectedContactCompany)}"]`);
+        const firstItem = _findItem(S.selectedContactCompany);
         if (firstItem) firstItem.classList.add('active');
         renderContactDetail(S.selectedContactCompany);
       }
@@ -476,10 +534,13 @@ export function renderContactDetail(company) {
   const detail = document.getElementById('contacts-detail');
   if (!detail || !company) return;
   let members = S.contactsGroupMap.get(company) || [];
-  // 有搜索词时仅显示命中的联系人
+  // 有搜索词时仅显示命中的联系人（公司名匹配则不过滤，展示全部成员）
   if (S._searchQuery) {
     const q = S._searchQuery.toLowerCase();
-    members = members.filter(m => (m.email || '').toLowerCase().includes(q) || (m.firstName || '').toLowerCase().includes(q) || (m.lastName || '').toLowerCase().includes(q) || (m.contactName || '').toLowerCase().includes(q));
+    const companyMatch = (company || '').toLowerCase().includes(q);
+    if (!companyMatch) {
+      members = members.filter(m => (m.email || '').toLowerCase().includes(q) || (m.firstName || '').toLowerCase().includes(q) || (m.lastName || '').toLowerCase().includes(q) || (m.contactName || '').toLowerCase().includes(q));
+    }
     if (!members.length) return; // 无匹配则不渲染
   }
   const ctype = members[0]?.clientType || 'unlabeled';
