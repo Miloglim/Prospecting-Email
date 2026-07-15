@@ -602,6 +602,7 @@ async function _fetchInbox(configPath) {
     activeAccounts.push({ acc, cfg });
   }
 
+  const failedAccounts = [];
   const results = await Promise.all(activeAccounts.map(async ({ acc, cfg }) => {
     Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port})...`);
     try {
@@ -623,7 +624,8 @@ async function _fetchInbox(configPath) {
       Log.info('[收件箱]', `${acc.label || cfg.user} 解析完成: ${mails.length}/${rawSources.length} 封`);
       return mails;
     } catch (e) {
-      Log.warn('[收件箱]', `${acc.label || cfg.user} 拉取失败: ${e.message}`);
+      Log.error('[收件箱]', `${acc.label || cfg.user} 拉取失败: ${e.message}`, e.stack);
+      failedAccounts.push({ label: acc.label || cfg.user, host: cfg.host, error: e.message });
       return [];
     }
   }));
@@ -648,12 +650,10 @@ async function _fetchInbox(configPath) {
   }
 
   // ponytail: 直接返回内存数据，避免写完又读
-  if (newMails.length) {
-    const merged = [...newMails, ...existing].slice(-500);
-    _writeCache(merged);
-    return merged;
-  }
-  return existing;
+  const result = newMails.length ? [...newMails, ...existing].slice(-500) : existing;
+  if (newMails.length) _writeCache(result);
+  result._failedAccounts = failedAccounts.length ? failedAccounts : undefined;
+  return result;
 }
 
 function listInbox() {

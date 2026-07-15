@@ -34,8 +34,12 @@ function register(ipcMain, deps) {
   }
 
   ipcMain.handle('inbox:fetch', async () => {
-    try { return { ok: true, data: await inbox.fetchInbox(configPath) }; }
-    catch (e) { return { ok: false, error: e.message }; }
+    try {
+      const result = await inbox.fetchInbox(configPath);
+      const failed = result._failedAccounts;
+      delete result._failedAccounts;
+      return { ok: true, data: result, failedAccounts: failed || [] };
+    } catch (e) { return { ok: false, error: e.message }; }
   });
   ipcMain.handle('inbox:list', async () => ({ ok: true, data: inbox.listInbox() }));
   ipcMain.handle('inbox:getBody', async (_e, i) => ({ ok: true, data: inbox.getBody(i) }));

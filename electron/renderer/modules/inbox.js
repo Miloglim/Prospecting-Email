@@ -4,10 +4,11 @@ import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared
 
 let _mails = [];
 let _selectedIdx = -1;
-let _selectedSet = new Set(); // 多选勾选集合
-let _lastClickIdx = -1; // Shift范围选择锚点
+let _selectedSet = new Set();
+let _lastClickIdx = -1;
 let _filter = 'all';
 let _loading = false;
+let _failedAccounts = [];
 // ponytail: 已读状态存 localStorage，重启不丢，上限 2000 条
 function _loadViewedKeys() {
   try { const s = localStorage.getItem('inbox-viewed'); return s ? new Set(JSON.parse(s)) : new Set(); }
@@ -57,7 +58,11 @@ export async function doFetchInbox() {
   _loading = false;
   if (result.ok) {
     _mails = result.data || [];
+    _failedAccounts = result.failedAccounts || [];
     renderInbox();
+    if (_failedAccounts.length) {
+      showToast(`${_failedAccounts.map(a => a.label + ': ' + a.error).join('；')}`, 'err');
+    }
   } else {
     showToast(`拉取失败: ${result.error}`, 'err');
   }
