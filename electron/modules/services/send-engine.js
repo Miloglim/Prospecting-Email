@@ -17,9 +17,8 @@ let _delayTotal = 0;
 // ── 自动退信定时器 ──
 let _autoBounceTimer = null;
 
-// ── 联系人标签回写：发送成功后自动推进阶段 + 标记 last_sent_at ─────
-const STAGE_ORDER = ['cold', 'f1', 'f2', 'f3', 'f4', 'archived'];
-function _tagContacts(emails, accountId, accountLabel, currentStage) {
+// ── 联系人标签回写：发送成功后标记 last_sent_at（阶段推进由队列侧 advanceStage 统一管理）──
+function _tagContacts(emails, accountId, accountLabel) {
   try {
     const contactsDb = require('./contacts-db');
     const now = new Date().toISOString();
@@ -27,13 +26,6 @@ function _tagContacts(emails, accountId, accountLabel, currentStage) {
       const existing = contactsDb.getByEmail(addr);
       if (!existing) continue;
       contactsDb.update(existing.id, { last_sent_at: now, last_sent_acct: accountLabel || '' });
-      // ponytail: 每封发成功后自动推进到下一阶段
-      const cur = existing.stage || 'cold';
-      const idx = STAGE_ORDER.indexOf(cur);
-      if (idx >= 0 && idx < STAGE_ORDER.length - 1) {
-        const next = STAGE_ORDER[idx + 1];
-        if (next !== cur) contactsDb.setStage(existing.id, next, 'send');
-      }
     }
   } catch { /* 静默跳过 */ }
 }
@@ -228,7 +220,7 @@ async function _sendOne(ctx, email, log, deps) {
     if (!log.daily_counts) log.daily_counts = {};
     log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
     log.daily_count = (log.daily_count || 0) + toList.length; // ponytail: 同步总量，兼容 send:status 读取
-    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '', email._stage);
+    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
     // 记录互动
     try {
       const contactsDb = require('./contacts-db');

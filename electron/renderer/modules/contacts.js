@@ -109,17 +109,24 @@ export function renderClientsTable() {
   if (toolbar) toolbar.style.display = 'flex';
   if (count) count.textContent = `共 ${S.clientsData.length} 条记录（第 ${S.clientsPage}/${Math.ceil(S.clientsData.length / S.PAGE_SIZE)} 页）`;
 
-  // 动态表头
+  // 动态表头（最后一列留给删除按钮）
   if (theadRow) {
     theadRow.innerHTML = '<th>#</th>' + allCols.map(col => {
       const extraStyle = col.isExtra ? 'color:#999;font-weight:400' : '';
       return `<th style="white-space:nowrap;${extraStyle}">${escapeHtml(col.label)}</th>`;
-    }).join('');
+    }).join('') + '<th style="width:30px"></th>';
   }
+
+  // 异常联系人置顶排序
+  const sorted = [...S.clientsData].sort((a, b) => {
+    const aBad = (a._emailStatus === 'no_email' || a._emailStatus === 'invalid_email' || a._noCompany) ? 1 : 0;
+    const bBad = (b._emailStatus === 'no_email' || b._emailStatus === 'invalid_email' || b._noCompany) ? 1 : 0;
+    return bBad - aBad;
+  });
 
   // 分页切片
   const start = (S.clientsPage - 1) * S.PAGE_SIZE;
-  const pageData = S.clientsData.slice(start, start + S.PAGE_SIZE);
+  const pageData = sorted.slice(start, start + S.PAGE_SIZE);
 
   if (tbody) {
     tbody.innerHTML = pageData.map((c, i) => {
@@ -130,12 +137,33 @@ export function renderClientsTable() {
         const extraStyle = col.isExtra ? 'color:#aaa;font-size:0.9em' : '';
         return `<td style="white-space:nowrap;${extraStyle}">${escapeHtml(String(val))}</td>`;
       }).join('');
-      // 异常行高亮：无邮箱=橙色，格式异常=红色
-      let rowStyle = '';
+      // 异常行高亮 + 删除按钮
+      let rowStyle = '', delBtn = '';
+      const isBad = c._emailStatus === 'no_email' || c._emailStatus === 'invalid_email' || c._noCompany;
       if (c._emailStatus === 'no_email') rowStyle = 'background:#fff8e1';
       else if (c._emailStatus === 'invalid_email') rowStyle = 'background:#fce4ec';
-      return `<tr${rowStyle ? ` style="${rowStyle}"` : ''}><td>${start + i + 1}</td>${cells}</tr>`;
+      else if (c._noCompany) rowStyle = 'background:#fce4ec';
+      if (isBad) {
+        const globalIdx = sorted.indexOf(c);
+        delBtn = `<td><button class="del-bad-row" data-idx="${globalIdx}" style="background:none;border:none;color:#c62828;cursor:pointer;font-size:14px;padding:0 4px;line-height:1" title="移除此行">✕</button></td>`;
+      } else {
+        delBtn = '<td></td>';
+      }
+      return `<tr${rowStyle ? ` style="${rowStyle}"` : ''}><td>${start + i + 1}</td>${cells}${delBtn}</tr>`;
     }).join('');
+
+    // 异常行删除按钮事件
+    tbody.querySelectorAll('.del-bad-row').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const c = sorted[parseInt(btn.dataset.idx)]; // 按排序后位置找回原始对象
+        const realIdx = S.clientsData.indexOf(c);
+        if (realIdx >= 0) {
+          S.clientsData.splice(realIdx, 1);
+          renderClientsTable();
+        }
+      });
+    });
   }
 
   // 分页控件
@@ -446,7 +474,7 @@ function enableColResize(table, storageKey) {
 
 export function renderContactDetail(company) {
   const detail = document.getElementById('contacts-detail');
-  if (!detail) return;
+  if (!detail || !company) return;
   let members = S.contactsGroupMap.get(company) || [];
   // 有搜索词时仅显示命中的联系人
   if (S._searchQuery) {
