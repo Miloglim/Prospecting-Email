@@ -597,7 +597,7 @@ async function _fetchInbox(configPath) {
   const activeAccounts = [];
   for (const acc of accounts) {
     if (acc.active === false) continue;
-    const cfg = acc.imap || { host: acc.smtp?.host?.replace('smtp.', 'pop3.') || '', port: 995, user: acc.smtp?.user || '', pass: acc.smtp?.pass || '' };
+    const cfg = acc.imap || { host: acc.smtp?.host?.replace(/^smtp\./i, 'imap.').replace(/^mail\./i, 'imap.') || '', port: 993, user: acc.smtp?.user || '', pass: acc.smtp?.pass || '' };
     if (!cfg.host || !cfg.user) continue;
     activeAccounts.push({ acc, cfg });
   }

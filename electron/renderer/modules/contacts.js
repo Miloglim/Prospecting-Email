@@ -402,7 +402,11 @@ export function renderContactsList(filtered) {
         sidebar.querySelectorAll('.contact-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         S.selectedContactCompany = company;
-        try { renderContactDetail(company); } catch (err) { /* 静默降级 */ }
+        try { renderContactDetail(company); } catch (err) {
+          console.error('renderContactDetail 崩溃:', err);
+          const detail = document.getElementById('contacts-detail');
+          if (detail) detail.innerHTML = `<p style="color:#e5484d;padding:12px">渲染失败: ${escapeHtml(err.message)}<br><span style="font-size:10px;color:#999">${escapeHtml(err.stack||'')}</span></p>`;
+        }
       });
 
       // 右键菜单：删除公司
@@ -636,6 +640,7 @@ export function renderContactDetail(company) {
   const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
   const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
   const OPP_LABEL = { '待开发':'待开发','触达中':'触达中','报价中':'报价中','试单':'试单','合作中':'合作中','已流失':'已流失' };
+  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
 
   const _th = (col, isExtra) => {
     const style = isExtra ? 'color:#999;font-weight:400' : '';
@@ -957,7 +962,6 @@ export function renderContactDetail(company) {
     opp_stage: ['待开发','触达中','报价中','试单','合作中','已流失'],
     _status: ['', 'reached','replied','autoreply','bounced_by_contact','left_company'],
   };
-  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
 
   const INPUT_STYLE = 'min-width:140px;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
   const SELECT_STYLE = 'min-width:120px;padding:4px 6px;border:2px solid var(--primary);border-radius:6px;font-size:11px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';

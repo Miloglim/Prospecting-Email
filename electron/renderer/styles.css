@@ -1013,13 +1013,15 @@ select option { font-size: 12px; }
 .tut-dismiss:hover { opacity: .9; }
 
 /* ── 设置 ─────────────────────────────────────────────────────────── */
-#page-settings { max-width: 680px; position: relative; }
+#page-settings { max-width: 680px; position: relative; padding-bottom: 80px; }
 
 /* 右侧极简大纲导航 */
 .settings-nav {
   position: fixed; right: 28px; top: 50%; transform: translateY(-50%);
   display: flex; flex-direction: column; gap: 0; z-index: 10;
+  pointer-events: none;
 }
+.settings-nav-item { pointer-events: auto; }
 .settings-nav-item {
   display: flex; align-items: center; justify-content: flex-end;
   padding: 14px 0; cursor: pointer; position: relative;
@@ -1041,7 +1043,7 @@ select option { font-size: 12px; }
 .settings-nav-item:hover .settings-nav-label { color: var(--text); transform: scale(1.15); }
 
 /* 分组 */
-.settings-section { margin-bottom: 40px; scroll-margin-top: 60px; }
+.settings-section { margin-bottom: 28px; scroll-margin-top: 48px; }
 .settings-section-label {
   font-size: 13px; font-weight: 700; color: var(--text);
   padding-bottom: 10px; margin-bottom: 12px;
@@ -1065,7 +1067,7 @@ select option { font-size: 12px; }
 .setting-card:last-of-type { border-radius: 0 0 var(--radius) var(--radius); margin-bottom: 0; }
 .setting-card:only-of-type { border-radius: var(--radius); }
 .setting-card-header {
-  padding: 10px 24px; border-bottom: 1px solid var(--border);
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
   display: flex; align-items: center; gap: 8px;
 }
 .setting-card-header h3 {
@@ -1074,13 +1076,13 @@ select option { font-size: 12px; }
   display: flex; align-items: center; gap: 6px; margin: 0;
 }
 .setting-card-header h3 [data-icon] { opacity: 0.5; width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
-.setting-card-body { padding: 1px 24px 24px; min-height: 100px; }
+.setting-card-body { padding: 1px 16px 16px; min-height: 60px; }
 
 /* 发信账号列表 */
 #account-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .account-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
   border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-card);
 }
@@ -1131,25 +1133,26 @@ select option { font-size: 12px; }
 
 /* ── 表单行 ── */
 .form-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 7px 0; border-bottom: 1px solid var(--border);
-  min-height: 46px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--border);
+  min-height: 36px;
 }
 .form-row:last-child { border-bottom: none; }
 /* 设置页：隐藏卡片内部分隔线 */
 #page-settings .form-row { border-bottom-color: transparent; }
 .form-row > label {
-  width: 80px; flex-shrink: 0;
-  font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  width: 72px; flex-shrink: 0;
+  font-size: 11px; font-weight: 500; color: var(--text-secondary);
   text-align: right; line-height: 1.2;
 }
 .form-row > label:empty { width: 0; }
 .form-row input,
 .form-row select {
-  font-size: 12px; padding: 5px 8px; height: 30px;
+  font-size: 12px; padding: 4px 8px; height: 28px;
   border: 1px solid var(--border); border-radius: 4px;
   background: var(--input-bg); color: var(--text);
   min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .form-row > input,
 .form-row > select { flex: 1; }
@@ -1167,8 +1170,8 @@ select option { font-size: 12px; }
 }
 .form-row input[readonly] { background: transparent; border: none; color: var(--text-secondary); font-size: 11px; padding-left: 0; height: auto; }
 
-/* 行内多控件：缩进到与普通行输入框对齐 (84px label + 12px gap) */
-.form-row-inline { flex-wrap: wrap; padding-left: 92px; }
+/* 行内多控件：缩进到与普通行输入框对齐 */
+.form-row-inline { flex-wrap: wrap; padding-left: 82px; }
 .form-row-inline > div { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .form-row-inline > div > label { width: auto; font-size: 10px; color: var(--text-secondary); text-align: left; flex-shrink: 0; }
 .form-row-inline > div input,
@@ -1201,8 +1204,8 @@ select option { font-size: 12px; }
 
 /* 子区块标签（与卡片标题对齐） */
 .sub-section-label {
-  font-size: 12px; font-weight: 600; color: var(--text-secondary);
-  letter-spacing: 0.3px; padding: 10px 0 4px 92px;
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+  letter-spacing: 0.3px; padding: 8px 0 3px 82px;
   border-top: 1px solid var(--border); text-transform: uppercase;
 }
 

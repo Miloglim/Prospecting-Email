@@ -627,7 +627,7 @@ function initAccountManager() {
       showAlert('服务器地址和邮箱地址不能为空'); return;
     }
     const btn = document.getElementById('btn-acct-save');
-    btn.disabled = true; btn.textContent = '保存中...';
+    btn.disabled = true;
     try {
       const id = $('acct-edit-id', '');
       let savedId = id;
@@ -651,7 +651,7 @@ function initAccountManager() {
     } catch (e) {
       showAlert('保存失败: ' + (e.message || '未知错误'));
     } finally {
-      btn.disabled = false; btn.textContent = '保存';
+      btn.disabled = false;
     }
   });
 
@@ -687,6 +687,38 @@ function initAccountManager() {
     }
     btn.disabled = false;
   });
+
+  // IMAP 连通性测试
+  document.getElementById('btn-acct-imap-test')?.addEventListener('click', async () => {
+    const resultEl = document.getElementById('acct-imap-result');
+    const btn = document.getElementById('btn-acct-imap-test');
+    if (!resultEl || !btn) return;
+    const host = document.getElementById('acct-imap-host')?.value?.trim();
+    const user = document.getElementById('acct-imap-user')?.value?.trim();
+    const pass = document.getElementById('acct-imap-pass')?.value;
+    if (!host || !user) {
+      resultEl.className = 'acct-test-status fail';
+      resultEl.innerHTML = `${lucide('x-circle',12)} 请先填写 IMAP 服务器和邮箱`;
+      return;
+    }
+    resultEl.className = 'acct-test-status';
+    resultEl.innerHTML = `${lucide('loader-2',12,'spin')} 测试中...`;
+    btn.disabled = true;
+    try {
+      const port = parseInt(document.getElementById('acct-imap-port')?.value) || 993;
+      const r = await window.electronAPI.testImap({ host, port, user, pass });
+      resultEl.className = r.ok ? 'acct-test-status ok' : 'acct-test-status fail';
+      resultEl.innerHTML = r.ok
+        ? `${lucide('check-circle',12)} IMAP 连接成功`
+        : `${lucide('x-circle',12)} ${escapeHtml(r.error || '连接失败')}`;
+    } catch (e) {
+      resultEl.className = 'acct-test-status fail';
+      resultEl.innerHTML = `${lucide('x-circle',12)} ${escapeHtml(e.message)}`;
+    }
+    btn.disabled = false;
+  });
+
+// ── 原有 SMTP 测试的结束标记（以下无更多按钮绑定）
 
   // SMTP 服务器变动时自动推导 IMAP 服务器
   document.getElementById('acct-host')?.addEventListener('input', function() {

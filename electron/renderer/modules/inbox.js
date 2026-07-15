@@ -174,21 +174,29 @@ function _bindMenuActions(menu, m, idx) {
   }));
   menu.querySelector('[data-action="del-matched"]')?.addEventListener('click', async () => {
     menu.remove();
+    // 收集所有选中邮件中的匹配联系人（多选时遍历全部选中项）
+    const targetIdxes = _selectedSet.size > 1 ? [..._selectedSet] : [idx];
     const allMatched = [];
-    if (m.contactCompany && m.from) allMatched.push({ mailIdx: idx, email: m.from, id: m.contactDbId || '' });
-    for (const c of (m.matchedContacts || [])) {
-      if (c.matched && c.email) allMatched.push({ mailIdx: idx, email: c.email, id: c.contactId || '' });
+    for (const i of targetIdxes) {
+      const mail = _mails[i];
+      if (!mail) continue;
+      if (mail.contactCompany && mail.from) allMatched.push({ mailIdx: i, email: mail.from, id: mail.contactDbId || '' });
+      for (const c of (mail.matchedContacts || [])) {
+        if (c.matched && c.email) allMatched.push({ mailIdx: i, email: c.email, id: c.contactId || '' });
+      }
     }
     if (!allMatched.length) { showToast('无匹配联系人', 'warn'); return; }
-    if (!await showConfirm(`确定删除 ${allMatched.length} 个匹配联系人？`)) return;
+    if (!await showConfirm(`确定删除选中的 ${allMatched.length} 个匹配联系人？`)) return;
     const contacts = await window.electronAPI.getContacts();
     const delIds = allMatched.map(c => c.id || (contacts.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
     if (delIds.length) await window.electronAPI.deleteContactsMany(delIds);
-    for (const c of allMatched) {
-      await window.electronAPI.removeInboxMatchedContact(c.mailIdx, c.email);
+    await window.electronAPI.removeInboxMatchedContactsBatch(allMatched);
+    // 更新内存中的匹配状态
+    const delEmails = new Set(allMatched.map(c => (c.email || '').toLowerCase()));
+    for (const mail of _mails) {
+      if (delEmails.has((mail.from || '').toLowerCase())) { mail.contactCompany = ''; mail.contactId = ''; mail.contactDbId = ''; }
+      if (mail.matchedContacts) mail.matchedContacts = mail.matchedContacts.filter(mc => !delEmails.has((mc.email || '').toLowerCase()));
     }
-    if (m.from && allMatched.some(c => c.email.toLowerCase() === m.from.toLowerCase())) { m.contactCompany = ''; m.contactId = ''; m.contactDbId = ''; }
-    if (m.matchedContacts) m.matchedContacts = m.matchedContacts.filter(mc => !allMatched.some(c => c.email.toLowerCase() === mc.email.toLowerCase()));
     renderDetail(); renderInbox();
     showToast(`已删除 ${allMatched.length} 个联系人`, 'ok');
   });
@@ -285,13 +293,13 @@ function renderInbox() {
   if (!_loading && !filtered.length) {
     listEl.innerHTML = '<div class="inbox-loading">暂无邮件，点击刷新拉取</div>';
   }
-  // 退信抽屉：有已匹配退信则渲染按钮，无则清空 DOM
+  // 退信抽屉：有已匹配退信则平滑下拉显示删除按钮
   const drawer = document.getElementById('inbox-bounce-drawer');
   if (drawer) {
     const hasMatched = _filter === 'bounce' && _mails.some(m => m.type === 'bounce' && (m.contactCompany || (m.matchedContacts || []).some(c => c.matched)));
+    drawer.classList.toggle('open', hasMatched);
     if (hasMatched) {
       drawer.innerHTML = '<button id="inbox-delete-bounced">删除全部退信联系人</button>';
-      // ponytail: 动态绑定事件（按钮每次重建，需重新绑定）
       document.getElementById('inbox-delete-bounced')?.addEventListener('click', _onDeleteBounced);
     } else {
       drawer.innerHTML = '';
