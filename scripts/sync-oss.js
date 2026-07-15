@@ -48,7 +48,7 @@ async function main() {
   for (const f of files) {
     const fp = path.join(DIST, f);
     const buf = fs.readFileSync(fp);
-    const r = await ossRequest('PUT', `prospector/${f}`, buf);
+    const r = await ossRequest('PUT', `outreacher/${f}`, buf);
     if (r.status === 200) console.log(`  ✅ ${f}`);
     else console.log(`  ❌ ${f} — HTTP ${r.status}`);
   }
@@ -56,7 +56,7 @@ async function main() {
   // 更新 latest.yml 的 URL 为 OSS 地址
   const ymlPath = path.join(DIST, 'latest.yml');
   let yml = fs.readFileSync(ymlPath, 'utf-8');
-  const cdnBase = `https://${OSS.bucket}.${OSS.region}.aliyuncs.com/prospector`;
+  const cdnBase = `https://${OSS.bucket}.${OSS.region}.aliyuncs.com/outreacher`;
   yml = yml.replace(/url:\s*.+/g, (m) => m.replace(/: .+$/, `: ${cdnBase}/${path.basename(m.split(': ')[1])}`));
   yml = yml.replace(/path:\s*.+/g, (m) => m.replace(/: .+$/, `: ${cdnBase}/${path.basename(m.split(': ')[1])}`));
   fs.writeFileSync(ymlPath, yml);
@@ -64,7 +64,7 @@ async function main() {
 
   // 重新上传 latest.yml
   const ymlBuf = fs.readFileSync(ymlPath);
-  const rr = await ossRequest('PUT', 'prospector/latest.yml', ymlBuf);
+  const rr = await ossRequest('PUT', 'outreacher/latest.yml', ymlBuf);
   console.log(rr.status === 200 ? '  ✅ latest.yml 同步到 OSS' : '  ❌ latest.yml 上传失败');
 }
 

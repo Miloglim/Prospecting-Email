@@ -1,4 +1,4 @@
-// ── Prospector — 发送日志 SQLite CRUD ────────────────────────────────────────
+// ── Outreacher — 发送日志 SQLite CRUD ────────────────────────────────────────
 "use strict";
 
 const { getDb } = require("./db");

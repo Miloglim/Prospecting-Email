@@ -190,6 +190,12 @@ document.getElementById('clients-import-btn')?.addEventListener('click', async (
   }
   const msg = `<div style="text-align:center;margin-bottom:6px"><b style="font-size:16px">${lucide('database',18)} 总计 ${result.total} 位联系人</b></div>${items.join('')}`;
   await showAlert(msg);
+  // 导入成功后清除预览
+  S.clientsData = [];
+  S.clientsExtraCols = [];
+  S.clientsPage = 1;
+  if (fileInput) fileInput.value = '';
+  renderClientsTable();
 });
 
 // 「清除」
@@ -265,7 +271,9 @@ export function renderContactsList(filtered) {
   if (S.contactsFilter === 'archived') {
     data = data.filter(c => S.contactsSendHistory[c.company]?.stage === 'archived');
   } else if (S.contactsFilter === 'anomaly') {
-    data = data.filter(c => c._suspicious === 1 || (c.email && c.email.endsWith('@no.email')));
+    data = data.filter(c => c._suspicious === 1 || (c.email && (c.email.endsWith('@no.email') || c.email.endsWith('@placeholder.local') || !S.EMAIL_RE.test(c.email))));
+  } else if (S.contactsFilter === 'has_phone') {
+    data = data.filter(c => c.phone && c.phone.trim());
   } else if (S.contactsFilter?.startsWith('tag:')) {
     const tag = S.contactsFilter.slice(4);
     data = data.filter(c => (c.tags || []).includes(tag));
@@ -350,7 +358,8 @@ export function renderContactsList(filtered) {
     const allGroups = groupByCompany(S.contactsData);
     const vipCount = allGroups.filter(g => g[1].length >= 5).length;
     statsBar.style.display = 'inline';
-    statsBar.textContent = `${S.contactsData.length} 位联系人 · ${allGroups.length} 家公司 · ${vipCount} 家可定制客户`;
+    const noEmailCount = S.contactsData.filter(c => (c.email || '').endsWith('@no.email')).length;
+    statsBar.textContent = `${S.contactsData.length} 位联系人（${noEmailCount} 无邮箱） · ${allGroups.length} 家公司 · ${vipCount} 家可定制客户`;
   }
 
   // 左侧公司列表
@@ -529,78 +538,183 @@ function enableColResize(table, storageKey) {
   });
 }
 
+// ── 联系人详情表列定义 ──────────────────────────────────────────────
+const DETAIL_COLS = [
+  { key: 'first_name', label: '名', always: false },
+  { key: 'last_name', label: '姓', always: false },
+  { key: 'email', label: '邮箱', always: false },
+  { key: 'title', label: '职位', always: false },
+  { key: 'phone', label: '电话', always: false },
+  { key: 'linkedin', label: '领英', always: false },
+  { key: 'country', label: '国家', always: false },
+  { key: 'category', label: '品类', always: false },
+  { key: 'client_type', label: '客户类型', always: false },
+  { key: 'stage', label: '阶段', always: false },
+  { key: '_status', label: '状态', always: true },
+  { key: 'opp_stage', label: '机会', always: false },
+  { key: '_tags', label: '标签', always: false },
+  { key: 'contact_person', label: '对接人', always: false },
+  { key: 'assignee', label: '跟进人', always: false },
+  { key: '_followup', label: '备注', always: false },
+  { key: '_actions', label: '操作', always: true },
+];
+
+function _getColVis() {
+  try { return JSON.parse(localStorage.getItem('detailCols') || '{}'); } catch { return {}; }
+}
+function _saveColVis(vis) {
+  try { localStorage.setItem('detailCols', JSON.stringify(vis)); } catch { /* 降级 */ }
+}
+function _isColVisible(key, vis) {
+  if (vis[key] !== undefined) return vis[key];
+  return true; // 默认全显示
+}
+
+// ── 列显隐切换下拉 ──────────────────────────────────────────────────
+function _showColToggle(anchorEl) {
+  document.getElementById('col-toggle-popup')?.remove();
+  const popup = document.createElement('div');
+  popup.id = 'col-toggle-popup';
+  popup.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:8px 0;min-width:160px;font-size:12px;max-height:60vh;overflow-y:auto';
+  const rect = anchorEl.getBoundingClientRect();
+  popup.style.left = (rect.right - 160) + 'px';
+  popup.style.top = (rect.bottom + 4) + 'px';
+
+  const vis = _getColVis();
+  const items = DETAIL_COLS.filter(c => !c.always).map(c => {
+    const show = _isColVisible(c.key, vis);
+    return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px" data-key="${c.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><input type="checkbox" ${show ? 'checked' : ''} style="pointer-events:none;margin:0"> ${c.label}</div>`;
+  }).join('');
+
+  popup.innerHTML = items;
+  popup.querySelectorAll('[data-key]').forEach(div => {
+    div.addEventListener('click', () => {
+      const key = div.dataset.key;
+      const newVis = _getColVis();
+      const willShow = !_isColVisible(key, vis);
+      newVis[key] = willShow;
+      _saveColVis(newVis);
+      // 原地更新复选框状态 + 重渲详情（popup 保持打开）
+      const cb = div.querySelector('input[type="checkbox"]');
+      if (cb) cb.checked = willShow;
+      vis[key] = willShow;
+      if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
+    });
+  });
+
+  document.body.appendChild(popup);
+  const close = (ev) => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
 export function renderContactDetail(company) {
   const detail = document.getElementById('contacts-detail');
   if (!detail || !company) return;
+  // 保存滚动位置，渲染后恢复（垂直+水平）
+  const scrollTop = detail.scrollTop;
+  const bodyEl = detail.querySelector('.contacts-detail-body');
+  const bodyScrollLeft = bodyEl ? bodyEl.scrollLeft : 0;
   let members = S.contactsGroupMap.get(company) || [];
-  // 有搜索词时仅显示命中的联系人（公司名匹配则不过滤，展示全部成员）
   if (S._searchQuery) {
     const q = S._searchQuery.toLowerCase();
     const companyMatch = (company || '').toLowerCase().includes(q);
     if (!companyMatch) {
       members = members.filter(m => (m.email || '').toLowerCase().includes(q) || (m.firstName || '').toLowerCase().includes(q) || (m.lastName || '').toLowerCase().includes(q) || (m.contactName || '').toLowerCase().includes(q));
     }
-    if (!members.length) return; // 无匹配则不渲染
+    if (!members.length) return;
   }
   const ctype = members[0]?.clientType || 'unlabeled';
   const hist = S.contactsSendHistory[company];
   const isArchived = hist?.stage === 'archived';
-  // 收集所有外部字段名（Excel 导入的非标准列）
   const extraKeys = [...new Set(members.flatMap(m => Object.keys(m._extra || {})))].filter(Boolean);
+
+  // 列显隐
+  const colVis = _getColVis();
+  const visibleCols = DETAIL_COLS.filter(c => c.always || _isColVisible(c.key, colVis));
+
+  // ── 构建列头和数据单元格 ──────────────────────────────────────────
+  const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
+  const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
+  const OPP_LABEL = { '待开发':'待开发','触达中':'触达中','报价中':'报价中','试单':'试单','合作中':'合作中','已流失':'已流失' };
+
+  const _th = (col, isExtra) => {
+    const style = isExtra ? 'color:#999;font-weight:400' : '';
+    return `<th style="white-space:nowrap;${style}">${escapeHtml(isExtra ? col.key : col.label)}</th>`;
+  };
+  const _td = (m, col, isExtra) => {
+    if (isExtra) return `<td style="color:#aaa;font-size:0.9em">${escapeHtml(String((m._extra || {})[col.key] || ''))}</td>`;
+    switch (col.key) {
+      case 'first_name': return `<td data-field="first_name" class="editable">${escapeHtml(m.firstName || m.first_name || '')}</td>`;
+      case 'last_name': return `<td data-field="last_name" class="editable">${escapeHtml(m.lastName || m.last_name || '')}</td>`;
+      case 'email': {
+        const isNoEmail = (m.email || '').endsWith('@no.email');
+        return `<td data-field="email" class="editable" data-value="${escapeHtml(m.email)}">${isNoEmail ? '<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:8px;cursor:text;display:inline-flex;align-items:center;gap:2px">'+lucide('mail',10)+' 无邮箱</span>' : escapeHtml(m.email)}</td>`;
+      }
+      case 'title': return `<td data-field="title" class="editable">${escapeHtml(m.title || m.position || '')}</td>`;
+      case 'phone': return `<td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>`;
+      case 'linkedin': return `<td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>`;
+      case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
+      case 'category': return `<td data-field="category" class="editable">${escapeHtml(m.category || '')}</td>`;
+      case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
+      case 'stage': {
+        const st = m.stage || m._stage || 'cold';
+        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable"><span class="stage-badge stage-${st}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[st]||st}</span></td>`;
+      }
+      case '_status': {
+        const tags = m.tags || [];
+        const PRIORITY = ['left_company','bounced_by_contact','replied','autoreply','auto_reply','reached'];
+        const top = PRIORITY.find(t => tags.includes(t)) || (m.is_bounced || m.bounced ? 'bounced_by_contact' : '');
+        const label = STATUS_LABEL[top] || '未触达';
+        const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817', bounced_by_contact:'#e5484d', left_company:'#d93025' };
+        const dot = DOT[top] || 'var(--text-secondary)';
+        return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
+      }
+      case 'opp_stage': return `<td data-field="opp_stage" data-select="opp_stage" data-labels="${escapeHtml(JSON.stringify(OPP_LABEL))}" class="editable">${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>`;
+      case '_tags': {
+        const ts = (m.tags || []).join(',');
+        return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts)}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
+      }
+      case 'contact_person': return `<td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>`;
+      case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
+      case '_followup': return `<td><span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span></td>`;
+      case '_actions': return `<td><button class="btn-edit-contact" data-id="${m.id}" style="margin-right:4px">${lucide('pencil',13)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>`;
+      default: return `<td>${escapeHtml(String(m[col.key] || ''))}</td>`;
+    }
+  };
+
+  // 外部字段
+  const extraCols = extraKeys.map(k => ({ key: k, label: k }));
 
   detail.innerHTML = `
     <div class="contacts-detail-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
-      <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px;margin-left:auto">背调</button>
+      <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
+      <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px">背调</button>
       ${S.contactsFilter === 'tag:bounced_by_contact' ? `<button id="btn-delete-bounced" class="secondary" style="font-size:11px;padding:3px 10px;color:#e5484d;border-color:#e5484d">删除全部退信</button>` : ''}
     </div>
     <div class="contacts-detail-body" style="overflow-x:auto">
       <table style="white-space:nowrap">
-        <thead><tr><th>名</th><th>姓</th><th>邮箱</th><th>职位</th><th>电话</th><th>领英</th><th>国家</th><th>品类</th><th>客户类型</th><th>阶段</th><th>状态</th><th>机会</th><th>标签</th><th>对接人</th><th>跟进人</th><th>备注</th><th>操作</th>${extraKeys.map(k => `<th style="color:#999;font-weight:400">${escapeHtml(k)}</th>`).join('')}</tr></thead>
+        <thead><tr>${visibleCols.map(c => _th(c, false)).join('')}${extraCols.map(c => _th(c, true)).join('')}</tr></thead>
         <tbody>
-          ${members.map(m => {
-            const contactTags = m.tags || [];
-            const STATUS_PRIORITY = ['left_company','bounced_by_contact','replied','autoreply','auto_reply','reached'];
-            const topTag = STATUS_PRIORITY.find(t => contactTags.includes(t));
-            const STATUS_MAP = { left_company: { label: '已离职', dot: '#d93025' }, bounced_by_contact: { label: '退信', dot: '#e5484d' }, replied: { label: '有回复', dot: '#22a644' }, autoreply: { label: '自动回复', dot: '#e6a817' }, auto_reply: { label: '自动回复', dot: '#e6a817' }, reached: { label: '已触达', dot: '#3b82f6' } };
-            let st = STATUS_MAP[topTag];
-            if (!st && (m.is_bounced || m.bounced)) st = { label: '退信', dot: '#e5484d' };
-            if (!st) st = { label: '未触达', dot: 'var(--text-secondary)' };
-            const statusHtml = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${st.dot};flex-shrink:0"></span>${st.label}</span>`;
-            const hasFollowups = (m.followups || []).length > 0;
-            const nameDisplay = (m.firstName || m.lastName) ? `${m.firstName||''} ${m.lastName||''}`.trim() : (m.contactName || '—');
-            const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
-            const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
-            const OPP_LABEL = { '待开发':'待开发','触达中':'触达中','报价中':'报价中','试单':'试单','合作中':'合作中','已流失':'已流失' };
-            const tagStr = (m.tags || []).join(',');
-            return `
+          ${members.map(m => `
             <tr data-contact-id="${m.id}">
-              <td data-field="first_name" class="editable">${escapeHtml(m.firstName || m.first_name || '')}</td>
-              <td data-field="last_name" class="editable">${escapeHtml(m.lastName || m.last_name || '')}</td>
-              <td data-field="email" class="editable" data-value="${escapeHtml(m.email)}">${(m.email || '').endsWith('@no.email') ? '<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:8px;cursor:text;display:inline-flex;align-items:center;gap:2px">'+lucide('mail',10)+' 无邮箱</span>' : escapeHtml(m.email)}</td>
-              <td data-field="title" class="editable">${escapeHtml(m.title || m.position || '')}</td>
-              <td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>
-              <td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>
-              <td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>
-              <td data-field="category" class="editable">${escapeHtml(m.category || '')}</td>
-              <td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>
-              <td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable"><span class="stage-badge stage-${m.stage||m._stage||'cold'}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[m.stage||m._stage]||'cold'}</span></td>
-              <td>${statusHtml}</td>
-              <td data-field="opp_stage" data-select="opp_stage" data-labels="${escapeHtml(JSON.stringify(OPP_LABEL))}" class="editable">${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>
-              <td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${tagStr ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(tagStr)}</span>` : '<span style="color:#ccc">—</span>'}</td>
-              <td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>
-              <td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>
-              <td>${hasFollowups ? `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--primary);font-weight:600">${m.followups.length}条</span>` : `<span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span>`}</td>
-              <td><button class="btn-edit-contact" data-id="${m.id}" style="margin-right:4px">${lucide('pencil',13)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>
-              ${extraKeys.map(k => `<td style="color:#aaa;font-size:0.9em">${escapeHtml(String((m._extra || {})[k] || ''))}</td>`).join('')}
+              ${visibleCols.map(c => _td(m, c, false)).join('')}
+              ${extraCols.map(c => _td(m, c, true)).join('')}
             </tr>
-          `}).join('')}
+          `).join('')}
         </tbody>
       </table>
       ${isArchived ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:8px"><span style="font-size:13px">${lucide('archive',13)} 已归档 — 不参与常规序列</span><button id="btn-reactivate-contact" style="margin-left:auto;font-size:12px;padding:4px 12px">${lucide('refresh-cw',12)} 重新激活</button></div>` : ''}
     </div>
   `;
+  // 恢复滚动位置
+  if (scrollTop > 0) detail.scrollTop = scrollTop;
+  if (bodyScrollLeft > 0) { const b = detail.querySelector('.contacts-detail-body'); if (b) b.scrollLeft = bodyScrollLeft; }
+  // 列设置按钮
+  const colBtn = document.getElementById('btn-col-toggle');
+  if (colBtn) colBtn.addEventListener('click', (e) => { e.stopPropagation(); _showColToggle(colBtn); });
+
   // 编辑按钮
   detail.querySelectorAll('.btn-edit-contact').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -791,21 +905,21 @@ export function renderContactDetail(company) {
         { val: 'left_company', label: '已离职', color: '#d93025' },
       ];
 
+      const currentTag = currentTags[0] || '';
       const items = TAG_OPTIONS.map(t => {
-        const checked = currentTags.includes(t.val);
-        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:${t.color}" data-tag="${t.val}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><input type="checkbox" ${checked ? 'checked' : ''} style="pointer-events:none;width:13px;height:13px;accent-color:${t.color};margin:0;flex-shrink:0"> ${t.label}</div>`;
+        const active = currentTag === t.val;
+        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:${t.color};${active ? 'font-weight:600' : ''}" data-tag="${t.val}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${active ? ' ●' : ''} ${t.label}</div>`;
       }).join('');
 
       popup.innerHTML = items +
         `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
-        `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除全部标签</div>`;
+        `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
 
       popup.querySelectorAll('[data-tag]').forEach(div => {
         div.addEventListener('click', async () => {
           const tagVal = div.dataset.tag;
-          const newTags = currentTags.includes(tagVal)
-            ? currentTags.filter(t => t !== tagVal)
-            : [...currentTags, tagVal];
+          // 单选：再次点击同一标签则取消
+          const newTags = currentTag === tagVal ? [] : [tagVal];
           popup.remove();
           await window.electronAPI.setContactTags(contactId, newTags);
           contact.tags = newTags;
@@ -841,7 +955,9 @@ export function renderContactDetail(company) {
     client_type: ['agent','direct','unlabeled'],
     stage: ['cold','f1','f2','f3','f4'],
     opp_stage: ['待开发','触达中','报价中','试单','合作中','已流失'],
+    _status: ['', 'reached','replied','autoreply','bounced_by_contact','left_company'],
   };
+  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
 
   const INPUT_STYLE = 'min-width:140px;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
   const SELECT_STYLE = 'min-width:120px;padding:4px 6px;border:2px solid var(--primary);border-radius:6px;font-size:11px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
@@ -883,15 +999,22 @@ export function renderContactDetail(company) {
           const company = ref.company || ref.company_name || '';
           const members = S.contactsData.filter(c => (c.company || c.company_name) === company);
           if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
-          for (const m of members) await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val });
+          for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
+        } else if (selType === '_status') {
+          const tagVal = val || ''; // 空字符串 = 清除标签 = 未触达
+          await window.electronAPI.setContactTags(contactId, tagVal ? [tagVal] : []);
+          ref.tags = tagVal ? [tagVal] : [];
+          const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');
+          if (members2) { const mx = members2.find(x => x.id === contactId); if (mx) mx.tags = tagVal ? [tagVal] : []; }
         } else if (selType === 'country') {
           const contact = S.contactsData.find(c => c.id === contactId);
-          if (contact?.company_id) await window.electronAPI.updateCompany(contact.company_id, { country: val });
+          if (contact?.company_id) { await window.electronAPI.updateCompany(contact.company_id, { country: val }); contact.country = val; }
         } else {
           const ref2 = S.contactsData.find(c => c.id === contactId);
-          if (ref2) await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val });
+          if (ref2) { await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val }); ref2[field] = val; }
         }
-        await CS.refreshContacts(); renderContactsList();
+        // 只刷新详情，不重建列表
+        if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
       };
       select.addEventListener('change', () => save(select.value));
       select.addEventListener('blur', () => { setTimeout(() => save(select.value), 100); });
@@ -915,8 +1038,23 @@ export function renderContactDetail(company) {
       if (val === orig || (val === '' && orig === '—') || (isNoEmail && !val)) { restore(); return; }
       td.textContent = val || '—';
       const ref = S.contactsData.find(c => c.id === contactId);
-      if (ref) await window.electronAPI.upsertContact({ id: contactId, email: ref.email, [field]: val });
-      await CS.refreshContacts();
+      if (ref) {
+        const payload = { id: contactId, [field]: val };
+        // 改邮箱时用旧邮箱做 upsert 定位，新邮箱做值
+        if (field === 'email') payload.email = val;
+        else payload.email = ref.email;
+        await window.electronAPI.upsertContact(payload);
+        // 只刷新当前公司详情，不重建整个列表
+        ref[field] = val;
+        if (field === 'email') ref.email = val;
+        const company = ref.company || ref.company_name || '';
+        const members = S.contactsGroupMap.get(company);
+        if (members) {
+          const m = members.find(x => x.id === contactId);
+          if (m) { m[field] = val; if (field === 'email') m.email = val; }
+        }
+      }
+      if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
     };
     input.addEventListener('blur', save);
     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); save(); } if (ev.key === 'Escape') { input.remove(); restore(); } });
@@ -1012,10 +1150,14 @@ document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', a
 });
 // ── 编辑联系人弹窗 ──────────────────────────────────────────────────────────
 // ── 跟进备注弹窗 ──────────────────────────────────────────────────────────
-function showFollowupEditor(contact) {
-  const notes = contact.followups || [];
+async function showFollowupEditor(contact) {
+  const notes = await window.electronAPI.listNotes(contact.id) || [];
+  const listHtml = notes.length
+    ? `<div class="fu-list">${notes.map(n => `<div class="fu-item"><div class="fu-time">${new Date(n.created_at).toLocaleString('zh-CN')} <span style="cursor:pointer;color:#e5484d;margin-left:8px" data-del="${n.id}">✕</span></div>${escapeHtml(n.content)}</div>`).join('')}</div>`
+    : '<div style="color:var(--text-secondary);font-size:12px;margin-bottom:12px">暂无备注</div>';
+
   showModal({
-    title: `跟进备注 — ${escapeHtml(contact.firstName || contact.contactName || contact.email)}`,
+    title: `备注 — ${escapeHtml(contact.firstName || contact.contactName || contact.email)}`,
     closeOnOverlay: false,
     message: `
       <style>
@@ -1026,24 +1168,29 @@ function showFollowupEditor(contact) {
         .fu-input { width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:var(--bg); color:var(--text); outline:none; resize:vertical; min-height:60px; }
         .fu-input:focus { border-color:var(--primary); }
       </style>
-      ${notes.length ? `<div class="fu-list">${notes.slice().reverse().map(n => `<div class="fu-item"><div class="fu-time">${new Date(n.ts).toLocaleString('zh-CN')}</div>${escapeHtml(n.text)}</div>`).join('')}</div>` : '<div style="color:var(--text-secondary);font-size:12px;margin-bottom:12px">暂无跟进记录</div>'}
-      <textarea class="fu-input" id="fu-input" placeholder="输入跟进备注..."></textarea>`,
+      ${listHtml}
+      <textarea class="fu-input" id="fu-input" placeholder="输入备注..."></textarea>`,
     buttons: [
       { text: '取消', value: false },
       { text: '保存', value: 'ok', primary: true },
     ],
+    onReady: () => {
+      // 删除按钮事件
+      document.querySelectorAll('[data-del]').forEach(el => {
+        el.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await window.electronAPI.deleteNote(el.dataset.del);
+          showFollowupEditor(contact); // 刷新列表
+        });
+      });
+    },
     onClose: async (val) => {
       if (val !== 'ok') return;
       const text = document.getElementById('fu-input')?.value?.trim();
       if (!text) { showToast('内容为空', 'warn'); return false; }
-      const r = await window.electronAPI.saveFollowup(contact.id, text);
-      if (r.ok) {
-        contact.followups = r.followups;
-        renderContactDetail(contact.company);
-        showToast('已保存', 'ok');
-      } else {
-        showToast(r.error || '保存失败', 'err');
-      }
+      await window.electronAPI.addNote(contact.id, text);
+      renderContactDetail(contact.company);
+      showToast('已保存', 'ok');
     },
   });
 

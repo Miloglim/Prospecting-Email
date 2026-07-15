@@ -7,7 +7,7 @@ const { app } = require('electron');
 
 // 打包后路径判定
 const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
-// 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\prospecting-email-send
+// 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\outreacher
 const APP_ROOT = _IS_PACKAGED
   ? app.getPath('userData')
   : path.join(__dirname, '..', '..');

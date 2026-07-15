@@ -1,4 +1,4 @@
-// ── Milogin's Prospector — Preload（安全 IPC 桥接）────────────────────────
+// ── Milogin's Outreacher — Preload（安全 IPC 桥接）────────────────────────
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("contacts:saveFollowup", contactId, text),
   getFollowups: (contactId) =>
     ipcRenderer.invoke("contacts:getFollowups", contactId),
+  listNotes: (contactId) => ipcRenderer.invoke("contacts:listNotes", contactId),
+  addNote: (contactId, content) => ipcRenderer.invoke("contacts:addNote", contactId, content),
+  deleteNote: (noteId) => ipcRenderer.invoke("contacts:deleteNote", noteId),
 
   // 模板
   getTemplateLibrary: () => ipcRenderer.invoke("template:getLibrary"),

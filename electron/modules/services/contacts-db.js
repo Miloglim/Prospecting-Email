@@ -1,4 +1,4 @@
-// ── Prospector — 联系人 SQLite CRUD（替换 contacts.json）─────────────────────
+// ── Outreacher — 联系人 SQLite CRUD（替换 contacts.json）─────────────────────
 "use strict";
 
 const { getDb } = require("./db");
@@ -94,6 +94,8 @@ function upsert(data) {
     { country: data.country || data.company_country || "", website: data.website || "" }
   );
 
+  // ponytail: 有 id 时按 id 更新（支持改邮箱），否则按 email 查重
+  if (data.id) { const byId = getById(data.id); if (byId) return update(data.id, data); }
   const existing = db.prepare("SELECT id FROM contacts WHERE email = ?").get(email);
   if (existing) return update(existing.id, data);
 
@@ -328,4 +330,18 @@ function migrateFromJson(contactsPath, sendLogPath) {
   return { migrated: n };
 }
 
-module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson };
+// ── 联系人备注 ──────────────────────────────────────────────────────────
+function listNotes(contactId) {
+  return getDb().prepare("SELECT * FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC").all(contactId);
+}
+function addNote(contactId, content) {
+  if (!content?.trim()) return null;
+  const id = uuid(); const now = new Date().toISOString();
+  getDb().prepare("INSERT INTO contact_notes (id,contact_id,content,created_at,updated_at) VALUES (?,?,?,?,?)").run(id, contactId, content.trim(), now, now);
+  return { id, contact_id: contactId, content: content.trim(), created_at: now, updated_at: now };
+}
+function deleteNote(noteId) {
+  getDb().prepare("DELETE FROM contact_notes WHERE id = ?").run(noteId);
+}
+
+module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson, listNotes, addNote, deleteNote };

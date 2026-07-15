@@ -1,4 +1,4 @@
-// ── Prospector — SQLite 建表 + 迁移 ──────────────────────────────────────────
+// ── Outreacher — SQLite 建表 + 迁移 ──────────────────────────────────────────
 "use strict";
 
 const SCHEMA_VERSION = 1;
@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS opportunities (
     created_at    TEXT DEFAULT (datetime('now','localtime')),
     updated_at    TEXT DEFAULT (datetime('now','localtime'))
 );
+
+  CREATE TABLE IF NOT EXISTS contact_notes (
+    id            TEXT PRIMARY KEY,
+    contact_id    TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    content       TEXT NOT NULL,
+    created_at    TEXT DEFAULT (datetime('now','localtime')),
+    updated_at    TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(contact_id);
 `;
 
 function initSchema(db) {

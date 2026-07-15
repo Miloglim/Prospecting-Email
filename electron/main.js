@@ -1,4 +1,4 @@
-// ── Milogin's Prospector — Electron 主进程 v2.0 ────────────────────────────
+// ── Milogin's Outreacher — Electron 主进程 v2.0 ────────────────────────────
 // electron-reloader 仅旧版 `electron .` 模式使用；electron-vite dev 自带 HMR
 if (!process.env.VITE_DEV_SERVER_URL) {
   try {
@@ -122,7 +122,7 @@ function createWindow() {
     height: 800,
     minWidth: 1024,
     minHeight: 680,
-    title: "Milogin's Prospector.",
+    title: "Milogin's Outreacher.",
     icon: appIcon,
     frame: false,
     webPreferences: {
@@ -190,11 +190,11 @@ function createTray() {
       },
     ]),
   );
-  deps.tray.setToolTip("Milogin's Prospector.");
+  deps.tray.setToolTip("Milogin's Outreacher.");
   deps.tray.on("double-click", () => deps.mainWindow?.show());
 }
 
-app.setAppUserModelId("com.milogin.prospecting-email");
+app.setAppUserModelId("com.milogin.outreacher");
 
 // 单实例锁：防止重复启动
 const gotLock = app.requestSingleInstanceLock();

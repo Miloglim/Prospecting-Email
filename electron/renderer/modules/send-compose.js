@@ -725,7 +725,16 @@ async function addToQueue() {
   for (const c of freshContacts) {
     if (c._sentBy && c.email) sentByEmails.add(c.email.toLowerCase().trim());
   }
+  // ponytail: 已重置公司的联系人视为未发过，从拦截白名单中移除
+  if (S._justReactivated) {
+    for (const name of S._justReactivated) {
+      const mbrs = S.sendCompanies[name] || [];
+      for (const m of mbrs) sentByEmails.delete((m.email || '').toLowerCase().trim());
+      if (S.sendHistory[name]) S.sendHistory[name].sentContacts = [];
+    }
+  }
 
+  if (!S._justReactivated) S._justReactivated = new Set();
   const needReset = [];
   for (const name of selected) {
     const members = S.sendCompanies[name] || [];
@@ -742,7 +751,7 @@ async function addToQueue() {
     const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !noEmailMembers.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
-      if (!stage || stage === 'cold') needReset.push({ name, count: members.length });
+      if ((!stage || stage === 'cold') && !S._justReactivated.has(name)) needReset.push({ name, count: members.length });
     }
   }
 
@@ -754,9 +763,27 @@ async function addToQueue() {
     if (choice) {
       for (const r of needReset) {
         await window.electronAPI.reactivateCompany(r.name);
+        S._justReactivated.add(r.name);
         reactivatedCount += r.count;
       }
+      // 刷新全部相关内存数据，确保后续过滤不再拦截已重置的联系人
       await CS.refreshSendHistory();
+      await CS.refreshContacts();
+      const updatedContacts = await window.electronAPI.getContacts();
+      sentByEmails.clear();
+      for (const c of updatedContacts) {
+        if (c._sentBy && c.email) sentByEmails.add(c.email.toLowerCase().trim());
+      }
+      // 更新 S.sendCompanies 中的联系人数据，并从 sentByEmails 移除已重置公司
+      for (const r of needReset) {
+        const freshMembers = updatedContacts.filter(c => (c.company || c.company_name) === r.name);
+        S.sendCompanies[r.name] = freshMembers;
+        for (const m of freshMembers) {
+          sentByEmails.delete((m.email || '').toLowerCase().trim());
+        }
+        // 同时清理 sendHistory 中的 sentContacts
+        if (S.sendHistory[r.name]) S.sendHistory[r.name].sentContacts = [];
+      }
     } else {
       for (const r of needReset) skippedDupOrBounced += r.count;
     }

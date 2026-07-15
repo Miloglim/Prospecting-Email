@@ -232,7 +232,7 @@ function register(ipcMain, deps) {
       'inbox-deleted.json',
       'inbox-cache.json',
       // 测试数据库
-      '_test_prospector.db',
+      '_test_outreacher.db',
     ];
     let deletedCount = 0;
     for (const f of deleteFiles) {
@@ -451,6 +451,20 @@ function register(ipcMain, deps) {
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);
     return { ok: true, action: existing ? 'updated' : 'created', contact: result };
+  });
+
+  // ── 备注 ──
+  ipcMain.handle('contacts:listNotes', async (_e, contactId) => {
+    return db.listNotes(contactId);
+  });
+  ipcMain.handle('contacts:addNote', async (_e, contactId, content) => {
+    const note = db.addNote(contactId, content);
+    if (!note) return { ok: false, error: '内容为空' };
+    return { ok: true, data: note };
+  });
+  ipcMain.handle('contacts:deleteNote', async (_e, noteId) => {
+    db.deleteNote(noteId);
+    return { ok: true };
   });
 
   // 暴露内部方法给其他模块使用

@@ -1,6 +1,6 @@
-# Prospecting Email — 公司背调 + 开发信生成工具
+# Outreacher — 公司背调 + 开发信生成工具
 
-> Milogin's Prospector — 货代行业一站式客户开发工具 (v1.1.0)
+> Milogin's Outreacher — 货代行业一站式客户开发工具 (v1.1.0)
 > 拖入客户表 → AI 背调 → 输出定制双语开发信 → 自动发送。
 
 ---

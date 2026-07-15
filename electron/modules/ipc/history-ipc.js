@@ -105,10 +105,11 @@ function register(ipcMain, deps) {
       const contactsDb = require('../services/contacts-db');
       const all = contactsDb.listAll();
       for (const ct of all) {
-        if ((ct.company_name || ct.company || '') === c) {
-          contactsDb.setStage(ct.id, 'cold', 'manual:reactivate');
-          contactsDb.update(ct.id, { last_sent_at: '', last_sent_acct: '' });
-        }
+        if ((ct.company_name || ct.company || '') !== c) continue;
+        // ponytail: 只重置确实发过的联系人（有 last_sent_at），不动其他人
+        if (!ct.last_sent_at) continue;
+        contactsDb.setStage(ct.id, 'cold', 'manual:reactivate');
+        contactsDb.update(ct.id, { last_sent_at: '', last_sent_acct: '' });
       }
     } catch { /* 降级 */ }
     return { ok: true };

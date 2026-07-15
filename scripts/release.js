@@ -45,7 +45,7 @@ const cmd = `gh release create ${tag} ${fileArgs} --title "${tag}" --notes "${no
 console.log(`\n🚀 创建 Release...`);
 try {
   execSync(cmd, { cwd: ROOT, stdio: 'inherit' });
-  console.log(`\n✅ 发布完成: https://github.com/Miloglim/Prospecting-Email/releases/tag/${tag}`);
+  console.log(`\n✅ 发布完成: https://github.com/Miloglim/Outreacher/releases/tag/${tag}`);
 } catch (e) {
   console.error('❌ 发布失败，请检查 GitHub 连接和权限');
   process.exit(1);

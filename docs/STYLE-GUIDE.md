@@ -1,4 +1,4 @@
-# Milogin's Prospector — 产品风格基准确认书
+# Milogin's Outreacher — 产品风格基准确认书
 
 > 本文档是 Prospector 系列产品的设计/架构/代码风格唯一真相源。
 > 新产品必须严格对齐本文档的所有约定，偏差需在项目 CLAUDE.md 中显式声明并说明理由。

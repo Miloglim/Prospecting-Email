@@ -1,5 +1,5 @@
 ## 0.产品介绍
-Milogin's Prospector. — 货代行业一站式客户开发工具
+Milogin's Outreacher. — 货代行业一站式客户开发工具
 开发信语言:英(EN)/西(ES)/葡(PT)。
 
 ## 1. 角色与标准定位
