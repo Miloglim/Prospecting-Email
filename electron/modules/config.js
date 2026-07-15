@@ -7,7 +7,7 @@ const { app } = require('electron');
 
 // 打包后路径判定
 const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
-// 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\outreacher
+// 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\prospecting-email-send
 const APP_ROOT = _IS_PACKAGED
   ? app.getPath('userData')
   : path.join(__dirname, '..', '..');
@@ -39,8 +39,35 @@ function _migrateIfNeeded() {
   }
 }
 
+// ── 品牌更名数据迁移：prospecting-email-send → outreacher ──────────
+function _migrateFromOldName() {
+  if (!_IS_PACKAGED) return;
+  const oldRoot = path.join(path.dirname(APP_ROOT), 'prospecting-email-send');
+  if (!fs.existsSync(oldRoot) || oldRoot === APP_ROOT) return;
+  const marker = path.join(APP_ROOT, '.migrated_from_old_name');
+  if (fs.existsSync(marker)) return; // 已迁移过
+  try {
+    const dirs = ['logs', 'data', 'send', 'reports'];
+    for (const d of dirs) {
+      const oldDir = path.join(oldRoot, d);
+      const newDir = path.join(APP_ROOT, d);
+      if (!fs.existsSync(oldDir)) continue;
+      try { fs.mkdirSync(newDir, { recursive: true }); } catch { /* 降级 */ }
+      const files = fs.readdirSync(oldDir);
+      for (const f of files) {
+        const oldPath = path.join(oldDir, f);
+        const newPath = path.join(newDir, f);
+        if (fs.existsSync(newPath)) continue;
+        try { fs.copyFileSync(oldPath, newPath); } catch { /* 降级 */ }
+      }
+    }
+    fs.writeFileSync(marker, new Date().toISOString());
+  } catch { /* 迁移失败不阻塞启动 */ }
+}
+
 function ensureRuntimeDirs() {
   _migrateIfNeeded();
+  _migrateFromOldName();
   const dirs = ['logs', 'data', 'send', 'reports'];
   for (const d of dirs) {
     const p = path.join(APP_ROOT, d);
