@@ -526,8 +526,10 @@ async function _pop3Fetch(cfg, sinceDays) {
     await _pop3Cmd(sock, `USER ${cfg.user}`);
     await _pop3Cmd(sock, `PASS ${cfg.pass}`);
     const statRes = await _pop3Cmd(sock, 'STAT');
-    const total = parseInt((statRes[0] || '').split(' ')[1]) || 0;
-    if (!total) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
+    const statTotal = parseInt((statRes[0] || '').split(' ')[1]) || 0;
+    rawSources._diag = { step: 'STAT', statTotal };
+    // ponytail: 部分服务器 STAT 只计未读邮件，返回 0 不代表没邮件
+    // 只要 UIDL 能返回数据就继续拉（参考 RFC 1939: STAT 是可选优化提示）
 
     // UIDL 增量：用 UID 做游标（POP3 序号不持久，删邮件后序号会变）
     const cursor = _readCursor();
@@ -543,9 +545,11 @@ async function _pop3Fetch(cfg, sinceDays) {
         revUidMap[parts[1]] = n;
       }
     }
+    const uidlCount = Object.keys(uidMap).length;
+    rawSources._diag = { step: 'UIDL', statTotal, uidlCount, hasCursor: !!lastUid, cursorValid: lastUid && revUidMap[lastUid] !== undefined };
 
     // 游标自愈：如果上次记录的 UID 已不在服务器上，退化为首次拉取
-    Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${total}, UIDL=${Object.keys(uidMap).length}条, 游标=${lastUid ? (revUidMap[lastUid] !== undefined ? '有效' : '失效') : '无'}`);
+    Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${statTotal}, UIDL=${uidlCount}条, 游标=${lastUid ? (revUidMap[lastUid] !== undefined ? '有效' : '失效') : '无'}`);
     const cursorValid = lastUid && revUidMap[lastUid] !== undefined;
     let ids;
     if (cursorValid) {
@@ -562,6 +566,7 @@ async function _pop3Fetch(cfg, sinceDays) {
     }
     if (!ids.length) { Log.info('[收件箱]', `POP3 ${cfg.user}: 无新邮件需要拉取`); sock.write('QUIT\r\n'); sock.end(); return rawSources; }
     Log.info('[收件箱]', `POP3 ${cfg.user}: 待拉取 ${ids.length} 封 (seq: ${Math.min(...ids)}~${Math.max(...ids)})`);
+    rawSources._diag = { step: 'FETCH', statTotal, uidlCount, fetchCount: ids.length };
 
     // 取最新邮件的 UID 作为新游标
     let newCursorUid = lastUid;
@@ -580,9 +585,11 @@ async function _pop3Fetch(cfg, sinceDays) {
       cursor[cfg.user] = newCursorUid;
       _writeCursor(cursor);
     }
+    rawSources._diag = { step: 'DONE', statTotal, uidlCount, fetchCount: ids.length, parsedCount: rawSources.length };
     sock.write('QUIT\r\n'); sock.end();
   } catch (e) {
     try { sock?.end(); } catch { /* 清理 */ }
+    rawSources._diag = { step: 'ERROR', error: e.message };
     Log.warn('[收件箱]', `POP3 ${cfg.user} 失败: ${e.message}`, e.stack);
   }
   return rawSources;
@@ -654,7 +661,8 @@ async function _fetchInbox(configPath) {
         mails.push(m);
       }
       Log.info('[收件箱]', `${acc.label || cfg.user} 解析完成: ${mails.length}/${rawSources.length} 封`);
-      accountStats.push({ label: acc.label || cfg.user, host: cfg.host, port: cfg.port, protocol, rawCount: rawSources.length, mailCount: mails.length, ok: true });
+      const diag = rawSources._diag || {};
+      accountStats.push({ label: acc.label || cfg.user, host: cfg.host, port: cfg.port, protocol, rawCount: rawSources.length, mailCount: mails.length, ok: true, diag });
       return mails;
     } catch (e) {
       Log.error('[收件箱]', `${acc.label || cfg.user} 拉取失败: ${e.message}`, e.stack);

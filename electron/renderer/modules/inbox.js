@@ -298,8 +298,19 @@ function renderInbox() {
         const n = acctCounts[key];
         const st = _accountStats.find(s => (s.label || s.host) === key);
         const protocol = st ? st.protocol : '';
+        // 诊断：0 封时显示内部步骤信息
+        let detail = '';
+        if (n === 0 && st && st.diag) {
+          const d = st.diag;
+          if (d.error) detail = ` (错误: ${d.error})`;
+          else if (d.step === 'STAT' && d.statTotal === 0) detail = ' (收件箱为空)';
+          else if (d.step === 'UIDL' && d.uidlCount === 0) detail = ' (UIDL解析失败)';
+          else if (d.step === 'UIDL' && d.cursorValid) detail = ' (游标阻塞)';
+          else if (d.step === 'FETCH') detail = ` (${d.fetchCount}封未解析)`;
+          else detail = d.step ? ` (步骤: ${d.step})` : '';
+        }
         const color = n === 0 && st && !st.ok ? 'color:#e5484d' : n === 0 ? 'color:#e6a817' : '';
-        return `<span${color ? ` style="${color}"` : ''}>${key}${protocol ? ' ' + protocol : ''}: ${n}封</span>`;
+        return `<span${color ? ` style="${color}"` : ''} title="${escapeHtml(JSON.stringify(st?.diag || {}))}">${key}${protocol ? ' ' + protocol : ''}: ${n}封${detail}</span>`;
       });
       html += ' &nbsp;|&nbsp; ' + parts.join(' &nbsp;·&nbsp; ');
     }
