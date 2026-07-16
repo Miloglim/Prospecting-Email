@@ -360,6 +360,7 @@ export async function startSend() {
   if (S._sendPaused) {
     S._sendPaused = false;
     S.sendInProgress = true;
+    if (!S._advancedThisRun) S._advancedThisRun = new Set(); // 恢复后继续追踪
     const startBtn = document.getElementById('queue-start');
     if (startBtn) startBtn.innerHTML = '<span data-icon="chevron-right"></span> 开始发送';
     startBtn.disabled = true;
@@ -374,6 +375,7 @@ export async function startSend() {
   }
   S.sendInProgress = true;
   S._sendPaused = false;
+  S._advancedThisRun = new Set(); // ponytail: 本轮已递进公司追踪，防止批量推进重复递进
   const pending = S.queue.filter(e => e.status === 'pending');
   if (!pending.length) { S.sendInProgress = false; return; }
 
@@ -557,10 +559,13 @@ export async function startSend() {
       if (!data._testMode) {
         const companyHasPending = {};
         S.queue.forEach(e => { if (e.company && e.status === 'pending') companyHasPending[e.company] = true; });
-        const sentCompanies = S.queue.filter(e => e.status === 'sent' && e._stage && !companyHasPending[e.company]).map(e => e.company);
+        // ponytail: 排除 per-item handler 已递进的公司，避免同一轮发送递进两次
+        const alreadyAdvanced = S._advancedThisRun || new Set();
+        const sentCompanies = S.queue.filter(e => e.status === 'sent' && e._stage && !companyHasPending[e.company] && !alreadyAdvanced.has(e.company)).map(e => e.company);
         if (sentCompanies.length) {
           window.electronAPI.advanceStage([...new Set(sentCompanies)]);
         }
+        S._advancedThisRun = null; // 本轮结束，清理追踪
       }
     } else if (data.type === 'limit') {
       // 达到每日上限
@@ -605,6 +610,7 @@ export async function startSend() {
           const allDone = items.every(e => e.status === 'sent');
           if (!hasPending && allDone) {
             window.electronAPI.advanceStage([justDone.company]);
+            if (S._advancedThisRun) S._advancedThisRun.add(justDone.company);
           }
         }
       }

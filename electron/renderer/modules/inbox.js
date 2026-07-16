@@ -59,9 +59,13 @@ export async function doFetchInbox() {
   if (result.ok) {
     _mails = result.data || [];
     _failedAccounts = result.failedAccounts || [];
+    const skipped = result.skippedAccounts || [];
     renderInbox();
     if (_failedAccounts.length) {
       showToast(`${_failedAccounts.map(a => a.label + ': ' + a.error).join('；')}`, 'err');
+    }
+    if (skipped.length) {
+      showToast(`${skipped.map(a => a.label + ' 跳过: ' + a.reason).join('；')}`, 'warn');
     }
   } else {
     showToast(`拉取失败: ${result.error}`, 'err');
@@ -173,8 +177,11 @@ function _bindInboxDelegates() {
 function _bindMenuActions(menu, m, idx) {
   menu.querySelectorAll('[data-action="set-type"]').forEach(el => el.addEventListener('click', async () => {
     menu.remove();
-    await window.electronAPI.setInboxType(idx, el.dataset.type);
-    if (_mails[idx]) _mails[idx].type = el.dataset.type;
+    const targetIdxes = _selectedSet.size > 1 ? [..._selectedSet] : [idx];
+    for (const i of targetIdxes) {
+      await window.electronAPI.setInboxType(i, el.dataset.type);
+      if (_mails[i]) _mails[i].type = el.dataset.type;
+    }
     renderInbox();
   }));
   menu.querySelector('[data-action="del-matched"]')?.addEventListener('click', async () => {
@@ -207,15 +214,25 @@ function _bindMenuActions(menu, m, idx) {
   });
   menu.querySelector('[data-action="important"]').addEventListener('click', async () => {
     menu.remove();
-    const key = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
-    await window.electronAPI.toggleInboxImportant(idx, key);
-    m.important = !m.important;
+    const targetIdxes = _selectedSet.size > 1 ? [..._selectedSet] : [idx];
+    for (const i of targetIdxes) {
+      const mail = _mails[i];
+      if (!mail) continue;
+      const key = `${mail.accountId}|${mail.uid}|${mail.from}|${mail.subject}`;
+      await window.electronAPI.toggleInboxImportant(i, key);
+      mail.important = !mail.important;
+    }
     renderInbox();
   });
   menu.querySelector('[data-action="read"]').addEventListener('click', () => {
     menu.remove();
-    const mk = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
-    _viewedKeys.add(mk);
+    const targetIdxes = _selectedSet.size > 1 ? [..._selectedSet] : [idx];
+    for (const i of targetIdxes) {
+      const mail = _mails[i];
+      if (!mail) continue;
+      const mk = `${mail.accountId}|${mail.uid}|${mail.from}|${mail.subject}`;
+      _viewedKeys.add(mk);
+    }
     _saveViewedKeys();
     renderInbox();
   });

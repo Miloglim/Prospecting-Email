@@ -1038,6 +1038,7 @@ export function renderContactDetail(company) {
       else td.textContent = orig || '—';
     };
     const save = async () => {
+      if (!input.parentNode) return; // ponytail: blur 在 Enter/Escape 移除 DOM 后二次触发，此时 input 已不在 DOM 中
       const val = input.value.trim(); input.remove();
       if (val === orig || (val === '' && orig === '—') || (isNoEmail && !val)) { restore(); return; }
       td.textContent = val || '—';

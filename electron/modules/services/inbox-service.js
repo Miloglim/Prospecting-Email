@@ -447,7 +447,7 @@ function _pop3ReadLine(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buf = '';
     const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读行超时')); }, timeoutMs || 10000);
-    const onData = (d) => { buf += d.toString(); const rn = buf.indexOf('\r\n'), n = buf.indexOf('\n'); const end = rn >= 0 ? rn : n; if (end >= 0) { clearTimeout(timer); sock.removeListener('data', onData); resolve(buf.slice(0, end).trim()); } };
+    const onData = (d) => { buf += d.toString('latin1'); const rn = buf.indexOf('\r\n'), n = buf.indexOf('\n'); const end = rn >= 0 ? rn : n; if (end >= 0) { clearTimeout(timer); sock.removeListener('data', onData); resolve(buf.slice(0, end).trim()); } };
     sock.on('data', onData);
   });
 }
@@ -467,7 +467,7 @@ function _pop3ReadRaw(sock, timeoutMs) {
         tailChunks.unshift(chunks[i]);
         scanned += chunks[i].length;
       }
-      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString())) {
+      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString('latin1'))) {
         clearTimeout(timer);
         sock.removeListener('data', onData);
         resolve(Buffer.concat(chunks, totalLen));
@@ -497,16 +497,22 @@ function _pop3ReadMulti(sock, timeoutMs) {
         tailChunks.unshift(chunks[i]);
         scanned += chunks[i].length;
       }
-      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString())) {
+      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString('latin1'))) {
         clearTimeout(timer);
         sock.removeListener('data', onData);
-        const buf = Buffer.concat(chunks).toString();
+        const buf = Buffer.concat(chunks).toString('latin1');
         const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/);
         resolve(lines.length > 1 && /^[+-]/.test(lines[0]) ? lines.slice(1) : lines);
       }
     };
     sock.on('data', onData);
   });
+}
+
+// ── 协议检测 ──────────────────────────────────────────────────────────────────
+function _isPop3(cfg) {
+  if (!cfg) return false;
+  return cfg.port === 995 || (cfg.host || '').toLowerCase().includes('pop');
 }
 
 // ── POP3 拉取（RETR 拿完整 raw → mailparser）─────────────────────────────────
@@ -522,46 +528,61 @@ async function _pop3Fetch(cfg, sinceDays) {
     const total = parseInt((statRes[0] || '').split(' ')[1]) || 0;
     if (!total) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
 
+    // UIDL 增量：用 UID 做游标（POP3 序号不持久，删邮件后序号会变）
     const cursor = _readCursor();
-    const lastNum = parseInt(cursor[cfg.user]) || 0; // 游标存最大序号，新邮件序号一定更大
+    const lastUid = cursor[cfg.user] || '';
     const uidlRes = await _pop3Cmd(sock, 'UIDL');
-    const uidMap = {};
-    let maxServerNum = 0;
+    const uidMap = {};      // seqNum → uid
+    const revUidMap = {};   // uid → seqNum
     for (const line of uidlRes) {
       const parts = line.split(/\s+/);
       if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
         const n = parseInt(parts[0]);
         uidMap[n] = parts[1];
-        if (n > maxServerNum) maxServerNum = n;
+        revUidMap[parts[1]] = n;
       }
     }
-    const isIncremental = lastNum > 0;
-    let ids = Object.keys(uidMap)
-      .map(Number)
-      .filter((n) => n > lastNum) // 只要序号 > 游标的新邮件
-      .sort((a, b) => b - a);
-    if (!isIncremental) ids = ids.slice(0, 40); // 首次只取最近 40 封
-    if (!ids.length) {
-      if (lastNum) { sock.write('QUIT\r\n'); sock.end(); return rawSources; }
+
+    // 游标自愈：如果上次记录的 UID 已不在服务器上，退化为首次拉取
+    Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${total}, UIDL=${Object.keys(uidMap).length}条, 游标=${lastUid ? (revUidMap[lastUid] !== undefined ? '有效' : '失效') : '无'}`);
+    const cursorValid = lastUid && revUidMap[lastUid] !== undefined;
+    let ids;
+    if (cursorValid) {
+      // 增量：只取序号在游标 UID 之后的新邮件
+      const cursorSeq = revUidMap[lastUid];
+      ids = Object.keys(uidMap)
+        .map(Number)
+        .filter((n) => n > cursorSeq)
+        .sort((a, b) => b - a);
+    } else {
+      // 首次运行或游标失效：取最近 40 封
+      if (lastUid) Log.warn('[收件箱]', `POP3 游标失效(${cfg.user})，回退为全量拉取`);
       ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 40);
     }
-    let newCursorNum = lastNum;
+    if (!ids.length) { Log.info('[收件箱]', `POP3 ${cfg.user}: 无新邮件需要拉取`); sock.write('QUIT\r\n'); sock.end(); return rawSources; }
+    Log.info('[收件箱]', `POP3 ${cfg.user}: 待拉取 ${ids.length} 封 (seq: ${Math.min(...ids)}~${Math.max(...ids)})`);
+
+    // 取最新邮件的 UID 作为新游标
+    let newCursorUid = lastUid;
     for (const n of ids) {
       try {
         const raw = await _pop3Cmd(sock, `RETR ${n}`);
         raw._pop3Seq = String(n);
         rawSources.push(raw);
-        if (n > newCursorNum) newCursorNum = n;
+        if (uidMap[n] && uidMap[n] !== lastUid) newCursorUid = uidMap[n];
       } catch { continue; }
     }
-    if (newCursorNum > lastNum) {
-      cursor[cfg.user] = String(newCursorNum);
+    // 选最大序号对应的 UID 作为游标（兜底：从未被上面更新时）
+    const maxSeq = Math.max(...ids);
+    if (uidMap[maxSeq]) newCursorUid = uidMap[maxSeq];
+    if (newCursorUid && newCursorUid !== lastUid) {
+      cursor[cfg.user] = newCursorUid;
       _writeCursor(cursor);
     }
     sock.write('QUIT\r\n'); sock.end();
   } catch (e) {
     try { sock?.end(); } catch { /* 清理 */ }
-    Log.warn('[收件箱]', `POP3 ${cfg.user} 失败: ${e.message}`);
+    Log.warn('[收件箱]', `POP3 ${cfg.user} 失败: ${e.message}`, e.stack);
   }
   return rawSources;
 }
@@ -596,18 +617,26 @@ async function _fetchInbox(configPath) {
   // ponytail: 多账号并行拉取，不再串行排队
   const activeAccounts = [];
   for (const acc of accounts) {
-    if (acc.active === false) continue;
-    const cfg = acc.imap || { host: acc.smtp?.host?.replace(/^smtp\./i, 'imap.').replace(/^mail\./i, 'imap.') || '', port: 993, user: acc.smtp?.user || '', pass: acc.smtp?.pass || '' };
-    if (!cfg.host || !cfg.user) continue;
+    const label = acc.label || acc.smtp?.user || '?';
+    if (acc.active === false) { Log.info('[收件箱]', `${label} 已停用，跳过`); continue; }
+    const autoHost = acc.smtp?.host?.replace(/^smtp\./i, 'imap.').replace(/^mail\./i, 'imap.') || '';
+    const cfg = acc.imap || { host: autoHost, port: 993, user: acc.smtp?.user || '', pass: acc.smtp?.pass || '' };
+    if (!cfg.host || !cfg.user) {
+      Log.warn('[收件箱]', `${label} 跳过: host=${cfg.host || '(空)'} user=${cfg.user || '(空)'} smtpHost=${acc.smtp?.host || '(空)'}`);
+      skippedAccounts.push({ label, reason: `host=${cfg.host || '无'} user=${cfg.user || '无'}` });
+      continue;
+    }
     activeAccounts.push({ acc, cfg });
   }
+  Log.info('[收件箱]', `活跃账号: ${activeAccounts.map(a => a.acc.label || a.cfg.user).join(', ')}`);
 
   const failedAccounts = [];
+  const skippedAccounts = [];
   const results = await Promise.all(activeAccounts.map(async ({ acc, cfg }) => {
     Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port})...`);
     try {
       let rawSources = [];
-      if (cfg.host.includes('imap') || cfg.port === 993) {
+      if (!_isPop3(cfg)) {
         rawSources = await _imapFetch(cfg);
       } else {
         rawSources = await _pop3Fetch(cfg, 2);
@@ -653,6 +682,7 @@ async function _fetchInbox(configPath) {
   const result = newMails.length ? [...newMails, ...existing].slice(-500) : existing;
   if (newMails.length) _writeCache(result);
   result._failedAccounts = failedAccounts.length ? failedAccounts : undefined;
+  result._skippedAccounts = skippedAccounts.length ? skippedAccounts : undefined;
   return result;
 }
 
