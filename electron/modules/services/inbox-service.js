@@ -512,7 +512,8 @@ function _pop3ReadMulti(sock, timeoutMs) {
 // ── 协议检测 ──────────────────────────────────────────────────────────────────
 function _isPop3(cfg) {
   if (!cfg) return false;
-  return cfg.port === 995 || (cfg.host || '').toLowerCase().includes('pop');
+  const port = parseInt(cfg.port) || 0;
+  return port === 995 || (cfg.host || '').toLowerCase().includes('pop');
 }
 
 // ── POP3 拉取（RETR 拿完整 raw → mailparser）─────────────────────────────────
@@ -632,8 +633,10 @@ async function _fetchInbox(configPath) {
 
   const failedAccounts = [];
   const skippedAccounts = [];
+  const accountStats = []; // 诊断：每个账号的拉取详情
   const results = await Promise.all(activeAccounts.map(async ({ acc, cfg }) => {
-    Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port})...`);
+    const protocol = _isPop3(cfg) ? 'POP3' : 'IMAP';
+    Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port}) [${protocol}]...`);
     try {
       let rawSources = [];
       if (!_isPop3(cfg)) {
@@ -651,10 +654,12 @@ async function _fetchInbox(configPath) {
         mails.push(m);
       }
       Log.info('[收件箱]', `${acc.label || cfg.user} 解析完成: ${mails.length}/${rawSources.length} 封`);
+      accountStats.push({ label: acc.label || cfg.user, host: cfg.host, port: cfg.port, protocol, rawCount: rawSources.length, mailCount: mails.length, ok: true });
       return mails;
     } catch (e) {
       Log.error('[收件箱]', `${acc.label || cfg.user} 拉取失败: ${e.message}`, e.stack);
       failedAccounts.push({ label: acc.label || cfg.user, host: cfg.host, error: e.message });
+      accountStats.push({ label: acc.label || cfg.user, host: cfg.host, port: cfg.port, protocol, rawCount: 0, mailCount: 0, ok: false, error: e.message });
       return [];
     }
   }));
@@ -683,6 +688,7 @@ async function _fetchInbox(configPath) {
   if (newMails.length) _writeCache(result);
   result._failedAccounts = failedAccounts.length ? failedAccounts : undefined;
   result._skippedAccounts = skippedAccounts.length ? skippedAccounts : undefined;
+  result._accountStats = accountStats.length ? accountStats : undefined;
   return result;
 }
 

@@ -38,9 +38,11 @@ function register(ipcMain, deps) {
       const result = await inbox.fetchInbox(configPath);
       const failed = result._failedAccounts || [];
       const skipped = result._skippedAccounts || [];
+      const stats = result._accountStats || [];
       delete result._failedAccounts;
       delete result._skippedAccounts;
-      return { ok: true, data: result, failedAccounts: failed, skippedAccounts: skipped };
+      delete result._accountStats;
+      return { ok: true, data: result, failedAccounts: failed, skippedAccounts: skipped, accountStats: stats };
     } catch (e) { return { ok: false, error: e.message }; }
   });
   ipcMain.handle('inbox:list', async () => ({ ok: true, data: inbox.listInbox() }));

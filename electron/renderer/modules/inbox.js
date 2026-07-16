@@ -9,6 +9,7 @@ let _lastClickIdx = -1;
 let _filter = 'all';
 let _loading = false;
 let _failedAccounts = [];
+let _accountStats = [];
 // ponytail: 已读状态存 localStorage，重启不丢，上限 2000 条
 function _loadViewedKeys() {
   try { const s = localStorage.getItem('inbox-viewed'); return s ? new Set(JSON.parse(s)) : new Set(); }
@@ -59,6 +60,7 @@ export async function doFetchInbox() {
   if (result.ok) {
     _mails = result.data || [];
     _failedAccounts = result.failedAccounts || [];
+    _accountStats = result.accountStats || [];
     const skipped = result.skippedAccounts || [];
     renderInbox();
     if (_failedAccounts.length) {
@@ -278,7 +280,30 @@ function renderInbox() {
     if (!_viewedKeys.has(mkey)) newCounts[m.type]++;
   });
   if (countEl) {
-    countEl.textContent = `共 ${_mails.length} 封 · 退信 ${counts.bounce} · 回复 ${counts.reply} · 自动回复 ${counts['auto-reply']} · 其他 ${counts.other}`;
+    let html = `共 ${_mails.length} 封 · 退信 ${counts.bounce} · 回复 ${counts.reply} · 自动回复 ${counts['auto-reply']} · 其他 ${counts.other}`;
+    // 分账号计数：直接从 _mails 聚合，任何时候都准确
+    const acctCounts = {};
+    for (const m of _mails) {
+      const key = m.accountLabel || m.accountId || '?';
+      acctCounts[key] = (acctCounts[key] || 0) + 1;
+    }
+    // 补上 _accountStats 里 0 封的账号（可能是拉取失败或协议不对）
+    for (const s of _accountStats) {
+      const key = s.label || s.host;
+      if (!acctCounts[key]) acctCounts[key] = 0;
+    }
+    const acctKeys = Object.keys(acctCounts);
+    if (acctKeys.length >= 1) {
+      const parts = acctKeys.map(key => {
+        const n = acctCounts[key];
+        const st = _accountStats.find(s => (s.label || s.host) === key);
+        const protocol = st ? st.protocol : '';
+        const color = n === 0 && st && !st.ok ? 'color:#e5484d' : n === 0 ? 'color:#e6a817' : '';
+        return `<span${color ? ` style="${color}"` : ''}>${key}${protocol ? ' ' + protocol : ''}: ${n}封</span>`;
+      });
+      html += ' &nbsp;|&nbsp; ' + parts.join(' &nbsp;·&nbsp; ');
+    }
+    countEl.innerHTML = html;
   }
   // 分类标签红点
   _updateBadges(newCounts);

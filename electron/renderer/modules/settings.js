@@ -103,10 +103,15 @@ export async function initSettings() {
   // 强制关闭可能残留的编辑弹窗，防止透明模态层卡死按钮
   const modal = document.getElementById('account-modal');
   if (modal) modal.style.display = 'none';
-  // 所有输入框点击/聚焦时全选，键入即覆盖
-  document.querySelectorAll('#page-settings input[type="text"], #page-settings input[type="number"], #page-settings input[type="password"]').forEach(el => {
-    el.addEventListener('focus', () => el.select());
-  });
+  // ponytail: 事件委托替代逐元素绑定，避免每次切到设置页累加 focus 监听器
+  const page = document.getElementById('page-settings');
+  if (page && !page._focusBound) {
+    page._focusBound = true;
+    page.addEventListener('focusin', (e) => {
+      const el = e.target;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') el.select();
+    });
+  }
 
   const config = await window.electronAPI.loadConfig();
   if (config) loadSettingsIntoForm(config);
@@ -536,7 +541,10 @@ function initAccountManager() {
   }
 
   // 打开编辑框
+  let _openingEditor = false;
   async function openEditor(id) {
+    if (_openingEditor) return; // 防重入：上一次还没打开完成
+    _openingEditor = true;
     const setVal = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; };
     const setChk = (elId, v) => { const el = document.getElementById(elId); if (el) el.checked = v; };
     try {
@@ -577,6 +585,8 @@ function initAccountManager() {
     modal.style.display = 'flex';
     } catch (e) {
       showToast('编辑失败: ' + (e.message || ''), 'error');
+    } finally {
+      _openingEditor = false;
     }
   }
 
