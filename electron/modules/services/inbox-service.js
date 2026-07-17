@@ -446,31 +446,23 @@ function _pop3Connect(host, port) {
 function _pop3ReadLine(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buf = '';
-    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读行超时')); }, timeoutMs || 10000);
+    const t = timeoutMs || 20000;
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读行超时(' + (t/1000) + 's)')); }, t);
     const onData = (d) => { buf += d.toString('latin1'); const rn = buf.indexOf('\r\n'), n = buf.indexOf('\n'); const end = rn >= 0 ? rn : n; if (end >= 0) { clearTimeout(timer); sock.removeListener('data', onData); resolve(buf.slice(0, end).trim()); } };
     sock.on('data', onData);
   });
 }
 function _pop3ReadRaw(sock, timeoutMs) {
   return new Promise((resolve) => {
-    const chunks = [];
-    let totalLen = 0;
-    const timer = setTimeout(() => { sock.removeAllListeners('data'); resolve(Buffer.concat(chunks, totalLen)); }, timeoutMs || 15000);
+    let buf = '';
+    const t = timeoutMs || 60000; // RETR 单封邮件可能很大 + 拉美延迟
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); resolve(Buffer.from(buf, 'latin1')); }, t);
     const onData = (d) => {
-      chunks.push(d);
-      totalLen += d.length;
-      if (totalLen < 5) return;
-      // ponytail: 只拼末尾 200 字节查结束标记，避免 O(n²) 全量拼接
-      let scanned = 0;
-      const tailChunks = [];
-      for (let i = chunks.length - 1; i >= 0 && scanned < 200; i--) {
-        tailChunks.unshift(chunks[i]);
-        scanned += chunks[i].length;
-      }
-      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString('latin1'))) {
+      buf += d.toString('latin1');
+      if (/\r?\n\.\r?\n/.test(buf)) {
         clearTimeout(timer);
         sock.removeListener('data', onData);
-        resolve(Buffer.concat(chunks, totalLen));
+        resolve(Buffer.from(buf, 'latin1'));
       }
     };
     sock.on('data', onData);
@@ -486,21 +478,14 @@ function _pop3Cmd(sock, cmd) {
 
 function _pop3ReadMulti(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
-    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时')); }, timeoutMs || 15000);
+    let buf = '';
+    const t = timeoutMs || 45000; // UIDL/RETR 可能很慢，拉美服务器常有延迟
+    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时(' + (t/1000) + 's)')); }, t);
     const onData = (d) => {
-      chunks.push(d);
-      // ponytail: 只拼末尾 200 字节查结束标记，避免大 UIDL 列表的 O(n²) 字符串拼接
-      let scanned = 0;
-      const tailChunks = [];
-      for (let i = chunks.length - 1; i >= 0 && scanned < 200; i--) {
-        tailChunks.unshift(chunks[i]);
-        scanned += chunks[i].length;
-      }
-      if (/\r?\n\.\r?\n/.test(Buffer.concat(tailChunks).toString('latin1'))) {
+      buf += d.toString('latin1');
+      if (/\r?\n\.\r?\n/.test(buf)) {
         clearTimeout(timer);
         sock.removeListener('data', onData);
-        const buf = Buffer.concat(chunks).toString('latin1');
         const lines = buf.replace(/\r?\n\.\r?\n.*/, '').split(/\r?\n/);
         resolve(lines.length > 1 && /^[+-]/.test(lines[0]) ? lines.slice(1) : lines);
       }
@@ -520,21 +505,30 @@ function _isPop3(cfg) {
 async function _pop3Fetch(cfg, sinceDays) {
   const rawSources = [];
   let sock;
+  const T = {}; // 探针：各步骤耗时(ms) + 状态
+  const t0 = Date.now();
   try {
+    // ① TLS 连接
     sock = await _pop3Connect(cfg.host, cfg.port || 995);
+    T.connect = Date.now() - t0;
+    // ② 读欢迎语
     await _pop3ReadLine(sock, 15000);
+    T.greet = Date.now() - t0;
+    // ③ 登录
     await _pop3Cmd(sock, `USER ${cfg.user}`);
     await _pop3Cmd(sock, `PASS ${cfg.pass}`);
+    T.auth = Date.now() - t0;
+    // ④ STAT
     const statRes = await _pop3Cmd(sock, 'STAT');
     const statTotal = parseInt((statRes[0] || '').split(' ')[1]) || 0;
-    rawSources._diag = { step: 'STAT', statTotal };
-    // ponytail: 部分服务器 STAT 只计未读邮件，返回 0 不代表没邮件
-    // 只要 UIDL 能返回数据就继续拉（参考 RFC 1939: STAT 是可选优化提示）
+    T.stat = Date.now() - t0; T.statCount = statTotal;
+    rawSources._diag = { step: 'STAT', ...T };
 
-    // UIDL 增量：用 UID 做游标（POP3 序号不持久，删邮件后序号会变）
+    // ⑤ UIDL 列表
     const cursor = _readCursor();
     const lastUid = cursor[cfg.user] || '';
     const uidlRes = await _pop3Cmd(sock, 'UIDL');
+    T.uidl = Date.now() - t0;
     const uidMap = {};      // seqNum → uid
     const revUidMap = {};   // uid → seqNum
     for (const line of uidlRes) {
@@ -546,50 +540,52 @@ async function _pop3Fetch(cfg, sinceDays) {
       }
     }
     const uidlCount = Object.keys(uidMap).length;
-    rawSources._diag = { step: 'UIDL', statTotal, uidlCount, hasCursor: !!lastUid, cursorValid: lastUid && revUidMap[lastUid] !== undefined };
+    T.uidlCount = uidlCount; T.cursorValid = lastUid && revUidMap[lastUid] !== undefined;
+    rawSources._diag = { step: 'UIDL', ...T };
 
-    // 游标自愈：如果上次记录的 UID 已不在服务器上，退化为首次拉取
+    // ⑥ 计算待拉取 ID
     Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${statTotal}, UIDL=${uidlCount}条, 游标=${lastUid ? (revUidMap[lastUid] !== undefined ? '有效' : '失效') : '无'}`);
     const cursorValid = lastUid && revUidMap[lastUid] !== undefined;
     let ids;
     if (cursorValid) {
-      // 增量：只取序号在游标 UID 之后的新邮件
       const cursorSeq = revUidMap[lastUid];
-      ids = Object.keys(uidMap)
-        .map(Number)
-        .filter((n) => n > cursorSeq)
-        .sort((a, b) => b - a);
+      ids = Object.keys(uidMap).map(Number).filter((n) => n > cursorSeq).sort((a, b) => b - a);
     } else {
-      // 首次运行或游标失效：取最近 40 封
       if (lastUid) Log.warn('[收件箱]', `POP3 游标失效(${cfg.user})，回退为全量拉取`);
       ids = Object.keys(uidMap).map(Number).sort((a, b) => b - a).slice(0, 40);
     }
     if (!ids.length) { Log.info('[收件箱]', `POP3 ${cfg.user}: 无新邮件需要拉取`); sock.write('QUIT\r\n'); sock.end(); return rawSources; }
     Log.info('[收件箱]', `POP3 ${cfg.user}: 待拉取 ${ids.length} 封 (seq: ${Math.min(...ids)}~${Math.max(...ids)})`);
-    rawSources._diag = { step: 'FETCH', statTotal, uidlCount, fetchCount: ids.length };
+    T.fetchCount = ids.length;
+    rawSources._diag = { step: 'FETCH', ...T };
 
-    // 取最新邮件的 UID 作为新游标
+    // ⑦ 逐封 RETR
     let newCursorUid = lastUid;
+    let retrOk = 0, retrFail = 0;
     for (const n of ids) {
       try {
         const raw = await _pop3Cmd(sock, `RETR ${n}`);
         raw._pop3Seq = String(n);
         rawSources.push(raw);
         if (uidMap[n] && uidMap[n] !== lastUid) newCursorUid = uidMap[n];
-      } catch { continue; }
+        retrOk++;
+      } catch { retrFail++; continue; }
     }
-    // 选最大序号对应的 UID 作为游标（兜底：从未被上面更新时）
+    T.retr = Date.now() - t0; T.retrOk = retrOk; T.retrFail = retrFail;
+    // ⑧ 保存游标
     const maxSeq = Math.max(...ids);
     if (uidMap[maxSeq]) newCursorUid = uidMap[maxSeq];
     if (newCursorUid && newCursorUid !== lastUid) {
       cursor[cfg.user] = newCursorUid;
       _writeCursor(cursor);
     }
-    rawSources._diag = { step: 'DONE', statTotal, uidlCount, fetchCount: ids.length, parsedCount: rawSources.length };
+    T.total = Date.now() - t0;
+    rawSources._diag = { step: 'DONE', ...T };
     sock.write('QUIT\r\n'); sock.end();
   } catch (e) {
     try { sock?.end(); } catch { /* 清理 */ }
-    rawSources._diag = { step: 'ERROR', error: e.message };
+    T.total = Date.now() - t0; T.error = e.message;
+    rawSources._diag = { step: 'ERROR', ...T };
     Log.warn('[收件箱]', `POP3 ${cfg.user} 失败: ${e.message}`, e.stack);
   }
   return rawSources;
@@ -768,8 +764,27 @@ function setMailType(index, newType) {
   mails[index].type = newType;
   _writeCache(mails);
   Log.info('[收件箱]', `手动分类: [${index}] ${oldType} → ${newType}`);
-  // 同步标签到联系人
-  _syncTagsToContacts([mails[index]]);
+
+  // 手动设置 → 覆盖式更新联系人标签（唯一值，不叠加）
+  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: 'replied', 'auto-reply': 'autoreply' };
+  const oldTag = TYPE_TAG[oldType];
+  const newTag = TYPE_TAG[newType];
+  if (oldTag !== newTag) {
+    const contactsDb = require('./contacts-db');
+    const m = mails[index];
+    const ids = new Set();
+    const addByEmail = (email) => {
+      if (!email) return;
+      const contact = contactsDb.getByEmail(email);
+      if (contact) ids.add(contact.id);
+    };
+    addByEmail(m.from);
+    for (const c of (m.matchedContacts || [])) addByEmail(c.email);
+    for (const id of ids) {
+      if (oldTag) contactsDb.removeTag(id, oldTag);
+      if (newTag) contactsDb.addTag(id, newTag);
+    }
+  }
   return true;
 }
 

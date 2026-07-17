@@ -302,12 +302,20 @@ function renderInbox() {
         let detail = '';
         if (n === 0 && st && st.diag) {
           const d = st.diag;
-          if (d.error) detail = ` (错误: ${d.error})`;
-          else if (d.step === 'STAT' && d.statTotal === 0) detail = ' (收件箱为空)';
+          if (d.error) {
+            // 探针：显示卡在哪个节点 + 累计耗时
+            const lastStep = d.auth ? 'STAT' : d.greet ? 'AUTH' : d.connect ? 'GREET' : 'CONNECT';
+            const ms = d.total || 0;
+            detail = ` (卡在${lastStep}, ${ms}ms: ${d.error})`;
+          } else if (d.step === 'STAT' && d.statTotal === 0) detail = ' (收件箱为空)';
           else if (d.step === 'UIDL' && d.uidlCount === 0) detail = ' (UIDL解析失败)';
           else if (d.step === 'UIDL' && d.cursorValid) detail = ' (游标阻塞)';
           else if (d.step === 'FETCH') detail = ` (${d.fetchCount}封未解析)`;
-          else detail = d.step ? ` (步骤: ${d.step})` : '';
+          else if (d.total !== undefined) {
+            // 成功时也显示耗时链
+            const chain = [`连接${d.connect||0}ms`, `认证${d.auth - (d.connect||0)}ms`, `STAT${d.stat - (d.auth||0)}ms`, `UIDL${d.uidl - (d.stat||0)}ms`, `拉取${d.retr - (d.uidl||0)}ms`];
+            detail = n === 0 ? ` (0封, ${chain.join('→')})` : '';
+          }
         }
         const color = n === 0 && st && !st.ok ? 'color:#e5484d' : n === 0 ? 'color:#e6a817' : '';
         return `<span${color ? ` style="${color}"` : ''} title="${escapeHtml(JSON.stringify(st?.diag || {}))}">${key}${protocol ? ' ' + protocol : ''}: ${n}封${detail}</span>`;
