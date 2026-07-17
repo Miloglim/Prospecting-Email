@@ -3,15 +3,11 @@ const S = window.S;
 import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared.js';
 
 const TAG_OPTIONS = [
-  { val: '待开发',   label: '待开发',   color: '#9e9e9e' },
-  { val: '自动回复', label: '自动回复', color: '#f5a623' },
-  { val: '有回复',   label: '有回复',   color: '#22a644' },
-  { val: '已触达',   label: '已触达',   color: '#3b82f6' },
-  { val: '触达中',    label: '触达中',   color: '#ff9800' },
-  { val: '报价中',    label: '报价中',   color: '#2196f3' },
-  { val: '试单',      label: '试单',     color: '#8e24aa' },
-  { val: '合作中',    label: '合作中',   color: '#4caf50' },
-  { val: '已流失',    label: '已流失',   color: '#d93025' },
+  { val: '触达中', label: '触达中', color: '#ff9800' },
+  { val: '报价中', label: '报价中', color: '#2196f3' },
+  { val: '试单',   label: '试单',   color: '#8e24aa' },
+  { val: '合作中', label: '合作中', color: '#4caf50' },
+  { val: '已流失', label: '已流失', color: '#d93025' },
 ];
 
 let _mails = [];
@@ -267,12 +263,8 @@ function _bindMenuActions(menu, m, idx) {
       const c = (S.contactsData || []).find(x => (x.email || '').toLowerCase() === mail.from.toLowerCase());
       if (!c?.id) { diag.push(`→ 未找到联系人(共${(S.contactsData||[]).length}条)`); continue; }
       diag.push(`→ 找到: ${c.id} tags=${JSON.stringify(c.tags||[])}`);
-      // 合并：保留状态类标签，替换机会类标签
-      const STS = ['已触达','有回复','自动回复','reached','replied','autoreply','auto_reply','bounced_by_contact','left_company'];
-      const OPP = ['待开发','触达中','报价中','试单','合作中','已流失'];
-      const old = c.tags || [];
-      const merged = [...old.filter(t => !OPP.includes(t) && !STS.includes(t) || STS.includes(t)), ...(OPP.includes(tagVal) ? [tagVal] : []), ...(STS.includes(tagVal) ? [tagVal] : [])];
-      const r = await window.electronAPI.setContactTags(c.id, [...new Set(merged)]);
+      // 直接覆盖标签（_status 是独立字段，互不影响）
+      const r = await window.electronAPI.setContactTags(c.id, [tagVal]);
       diag.push(`→ setContactTags: ok=${r.ok} added=${JSON.stringify(r.added||[])} removed=${JSON.stringify(r.removed||[])}`);
       total++;
     }

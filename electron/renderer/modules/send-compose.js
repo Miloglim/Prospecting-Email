@@ -741,7 +741,7 @@ async function addToQueue() {
     if (!members.length) continue;
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => (m.tags || []).includes('reached'));
+    const reachedMembers = members.filter(m => m._status === '已触达' || (m.tags || []).some(t => t === '已触达' || t === 'reached'));
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
     const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
@@ -794,7 +794,7 @@ async function addToQueue() {
     if (!card) continue;
     const members = S.sendCompanies[name] || [];
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => (m.tags || []).includes('reached'));
+    const reachedMembers = members.filter(m => m._status === '已触达' || (m.tags || []).some(t => t === '已触达' || t === 'reached'));
     const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
     const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
     const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));

@@ -349,7 +349,7 @@ export function renderContactsList(filtered) {
       const tagHtml = clientTypeTag(ctype);
       const ctry = escapeHtml(members[0]?.country || '');
       const st = members[0]?.stage || members[0]?._stage || 'cold';
-      const stageLabel = `<span class="ci-stage-badge ci-stage-${st}">${S.STAGE_LABELS_SEND[st] || st.toUpperCase()}</span>`;
+      const stageLabel = S.STAGE_LABELS_SEND[st] || st.toUpperCase();
       const vipClass = members.length >= 5 ? ' ci-vip' : '';
       const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
       return `
@@ -704,15 +704,13 @@ export function renderContactDetail(company) {
       case 'stage': {
         const st = m.stage || m._stage || 'cold';
         const company = m.company || m.company_name || '';
-        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable" data-company="${escapeHtml(company)}"><span class="stage-badge stage-${st}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[st]||st}</span></td>`;
+        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable" data-company="${escapeHtml(company)}">${STAGE_LABEL[st]||st}</td>`;
       }
       case '_status': {
-        const tags = m.tags || [];
-        const PRIORITY = ['有回复','replied','自动回复','autoreply','auto_reply','已触达','reached'];
-        const top = PRIORITY.find(t => tags.includes(t)) || '';
-        const label = STATUS_LABEL[top] || '未触达';
-        const DOT = { '已触达':'#3b82f6', reached:'#3b82f6', '有回复':'#22a644', replied:'#22a644', '自动回复':'#e6a817', autoreply:'#e6a817' };
-        const dot = DOT[top] || 'var(--text-secondary)';
+        const v = m._status || '';
+        const label = STATUS_LABEL[v] || '未触达';
+        const DOT = { '已触达':'#3b82f6', '有回复':'#22a644', '自动回复':'#e6a817' };
+        const dot = DOT[v] || 'var(--text-secondary)';
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
       case '_tags': {
@@ -919,38 +917,29 @@ export function renderContactDetail(company) {
       popup.style.top = (rect.bottom + 4) + 'px';
 
       const TAG_OPTIONS = [
-        { val: '待开发',   label: '待开发',   color: '#9e9e9e' },
-        { val: '自动回复', label: '自动回复', color: '#f5a623' },
-        { val: '有回复',   label: '有回复',   color: '#22a644' },
-        { val: '已触达',   label: '已触达',   color: '#3b82f6' },
-        { val: '触达中',    label: '触达中',   color: '#ff9800' },
-        { val: '报价中',    label: '报价中',   color: '#2196f3' },
-        { val: '试单',      label: '试单',     color: '#8e24aa' },
-        { val: '合作中',    label: '合作中',   color: '#4caf50' },
-        { val: '已流失',    label: '已流失',   color: '#d93025' },
+        { val: '触达中', label: '触达中', color: '#ff9800' },
+        { val: '报价中', label: '报价中', color: '#2196f3' },
+        { val: '试单',   label: '试单',   color: '#8e24aa' },
+        { val: '合作中', label: '合作中', color: '#4caf50' },
+        { val: '已流失', label: '已流失', color: '#d93025' },
       ];
 
-      const currentTag = currentTags[0] || '';
       const items = TAG_OPTIONS.map(t => {
-        const active = currentTag === t.val;
-        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:${t.color};${active ? 'font-weight:600' : ''}" data-tag="${t.val}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${active ? ' ●' : ''} ${t.label}</div>`;
+        const active = currentTags.includes(t.val);
+        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:${t.color};${active ? 'font-weight:600' : ''}" data-tag="${t.val}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${active ? ' ✓' : ''} ${t.label}</div>`;
       }).join('');
 
       popup.innerHTML = items +
         `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
-        `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
+        `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" data-action="clear-tags" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
 
-      // 机会类标签（与状态独立，互不覆盖）
-      const OPP_KEYS = ['待开发','触达中','报价中','试单','合作中','已流失'];
-      const STATUS_KEYS = ['已触达','有回复','自动回复','reached','replied','autoreply','auto_reply','bounced_by_contact','left_company'];
-
+      // 多选：点击切换标签
       popup.querySelectorAll('[data-tag]').forEach(div => {
         div.addEventListener('click', async () => {
           const tagVal = div.dataset.tag;
-          const statusTags = currentTags.filter(t => STATUS_KEYS.includes(t));
-          const oppTag = OPP_KEYS.includes(currentTag) ? currentTag : '';
-          const newOppTag = currentTag === tagVal ? '' : tagVal;
-          const newTags = [...statusTags, ...(newOppTag ? [newOppTag] : [])];
+          const newTags = currentTags.includes(tagVal)
+            ? currentTags.filter(t => t !== tagVal)
+            : [...currentTags, tagVal];
           popup.remove();
           await window.electronAPI.setContactTags(contactId, newTags);
           contact.tags = newTags;
@@ -961,14 +950,14 @@ export function renderContactDetail(company) {
         });
       });
 
-      popup.lastElementChild.addEventListener('click', async () => {
+      // 清除标签
+      popup.querySelector('[data-action="clear-tags"]')?.addEventListener('click', async () => {
         popup.remove();
-        const statusTags = currentTags.filter(t => STATUS_KEYS.includes(t));
-        await window.electronAPI.setContactTags(contactId, statusTags);
-        contact.tags = statusTags;
+        await window.electronAPI.setContactTags(contactId, []);
+        contact.tags = [];
         const newMembers = S.contactsGroupMap.get(company) || [];
         const idx = newMembers.findIndex(m => m.id === contactId);
-        if (idx >= 0) newMembers[idx].tags = statusTags;
+        if (idx >= 0) newMembers[idx].tags = [];
         renderContactDetail(company);
       });
 
@@ -1023,7 +1012,7 @@ export function renderContactDetail(company) {
         popup.remove();
         // stage 用标签样式，_status 用圆点样式，其他用纯文本
         if (selType === 'stage') {
-          td.innerHTML = `<span class="stage-badge stage-${val}">${labels[val] || val}</span>`;
+          td.textContent = labels[val] || val;
         } else if (selType === '_status') {
           const dotColors = { '已触达':'#3b82f6', reached:'#3b82f6', '有回复':'#22a644', replied:'#22a644', '自动回复':'#e6a817', autoreply:'#e6a817' };
           const dot = dotColors[val] || 'var(--text-secondary)';
@@ -1044,14 +1033,11 @@ export function renderContactDetail(company) {
           if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
           for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
         } else if (selType === '_status') {
-          // 状态标签独立：替换状态类标签，保留机会类标签
-          const STATUS_KEYS = ['已触达','有回复','自动回复','reached','replied','autoreply','auto_reply'];
-          const oppTags = (ref.tags || []).filter(t => !STATUS_KEYS.includes(t));
-          const newTags = val ? [val, ...oppTags] : oppTags;
-          await window.electronAPI.setContactTags(contactId, newTags);
-          ref.tags = newTags;
+          // _status 是独立字段，不走 tags
+          await window.electronAPI.upsertContact({ id: contactId, email: ref.email, _status: val || '' });
+          ref._status = val || '';
           const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');
-          if (members2) { const mx = members2.find(x => x.id === contactId); if (mx) mx.tags = newTags; }
+          if (members2) { const mx = members2.find(x => x.id === contactId); if (mx) mx._status = val || ''; }
         } else if (selType === 'country') {
           const contact = S.contactsData.find(c => c.id === contactId);
           if (contact?.company_id) { await window.electronAPI.updateCompany(contact.company_id, { country: val }); contact.country = val; }
