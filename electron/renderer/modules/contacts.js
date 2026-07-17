@@ -751,9 +751,13 @@ export function renderContactDetail(company) {
       ${isArchived ? `<div style="margin-top:12px;padding:10px;background:#fff8e1;border-radius:6px;display:flex;align-items:center;gap:8px"><span style="font-size:13px">${lucide('archive',13)} 已归档 — 不参与常规序列</span><button id="btn-reactivate-contact" style="margin-left:auto;font-size:12px;padding:4px 12px">${lucide('refresh-cw',12)} 重新激活</button></div>` : ''}
     </div>
   `;
-  // 恢复滚动位置
-  if (scrollTop > 0) detail.scrollTop = scrollTop;
-  if (bodyScrollLeft > 0) { const b = detail.querySelector('.contacts-detail-body'); if (b) b.scrollLeft = bodyScrollLeft; }
+  // 恢复滚动位置（requestAnimationFrame 等 DOM 布局完成）
+  if (scrollTop > 0 || bodyScrollLeft > 0) {
+    requestAnimationFrame(() => {
+      if (scrollTop > 0) detail.scrollTop = scrollTop;
+      if (bodyScrollLeft > 0) { const b = detail.querySelector('.contacts-detail-body'); if (b) b.scrollLeft = bodyScrollLeft; }
+    });
+  }
   // 列设置按钮
   const colBtn = document.getElementById('btn-col-toggle');
   if (colBtn) colBtn.addEventListener('click', (e) => { e.stopPropagation(); _showColToggle(colBtn); });
@@ -1033,7 +1037,6 @@ export function renderContactDetail(company) {
           if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
           for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
         } else if (selType === '_status') {
-          // _status 是独立字段，不走 tags
           await window.electronAPI.upsertContact({ id: contactId, email: ref.email, _status: val || '' });
           ref._status = val || '';
           const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');

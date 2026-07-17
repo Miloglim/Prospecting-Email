@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     client_type   TEXT DEFAULT 'unlabeled',
     category      TEXT,
     stage         TEXT DEFAULT 'cold',
+    _status       TEXT DEFAULT '',
     last_sent_at  TEXT,
     last_sent_acct TEXT,
     is_bounced    INTEGER DEFAULT 0,
@@ -167,6 +168,7 @@ function initSchema(db) {
   try { db.exec("ALTER TABLE contacts ADD COLUMN tags_updated_at TEXT DEFAULT ''"); } catch { /* 已存在 */ }
   try { db.exec("ALTER TABLE contacts ADD COLUMN contact_person TEXT DEFAULT ''"); } catch { /* 已存在 */ }
   try { db.exec("ALTER TABLE contacts ADD COLUMN _extra TEXT DEFAULT '{}'"); } catch { /* 已存在 */ }
+  try { db.exec("ALTER TABLE contacts ADD COLUMN _status TEXT DEFAULT ''"); } catch { /* 已存在 */ }
 
   const v = db.prepare("SELECT MAX(version) as v FROM _schema").get()?.v || 0;
   if (v < SCHEMA_VERSION) {

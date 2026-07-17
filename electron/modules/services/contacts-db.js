@@ -8,7 +8,7 @@ const { Log } = require("../core/logger");
 const CONTACT_SELECT = `
   c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
   c.phone, c.linkedin, c.position, c.contact_name,
-  c.client_type, c.category, c.stage, c.last_sent_at, c.last_sent_acct,
+  c.client_type, c.category, c.stage, c._status, c.last_sent_at, c.last_sent_acct,
   c.is_bounced, c.bounce_type, c.bounce_reason, c.bounced_at,
   c.tags, c.opp_stage, c._suspicious, c.followup_note, c._extra,
   c.created_at, c.updated_at,
@@ -103,14 +103,14 @@ function upsert(data) {
   const now = new Date().toISOString();
   // ponytail: 完整 INSERT（关外键避免 company_id 空值报错），字段名兼容新旧两种命名
   db.pragma("foreign_keys = OFF");
-  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,_extra,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,position,contact_name,client_type,category,stage,_status,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,_extra,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, companyId, email,
     data.first_name || data.firstName || "", data.last_name || data.lastName || "",
     data.title || data.position || "", data.phone || "", data.linkedin || "",
     data.position || "", data.contact_name || data.contactName || "",
     data.client_type || data.clientType || "unlabeled", data.category || "",
-    data.stage || "cold", data.last_sent_at || data._sentAt || "",
+    data.stage || "cold", data._status || "", data.last_sent_at || data._sentAt || "",
     data.last_sent_acct || data._sentAccount || "",
     data.is_bounced || data.bounced ? 1 : 0,
     data.bounce_type || data.bounceType || "", data.bounce_reason || data.bounceReason || "",
@@ -127,7 +127,7 @@ function update(id, data) {
   // 联系人表的实际列名
   const VALID_COLS = new Set([
     "company_id", "email", "first_name", "last_name", "title", "phone", "linkedin",
-    "position", "contact_name", "client_type", "category", "stage",
+    "position", "contact_name", "client_type", "category", "stage", "_status",
     "last_sent_at", "last_sent_acct", "is_bounced", "bounce_type", "bounce_reason",
     "bounced_at", "tags", "tags_updated_at", "opp_stage", "assignee", "contact_person", "_suspicious", "followup_note", "_extra",
   ]);

@@ -132,8 +132,7 @@ function showSendContextMenu(companyName, x, y) {
   if (!ctxMenu) return;
   const members = S.sendCompanies[companyName] || [];
   const ctype = members[0]?.clientType || 'unlabeled';
-  const hist = S.sendHistory[companyName];
-  const stage = hist?.stage || 'cold';
+  const stage = members[0]?.stage || members[0]?._stage || 'cold';
   const lang = countryToLang(members[0]?.country || '');
   const card = S.selectedCards[companyName];
   const isUserTpl = card?._templateSource === 'user';
@@ -425,7 +424,7 @@ export function renderCompanyList(filter) {
     const stageGroups = {};
     const STAGES = ['cold','f1','f2','f3','f4'];
     visible.forEach(([name, members]) => {
-      const stage = S.sendHistory[name]?.stage || 'cold';
+      const stage = members[0]?.stage || members[0]?._stage || 'cold';
       if (!stageGroups[stage]) stageGroups[stage] = [];
       stageGroups[stage].push([name, members]);
     });
@@ -642,7 +641,7 @@ export async function renderSelectedCards() {
     const members = S.sendCompanies[name] || [];
     const ctype = members[0]?.clientType || 'unlabeled';
     const hist = S.sendHistory[name];
-    const stage = hist?.stage || 'cold';
+    const stage = members[0]?.stage || members[0]?._stage || 'cold';
     const lang = countryToLang(members[0]?.country || '');
     const usedSentences = hist?.usedSentences || [];
     // ponytail: 每次加入队列时重新读取全局模板模式，不保留旧选择
@@ -837,8 +836,7 @@ async function addToQueue() {
       if (!await showConfirm(`<div style="line-height:1.8"><b>${escapeHtml(name)}</b> 有 <span style="color:#e5484d">${invalid.length}</span> 个邮箱格式异常：<br><br>${invalidList}<br>仅发送 <b>${valid.length}</b> 个有效邮箱，是否继续？</div>`)) continue;
     }
     const lang = card.lang;
-    const hist = S.sendHistory[name];
-    const stage = hist?.stage || 'cold';
+    const stage = members[0]?.stage || members[0]?._stage || 'cold';
 
     const useUserTpl = card._templateSource === 'user' && card._userTemplate;
     let baseSubject, body;
