@@ -160,7 +160,8 @@ function update(id, data) {
 // ── 阶段：唯一写入入口 ──────────────────────────────────────────────────────
 
 const VALID_STAGES = ["cold", "f1", "f2", "f3", "f4"];
-const ALLOWED_TAGS = ["replied", "bounced_by_contact", "autoreply", "reached", "left_company"];
+// ponytail: 标签不做白名单限制，任何字符串都可以作为标签
+const ALLOWED_TAGS = null;
 
 /**
  * 设置联系人阶段（唯一入口）。只允许向前推进，回退需加 manual: 前缀。
@@ -188,7 +189,7 @@ function setStage(contactId, newStage, reason) {
 // ── 标签：唯一写入入口 ──────────────────────────────────────────────────────
 
 function addTag(contactId, tag) {
-  if (!ALLOWED_TAGS.includes(tag)) { Log.warn("DB", `无效标签: ${tag}`); return false; }
+  if (ALLOWED_TAGS && !ALLOWED_TAGS.includes(tag)) { Log.warn("DB", `无效标签: ${tag}`); return false; }
   const contact = getById(contactId);
   if (!contact) return false;
   const tags = contact.tags || [];

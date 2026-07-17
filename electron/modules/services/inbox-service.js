@@ -110,6 +110,9 @@ function _classify(subject, from, bodySnippet) {
   const f = (from || '').toLowerCase();
   const b = (bodySnippet || '').toLowerCase();
 
+  // 0. 回复/转发标题 → 直接判回复，不再检查退信关键词（避免正文引用内容误判）
+  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
+
   // 1. 退信
   // 1a. 标题含退信关键词
   if (kw.bounce_subject.some(k => s.includes(k))) return 'bounce';
@@ -124,8 +127,7 @@ function _classify(subject, from, bodySnippet) {
   // 2. 自动回复：标题 或 正文前 500 字符
   if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'auto-reply';
 
-  // 3. 回复/询盘
-  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
+  // 3. 询盘关键词
   if (kw.inquiry.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'reply';
 
   // 4. 其余
@@ -283,7 +285,7 @@ function _writeCursor(data) {
 // ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
 function _syncTagsToContacts(newMails) {
   const contactsDb = require('./contacts-db');
-  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: 'replied', 'auto-reply': 'autoreply' };
+  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: '有回复', 'auto-reply': '自动回复' };
   let synced = 0;
   for (const m of newMails) {
     const tag = TYPE_TAG[m.type];
@@ -479,9 +481,19 @@ function _pop3Cmd(sock, cmd) {
 function _pop3ReadMulti(sock, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buf = '';
-    const t = timeoutMs || 45000; // UIDL/RETR 可能很慢，拉美服务器常有延迟
-    const timer = setTimeout(() => { sock.removeAllListeners('data'); reject(new Error('读多行超时(' + (t/1000) + 's)')); }, t);
+    let chunkCount = 0;
+    let byteCount = 0;
+    const t = timeoutMs || 45000;
+    const timer = setTimeout(() => {
+      sock.removeAllListeners('data');
+      // 超时时把已收到的数据头尾写入错误信息，方便诊断
+      const head = buf.slice(0, 200).replace(/[\r\n]/g, '\\n');
+      const tail = buf.slice(-100).replace(/[\r\n]/g, '\\n');
+      reject(new Error(`读多行超时(${t/1000}s,收到${chunkCount}包/${byteCount}B, head:"${head}", tail:"${tail}")`));
+    }, t);
     const onData = (d) => {
+      chunkCount++;
+      byteCount += d.length;
       buf += d.toString('latin1');
       if (/\r?\n\.\r?\n/.test(buf)) {
         clearTimeout(timer);
@@ -766,7 +778,7 @@ function setMailType(index, newType) {
   Log.info('[收件箱]', `手动分类: [${index}] ${oldType} → ${newType}`);
 
   // 手动设置 → 覆盖式更新联系人标签（唯一值，不叠加）
-  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: 'replied', 'auto-reply': 'autoreply' };
+  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: '有回复', 'auto-reply': '自动回复' };
   const oldTag = TYPE_TAG[oldType];
   const newTag = TYPE_TAG[newType];
   if (oldTag !== newTag) {

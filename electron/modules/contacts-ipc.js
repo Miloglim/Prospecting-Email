@@ -330,10 +330,11 @@ function register(ipcMain, deps) {
     if (!c) return { ok: false, error: '联系人不存在' };
     const arr = Array.isArray(tags) ? tags : [];
     const old = c.tags || [];
-    for (const t of old) { if (!arr.includes(t)) db.removeTag(id, t); }
-    for (const t of arr) { if (!old.includes(t)) db.addTag(id, t); }
+    const removed = [], added = [];
+    for (const t of old) { if (!arr.includes(t)) { db.removeTag(id, t); removed.push(t); } }
+    for (const t of arr) { if (!old.includes(t)) { const ok = db.addTag(id, t); if (ok) added.push(t); else Log.warn('标签', `addTag 被拒: ${t} (不在白名单)`); } }
     _notify();
-    return { ok: true };
+    return { ok: true, removed, added };
   });
 
   ipcMain.handle('contacts:search', async (_e, query) => {

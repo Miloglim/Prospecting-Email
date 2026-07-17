@@ -2,6 +2,18 @@
 const S = window.S;
 import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared.js';
 
+const TAG_OPTIONS = [
+  { val: '待开发',   label: '待开发',   color: '#9e9e9e' },
+  { val: '自动回复', label: '自动回复', color: '#f5a623' },
+  { val: '有回复',   label: '有回复',   color: '#22a644' },
+  { val: '已触达',   label: '已触达',   color: '#3b82f6' },
+  { val: '触达中',    label: '触达中',   color: '#ff9800' },
+  { val: '报价中',    label: '报价中',   color: '#2196f3' },
+  { val: '试单',      label: '试单',     color: '#8e24aa' },
+  { val: '合作中',    label: '合作中',   color: '#4caf50' },
+  { val: '已流失',    label: '已流失',   color: '#d93025' },
+];
+
 let _mails = [];
 let _selectedIdx = -1;
 let _selectedSet = new Set();
@@ -165,6 +177,9 @@ function _bindInboxDelegates() {
       <div style="border-top:1px solid var(--border);margin:4px 0"></div>
       ${['bounce','reply','auto-reply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
       <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+      <div style="padding:4px 14px;color:var(--text-secondary);font-size:10px">联系人标签</div>
+      ${TAG_OPTIONS.map(t => `<div style="padding:4px 14px 4px 24px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px" data-action="set-tag" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${t.label}</div>`).join('')}
+      <div style="border-top:1px solid var(--border);margin:4px 0"></div>
       <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${selCount > 1 ? `删除选中的 ${selCount} 封` : '删除邮件'}</div>
     `;
     // 绑定菜单事件
@@ -238,6 +253,39 @@ function _bindMenuActions(menu, m, idx) {
     _saveViewedKeys();
     renderInbox();
   });
+  // 标签选择：发件人邮箱 → 查联系人 → 写库 → 强制刷新联系人数据
+  menu.querySelectorAll('[data-action="set-tag"]').forEach(el => el.addEventListener('click', async () => {
+    menu.remove();
+    const tagVal = el.dataset.tag;
+    const targetIdxes = _selectedSet.size > 1 ? [..._selectedSet] : [idx];
+    const diag = []; // 探针
+    let total = 0;
+    for (const i of targetIdxes) {
+      const mail = _mails[i];
+      if (!mail?.from) { diag.push(`邮件${i}: 无发件人`); continue; }
+      diag.push(`查询: ${mail.from}`);
+      const c = (S.contactsData || []).find(x => (x.email || '').toLowerCase() === mail.from.toLowerCase());
+      if (!c?.id) { diag.push(`→ 未找到联系人(共${(S.contactsData||[]).length}条)`); continue; }
+      diag.push(`→ 找到: ${c.id} tags=${JSON.stringify(c.tags||[])}`);
+      const r = await window.electronAPI.setContactTags(c.id, [tagVal]);
+      diag.push(`→ setContactTags: ok=${r.ok} added=${JSON.stringify(r.added||[])} removed=${JSON.stringify(r.removed||[])}`);
+      total++;
+    }
+    if (total > 0) {
+      S.contactsData = await window.electronAPI.getContacts();
+      const verify = (S.contactsData || []).find(x => targetIdxes.some(i => {
+        const m = _mails[i]; return m && (x.email || '').toLowerCase() === (m.from || '').toLowerCase();
+      }));
+      diag.push(`重读验证: tags=${JSON.stringify(verify?.tags||[])}`);
+      renderDetail();
+      document.dispatchEvent(new CustomEvent('contacts:sync'));
+      showToast(`已为 ${total} 个联系人设置标签`, 'ok');
+    } else {
+      diag.push('结果: 0个联系人被打标');
+    }
+    console.log('[标签探针]', diag.join('\n  '));
+    if (!total) showToast('未找到匹配的联系人 → 看F12', 'warn');
+  }));
   menu.querySelector('[data-action="delete"]').addEventListener('click', async () => {
     menu.remove();
     if (_selectedSet.size > 1) {
@@ -303,8 +351,8 @@ function renderInbox() {
         if (n === 0 && st && st.diag) {
           const d = st.diag;
           if (d.error) {
-            // 探针：显示卡在哪个节点 + 累计耗时
-            const lastStep = d.auth ? 'STAT' : d.greet ? 'AUTH' : d.connect ? 'GREET' : 'CONNECT';
+            // 探针：根据已有的计时数据确定卡在哪一步
+            const lastStep = d.uidl ? 'UIDL→RETR' : d.stat ? 'UIDL' : d.auth ? 'STAT' : d.greet ? 'AUTH' : d.connect ? 'GREET' : 'CONNECT';
             const ms = d.total || 0;
             detail = ` (卡在${lastStep}, ${ms}ms: ${d.error})`;
           } else if (d.step === 'STAT' && d.statTotal === 0) detail = ' (收件箱为空)';
@@ -401,6 +449,14 @@ async function renderDetail() {
       <div class="inbox-detail-field"><span>时间</span><span>${time}</span></div>
       <div class="inbox-detail-field"><span>账号</span><span>${escapeHtml(m.accountLabel || m.accountId)}</span></div>
       <div class="inbox-detail-field"><span>分类</span><span><span style="color:${TYPE_DOT[m.type] || '#8b8b8b'};font-weight:600">●</span> ${typeLabel}</span></div>
+      <div class="inbox-detail-field"><span>标签</span><span>${(() => {
+        const c = (S.contactsData || []).find(x => (x.email || '').toLowerCase() === (m.from || '').toLowerCase());
+        const tags = c?.tags || [];
+        const diag = c ? `[找到:${c.id} tags:${JSON.stringify(tags)}]` : `[查无:${m.from} 共${(S.contactsData||[]).length}条]`;
+        if (!tags.length) return `<span class="muted" title="${escapeHtml(diag)}">—</span>`;
+        const TL = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职', auto_reply:'自动回复' };
+        return tags.map(t => `<span style="display:inline-block;background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;font-size:10px;margin-right:2px" title="${escapeHtml(diag)}">${escapeHtml(TL[t] || t)}</span>`).join('');
+      })()}</span></div>
       <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a>` : '未关联'}</span></div>
     </div>
     ${(() => {

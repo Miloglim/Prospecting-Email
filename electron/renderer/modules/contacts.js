@@ -275,7 +275,10 @@ export function renderContactsList(filtered) {
     data = data.filter(c => c.phone && c.phone.trim());
   } else if (S.contactsFilter?.startsWith('tag:')) {
     const tag = S.contactsFilter.slice(4);
-    data = data.filter(c => (c.tags || []).includes(tag));
+    // 同时匹配中英文 key（旧数据用英文，新数据用中文）
+    const ALT = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
+    const keys = [tag, ALT[tag]].filter(Boolean);
+    data = data.filter(c => (c.tags || []).some(t => keys.includes(t)));
   } else if (S.contactsFilter !== 'all') {
     data = data.filter(c => (c.clientType || 'unlabeled') === S.contactsFilter);
   }
@@ -526,11 +529,9 @@ const DETAIL_COLS = [
   { key: 'phone', label: '电话', always: false },
   { key: 'linkedin', label: '领英', always: false },
   { key: 'country', label: '国家', always: false },
-  { key: 'category', label: '品类', always: false },
   { key: 'client_type', label: '客户类型', always: false },
   { key: 'stage', label: '阶段', always: false },
   { key: '_status', label: '状态', always: true },
-  { key: 'opp_stage', label: '机会', always: false },
   { key: '_tags', label: '标签', always: false },
   { key: 'contact_person', label: '对接人', always: false },
   { key: 'assignee', label: '跟进人', always: false },
@@ -601,7 +602,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     }
     totalCompanies = seen.size;
   }
-  const tagCounts = { reached: 0, left_company: 0, replied: 0, autoreply: 0, bounced_by_contact: 0 };
+  const tagCounts = { reached: 0, replied: 0, autoreply: 0, bounced_by_contact: 0, left_company: 0, '已触达':0, '有回复':0, '自动回复':0 };
   for (const c of S.contactsData) {
     for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
   }
@@ -616,11 +617,12 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     direct: `直客 ${clientCounts.direct || 0}`,
     unlabeled: `未标签 ${clientCounts.unlabeled || 0}`,
     anomaly: `⚠️ 异常 ${anomalyCount}`,
-    'tag:reached': `已触达 ${tagCounts.reached}`,
+    'tag:reached': `已触达 ${(tagCounts.reached||0) + (tagCounts['已触达']||0)}`,
+    'tag:replied': `有回复 ${(tagCounts.replied||0) + (tagCounts['有回复']||0)}`,
+    'tag:autoreply': `自动回复 ${(tagCounts.autoreply||0) + (tagCounts['自动回复']||0)}`,
     'tag:left_company': `已离职 ${tagCounts.left_company}`,
-    'tag:replied': `有回复 ${tagCounts.replied}`,
-    'tag:autoreply': `自动回复 ${tagCounts.autoreply}`,
     'tag:bounced_by_contact': `退信 ${tagCounts.bounced_by_contact}`,
+    has_phone: `有电话 ${S.contactsData.filter(c => c.phone && c.phone.trim()).length}`,
     archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
   };
   tabs.forEach(tab => {
@@ -679,8 +681,7 @@ export function renderContactDetail(company) {
   // ── 构建列头和数据单元格 ──────────────────────────────────────────
   const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
   const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
-  const OPP_LABEL = { '待开发':'待开发','触达中':'触达中','报价中':'报价中','试单':'试单','合作中':'合作中','已流失':'已流失' };
-  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
+  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', '已触达':'已触达', '有回复':'有回复', '自动回复':'自动回复' };
 
   const _th = (col, isExtra) => {
     const style = isExtra ? 'color:#999;font-weight:400' : '';
@@ -699,7 +700,6 @@ export function renderContactDetail(company) {
       case 'phone': return `<td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>`;
       case 'linkedin': return `<td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>`;
       case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
-      case 'category': return `<td data-field="category" class="editable">${escapeHtml(m.category || '')}</td>`;
       case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
       case 'stage': {
         // ponytail: stage 是公司级概念，统一读 send-history，避免和 contact.stage 不同步
@@ -710,22 +710,22 @@ export function renderContactDetail(company) {
       }
       case '_status': {
         const tags = m.tags || [];
-        const PRIORITY = ['left_company','bounced_by_contact','replied','autoreply','auto_reply','reached'];
-        const top = PRIORITY.find(t => tags.includes(t)) || (m.is_bounced || m.bounced ? 'bounced_by_contact' : '');
+        const PRIORITY = ['有回复','replied','自动回复','autoreply','auto_reply','已触达','reached'];
+        const top = PRIORITY.find(t => tags.includes(t)) || '';
         const label = STATUS_LABEL[top] || '未触达';
-        const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817', bounced_by_contact:'#e5484d', left_company:'#d93025' };
+        const DOT = { '已触达':'#3b82f6', reached:'#3b82f6', '有回复':'#22a644', replied:'#22a644', '自动回复':'#e6a817', autoreply:'#e6a817' };
         const dot = DOT[top] || 'var(--text-secondary)';
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
-      case 'opp_stage': return `<td data-field="opp_stage" data-select="opp_stage" data-labels="${escapeHtml(JSON.stringify(OPP_LABEL))}" class="editable">${OPP_LABEL[m.opp_stage]||m.opp_stage||'待开发'}</td>`;
       case '_tags': {
-        const ts = (m.tags || []).join(',');
-        return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts)}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
+        const TAG_LABEL = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职', auto_reply:'自动回复' };
+        const ts = (m.tags || []).map(t => TAG_LABEL[t] || t);
+        return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts.length ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts.join(','))}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
       }
       case 'contact_person': return `<td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>`;
       case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
       case '_followup': return `<td><span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span></td>`;
-      case '_actions': return `<td><button class="btn-edit-contact" data-id="${m.id}" style="margin-right:4px">${lucide('pencil',13)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',13)}</button></td>`;
+      case '_actions': return `<td><button class="btn-edit-contact" data-id="${m.id}">${lucide('pencil',12)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',12)}</button></td>`;
       default: return `<td>${escapeHtml(String(m[col.key] || ''))}</td>`;
     }
   };
@@ -738,7 +738,6 @@ export function renderContactDetail(company) {
       <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
-      <button id="btn-backcheck-contact" class="secondary" style="font-size:11px;padding:3px 10px">背调</button>
       ${S.contactsFilter === 'tag:bounced_by_contact' ? `<button id="btn-delete-bounced" class="secondary" style="font-size:11px;padding:3px 10px;color:#e5484d;border-color:#e5484d">删除全部退信</button>` : ''}
     </div>
     <div class="contacts-detail-body" style="overflow-x:auto">
@@ -873,27 +872,6 @@ export function renderContactDetail(company) {
     });
   }
 
-  // 发起背调按钮
-  const bcBtn = document.getElementById('btn-backcheck-contact');
-  if (bcBtn) {
-    bcBtn.addEventListener('click', async () => {
-      const contact = members[0];
-      if (!contact) return;
-      // 检查背调筛选设置
-      const cfg = await window.electronAPI.loadConfig().catch(() => ({}));
-      if (cfg?.backcheck?.filterEnabled && members.length < 5) {
-        showToast('该公司被背调筛选隐藏（<5位联系人），请前往设置关闭「仅显示高价值客户」', 'warn');
-        return;
-      }
-      showToast(`正在启动 ${company} 背调...`, 'ok');
-      const result = await window.electronAPI.startResearch(contact, 'deep-research');
-      if (!result.ok) { showToast(result.message || '启动失败', 'err'); return; }
-      CS.setDiscoverPreselect($1);
-      const nav = document.querySelector('[data-page="backcheck"]');
-      if (nav) nav.click();
-    });
-  }
-
   // 重新激活按钮
   const reactBtn = document.getElementById('btn-reactivate-contact');
   if (reactBtn) {
@@ -943,11 +921,15 @@ export function renderContactDetail(company) {
       popup.style.top = (rect.bottom + 4) + 'px';
 
       const TAG_OPTIONS = [
-        { val: 'reached', label: '已触达', color: '#3b82f6' },
-        { val: 'replied', label: '有回复', color: '#22a644' },
-        { val: 'autoreply', label: '自动回复', color: '#e6a817' },
-        { val: 'bounced_by_contact', label: '退信', color: '#e5484d' },
-        { val: 'left_company', label: '已离职', color: '#d93025' },
+        { val: '待开发',   label: '待开发',   color: '#9e9e9e' },
+        { val: '自动回复', label: '自动回复', color: '#f5a623' },
+        { val: '有回复',   label: '有回复',   color: '#22a644' },
+        { val: '已触达',   label: '已触达',   color: '#3b82f6' },
+        { val: '触达中',    label: '触达中',   color: '#ff9800' },
+        { val: '报价中',    label: '报价中',   color: '#2196f3' },
+        { val: '试单',      label: '试单',     color: '#8e24aa' },
+        { val: '合作中',    label: '合作中',   color: '#4caf50' },
+        { val: '已流失',    label: '已流失',   color: '#d93025' },
       ];
 
       const currentTag = currentTags[0] || '';
@@ -999,8 +981,7 @@ export function renderContactDetail(company) {
     country: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'],
     client_type: ['agent','direct','unlabeled'],
     stage: ['cold','f1','f2','f3','f4'],
-    opp_stage: ['待开发','触达中','报价中','试单','合作中','已流失'],
-    _status: ['', 'reached','replied','autoreply','bounced_by_contact','left_company'],
+    _status: ['', '已触达','有回复','自动回复'],
   };
 
   const INPUT_STYLE = 'min-width:140px;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
@@ -1018,26 +999,38 @@ export function renderContactDetail(company) {
     const selType = td.dataset.select;
 
     if (selType) {
-      // 下拉选择
+      // 弹窗选择（统一风格，替代原生 select）
       const orig = td.textContent.trim();
       const opts = SELECT_OPTS[selType] || [];
       const labels = td.dataset.labels ? JSON.parse(td.dataset.labels) : {};
-      const select = document.createElement('select');
-      select.style.cssText = SELECT_STYLE;
-      opts.forEach((o) => {
-        const opt = document.createElement('option'); opt.value = o;
-        opt.textContent = labels[o] || o;
-        if ((labels[o] || o) === orig || o === orig) opt.selected = true;
-        select.appendChild(opt);
-      });
-      td.textContent = ''; td.appendChild(select); select.focus();
+      const rect = td.getBoundingClientRect();
+
+      document.getElementById('sel-popup')?.remove();
+      const popup = document.createElement('div');
+      popup.id = 'sel-popup';
+      popup.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+      popup.style.left = Math.min(rect.left, window.innerWidth - 160) + 'px';
+      popup.style.top = (rect.bottom + 2 > window.innerHeight - 200 ? rect.top - 200 : rect.bottom + 2) + 'px';
+
       let _saved = false;
       const save = async (val) => {
         if (_saved) return; _saved = true;
-        select.remove();
-        td.textContent = labels[val] || val;
-        // ponytail: _status 空值(=未触达)是合法操作，不能和普通字段空值一样直接跳过
+        popup.remove();
+        // stage 用标签样式，_status 用圆点样式，其他用纯文本
+        if (selType === 'stage') {
+          td.innerHTML = `<span class="stage-badge stage-${val}">${labels[val] || val}</span>`;
+        } else if (selType === '_status') {
+          const dotColors = { '已触达':'#3b82f6', reached:'#3b82f6', '有回复':'#22a644', replied:'#22a644', '自动回复':'#e6a817', autoreply:'#e6a817' };
+          const dot = dotColors[val] || 'var(--text-secondary)';
+          td.innerHTML = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${labels[val] || val}</span>`;
+        } else {
+          td.textContent = labels[val] || val;
+        }
         if ((!val && selType !== '_status') || (labels[val] || val) === orig) return;
+        if (selType === 'stage') {
+          const stCompany = td.dataset.company || '';
+          if (stCompany && S.contactsSendHistory[stCompany]) S.contactsSendHistory[stCompany].stage = val;
+        }
         const ref = S.contactsData.find(c => c.id === contactId);
         if (!ref) return;
         if (selType === 'client_type') {
@@ -1046,7 +1039,7 @@ export function renderContactDetail(company) {
           if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
           for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
         } else if (selType === '_status') {
-          const tagVal = val || ''; // 空字符串 = 清除标签 = 未触达
+          const tagVal = val || '';
           await window.electronAPI.setContactTags(contactId, tagVal ? [tagVal] : []);
           ref.tags = tagVal ? [tagVal] : [];
           const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');
@@ -1058,19 +1051,31 @@ export function renderContactDetail(company) {
           const ref2 = S.contactsData.find(c => c.id === contactId);
           if (ref2) { await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val }); ref2[field] = val; }
         }
-        // 刷新详情
         if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
-        // stage 是公司级字段 → 手动同步 send-history + 侧边栏，不走 syncContactsUI（会被磁盘覆盖）
-        if (field === 'stage' || selType === 'stage') {
-          const company = td.dataset.company || S.contactsData.find(c => c.id === contactId)?.company || '';
-          if (company && S.contactsSendHistory[company]) { S.contactsSendHistory[company].stage = val; }
+        if (selType === 'stage' || field === 'stage') {
           _updateSidebarItem(contactId);
         } else {
           CS.syncContactsUI();
         }
       };
-      select.addEventListener('change', () => save(select.value));
-      select.addEventListener('blur', () => { setTimeout(() => save(select.value), 100); });
+
+      const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817' };
+      opts.forEach((o) => {
+        const label = labels[o] || o;
+        const active = label === orig || o === orig;
+        const dotColor = selType === '_status' ? (DOT[o] || 'var(--text-secondary)') : '';
+        const div = document.createElement('div');
+        div.style.cssText = `padding:6px 14px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:8px;${active ? 'font-weight:600' : ''}`;
+        div.innerHTML = (selType === '_status' && o ? `<span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>` : '') + label + (active ? ' ●' : '');
+        div.addEventListener('mouseenter', () => div.style.background = 'var(--border)');
+        div.addEventListener('mouseleave', () => div.style.background = 'transparent');
+        div.addEventListener('click', () => save(o));
+        popup.appendChild(div);
+      });
+
+      document.body.appendChild(popup);
+      const close = (ev) => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
       return;
     }
 
@@ -1147,10 +1152,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
           <div class="ac-field"><label>名</label><input id="ac-firstname" placeholder="如 Julio"></div>
           <div class="ac-field"><label>姓</label><input id="ac-lastname" placeholder="如 Gallegos"></div>
         </div>
-        <div class="ac-row">
-          <div class="ac-field"><label>国家</label><input id="ac-country" placeholder="如 Mexico"></div>
-          <div class="ac-field"><label>品类</label><input id="ac-category" placeholder="如 freight forwarder"></div>
-        </div>
+        <div class="ac-field"><label>国家</label><input id="ac-country" placeholder="如 Mexico"></div>
         <div class="ac-row">
           <div class="ac-field"><label>职位</label><input id="ac-position" placeholder="如 Manager"></div>
           <div class="ac-field"><label>电话</label><input id="ac-phone" placeholder="如 +52 555..."></div>
@@ -1176,7 +1178,6 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         firstName, lastName,
         contactName: `${firstName} ${lastName}`.trim(),
         country: document.getElementById('ac-country')?.value.trim() || '',
-        category: document.getElementById('ac-category')?.value.trim() || '',
         position: document.getElementById('ac-position')?.value.trim() || '',
         phone: document.getElementById('ac-phone')?.value.trim() || '',
         clientType: document.getElementById('ac-type')?.value || 'unlabeled',
@@ -1248,8 +1249,9 @@ async function showFollowupEditor(contact) {
   });
 
 // 统一刷新入口：主进程 IPC 事件 + 渲染进程内部事件都走同一条路
-function _onContactsSync() {
+async function _onContactsSync() {
   if (document.getElementById('page-contacts')?.classList.contains('active')) {
+    await CS.refreshContacts();
     renderContactsList();
   }
 }
@@ -1312,9 +1314,7 @@ function showContactEditor(contact) {
           <div class="ec-field"><label>公司</label><input id="ec-company" value="${escapeHtml(contact.company || contact.company_name || '')}"></div>
           <div class="ec-row">
             <div class="ec-field"><label>国家</label><input id="ec-country" value="${escapeHtml(contact.country || '')}"></div>
-            <div class="ec-field"><label>品类</label><input id="ec-category" value="${escapeHtml(contact.category || '')}"></div>
           </div>
-          <div class="ec-field"><label>网站</label><input id="ec-website" value="${escapeHtml(contact.website || contact.company_website || '')}"></div>
         </div>
         <div class="ec-panel" data-panel="contact">
           <div class="ec-row">
@@ -1342,14 +1342,6 @@ function showContactEditor(contact) {
               <option value="f4" ${(contact.stage || contact._stage) === 'f4' ? 'selected' : ''}>F4</option>
             </select></div>
           </div>
-          <div class="ec-field"><label>机会阶段</label><select id="ec-opp-stage">
-            <option value="待开发" ${(contact.opp_stage || '待开发') === '待开发' ? 'selected' : ''}>待开发</option>
-            <option value="触达中" ${contact.opp_stage === '触达中' ? 'selected' : ''}>触达中</option>
-            <option value="报价中" ${contact.opp_stage === '报价中' ? 'selected' : ''}>报价中</option>
-            <option value="试单" ${contact.opp_stage === '试单' ? 'selected' : ''}>试单</option>
-            <option value="合作中" ${contact.opp_stage === '合作中' ? 'selected' : ''}>合作中</option>
-            <option value="已流失" ${contact.opp_stage === '已流失' ? 'selected' : ''}>已流失</option>
-          </select></div>
           <div class="ec-field"><label>跟进备注</label><input id="ec-followup" value="${escapeHtml(contact.followup_note || contact.followupNote || '')}"></div>
         </div>
       </div>`,
@@ -1366,14 +1358,11 @@ function showContactEditor(contact) {
         firstName: document.getElementById('ec-firstname')?.value?.trim() || '',
         lastName: document.getElementById('ec-lastname')?.value?.trim() || '',
         country: document.getElementById('ec-country')?.value?.trim() || '',
-        website: document.getElementById('ec-website')?.value?.trim() || '',
-        category: document.getElementById('ec-category')?.value?.trim() || '',
         position: document.getElementById('ec-position')?.value?.trim() || '',
         phone: document.getElementById('ec-phone')?.value?.trim() || '',
         linkedin: document.getElementById('ec-linkedin')?.value?.trim() || '',
         clientType: document.getElementById('ec-client-type')?.value || 'unlabeled',
         stage: document.getElementById('ec-stage')?.value || 'cold',
-        opp_stage: document.getElementById('ec-opp-stage')?.value || '待开发',
         contact_person: document.getElementById('ec-contact-person')?.value?.trim() || '',
         assignee: document.getElementById('ec-assignee')?.value?.trim() || '',
         followup_note: document.getElementById('ec-followup')?.value?.trim() || '',
