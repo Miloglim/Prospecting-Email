@@ -536,28 +536,57 @@ async function _pop3Fetch(cfg, sinceDays) {
     T.stat = Date.now() - t0; T.statCount = statTotal;
     rawSources._diag = { step: 'STAT', ...T };
 
-    // ⑤ UIDL 列表
+    // ⑤ 获取消息列表（UIDL，不支持时降级为 LIST）
     const cursor = _readCursor();
-    const lastUid = cursor[cfg.user] || '';
-    const uidlRes = await _pop3Cmd(sock, 'UIDL');
-    T.uidl = Date.now() - t0;
-    const uidMap = {};      // seqNum → uid
-    const revUidMap = {};   // uid → seqNum
-    for (const line of uidlRes) {
-      const parts = line.split(/\s+/);
-      if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
-        const n = parseInt(parts[0]);
-        uidMap[n] = parts[1];
-        revUidMap[parts[1]] = n;
+    let lastUid = cursor[cfg.user] || '';
+    let uidMap = {};      // seqNum → uid
+    let revUidMap = {};   // uid → seqNum
+    let useUidl = true;
+
+    try {
+      const uidlRes = await _pop3Cmd(sock, 'UIDL');
+      const firstLine = (uidlRes[0] || '').toUpperCase();
+      if (firstLine.startsWith('-ERR')) {
+        // 服务器不支持 UIDL → 降级 LIST
+        useUidl = false;
+        Log.warn('[收件箱]', `POP3 ${cfg.user}: UIDL不支持，降级LIST`);
+      } else {
+        for (const line of uidlRes) {
+          const parts = line.split(/\s+/);
+          if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+            const n = parseInt(parts[0]);
+            uidMap[n] = parts[1];
+            revUidMap[parts[1]] = n;
+          }
+        }
       }
+    } catch {
+      useUidl = false;
+      Log.warn('[收件箱]', `POP3 ${cfg.user}: UIDL超时，降级LIST`);
     }
+
+    if (!useUidl) {
+      // LIST: 返回 seqNum size，没有 UID，无法做增量跟踪
+      const listRes = await _pop3Cmd(sock, 'LIST');
+      for (const line of listRes) {
+        const parts = line.split(/\s+/);
+        if (parts.length >= 2 && /^\d+$/.test(parts[0])) {
+          const n = parseInt(parts[0]);
+          uidMap[n] = String(n); // 用序号自身作为伪 UID
+          revUidMap[String(n)] = n;
+        }
+      }
+      lastUid = ''; // 不支持增量，每次全量拉取
+    }
+
+    T.uidl = Date.now() - t0;
     const uidlCount = Object.keys(uidMap).length;
-    T.uidlCount = uidlCount; T.cursorValid = lastUid && revUidMap[lastUid] !== undefined;
+    T.uidlCount = uidlCount; T.useUidl = useUidl;
     rawSources._diag = { step: 'UIDL', ...T };
 
     // ⑥ 计算待拉取 ID
-    Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${statTotal}, UIDL=${uidlCount}条, 游标=${lastUid ? (revUidMap[lastUid] !== undefined ? '有效' : '失效') : '无'}`);
-    const cursorValid = lastUid && revUidMap[lastUid] !== undefined;
+    Log.info('[收件箱]', `POP3 ${cfg.user}: STAT=${statTotal}, ${useUidl?'UIDL':'LIST'}=${uidlCount}条`);
+    const cursorValid = useUidl && lastUid && revUidMap[lastUid] !== undefined;
     let ids;
     if (cursorValid) {
       const cursorSeq = revUidMap[lastUid];

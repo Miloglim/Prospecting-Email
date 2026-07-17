@@ -348,8 +348,8 @@ export function renderContactsList(filtered) {
       const ctype = members[0]?.clientType || 'unlabeled';
       const tagHtml = clientTypeTag(ctype);
       const ctry = escapeHtml(members[0]?.country || '');
-      const hist = S.contactsSendHistory[company];
-      const stageLabel = hist?.stage ? `<span class="ci-stage-badge ci-stage-${hist.stage}">${S.STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
+      const st = members[0]?.stage || members[0]?._stage || 'cold';
+      const stageLabel = `<span class="ci-stage-badge ci-stage-${st}">${S.STAGE_LABELS_SEND[st] || st.toUpperCase()}</span>`;
       const vipClass = members.length >= 5 ? ' ci-vip' : '';
       const subParts = [tagHtml, ctry, stageLabel].filter(Boolean);
       return `
@@ -643,8 +643,8 @@ function _updateSidebarItem(contactId) {
   const members = S.contactsGroupMap.get(company) || [];
   const ctype = members[0]?.clientType || 'unlabeled';
   const ctry = escapeHtml(members[0]?.country || '');
-  const hist = S.contactsSendHistory[company];
-  const stageLabel = hist?.stage ? `<span class="ci-stage-badge ci-stage-${hist.stage}">${S.STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
+  const st = members[0]?.stage || members[0]?._stage || 'cold';
+  const stageLabel = `<span class="ci-stage-badge ci-stage-${st}">${S.STAGE_LABELS_SEND[st] || st.toUpperCase()}</span>`;
   const subParts = [clientTypeTag(ctype), ctry, stageLabel].filter(Boolean);
   const subEl = item.querySelector('.ci-sub');
   if (subEl) subEl.innerHTML = subParts.join(' · ');
@@ -702,10 +702,8 @@ export function renderContactDetail(company) {
       case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
       case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
       case 'stage': {
-        // ponytail: stage 是公司级概念，统一读 send-history，避免和 contact.stage 不同步
+        const st = m.stage || m._stage || 'cold';
         const company = m.company || m.company_name || '';
-        const hist = S.contactsSendHistory[company];
-        const st = hist?.stage || 'cold';
         return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable" data-company="${escapeHtml(company)}"><span class="stage-badge stage-${st}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[st]||st}</span></td>`;
       }
       case '_status': {
@@ -942,11 +940,17 @@ export function renderContactDetail(company) {
         `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
         `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
 
+      // 机会类标签（与状态独立，互不覆盖）
+      const OPP_KEYS = ['待开发','触达中','报价中','试单','合作中','已流失'];
+      const STATUS_KEYS = ['已触达','有回复','自动回复','reached','replied','autoreply','auto_reply','bounced_by_contact','left_company'];
+
       popup.querySelectorAll('[data-tag]').forEach(div => {
         div.addEventListener('click', async () => {
           const tagVal = div.dataset.tag;
-          // 单选：再次点击同一标签则取消
-          const newTags = currentTag === tagVal ? [] : [tagVal];
+          const statusTags = currentTags.filter(t => STATUS_KEYS.includes(t));
+          const oppTag = OPP_KEYS.includes(currentTag) ? currentTag : '';
+          const newOppTag = currentTag === tagVal ? '' : tagVal;
+          const newTags = [...statusTags, ...(newOppTag ? [newOppTag] : [])];
           popup.remove();
           await window.electronAPI.setContactTags(contactId, newTags);
           contact.tags = newTags;
@@ -959,11 +963,12 @@ export function renderContactDetail(company) {
 
       popup.lastElementChild.addEventListener('click', async () => {
         popup.remove();
-        await window.electronAPI.setContactTags(contactId, []);
-        contact.tags = [];
+        const statusTags = currentTags.filter(t => STATUS_KEYS.includes(t));
+        await window.electronAPI.setContactTags(contactId, statusTags);
+        contact.tags = statusTags;
         const newMembers = S.contactsGroupMap.get(company) || [];
         const idx = newMembers.findIndex(m => m.id === contactId);
-        if (idx >= 0) newMembers[idx].tags = [];
+        if (idx >= 0) newMembers[idx].tags = statusTags;
         renderContactDetail(company);
       });
 
@@ -1039,11 +1044,14 @@ export function renderContactDetail(company) {
           if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
           for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
         } else if (selType === '_status') {
-          const tagVal = val || '';
-          await window.electronAPI.setContactTags(contactId, tagVal ? [tagVal] : []);
-          ref.tags = tagVal ? [tagVal] : [];
+          // 状态标签独立：替换状态类标签，保留机会类标签
+          const STATUS_KEYS = ['已触达','有回复','自动回复','reached','replied','autoreply','auto_reply'];
+          const oppTags = (ref.tags || []).filter(t => !STATUS_KEYS.includes(t));
+          const newTags = val ? [val, ...oppTags] : oppTags;
+          await window.electronAPI.setContactTags(contactId, newTags);
+          ref.tags = newTags;
           const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');
-          if (members2) { const mx = members2.find(x => x.id === contactId); if (mx) mx.tags = tagVal ? [tagVal] : []; }
+          if (members2) { const mx = members2.find(x => x.id === contactId); if (mx) mx.tags = newTags; }
         } else if (selType === 'country') {
           const contact = S.contactsData.find(c => c.id === contactId);
           if (contact?.company_id) { await window.electronAPI.updateCompany(contact.company_id, { country: val }); contact.country = val; }
@@ -1252,6 +1260,7 @@ async function showFollowupEditor(contact) {
 async function _onContactsSync() {
   if (document.getElementById('page-contacts')?.classList.contains('active')) {
     await CS.refreshContacts();
+    await CS.refreshContactsSendHistory();
     renderContactsList();
   }
 }
