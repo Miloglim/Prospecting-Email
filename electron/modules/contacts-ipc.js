@@ -11,6 +11,11 @@ function register(ipcMain, deps) {
   const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json'); // 保留兼容旧引用
   const db = require('./services/contacts-db');
 
+  // 通知渲染进程联系人数据已变更
+  function _notify() {
+    try { deps.mainWindow?.webContents.send('contacts:changed'); } catch { /* 窗口已关闭 */ }
+  }
+
   // ponytail: SQLite 替代 JSON，不再需要缓存和手动写盘
   function readContacts() {
     return db.listAll();
@@ -179,6 +184,7 @@ function register(ipcMain, deps) {
       removeFromSendHistory(target.company, [target.email]);
     }
     db.remove(id);
+    _notify();
     return { ok: true };
   });
 
@@ -191,6 +197,7 @@ function register(ipcMain, deps) {
       }
     }
     db.removeMany([...idSet]);
+    _notify();
     return { ok: true, deleted: toDelete.length };
   });
 
@@ -299,18 +306,21 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:updateBounce', async (_e, email, bounceData) => {
     const existing = db.getByEmail(email);
     if (existing) db.update(existing.id, { is_bounced: true, bounce_type: bounceData.type || 'unknown', bounce_reason: bounceData.reason || '', bounced_at: new Date().toISOString() });
+    if (existing) _notify();
     return { ok: true };
   });
 
   ipcMain.handle('contacts:clearBounce', async (_e, email) => {
     const existing = db.getByEmail(email);
     if (existing) db.update(existing.id, { is_bounced: false, bounce_type: '', bounce_reason: '', bounced_at: '' });
+    if (existing) _notify();
     return { ok: true };
   });
 
   // 旧 API：单值标签（向后兼容）
   ipcMain.handle('contacts:setTag', async (_e, id, tag) => {
     if (tag) db.addTag(id, tag); else { const c = db.getById(id); if (c) db.update(id, { tags: [] }); }
+    _notify();
     return { ok: true };
   });
 
@@ -322,6 +332,7 @@ function register(ipcMain, deps) {
     const old = c.tags || [];
     for (const t of old) { if (!arr.includes(t)) db.removeTag(id, t); }
     for (const t of arr) { if (!old.includes(t)) db.addTag(id, t); }
+    _notify();
     return { ok: true };
   });
 
@@ -334,6 +345,7 @@ function register(ipcMain, deps) {
     const { getDb } = require('./services/db');
     const result = getDb().prepare("UPDATE companies SET country = ?, updated_at = ? WHERE name = ?")
       .run(newCountry, new Date().toISOString(), companyName.trim());
+    _notify();
     return { ok: true, updated: result.changes };
   });
 
@@ -450,6 +462,7 @@ function register(ipcMain, deps) {
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);
+    _notify();
     return { ok: true, action: existing ? 'updated' : 'created', contact: result };
   });
 

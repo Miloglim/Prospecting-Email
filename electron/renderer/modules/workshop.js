@@ -462,16 +462,68 @@ export function showUserTemplateEditor(tpl) {
 
 }
 
+let _sigAccountId = null; // 当前编辑的账号 ID（null=全局）
+
 export async function initSignature() {
-  // 从 send/signature.html 加载
-  const result = await window.electronAPI.loadSignature();
   const editor = document.getElementById('sig-content');
   const preview = document.getElementById('sig-preview');
-  if (editor && result.ok) editor.innerHTML = result.html;
-  if (preview && result.ok) preview.innerHTML = result.html;
+  const saveBtn = document.getElementById('sig-save');
+  const folderBtn = document.getElementById('sig-open-folder');
 
-  // 实时预览
-  if (editor) {
+  // 账号选择器（只创建一次）
+  let sel = document.getElementById('sig-account');
+  if (!sel && folderBtn?.parentElement) {
+    sel = document.createElement('select');
+    sel.id = 'sig-account';
+    sel.style.cssText = 'font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);margin-right:8px';
+    sel.innerHTML = '<option value="">全局（默认）</option>';
+    folderBtn.parentElement.insertBefore(sel, folderBtn);
+
+    // 填充账号列表
+    try {
+      const r = await window.electronAPI.listAccounts();
+      const accounts = (r.data || []).filter(a => a.active !== false);
+      for (const a of accounts) {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.label || a.smtp?.user || a.id;
+        sel.appendChild(opt);
+      }
+    } catch { /* 账号列表加载失败不影响签名编辑 */ }
+  }
+
+  // 从设置页跳转来时预选账号
+  if (S._sigTargetAccount && sel) {
+    sel.value = S._sigTargetAccount;
+    S._sigTargetAccount = null;
+  }
+
+  // 加载签名
+  async function loadFor(accountId) {
+    _sigAccountId = accountId || null;
+    const result = await window.electronAPI.loadSignature(_sigAccountId);
+    if (editor && result.ok) editor.innerHTML = result.html;
+    if (preview && result.ok) preview.innerHTML = result.html;
+    // 更新 UI 提示
+    if (saveBtn && _sigAccountId) {
+      const label = sel?.selectedOptions?.[0]?.textContent || _sigAccountId;
+      saveBtn.textContent = `保存到 ${label}`;
+    } else if (saveBtn) {
+      saveBtn.textContent = '保存到文件';
+    }
+  }
+
+  await loadFor(_sigAccountId);
+
+  // 账号切换
+  if (sel && !sel._bound) {
+    sel._bound = true;
+    sel.addEventListener('change', () => loadFor(sel.value || null));
+  }
+
+  // 实时预览（只绑一次）
+  if (editor && !editor._previewBound) {
+    editor._previewBound = true;
     editor.addEventListener('input', () => {
       if (preview) preview.innerHTML = editor.innerHTML;
     });
@@ -484,8 +536,13 @@ document.getElementById('sig-open-folder')?.addEventListener('click', () => {
 
 document.getElementById('sig-save')?.addEventListener('click', async () => {
   const html = document.getElementById('sig-content')?.innerHTML || '';
-  const result = await window.electronAPI.saveSignature(html);
-  if (result.ok) showToast('签名已保存', 'ok'); else showToast('签名保存失败', 'err');
+  const result = await window.electronAPI.saveSignature(html, _sigAccountId);
+  if (result.ok) {
+    const label = _sigAccountId ? (document.getElementById('sig-account')?.selectedOptions?.[0]?.textContent || '账号') : '全局';
+    showToast(`签名已保存 (${label})`, 'ok');
+  } else {
+    showToast('签名保存失败: ' + (result.error || ''), 'err');
+  }
 });
 
 

@@ -89,9 +89,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("send:progress", handler);
   },
 
-  // 签名
-  loadSignature: () => ipcRenderer.invoke("signature:load"),
-  saveSignature: (html) => ipcRenderer.invoke("signature:save", html),
+  // 签名（accountId 可选：不传=全局，传了=账号专属）
+  loadSignature: (accountId) => ipcRenderer.invoke("signature:load", accountId),
+  saveSignature: (html, accountId) => ipcRenderer.invoke("signature:save", html, accountId),
 
   // 队列持久化
   saveQueue: (data) => ipcRenderer.invoke("queue:save", data),

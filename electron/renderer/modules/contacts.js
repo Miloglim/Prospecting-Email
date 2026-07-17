@@ -223,8 +223,7 @@ window.electronAPI?.onContactsCleared?.((_) => {
 // ===== 联系人 ========================================================
 
 export async function loadContacts() {
-  await CS.refreshContacts();
-  await CS.refreshContactsSendHistory();
+  await CS.syncContactsUI();
   // 诊断：打印分类统计
   const diag = { agent: 0, direct: 0, unlabeled: 0, no_email: 0, invalid_email: 0, noField: 0 };
   const seen = new Set();
@@ -303,31 +302,7 @@ export function renderContactsList(filtered) {
   }
 
   // 更新筛选标签
-  const tabs = filterBar?.querySelectorAll('.cf-tab');
-  if (tabs) {
-    const tagCounts = { reached: 0, left_company: 0, replied: 0, autoreply: 0, bounced_by_contact: 0 };
-    for (const c of S.contactsData) {
-      for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
-    }
-    const labelMap = {
-      all: `全部 ${seenCompanies.size}`,
-      agent: `代理 ${counts.agent}`,
-      direct: `直客 ${counts.direct}`,
-      unlabeled: `未标签 ${counts.unlabeled}`,
-      anomaly: `⚠️ 异常 ${anomalyCount}`,
-      'tag:reached': `已触达 ${tagCounts.reached}`,
-      'tag:left_company': `已离职 ${tagCounts.left_company}`,
-      'tag:replied': `有回复 ${tagCounts.replied}`,
-      'tag:autoreply': `自动回复 ${tagCounts.autoreply}`,
-      'tag:bounced_by_contact': `退信 ${tagCounts.bounced_by_contact}`,
-      archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
-    };
-    tabs.forEach(tab => {
-      const f = tab.dataset.filter;
-      tab.innerHTML = labelMap[f] || f;
-      tab.classList.toggle('active', S.contactsFilter === f);
-    });
-  }
+  _updateFilterTabs(seenCompanies.size, counts);
 
   if (!data.length) {
     if (empty) { empty.style.display = 'block'; empty.textContent = S.contactsFilter === 'archived' ? '暂无已归档客户' : S.contactsFilter === 'anomaly' ? '🎉 没有异常联系人' : S.contactsFilter?.startsWith('tag:') ? '该标签暂无联系人' : S.contactsFilter !== 'all' ? '该分类暂无联系人' : '暂无联系人 — 从「导入客户」导入'; }
@@ -611,6 +586,71 @@ function _showColToggle(anchorEl) {
   setTimeout(() => document.addEventListener('click', close), 0);
 }
 
+// ponytail: 更新筛选栏标签计数（不重建列表）。无参时自动从 S.contactsData 计算。
+function _updateFilterTabs(totalCompanies, clientCounts) {
+  const filterBar = document.getElementById('contacts-filter');
+  const tabs = filterBar?.querySelectorAll('.cf-tab');
+  if (!tabs) return;
+  // 无参调用时自动计算
+  if (totalCompanies === undefined) {
+    const seen = new Set();
+    clientCounts = { agent: 0, direct: 0, unlabeled: 0 };
+    for (const c of S.contactsData) {
+      const key = c.company;
+      if (!seen.has(key)) { seen.add(key); const ct = c.clientType || 'unlabeled'; clientCounts[ct] = (clientCounts[ct] || 0) + 1; }
+    }
+    totalCompanies = seen.size;
+  }
+  const tagCounts = { reached: 0, left_company: 0, replied: 0, autoreply: 0, bounced_by_contact: 0 };
+  for (const c of S.contactsData) {
+    for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
+  }
+  let anomalyCount = 0;
+  for (const c of S.contactsData) {
+    const ct = c.clientType || 'unlabeled';
+    if (ct === 'no_email' || ct === 'invalid_email' || ct === 'no_company') anomalyCount++;
+  }
+  const labelMap = {
+    all: `全部 ${totalCompanies}`,
+    agent: `代理 ${clientCounts.agent || 0}`,
+    direct: `直客 ${clientCounts.direct || 0}`,
+    unlabeled: `未标签 ${clientCounts.unlabeled || 0}`,
+    anomaly: `⚠️ 异常 ${anomalyCount}`,
+    'tag:reached': `已触达 ${tagCounts.reached}`,
+    'tag:left_company': `已离职 ${tagCounts.left_company}`,
+    'tag:replied': `有回复 ${tagCounts.replied}`,
+    'tag:autoreply': `自动回复 ${tagCounts.autoreply}`,
+    'tag:bounced_by_contact': `退信 ${tagCounts.bounced_by_contact}`,
+    archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
+  };
+  tabs.forEach(tab => {
+    const f = tab.dataset.filter;
+    tab.innerHTML = labelMap[f] || f;
+  });
+}
+
+// ponytail: 内联编辑后局部更新侧边栏条目，避免重建整个列表
+function _updateSidebarItem(contactId) {
+  const c = S.contactsData.find(x => x.id === contactId);
+  if (!c) return;
+  const company = c.company || c.company_name || '';
+  const sidebar = document.getElementById('contacts-sidebar');
+  if (!sidebar) return;
+  const item = sidebar.querySelector(`.contact-item[data-company="${CSS.escape(company)}"]`);
+  if (!item) return;
+  const members = S.contactsGroupMap.get(company) || [];
+  const ctype = members[0]?.clientType || 'unlabeled';
+  const ctry = escapeHtml(members[0]?.country || '');
+  const hist = S.contactsSendHistory[company];
+  const stageLabel = hist?.stage ? `<span class="ci-stage-badge ci-stage-${hist.stage}">${S.STAGE_LABELS_SEND[hist.stage] || hist.stage.toUpperCase()}</span>` : '';
+  const subParts = [clientTypeTag(ctype), ctry, stageLabel].filter(Boolean);
+  const subEl = item.querySelector('.ci-sub');
+  if (subEl) subEl.innerHTML = subParts.join(' · ');
+  // 更新计数
+  const countEl = item.querySelector('.ci-count');
+  if (countEl) countEl.textContent = members.length;
+}
+
 export function renderContactDetail(company) {
   const detail = document.getElementById('contacts-detail');
   if (!detail || !company) return;
@@ -662,8 +702,11 @@ export function renderContactDetail(company) {
       case 'category': return `<td data-field="category" class="editable">${escapeHtml(m.category || '')}</td>`;
       case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
       case 'stage': {
-        const st = m.stage || m._stage || 'cold';
-        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable"><span class="stage-badge stage-${st}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[st]||st}</span></td>`;
+        // ponytail: stage 是公司级概念，统一读 send-history，避免和 contact.stage 不同步
+        const company = m.company || m.company_name || '';
+        const hist = S.contactsSendHistory[company];
+        const st = hist?.stage || 'cold';
+        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable" data-company="${escapeHtml(company)}"><span class="stage-badge stage-${st}" style="font-size:10px;padding:1px 6px;border-radius:8px">${STAGE_LABEL[st]||st}</span></td>`;
       }
       case '_status': {
         const tags = m.tags || [];
@@ -786,8 +829,7 @@ export function renderContactDetail(company) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await window.electronAPI.clearBounce(btn.dataset.email);
-      await CS.refreshContacts();
-      renderContactsList();
+      CS.syncContactsUI();
     });
   });
 
@@ -826,8 +868,7 @@ export function renderContactDetail(company) {
         if (r === 'skip') S._deleteSkipUntil = Date.now() + 600000;
       }
       for (const m of bounced) { await window.electronAPI.deleteContact(m.id); }
-      await CS.refreshContacts();
-      renderContactsList();
+      CS.syncContactsUI();
       showToast(`已删除 ${bounced.length} 个退信联系人`, 'ok');
     });
   }
@@ -876,8 +917,7 @@ export function renderContactDetail(company) {
       const newMembers = S.contactsGroupMap.get(company) || [];
       const idx = newMembers.findIndex(m => m.id === contact.id);
       if (idx >= 0) newMembers.splice(idx, 1);
-      await CS.refreshContacts();
-      renderContactsList();
+      CS.syncContactsUI();
     });
   });
 
@@ -996,7 +1036,8 @@ export function renderContactDetail(company) {
         if (_saved) return; _saved = true;
         select.remove();
         td.textContent = labels[val] || val;
-        if (!val || (labels[val] || val) === orig) return;
+        // ponytail: _status 空值(=未触达)是合法操作，不能和普通字段空值一样直接跳过
+        if ((!val && selType !== '_status') || (labels[val] || val) === orig) return;
         const ref = S.contactsData.find(c => c.id === contactId);
         if (!ref) return;
         if (selType === 'client_type') {
@@ -1017,8 +1058,16 @@ export function renderContactDetail(company) {
           const ref2 = S.contactsData.find(c => c.id === contactId);
           if (ref2) { await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val }); ref2[field] = val; }
         }
-        // 只刷新详情，不重建列表
+        // 刷新详情
         if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
+        // stage 是公司级字段 → 手动同步 send-history + 侧边栏，不走 syncContactsUI（会被磁盘覆盖）
+        if (field === 'stage' || selType === 'stage') {
+          const company = td.dataset.company || S.contactsData.find(c => c.id === contactId)?.company || '';
+          if (company && S.contactsSendHistory[company]) { S.contactsSendHistory[company].stage = val; }
+          _updateSidebarItem(contactId);
+        } else {
+          CS.syncContactsUI();
+        }
       };
       select.addEventListener('change', () => save(select.value));
       select.addEventListener('blur', () => { setTimeout(() => save(select.value), 100); });
@@ -1135,8 +1184,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         addedAt: new Date().toISOString(),
       };
       await window.electronAPI.importContacts([contact]);
-      await CS.refreshContacts();
-      renderContactsList();
+      CS.syncContactsUI();
       showToast(`已添加 ${company}`, 'ok');
     },
   });
@@ -1147,7 +1195,7 @@ document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', a
   btn.disabled = true; btn.textContent = 'AI 分类中...';
   try {
     const r = await window.electronAPI.classifyContactsAI();
-    if (r.ok) { await CS.refreshContacts(); renderContactsList(); showToast(`AI 分类完成: ${r.updated} 人 / ${r.total} 家公司`, 'ok'); }
+    if (r.ok) { CS.syncContactsUI(); showToast(`AI 分类完成: ${r.updated} 人 / ${r.total} 家公司`, 'ok'); }
     else showToast(r.error || 'AI 分类失败', 'err');
   } catch (e) { showToast('AI 分类异常', 'err'); }
   btn.disabled = false; btn.textContent = 'AI 分类';
@@ -1199,13 +1247,14 @@ async function showFollowupEditor(contact) {
     },
   });
 
-// 热刷新：主进程通知联系人数据变化时自动更新
-window.electronAPI.onContactsChanged(() => {
+// 统一刷新入口：主进程 IPC 事件 + 渲染进程内部事件都走同一条路
+function _onContactsSync() {
   if (document.getElementById('page-contacts')?.classList.contains('active')) {
-    CS.refreshContacts();
     renderContactsList();
   }
-});
+}
+window.electronAPI.onContactsChanged(_onContactsSync);
+document.addEventListener('contacts:sync', _onContactsSync);
 }
 // 编辑器 Tab 切换（模块级事件委托）
 // 编辑器 Tab 切换（mousedown 避免被 modal 按钮处理拦截）
@@ -1331,8 +1380,7 @@ function showContactEditor(contact) {
         tags: contact.tags,
       };
       await window.electronAPI.upsertContact(updated);
-      await CS.refreshContacts();
-      renderContactsList();
+      CS.syncContactsUI();
       showToast('已保存', 'ok');
     },
   });

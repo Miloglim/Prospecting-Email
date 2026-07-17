@@ -419,7 +419,7 @@ export async function startSend() {
   document.getElementById('queue-cancel').disabled = true;  // 发送中不可取消
   if (S.unsubscribeProgress) S.unsubscribeProgress();
 
-  S.unsubscribeProgress = await window.electronAPI.onSendProgress((data) => {
+  S.unsubscribeProgress = await window.electronAPI.onSendProgress(async (data) => {
     if (data.type === 'sent') {
       // 记录当前发送账号
       if (data.accountLabel) S._currentAccountLabel = data.accountLabel;
@@ -563,7 +563,8 @@ export async function startSend() {
         const alreadyAdvanced = S._advancedThisRun || new Set();
         const sentCompanies = S.queue.filter(e => e.status === 'sent' && e._stage && !companyHasPending[e.company] && !alreadyAdvanced.has(e.company)).map(e => e.company);
         if (sentCompanies.length) {
-          window.electronAPI.advanceStage([...new Set(sentCompanies)]);
+          const newHist = await window.electronAPI.advanceStage([...new Set(sentCompanies)]);
+          if (newHist) { Object.assign(S.contactsSendHistory, newHist); CS.syncContactsUI(); }
         }
         S._advancedThisRun = null; // 本轮结束，清理追踪
       }
@@ -609,7 +610,8 @@ export async function startSend() {
           const hasPending = items.some(e => e.status === 'pending');
           const allDone = items.every(e => e.status === 'sent');
           if (!hasPending && allDone) {
-            window.electronAPI.advanceStage([justDone.company]);
+            const newHist = await window.electronAPI.advanceStage([justDone.company]);
+            if (newHist) { Object.assign(S.contactsSendHistory, newHist); CS.syncContactsUI(); }
             if (S._advancedThisRun) S._advancedThisRun.add(justDone.company);
           }
         }

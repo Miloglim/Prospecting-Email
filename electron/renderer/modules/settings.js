@@ -581,6 +581,20 @@ function initAccountManager() {
     }
     const tr = document.getElementById('acct-test-result');
     if (tr) { tr.className = ''; tr.innerHTML = ''; }
+    // 专属签名链接（仅编辑已有账号时显示）
+    const sigLink = document.getElementById('acct-sig-link');
+    if (sigLink) {
+      if (id) {
+        sigLink.style.display = '';
+        sigLink.onclick = () => {
+          closeEditor();
+          S._sigTargetAccount = id;
+          document.querySelector('.nav-sub[data-page="signature"]')?.click();
+        };
+      } else {
+        sigLink.style.display = 'none';
+      }
+    }
     // ponytail: missing 仅开发调试用，客户端静默降级
     modal.style.display = 'flex';
     } catch (e) {

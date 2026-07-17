@@ -103,6 +103,12 @@ function register(ipcMain) {
     }
     cfg.smtpAccounts = accounts.filter(a => a.id !== id);
     _writeConfig(cfg);
+    // 同步清理专属签名文件
+    try {
+      const sigStore = require('../services/signature-store');
+      sigStore.init(APP_ROOT);
+      sigStore.deleteSignature(id);
+    } catch { /* 签名清理失败不影响主流程 */ }
     Log.info("账号", "删除: " + id);
     return { ok: true };
   });

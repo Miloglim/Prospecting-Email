@@ -175,11 +175,18 @@ const CS = {
   /** 异步加载联系人（首次缓存 / 强制刷新） */
   async refreshContacts() {
     S.contactsData = await window.electronAPI.getContacts();
-    // 联系人数据更新后，清除 ID 映射缓存，下次 _ensureIdMap() 自动重建
     delete S._companyNameToId;
     delete S._companyIdToName;
     if (_refreshCallbacks.contacts) _refreshCallbacks.contacts(S.contactsData);
     return S.contactsData;
+  },
+
+  // ── 统一刷新：联系人数据 + 发送历史 + UI ──────────────────────────────
+  /** ponytail: 任何地方改了联系人数据，调这一个函数即可。刷新 DB 数据 + 通知 UI。 */
+  async syncContactsUI() {
+    await this.refreshContacts();
+    await this.refreshContactsSendHistory();
+    document.dispatchEvent(new CustomEvent('contacts:sync'));
   },
 
   // ── 跨模块共享：模板库（4 个文件）─────────────────────────────────────

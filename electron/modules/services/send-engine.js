@@ -81,7 +81,7 @@ function _loadConfig(sendProgress) {
 // ── 发送引擎：构建上下文 ──────────────────────────────────────────────────
 function _buildContext(config) {
   const nodemailer = require('nodemailer');
-  const sigPath = path.join(APP_ROOT, 'send', 'signature.html');
+  const sigStore = require('./signature-store');
   const testMode = !!(config.test?.enabled && config.test?.email);
   const isBatch = (config.schedule?.mode || 'multi') === 'batch';
   const sc = config.schedule || {};
@@ -89,11 +89,22 @@ function _buildContext(config) {
 
   const dryRun = !!(config.test?.dryRun); // ponytail: 发信阻隔 — 流程完整但不真实发送
 
+  // 全局签名作为默认
+  const globalSigHtml = sigStore.readSignature(null);
+  const globalSigText = config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com';
+
+  // 每个账号预加载专属签名（signature-store 内部处理回退）
+  for (const a of accounts) {
+    a._sigHtml = sigStore.readSignature(a.id);
+    a._sigText = a.signatureText || globalSigText;
+    Log.info('发信', `签名: ${a.label || a.smtp?.user} → ${a._sigHtml === globalSigHtml ? '全局' : '专属'}`);
+  }
+
   const ctx = {
     config, testMode, dryRun, isBatch, nodemailer, accounts,
     logPath: path.join(APP_ROOT, 'send', testMode ? 'send-log-test.json' : 'send-log.json'),
-    sigHtml: fs.existsSync(sigPath) ? fs.readFileSync(sigPath, 'utf-8') : '',
-    sigText: config.signature?.text || '金颖哲 Zayne Jin | YQN Logistics\nzayne_jin@yqn.com | +86 18487665870 | www.yqn.com',
+    sigHtml: globalSigHtml,
+    sigText: globalSigText,
     senderAddr: config.sender?.email || 'zayne_jin@yqn.com',
     maxPerDay: accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0),
     startH: sc.start_hour_beijing ?? 19,
@@ -196,8 +207,11 @@ async function _sendOne(ctx, email, log, deps) {
   toList = toList.filter(addr => !alreadySent.has(addr.toLowerCase().trim()));
   if (!toList.length) return { ok: true, n: 0, skipped: true };
 
-  const { textBody, html } = buildContent(email.body || '', ctx.sigText, ctx.sigHtml);
-  const accountId = deps.currentAccount?.id || '';
+  const acct = deps.currentAccount;
+  const sigText = acct?._sigText || ctx.sigText;
+  const sigHtml = acct?._sigHtml || ctx.sigHtml;
+  const { textBody, html } = buildContent(email.body || '', sigText, sigHtml);
+  const accountId = acct?.id || '';
 
   const subject = ctx.testMode ? `[测试] ${email.subject}` : email.subject;
   const aTo = ctx.testMode ? (ctx.config.test?.email || ctx.senderAddr) : toList[0];

@@ -90,9 +90,17 @@ function register(ipcMain, deps) {
   ipcMain.handle('app:openLogFile', async () => shell.openPath(path.join(APP_ROOT, 'logs')));
 
   // ── 签名 ──
-  const sfp = path.join(APP_ROOT, 'send', 'signature.html');
-  ipcMain.handle('signature:load', async () => { try { if (fs.existsSync(sfp)) return { ok: true, html: fs.readFileSync(sfp, 'utf-8') }; } catch { /* 非关键 I/O 失败不影响主流程 */ } return { ok: true, html: '<div style="font-family:Arial"><p><strong>Zayne Jin</strong></p></div>' }; });
-  ipcMain.handle('signature:save', async (_e, html) => { const d = path.dirname(sfp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(sfp, html); return { ok: true }; });
+  const sigStore = require('../services/signature-store');
+  sigStore.init(APP_ROOT);
+  ipcMain.handle('signature:load', async (_e, accountId) => {
+    try {
+      const html = sigStore.readSignature(accountId || null);
+      return { ok: true, html };
+    } catch { return { ok: true, html: '<div style="font-family:Arial"><p><strong>Zayne Jin</strong></p></div>' }; }
+  });
+  ipcMain.handle('signature:save', async (_e, html, accountId) => {
+    return sigStore.writeSignature(html, accountId || null);
+  });
 
   // ── 设置 ──
   ipcMain.handle('config:load', async () => loadSearchConfig());

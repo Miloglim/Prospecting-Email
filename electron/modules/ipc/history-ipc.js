@@ -46,6 +46,10 @@ function _advanceCompany(name, newStage, reason) {
 }
 
 function register(ipcMain, deps) {
+  function _notify() {
+    try { deps?.mainWindow?.webContents.send('contacts:changed'); } catch { /* 窗口已关闭 */ }
+  }
+
   // ── 发送历史（纯 SQLite）──
   ipcMain.handle('history:get', async () => {
     try { return _buildHist(); } catch { return {}; }
@@ -64,6 +68,7 @@ function register(ipcMain, deps) {
       h[name] = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
       if (!h[name]?.startedAt) h[name].startedAt = now;
     }
+    _notify();
     return h;
   });
 
@@ -112,6 +117,7 @@ function register(ipcMain, deps) {
         contactsDb.update(ct.id, { last_sent_at: '', last_sent_acct: '' });
       }
     } catch { /* 降级 */ }
+    _notify();
     return { ok: true };
   });
 
