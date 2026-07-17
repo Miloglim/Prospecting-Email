@@ -495,6 +495,12 @@ function _pop3ReadMulti(sock, timeoutMs) {
       chunkCount++;
       byteCount += d.length;
       buf += d.toString('latin1');
+      // 单行错误响应（-ERR）→ 立即返回，不等终止符
+      if (byteCount < 200 && /^[\s\S]*\n/.test(buf) && /^\s*-ERR/i.test(buf)) {
+        clearTimeout(timer);
+        sock.removeListener('data', onData);
+        return resolve([buf.replace(/[\r\n].*/, '').trim()]);
+      }
       if (/\r?\n\.\r?\n/.test(buf)) {
         clearTimeout(timer);
         sock.removeListener('data', onData);

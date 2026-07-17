@@ -68,7 +68,7 @@ function register(ipcMain, deps) {
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
           clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
-          stage: c.stage || 'cold', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
+          stage: c.stage || 'cold', _status: c._status || '', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
         emailIndex.set(placeholder.toLowerCase(), existing[existing.length - 1]);
         noEmailImported++;
@@ -88,7 +88,7 @@ function register(ipcMain, deps) {
           firstName: c.firstName || '', lastName: c.lastName || '',
           contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
           clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
-          stage: c.stage || 'cold', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
+          stage: c.stage || 'cold', _status: c._status || '', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
         emailIndex.set(cleanEmail.toLowerCase(), existing[existing.length - 1]);
         continue;
@@ -115,6 +115,7 @@ function register(ipcMain, deps) {
         existingContact.assignee = c.assignee || existingContact.assignee || '';
         existingContact.contactPerson = c.contactPerson || existingContact.contactPerson || '';
         if (c.stage && c.stage !== (existingContact.stage || 'cold')) db.setStage(existingContact.id, c.stage, 'manual:import');
+        if (c._status) existingContact._status = c._status;
         // firstName/lastName：优先用导入值，否则从 contactName 拆分填充
         if (c.firstName || c.lastName) {
           existingContact.firstName = c.firstName || existingContact.firstName || '';
