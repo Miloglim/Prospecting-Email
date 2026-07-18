@@ -606,9 +606,21 @@ async function testConnection(cfg) {
   if (isPop3(cfg)) {
     try {
       const sock = await pop3Connect(cfg.host, cfg.port || 995);
-      await pop3ReadLine(sock, 15000);
-      await pop3Cmd(sock, `USER ${cfg.user}`);
-      await pop3Cmd(sock, `PASS ${cfg.pass}`);
+      const greeting = await pop3ReadLine(sock, 15000);
+      if (!greeting.startsWith('+OK')) {
+        sock.end();
+        return { ok: false, error: `服务器拒绝连接: ${greeting.slice(0, 100)}` };
+      }
+      const userRes = (await pop3Cmd(sock, `USER ${cfg.user}`))[0] || '';
+      if (!userRes.startsWith('+OK')) {
+        sock.write('QUIT\r\n'); sock.end();
+        return { ok: false, error: `用户名错误: ${userRes.slice(0, 100)}` };
+      }
+      const passRes = (await pop3Cmd(sock, `PASS ${cfg.pass}`))[0] || '';
+      if (!passRes.startsWith('+OK')) {
+        sock.write('QUIT\r\n'); sock.end();
+        return { ok: false, error: `密码错误或登录失败: ${passRes.slice(0, 100)}` };
+      }
       sock.write('QUIT\r\n');
       sock.end();
       return { ok: true, message: 'POP3 连接成功' };
