@@ -142,7 +142,7 @@ function update(id, data) {
     k = FIELD_ALIAS[k] || k;
     // 跳过 id、时间戳、JOIN 来的公司字段、旧 JSON 字段名
     if (k === "id" || k === "created_at" || k === "updated_at") continue;
-    if (k.startsWith("_") && k !== "_suspicious" && k !== "_extra") continue; // 旧内部字段跳过，_suspicious/_extra 保留
+    if (k.startsWith("_") && k !== "_suspicious" && k !== "_extra" && k !== "_status") continue; // 旧内部字段跳过，_suspicious/_extra 保留
     if (!VALID_COLS.has(k)) continue;
     if (k === "tags") { fields.push("tags = ?"); params.push(JSON.stringify(v || [])); continue; }
     if (k === "_extra") { fields.push("_extra = ?"); params.push(typeof v === 'object' ? JSON.stringify(v) : (v || '{}')); continue; }

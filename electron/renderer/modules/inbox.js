@@ -352,7 +352,7 @@ function renderInbox() {
             const lastStep = d.uidl ? 'UIDL→RETR' : d.stat ? 'UIDL' : d.auth ? 'STAT' : d.greet ? 'AUTH' : d.connect ? 'GREET' : 'CONNECT';
             const ms = d.total || 0;
             detail = ` (卡在${lastStep}, ${ms}ms: ${d.error})`;
-          } else if (d.step === 'STAT' && d.statTotal === 0) detail = ' (收件箱为空)';
+          } else if (d.statTotal === 0) detail = ' (收件箱为空)';
           else if (d.step === 'UIDL' && d.uidlCount === 0) detail = ' (UIDL解析失败)';
           else if (d.step === 'UIDL' && d.cursorValid) detail = ' (游标阻塞)';
           else if (d.step === 'FETCH') detail = ` (${d.fetchCount}封未解析)`;

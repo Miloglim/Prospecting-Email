@@ -254,4 +254,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 数据导出
   exportData: () => ipcRenderer.invoke("data:export"),
+
+  // 渲染进程日志 → 主进程统一写文件
+  log: (level, ctx, msg, data) => ipcRenderer.invoke("log:write", { level, ctx, msg, data }),
 });

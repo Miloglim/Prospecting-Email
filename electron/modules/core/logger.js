@@ -105,8 +105,9 @@ const Log = {
    * @param {*}      [data] - 附加数据
    */
   debug: (ctx, msg, data) => {
-    if (!_isDev) return;
-    _rawLog(_formatLine('DEBUG', ctx, msg, data));
+    const line = _formatLine('DEBUG', ctx, msg, data);
+    _writeFile(line);
+    if (_isDev) _rawLog(line);
   },
 
   /**

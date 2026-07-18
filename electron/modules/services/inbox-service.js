@@ -565,6 +565,10 @@ async function _pop3Fetch(cfg, sinceDays) {
             revUidMap[parts[1]] = n;
           }
         }
+        // 诊断：STAT 有邮件但 UIDL 解析出 0 条时，记录原始响应
+        if (statTotal > 0 && Object.keys(uidMap).length === 0) {
+          Log.error('[收件箱]', `POP3 ${cfg.user}: STAT=${statTotal}但UIDL解析为0 — 响应行数=${uidlRes.length}, 首行="${firstLine}", 前5行="${uidlRes.slice(0, 5).join(' | ')}"`);
+        }
       }
     } catch {
       useUidl = false;

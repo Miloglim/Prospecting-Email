@@ -79,5 +79,15 @@ process.on("unhandledRejection", (reason) => {
   _error("FATAL(unhandled):", reason?.stack || reason);
 });
 
+// ── 渲染进程日志桥接 ──────────────────────────────────────────────────────
+// 渲染进程通过 IPC 把日志发给主进程，统一写入日志文件
+try {
+  const { ipcMain } = require("electron");
+  ipcMain.handle("log:write", (_e, { level, ctx, msg, data }) => {
+    const fn = Log[level] || Log.info;
+    fn(`渲染:${ctx || "?"}`, msg, data);
+  });
+} catch { /* ipcMain 不可用（如非 Electron 环境） */ }
+
 // ── 导出（兼容旧引用：send-ipc.js 需要 logDir）────────────────────────────
 module.exports = { logDir: LOG_DIR, getLogDir };
