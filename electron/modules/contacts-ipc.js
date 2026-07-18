@@ -440,7 +440,13 @@ function register(ipcMain, deps) {
   // ── 单个联系人 upsert（email 唯一）─────────────────────────────────────
   ipcMain.handle('contacts:upsert', async (_e, contact) => {
     const email = (contact.email || '').toLowerCase().trim();
-    if (!email || !EMAIL_RE.test(contact.email)) return { ok: false, error: '无效邮箱' };
+
+    // 有 id → 走更新路径，放宽邮箱格式校验（兼容无 @ 的历史脏数据）
+    if (contact.id && db.getById(contact.id)) {
+      // 仅更新渲染层传过来的字段，不自动分类
+    } else if (!email || !EMAIL_RE.test(email)) {
+      return { ok: false, error: '无效邮箱' };
+    }
 
     const existing = db.getByEmail(email);
     // 预处理：名称拆分 + 公司解析
@@ -454,12 +460,13 @@ function register(ipcMain, deps) {
       contact.company = company;
       contact._suspicious = _suspicious;
     }
-    // ponytail: 渲染层可能传 client_type（snake_case）或 clientType（camelCase），两者都检查
+    // 只在渲染层明确传了 client_type/clientType 时才写入，不自动分类
     const ct = contact.clientType || contact.client_type;
-    if (!ct || ct === 'unlabeled') {
-      contact.clientType = classifyClient(contact.company || '', contact.category || '');
+    if (ct !== undefined && ct !== null) {
+      contact.clientType = ct;
     } else {
-      contact.clientType = ct; // 统一到 camelCase，避免 update() 中双重 key 覆盖
+      delete contact.clientType;
+      delete contact.client_type;
     }
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
