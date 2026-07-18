@@ -1,4 +1,4 @@
-// ── Prospector — CRM 漏斗管道 ──────────────────────────────────────────────
+// ── Prospector — CRM 跟进管道 ──────────────────────────────────────────────
 "use strict";
 
 import { escapeHtml, lucide, showToast } from './shared.js';
@@ -11,227 +11,163 @@ const STAGES = [
   { stage: "已流失", color: "#d93025" },
 ];
 
-let _pipelineData = null;   // { columns: [...] }
-let _expandedStage = null;  // 当前展开的阶段名
+let _pipelineData = null;
 let _currentDetailId = null;
 let _reminderTimers = {};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 初始化
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export async function initCrmPipeline() {
   await refreshPipeline();
 
-  const searchInput = document.getElementById('crm-search');
-  const countrySelect = document.getElementById('crm-country-filter');
-
-  if (searchInput) {
-    let _debounce;
-    searchInput.addEventListener('input', () => {
-      clearTimeout(_debounce);
-      _debounce = setTimeout(() => refreshPipeline(), 300);
-    });
-  }
-  if (countrySelect) {
-    countrySelect.addEventListener('change', () => refreshPipeline());
-  }
+  const si = document.getElementById('crm-search');
+  const cs = document.getElementById('crm-country-filter');
+  if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
+  if (cs) cs.addEventListener('change', refreshPipeline);
 
   window.electronAPI.onCrmChanged(() => refreshPipeline());
   setInterval(() => checkReminders(), 5 * 60 * 1000);
   checkReminders();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 漏斗渲染
-// ═══════════════════════════════════════════════════════════════════════════════
-
 async function refreshPipeline() {
-  const container = document.getElementById('crm-pipeline');
-  if (!container) return;
+  const el = document.getElementById('crm-pipeline');
+  if (!el) return;
 
   const search = document.getElementById('crm-search')?.value?.trim() || '';
   const country = document.getElementById('crm-country-filter')?.value || '';
 
   const r = await window.electronAPI.crmListPipeline({ search, country });
-  if (!r.ok) {
-    container.innerHTML = `<div class="crm-empty">加载失败: ${escapeHtml(r.error)}</div>`;
-    return;
-  }
+  if (!r.ok) { el.innerHTML = `<div class="crm-empty">${escapeHtml(r.error)}</div>`; return; }
 
   _pipelineData = r.data;
   const { columns } = r.data;
-  const maxCount = Math.max(...columns.map(c => c.contacts.length), 1);
   const hasAny = columns.some(c => c.contacts.length > 0);
 
   if (!hasAny) {
-    container.innerHTML = `<div class="crm-empty">
-      <p>暂无跟进中的客户</p>
-      <p style="font-size:12px;color:var(--text-secondary)">发送邮件后，已触达的客户会自动出现在这里</p>
-    </div>`;
+    el.innerHTML = `<div class="crm-empty"><p>暂无跟进中的客户</p><p style="font-size:12px;color:var(--text-secondary)">发送邮件后，已触达的客户会自动出现在这里</p></div>`;
     document.getElementById('crm-detail-panel').style.display = 'none';
     return;
   }
 
-  container.innerHTML = `
-    <div class="funnel-section">
-      ${columns.map(col => {
-        const pct = Math.max(Math.round((col.contacts.length / maxCount) * 100), 15);
-        const isExpanded = _expandedStage === col.stage;
-        const stageDef = STAGES.find(s => s.stage === col.stage) || { color: '#999' };
-        return `
-          <div class="funnel-row ${isExpanded ? 'expanded' : ''}" data-stage="${col.stage}">
-            <div class="funnel-bar" style="width:${pct}%;background:${stageDef.color}15;border-left:3px solid ${stageDef.color}" data-stage="${col.stage}">
-              <span class="funnel-dot" style="background:${stageDef.color}"></span>
-              <span class="funnel-label">${col.label}</span>
-              <span class="funnel-count">${col.contacts.length}</span>
-              <span class="funnel-arrow">${lucide(isExpanded ? 'chevron-down' : 'chevron-right', 14)}</span>
-            </div>
-            ${isExpanded ? renderContactList(col) : ''}
-          </div>`;
-      }).join('')}
-    </div>
-  `;
+  el.innerHTML = columns.map(col => renderStage(col)).join('');
 
-  // 点击漏斗条展开/收起
-  container.querySelectorAll('.funnel-bar').forEach(bar => {
-    bar.addEventListener('click', () => {
-      const stage = bar.dataset.stage;
-      _expandedStage = _expandedStage === stage ? null : stage;
-      refreshPipeline();
-    });
-  });
-
-  // 点击联系人行
-  container.querySelectorAll('.funnel-contact-row').forEach(row => {
+  el.querySelectorAll('.crm-contact-row').forEach(row => {
     row.addEventListener('click', () => {
-      const contactId = row.dataset.contactId;
-      openDetailPanel(contactId);
-      container.querySelectorAll('.funnel-contact-row').forEach(r => r.classList.remove('active'));
+      const cid = row.dataset.contactId;
+      openDetailPanel(cid);
+      el.querySelectorAll('.crm-contact-row').forEach(r => r.classList.remove('active'));
       row.classList.add('active');
     });
   });
 
-  // 阶段切换
-  container.querySelectorAll('.funnel-stage-select').forEach(sel => {
-    sel.addEventListener('click', async (e) => {
+  el.querySelectorAll('.crm-stage-badge').forEach(badge => {
+    badge.addEventListener('click', e => {
       e.stopPropagation();
-      const contactId = sel.dataset.contactId;
-      const currentStage = sel.dataset.stage;
-      showStagePicker(sel, contactId, currentStage);
+      showStagePicker(badge, badge.dataset.contactId, badge.dataset.stage);
     });
   });
 
-  // 恢复详情面板
   if (_currentDetailId) {
-    const activeRow = container.querySelector(`.funnel-contact-row[data-contact-id="${_currentDetailId}"]`);
-    if (activeRow) activeRow.classList.add('active');
-    else closeDetailPanel();
+    const row = el.querySelector(`.crm-contact-row[data-contact-id="${_currentDetailId}"]`);
+    if (row) row.classList.add('active'); else closeDetailPanel();
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 展开后的联系人列表
+// 阶段区块
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function renderContactList(col) {
-  const contacts = col.contacts;
-  if (!contacts.length) {
-    return `<div class="funnel-contact-list"><div class="funnel-contact-empty">该阶段暂无联系人</div></div>`;
-  }
+function renderStage(col) {
+  const sd = STAGES.find(s => s.stage === col.stage) || { color: '#999' };
+  const rows = col.contacts.length
+    ? col.contacts.map(c => renderContact(c, col.stage)).join('')
+    : `<div class="crm-contact-row crm-contact-none">暂无</div>`;
+
   return `
-    <div class="funnel-contact-list">
-      ${contacts.map(c => {
-        const reminder = c._extra?.crmReminder;
-        const nextAt = reminder?.nextFollowupAt;
-        let timeHtml = '';
-        if (nextAt) {
-          const t = new Date(nextAt).getTime();
-          const overdue = t <= Date.now();
-          const soon = !overdue && t <= Date.now() + 24 * 3600 * 1000;
-          timeHtml = `<span class="funnel-time ${overdue ? 'overdue' : soon ? 'soon' : ''}">${overdue ? '⏰ 逾期' : soon ? '⏰ ' + fmtDate(nextAt) : '📅 ' + fmtDate(nextAt)}</span>`;
-        }
-        const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
-        const color = STAGES.find(s => s.stage === col.stage)?.color || '#999';
-        return `
-          <div class="funnel-contact-row" data-contact-id="${c.id}">
-            <span class="funnel-contact-name">${escapeHtml(name)}</span>
-            <span class="funnel-contact-company">${escapeHtml(c.company || '—')}</span>
-            <span class="funnel-contact-country">${escapeHtml(c.country || '')}</span>
-            ${timeHtml}
-            <span class="funnel-stage-select" data-contact-id="${c.id}" data-stage="${col.stage}" style="background:${color}15;color:${color}" title="切换阶段">● ${col.stage}</span>
-          </div>`;
-      }).join('')}
+    <div class="crm-stage-block">
+      <div class="crm-stage-head" style="border-left:3px solid ${sd.color}">
+        <span class="crm-stage-dot" style="background:${sd.color}"></span>
+        <span class="crm-stage-label">${col.label}</span>
+        <span class="crm-stage-count">${col.contacts.length}</span>
+      </div>
+      <div class="crm-stage-body">${rows}</div>
+    </div>`;
+}
+
+function renderContact(c, stage) {
+  const reminder = c._extra?.crmReminder;
+  const nextAt = reminder?.nextFollowupAt;
+  let timeHtml = '';
+  if (nextAt) {
+    const t = new Date(nextAt).getTime();
+    const cls = t <= Date.now() ? 'overdue' : t <= Date.now() + 24*3600*1000 ? 'soon' : '';
+    timeHtml = `<span class="crm-time ${cls}">${t <= Date.now() ? '⏰ 逾期' : '⏰ ' + fmtDate(nextAt)}</span>`;
+  }
+  const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
+  const sd = STAGES.find(s => s.stage === stage) || { color: '#999' };
+
+  return `
+    <div class="crm-contact-row" data-contact-id="${c.id}">
+      <span class="crm-contact-name">${escapeHtml(name)}</span>
+      <span class="crm-contact-co">${escapeHtml(c.company || '—')}</span>
+      <span class="crm-contact-ctry">${escapeHtml(c.country || '')}</span>
+      ${timeHtml}
+      <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stage}" style="background:${sd.color}18;color:${sd.color}">${stage}</span>
     </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 阶段选择器
+// 阶段切换
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function showStagePicker(anchor, contactId, currentStage) {
+function showStagePicker(anchor, contactId, cur) {
   document.getElementById('stage-picker-popup')?.remove();
-  const popup = document.createElement('div');
-  popup.id = 'stage-picker-popup';
-  popup.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+  const p = document.createElement('div');
+  p.id = 'stage-picker-popup';
+  p.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
   const rect = anchor.getBoundingClientRect();
-  popup.style.left = Math.min(rect.left, window.innerWidth - 160) + 'px';
-  popup.style.top = (rect.bottom + 4 > window.innerHeight - 200 ? rect.top - 200 : rect.bottom + 4) + 'px';
+  p.style.left = Math.min(rect.left, window.innerWidth - 160) + 'px';
+  p.style.top = (rect.bottom + 4 > window.innerHeight - 200 ? rect.top - 200 : rect.bottom + 4) + 'px';
 
-  popup.innerHTML = STAGES.map(s => {
-    const isCurrent = s.stage === currentStage;
-    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${isCurrent ? 'font-weight:600' : ''}" data-stage="${s.stage}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">
-      <span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${isCurrent ? ' ✓' : ''} ${s.stage}
-    </div>`;
+  p.innerHTML = STAGES.map(s => {
+    const is = s.stage === cur;
+    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.stage}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.stage}</div>`;
   }).join('');
 
-  popup.querySelectorAll('[data-stage]').forEach(div => {
-    div.addEventListener('click', async () => {
-      const newStage = div.dataset.stage;
-      popup.remove();
-      if (newStage === currentStage) return;
-      const r = await window.electronAPI.crmSetStage(contactId, newStage);
-      if (r.ok) {
-        showToast(`已移至「${newStage}」`, 'ok');
-        await refreshPipeline();
-      } else {
-        showToast(r.error || '操作失败', 'err');
-      }
+  p.querySelectorAll('[data-s]').forEach(d => {
+    d.addEventListener('click', async () => {
+      const ns = d.dataset.s; p.remove();
+      if (ns === cur) return;
+      const r = await window.electronAPI.crmSetStage(contactId, ns);
+      showToast(r.ok ? `已移至「${ns}」` : r.error || '失败', r.ok ? 'ok' : 'err');
+      if (r.ok) refreshPipeline();
     });
   });
 
-  document.body.appendChild(popup);
-  const close = (ev) => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+  document.body.appendChild(p);
+  const close = ev => { if (!p.contains(ev.target)) { p.remove(); document.removeEventListener('click', close); } };
   setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 详情面板（保持不变）
+// 详情面板
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function openDetailPanel(contactId) {
   _currentDetailId = contactId;
   const panel = document.getElementById('crm-detail-panel');
   if (!panel) return;
-
   panel.style.display = 'flex';
-  panel.innerHTML = `<div class="crm-detail-loading">${lucide('loader-2', 16, 'spin')} 加载中...</div>`;
+  panel.innerHTML = `<div class="crm-detail-loading">${lucide('loader-2',16,'spin')} 加载中...</div>`;
 
   const r = await window.electronAPI.crmGetDetail(contactId);
-  if (!r.ok) {
-    panel.innerHTML = `<div class="crm-detail-error">加载失败: ${escapeHtml(r.error)}</div>`;
-    return;
-  }
+  if (!r.ok) { panel.innerHTML = `<div class="crm-detail-error">${escapeHtml(r.error)}</div>`; return; }
 
   const { contact, notes, interactions } = r.data;
   const prefs = contact._extra?.crmPreferences || {};
   const reminder = contact._extra?.crmReminder || {};
 
   panel.innerHTML = `
-    <div class="crm-detail-header">
-      <span class="crm-detail-name">${escapeHtml([contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email)}</span>
-      <button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x', 16)}</button>
-    </div>
+    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}</span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
     <div class="crm-detail-tabs">
       <button class="crm-tab active" data-tab="info">基本信息</button>
       <button class="crm-tab" data-tab="prefs">偏好设置</button>
@@ -239,74 +175,62 @@ async function openDetailPanel(contactId) {
       <button class="crm-tab" data-tab="timeline">时间线</button>
     </div>
     <div class="crm-detail-body">
-      <div class="crm-tab-content active" data-content="info">${renderInfoTab(contact)}</div>
-      <div class="crm-tab-content" data-content="prefs">${renderPrefsTab(contactId, prefs)}</div>
-      <div class="crm-tab-content" data-content="reminder">${renderReminderTab(contactId, reminder)}</div>
-      <div class="crm-tab-content" data-content="timeline">${renderTimelineTab(contactId, notes, interactions)}</div>
-    </div>
-  `;
+      <div class="crm-tab-content active" data-content="info">${infoTab(contact)}</div>
+      <div class="crm-tab-content" data-content="prefs">${prefsTab(contactId,prefs)}</div>
+      <div class="crm-tab-content" data-content="reminder">${reminderTab(contactId,reminder)}</div>
+      <div class="crm-tab-content" data-content="timeline">${timelineTab(contactId,notes,interactions)}</div>
+    </div>`;
 
-  // Tab 切换
   panel.querySelectorAll('.crm-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       panel.querySelectorAll('.crm-tab').forEach(t => t.classList.remove('active'));
       panel.querySelectorAll('.crm-tab-content').forEach(c => c.classList.remove('active'));
       tab.classList.add('active');
-      const target = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
-      if (target) target.classList.add('active');
+      const tgt = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
+      if (tgt) tgt.classList.add('active');
     });
   });
 
   document.getElementById('crm-detail-close')?.addEventListener('click', closeDetailPanel);
 
   // 偏好保存
-  panel.querySelectorAll('.crm-pref-input').forEach(input => {
-    let _debounce;
-    input.addEventListener('change', () => {
-      clearTimeout(_debounce);
-      _debounce = setTimeout(async () => {
+  panel.querySelectorAll('.crm-pref-input').forEach(inp => {
+    let db;
+    inp.addEventListener('change', () => {
+      clearTimeout(db);
+      db = setTimeout(async () => {
         const prefs = {};
         panel.querySelectorAll('.crm-pref-input').forEach(el => {
-          const key = el.dataset.prefKey;
-          if (key === 'cargoTypes' && el.type === 'checkbox') {
-            if (el.checked) prefs[key] = [...(prefs[key] || []), el.value];
-          } else if (key !== 'cargoTypes') {
-            prefs[key] = el.value;
-          }
+          const k = el.dataset.prefKey;
+          if (k === 'cargoTypes' && el.type === 'checkbox') { if (el.checked) prefs[k] = [...(prefs[k]||[]), el.value]; }
+          else if (k !== 'cargoTypes') prefs[k] = el.value;
         });
-        const checkedCargo = panel.querySelectorAll('.crm-pref-input[data-pref-key="cargoTypes"]:checked');
-        if (checkedCargo.length) prefs.cargoTypes = [...checkedCargo].map(cb => cb.value);
+        const cc = panel.querySelectorAll('.crm-pref-input[data-pref-key="cargoTypes"]:checked');
+        if (cc.length) prefs.cargoTypes = [...cc].map(cb => cb.value);
         await window.electronAPI.crmUpdateExtra(contactId, { crmPreferences: prefs });
       }, 300);
     });
   });
 
   // 提醒保存
-  panel.querySelectorAll('.crm-reminder-input').forEach(input => {
-    input.addEventListener('change', async () => {
-      const patch = {};
-      panel.querySelectorAll('.crm-reminder-input').forEach(el => { patch[el.dataset.remKey] = el.value; });
-      const r = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: patch });
-      if (r.ok) { scheduleReminderTimer(contactId, patch.nextFollowupAt); showToast('提醒已更新', 'ok'); }
+  panel.querySelectorAll('.crm-reminder-input').forEach(inp => {
+    inp.addEventListener('change', async () => {
+      const p = {}; panel.querySelectorAll('.crm-reminder-input').forEach(el => p[el.dataset.remKey] = el.value);
+      const r2 = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: p });
+      if (r2.ok) { scheduleReminder(contactId, p.nextFollowupAt); showToast('已更新','ok'); }
     });
   });
 
   // 备注
-  const noteBtn = panel.querySelector('#crm-add-note-btn');
-  const noteInput = panel.querySelector('#crm-note-input');
-  if (noteBtn && noteInput) {
-    noteBtn.addEventListener('click', async () => {
-      const content = noteInput.value.trim();
-      if (!content) return;
-      const r2 = await window.electronAPI.crmSaveNote(contactId, content);
-      if (r2.ok) {
-        noteInput.value = '';
-        showToast('备注已保存', 'ok');
-        const detail = await window.electronAPI.crmGetDetail(contactId);
-        if (detail.ok) {
-          const tl = panel.querySelector('[data-content="timeline"]');
-          if (tl) tl.innerHTML = renderTimelineTab(contactId, detail.data.notes, detail.data.interactions);
-        }
+  const nb = panel.querySelector('#crm-add-note-btn');
+  const ni = panel.querySelector('#crm-note-input');
+  if (nb && ni) {
+    nb.addEventListener('click', async () => {
+      const c = ni.value.trim(); if (!c) return;
+      const r3 = await window.electronAPI.crmSaveNote(contactId, c);
+      if (r3.ok) { ni.value = ''; showToast('已保存','ok');
+        const d = await window.electronAPI.crmGetDetail(contactId);
+        if (d.ok) { const tl = panel.querySelector('[data-content="timeline"]'); if (tl) tl.innerHTML = timelineTab(contactId, d.data.notes, d.data.interactions); }
       }
     });
   }
@@ -314,87 +238,62 @@ async function openDetailPanel(contactId) {
 
 function closeDetailPanel() {
   _currentDetailId = null;
-  const panel = document.getElementById('crm-detail-panel');
-  if (panel) panel.style.display = 'none';
+  const p = document.getElementById('crm-detail-panel');
+  if (p) p.style.display = 'none';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Tab 渲染
+// Tab 内容
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function renderInfoTab(contact) {
-  const rows = [
-    ['姓名', [contact.firstName, contact.lastName].filter(Boolean).join(' ')],
-    ['邮箱', contact.email], ['公司', contact.company],
-    ['国家', contact.country], ['职位', contact.title || contact.position],
-    ['电话', contact.phone], ['LinkedIn', contact.linkedin],
-    ['阶段', contact.opp_stage || contact._status],
-  ];
-  return rows.map(([l, v]) => `<div class="crm-field-row"><label>${l}</label><span>${escapeHtml(v || '—')}</span></div>`).join('');
+function infoTab(c) {
+  return [['姓名',[c.firstName,c.lastName].filter(Boolean).join(' ')],['邮箱',c.email],['公司',c.company],['国家',c.country],['职位',c.title||c.position],['电话',c.phone],['LinkedIn',c.linkedin],['阶段',c.opp_stage||c._status]]
+    .map(([l,v]) => `<div class="crm-field-row"><label>${l}</label><span>${escapeHtml(v||'—')}</span></div>`).join('');
 }
 
-function renderPrefsTab(contactId, prefs) {
-  const ROUTES = ['南美西','南美东','加勒比','中美','墨西哥','欧洲','亚洲','非洲'];
-  const ROLES = ['决策者','影响者','信息提供者'];
-  const SENS = ['高','中','低'];
-  const VOLS = ['<100TEU','100-500TEU','500-2000TEU','>2000TEU'];
-  const CARGOS = ['普货','危险品','冷藏','超规'];
-  const sel = (k, opts, cur) => `<select class="crm-pref-input" data-pref-key="${k}"><option value="">—</option>${opts.map(o => `<option value="${o}" ${o===cur?'selected':''}>${o}</option>`).join('')}</select>`;
-
+function prefsTab(cid, prefs) {
+  const sel = (k,o,v) => `<select class="crm-pref-input" data-pref-key="${k}"><option value="">—</option>${o.map(x => `<option value="${x}" ${x===v?'selected':''}>${x}</option>`).join('')}</select>`;
   return `
-    <div class="crm-field-row"><label>偏好航线</label>${sel('preferredRoutes', ROUTES, prefs.preferredRoutes)}</div>
-    <div class="crm-field-row"><label>货物类型</label><div style="display:flex;flex-wrap:wrap;gap:4px">${CARGOS.map(ct => `<label style="font-size:11px;display:flex;align-items:center;gap:3px"><input type="checkbox" class="crm-pref-input" data-pref-key="cargoTypes" value="${ct}" ${(prefs.cargoTypes||[]).includes(ct)?'checked':''}>${ct}</label>`).join('')}</div></div>
-    <div class="crm-field-row"><label>决策角色</label>${sel('decisionRole', ROLES, prefs.decisionRole)}</div>
-    <div class="crm-field-row"><label>价格敏感度</label>${sel('priceSensitivity', SENS, prefs.priceSensitivity)}</div>
+    <div class="crm-field-row"><label>偏好航线</label>${sel('preferredRoutes',['南美西','南美东','加勒比','中美','墨西哥','欧洲','亚洲','非洲'],prefs.preferredRoutes)}</div>
+    <div class="crm-field-row"><label>货物类型</label><div style="display:flex;flex-wrap:wrap;gap:4px">${['普货','危险品','冷藏','超规'].map(ct => `<label style="font-size:11px;display:flex;align-items:center;gap:3px"><input type="checkbox" class="crm-pref-input" data-pref-key="cargoTypes" value="${ct}" ${(prefs.cargoTypes||[]).includes(ct)?'checked':''}>${ct}</label>`).join('')}</div></div>
+    <div class="crm-field-row"><label>决策角色</label>${sel('decisionRole',['决策者','影响者','信息提供者'],prefs.decisionRole)}</div>
+    <div class="crm-field-row"><label>价格敏感度</label>${sel('priceSensitivity',['高','中','低'],prefs.priceSensitivity)}</div>
     <div class="crm-field-row"><label>偏好港口</label><input class="crm-pref-input" data-pref-key="preferredPorts" value="${escapeHtml(prefs.preferredPorts||'')}" placeholder="上海/宁波"></div>
-    <div class="crm-field-row"><label>年货量</label>${sel('annualVolume', VOLS, prefs.annualVolume)}</div>
-    <div class="crm-field-row"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" rows="3" placeholder="自由备注...">${escapeHtml(prefs.memo||'')}</textarea></div>
-  `;
+    <div class="crm-field-row"><label>年货量</label>${sel('annualVolume',['<100TEU','100-500TEU','500-2000TEU','>2000TEU'],prefs.annualVolume)}</div>
+    <div class="crm-field-row"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" rows="3" placeholder="自由备注...">${escapeHtml(prefs.memo||'')}</textarea></div>`;
 }
 
-function renderReminderTab(contactId, reminder) {
-  const nextAt = reminder.nextFollowupAt || '';
-  const note = reminder.followupNote || '';
+function reminderTab(cid, r) {
+  const na = r.nextFollowupAt || '', fn = r.followupNote || '';
   return `
-    <div class="crm-field-row"><label>下次跟进日期</label><input type="datetime-local" class="crm-reminder-input" data-rem-key="nextFollowupAt" value="${escapeHtml(nextAt)}"></div>
-    <div class="crm-field-row"><label>提醒备注</label><input class="crm-reminder-input" data-rem-key="followupNote" value="${escapeHtml(note)}" placeholder="如：确认报价、发合同"></div>
-    ${nextAt ? `<div class="crm-field-row"><span style="font-size:11px;color:var(--text-secondary)">${isOverdue(nextAt)?'🔴 已逾期':isSoon(nextAt)?'🟠 即将到期':'🟢 正常'}</span></div>` : ''}
-  `;
+    <div class="crm-field-row"><label>下次跟进日期</label><input type="datetime-local" class="crm-reminder-input" data-rem-key="nextFollowupAt" value="${escapeHtml(na)}"></div>
+    <div class="crm-field-row"><label>提醒备注</label><input class="crm-reminder-input" data-rem-key="followupNote" value="${escapeHtml(fn)}" placeholder="如：确认报价、发合同"></div>
+    ${na ? `<div class="crm-field-row"><span style="font-size:11px;color:var(--text-secondary)">${isOverdue(na)?'🔴 已逾期':isSoon(na)?'🟠 即将到期':'🟢 正常'}</span></div>` : ''}`;
 }
 
-function renderTimelineTab(contactId, notes, interactions) {
+function timelineTab(cid, notes, interactions) {
   const items = [
     ...((notes||[]).map(n => ({ type:'note', time:n.created_at, content:n.content }))),
     ...((interactions||[]).map(i => ({ type:i.type, time:i.created_at, subject:i.subject, snippet:i.snippet }))),
-  ].sort((a,b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 50);
+  ].sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
-  const listHtml = items.length ? items.map(item => `
-    <div class="crm-timeline-item">
-      <div class="crm-timeline-dot ${item.type==='note'?'is-note':''}"></div>
-      <div class="crm-timeline-body">
-        <div class="crm-timeline-time">${fmtDateTime(item.time)}</div>
-        ${item.subject?`<div class="crm-timeline-subject">${escapeHtml(item.subject)}</div>`:''}
-        <div class="crm-timeline-snippet">${escapeHtml(item.snippet||item.content||'')}</div>
-      </div>
-    </div>`).join('') : '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无记录</div>';
+  const list = items.length ? items.map(i => `
+    <div class="crm-timeline-item"><div class="crm-timeline-dot ${i.type==='note'?'is-note':''}"></div><div class="crm-timeline-body"><div class="crm-timeline-time">${fmtDT(i.time)}</div>${i.subject?`<div class="crm-timeline-subject">${escapeHtml(i.subject)}</div>`:''}<div class="crm-timeline-snippet">${escapeHtml(i.snippet||i.content||'')}</div></div></div>`).join('')
+    : '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无记录</div>';
 
-  return listHtml + `
-    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
-      <textarea id="crm-note-input" rows="2" placeholder="添加跟进备注..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></textarea>
-      <button id="crm-add-note-btn" class="primary" style="font-size:12px;padding:6px 14px;margin-top:6px">保存备注</button>
-    </div>`;
+  return list + `<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"><textarea id="crm-note-input" rows="2" placeholder="添加跟进备注..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></textarea><button id="crm-add-note-btn" class="primary" style="font-size:12px;padding:6px 14px;margin-top:6px">保存备注</button></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 提醒管理
+// 提醒
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function scheduleReminderTimer(contactId, nextAt) {
-  if (_reminderTimers[contactId]) { clearTimeout(_reminderTimers[contactId]); delete _reminderTimers[contactId]; }
-  if (!nextAt) return;
-  const delay = new Date(nextAt).getTime() - Date.now();
-  if (delay <= 0) return;
-  _reminderTimers[contactId] = setTimeout(() => { refreshPipeline(); delete _reminderTimers[contactId]; }, delay);
+function scheduleReminder(cid, na) {
+  if (_reminderTimers[cid]) { clearTimeout(_reminderTimers[cid]); delete _reminderTimers[cid]; }
+  if (!na) return;
+  const d = new Date(na).getTime() - Date.now();
+  if (d <= 0) return;
+  _reminderTimers[cid] = setTimeout(() => { refreshPipeline(); delete _reminderTimers[cid]; }, d);
 }
 
 async function checkReminders() {
@@ -403,22 +302,18 @@ async function checkReminders() {
     if (!r.ok) return;
     const dot = document.getElementById('crm-nav-dot');
     if (dot) {
-      const total = (r.data.due?.length || 0) + (r.data.overdue?.length || 0);
-      dot.style.display = total > 0 ? 'inline-block' : 'none';
-      dot.textContent = total > 9 ? '9+' : String(total);
+      const n = (r.data.due?.length||0)+(r.data.overdue?.length||0);
+      dot.style.display = n>0?'inline-block':'none';
+      dot.textContent = n>9?'9+':String(n);
     }
-  } catch { /* 静默 */ }
+  } catch {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 工具
-// ═══════════════════════════════════════════════════════════════════════════════
+function fmtDate(i) { try { const d=new Date(i); return `${d.getMonth()+1}/${d.getDate()}`; } catch { return ''; } }
+function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return i||''; } }
+function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch { return false; } }
+function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
 
-function fmtDate(iso) { try { const d = new Date(iso); return `${d.getMonth()+1}/${d.getDate()}`; } catch { return ''; } }
-function fmtDateTime(iso) { try { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return iso||''; } }
-function isOverdue(iso) { try { return new Date(iso).getTime() <= Date.now(); } catch { return false; } }
-function isSoon(iso) { try { return new Date(iso).getTime() <= Date.now() + 24*3600*1000; } catch { return false; } }
-
-// ── 页面处理器 ──────────────────────────────────────────────────────────────
 window.__pageHandlers = window.__pageHandlers || {};
 window.__pageHandlers['crm'] = initCrmPipeline;
