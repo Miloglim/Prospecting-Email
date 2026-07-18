@@ -4,11 +4,11 @@
 import { escapeHtml, lucide, showToast } from './shared.js';
 
 const STAGES = [
-  { stage: "触达中", color: "#ff9800" },
-  { stage: "报价中", color: "#2196f3" },
-  { stage: "试单", color: "#8e24aa" },
-  { stage: "合作中", color: "#4caf50" },
-  { stage: "已流失", color: "#d93025" },
+  { stage: "有回复",   color: "#22a644" },
+  { stage: "自动回复", color: "#e6a817" },
+  { stage: "已触达",   color: "#3b82f6" },
+  { stage: "退信",     color: "#d93025" },
+  { stage: "未标签",   color: "#9e9e9e" },
 ];
 
 let _pipelineData = null;

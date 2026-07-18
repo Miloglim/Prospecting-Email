@@ -8,15 +8,24 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段定义 */
+/** 管道阶段定义 — 对齐联系人列表标签字段 */
 const PIPELINE_STAGES = [
-  { stage: "触达中", label: "触达中", color: "#ff9800" },
-  { stage: "报价中", label: "报价中", color: "#2196f3" },
-  { stage: "试单", label: "试单", color: "#8e24aa" },
-  { stage: "合作中", label: "合作中", color: "#4caf50" },
-  { stage: "已流失", label: "已流失", color: "#d93025" },
+  { stage: "有回复",   color: "#22a644" },
+  { stage: "自动回复", color: "#e6a817" },
+  { stage: "已触达",   color: "#3b82f6" },
+  { stage: "退信",     color: "#d93025" },
+  { stage: "未标签",   color: "#9e9e9e" },
 ];
 
+// 标签匹配优先级：有回复 > 自动回复 > 已触达 > 退信 > 未标签
+const TAG_RULES = [
+  { stage: "有回复",   tags: ["replied", "有回复"] },
+  { stage: "自动回复", tags: ["autoreply", "auto_reply", "自动回复"] },
+  { stage: "已触达",   tags: ["reached", "已触达"] },
+  { stage: "退信",     tags: ["bounced_by_contact"] },
+];
+
+/** opp_stage 手动阶段白名单 */
 const MANUAL_STAGES = ["报价中", "试单", "合作中", "已流失"];
 
 /** _extra.crmPreferences 白名单 */
@@ -30,68 +39,52 @@ const REMINDER_KEYS = ["nextFollowupAt", "followupNote"];
 
 // ── 管道查询 ──────────────────────────────────────────────────────────────────
 
-/**
- * 获取管道数据，按阶段分列
- * @param {{ search?: string, country?: string }} filters
- * @returns {{ columns: Array<{ stage: string, label: string, color: string, contacts: object[] }> }}
- */
 function listPipeline(filters = {}) {
   const db = getDb();
 
-  // "触达中" 列：自动识别 _status 已触达的客户
-  const autoParams = [];
-  let autoWhere = `c._status IN ('已触达', '有回复', '自动回复', 'reached', 'replied', 'autoreply') AND (c.opp_stage = '待开发' OR c.opp_stage = '' OR c.opp_stage IS NULL)`;
+  const params = [];
+  let where = "1=1";
   if (filters.search) {
     const q = `%${filters.search.toLowerCase()}%`;
-    autoWhere += ` AND (lower(co.name) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.email) LIKE ?)`;
-    autoParams.push(q, q, q, q);
+    where += ` AND (lower(co.name) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.email) LIKE ?)`;
+    params.push(q, q, q, q);
   }
   if (filters.country) {
-    autoWhere += ` AND co.country = ?`;
-    autoParams.push(filters.country);
+    where += ` AND co.country = ?`;
+    params.push(filters.country);
   }
 
-  const autoContacts = db.prepare(
+  // 排除 opp_stage 已手动归入报价中/试单/合作中/已流失的联系人（这些由 CRM 人工管）
+  const manualSet = new Set(MANUAL_STAGES);
+  const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
             c.phone, c.linkedin, c.position, c.contact_name,
-            c.client_type, c.stage, c._status, c.opp_stage, c.tags,
+            c.client_type, c.stage, c.tags, c.opp_stage,
             c._extra, c.last_sent_at,
             co.name as company_name, co.country as company_country, co.website as company_website
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
-     WHERE ${autoWhere}
+     WHERE ${where}
      ORDER BY c.last_sent_at DESC`
-  ).all(...autoParams).map(_normalizeRow);
+  ).all(...params).map(_normalizeRow).filter(c => !manualSet.has(c.opp_stage));
 
-  // 手动阶段列（报价中/试单/合作中/已流失）
-  const columns = PIPELINE_STAGES.map(stageDef => {
-    if (stageDef.stage === "触达中") {
-      return { ...stageDef, contacts: autoContacts };
-    }
-    const params = [stageDef.stage];
-    let where = `c.opp_stage = ?`;
-    if (filters.search) {
-      const q = `%${filters.search.toLowerCase()}%`;
-      where += ` AND (lower(co.name) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.email) LIKE ?)`;
-      params.push(q, q, q, q);
-    }
-    if (filters.country) {
-      where += ` AND co.country = ?`;
-      params.push(filters.country);
-    }
+  // 按标签分类
+  const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
+  const untagged = [];
 
-    const contacts = db.prepare(
-      `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
-              c.phone, c.linkedin, c.position, c.contact_name,
-              c.client_type, c.stage, c._status, c.opp_stage, c.tags,
-              c._extra, c.last_sent_at,
-              co.name as company_name, co.country as company_country, co.website as company_website
-       FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
-       WHERE ${where}
-       ORDER BY c.updated_at DESC`
-    ).all(...params).map(_normalizeRow);
-
-    return { ...stageDef, contacts };
-  });
+  for (const c of allContacts) {
+    const tags = c.tags || [];
+    let matched = false;
+    for (const rule of TAG_RULES) {
+      if (tags.some(t => rule.tags.includes(t))) {
+        const col = columns.find(x => x.stage === rule.stage);
+        if (col) { col.contacts.push(c); matched = true; }
+        break;
+      }
+    }
+    if (!matched) untagged.push(c);
+  }
+  const untaggedCol = columns.find(x => x.stage === "未标签");
+  if (untaggedCol) untaggedCol.contacts = untagged;
 
   return { columns };
 }
@@ -112,25 +105,24 @@ function setStage(contactId, newStage) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
-  const oldStage = contact.opp_stage || "待开发";
-  contactsDb.update(contactId, { opp_stage: newStage });
+  const oldTags = contact.tags || [];
+  // 清除旧标签类别，写入新标签
+  const ALL_TAG_VALS = TAG_RULES.flatMap(r => r.tags);
+  const newTags = oldTags.filter(t => !ALL_TAG_VALS.includes(t));
+  const rule = TAG_RULES.find(r => r.stage === newStage);
+  if (rule) newTags.push(rule.tags[0]); // 用标准 key（英文）
+  contactsDb.update(contactId, { tags: newTags });
 
-  // 审计记录
   try {
     interactionsDb.add({
-      contact_id: contactId,
-      company_id: contact.company_id || "",
-      type: "stage_changed",
-      direction: "internal",
-      subject: "阶段变更",
-      snippet: `${oldStage} → ${newStage}`,
+      contact_id: contactId, company_id: contact.company_id || "",
+      type: "stage_changed", direction: "internal",
+      subject: "标签变更", snippet: `${oldTags.join(',') || '无'} → ${newTags.join(',')}`,
     });
-  } catch (e) {
-    Log.error("CRM", "写审计记录失败", e.stack);
-  }
+  } catch (e) { Log.error("CRM", "写审计记录失败", e.stack); }
 
-  Log.info("CRM", "阶段变更", { contactId, from: oldStage, to: newStage });
-  return { ok: true, data: { id: contactId, opp_stage: newStage } };
+  Log.info("CRM", "标签变更", { contactId, newTags });
+  return { ok: true, data: { id: contactId, tags: newTags } };
 }
 
 // ── 扩展字段更新 ──────────────────────────────────────────────────────────────
@@ -220,18 +212,14 @@ function saveNote(contactId, content) {
  */
 function checkReminders() {
   const db = getDb();
-  const now = new Date().toISOString();
-  const tomorrow = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 
-  // 查所有在 CRM 管道中且有 nextFollowupAt 的联系人
+  // 查所有有 nextFollowupAt 的联系人（不限标签/阶段）
   const rows = db.prepare(
-    `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.opp_stage,
+    `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.tags, c.opp_stage,
             co.name as company_name, co.country as company_country
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
-     WHERE c._extra LIKE '%nextFollowupAt%'
-       AND (c.opp_stage IN (${MANUAL_STAGES.map(() => "?").join(",")})
-            OR c._status IN ('已触达', '有回复', '自动回复', 'reached', 'replied', 'autoreply'))`
-  ).all(...MANUAL_STAGES).map(r => {
+     WHERE c._extra LIKE '%nextFollowupAt%'`
+  ).all().map(r => {
     try { r._extra = JSON.parse(r._extra || "{}"); } catch { r._extra = {}; }
     return r;
   });
