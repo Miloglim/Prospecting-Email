@@ -8,7 +8,7 @@
 ## 1. 需求摘要
 
 - 看板管道视图，按销售阶段分列展示联系人卡片
-- 仅展示已进入 CRM 管道的客户（`opp_stage` 非空且非"待开发"）
+- 自动识别：`_status` 为"已触达/有回复/自动回复"的客户自动进入"触达中"列，无需手动操作
 - 提醒式跟进：设置下次跟进日期，到期界面提醒（本地定时器 + 轮询兜底）
 - 客户偏好（结构化字段 + 自由备注混合，存 `_extra` JSON）
 - 实时热读写 SQLite，WAL 模式，编辑即保存（300ms 防抖）
@@ -37,7 +37,7 @@ renderer/
 ├── modules/
 │   ├── crm-pipeline.js            ← NEW 看板渲染 + 筛选 + 阶段切换
 │   ├── crm-detail-panel.js        ← NEW 右侧详情面板（4 Tab）
-│   ├── contacts.js                ← 追加"加入 CRM"按钮（最小改动）
+│   ├── contacts.js                ← 零改动
 │
 ├── index.html                     ← 追加导航项 + 页面容器 DOM
 ├── styles.css                     ← 追加 CRM 页面样式
@@ -64,37 +64,41 @@ renderer/
 | 追加 | `preload.js` | +6 条 IPC 桥接 |
 | 新建 | `renderer/modules/crm-pipeline.js` | ~200 行 |
 | 新建 | `renderer/modules/crm-detail-panel.js` | ~200 行 |
-| 微调 | `renderer/modules/contacts.js` | +1 个"加入 CRM"按钮 |
 | 追加 | `renderer/index.html` | +1 导航项 + 1 页面容器 |
 | 追加 | `renderer/styles.css` | +看板 + 面板样式 |
 
-**不动的文件**：`contacts-db.js`、`company-state.js`、`interactions-db.js`、其他渲染模块
+**不动的文件**：`contacts-db.js`、`company-state.js`、`interactions-db.js`、`contacts.js`、其他渲染模块
 
 ---
 
 ## 3. 数据模型（v2 修正）
 
-### 3.1 管道阶段 —— 用 `contacts.opp_stage` 列（不用 tags JSON）
+### 3.1 管道列定义 + 自动识别规则
 
-**原方案问题**：`contacts.tags` JSON 数组存的是行为标签（replied / bounced_by_contact / autoreply），和管道阶段（触达中 → 报价中 → 试单 → 合作中 → 已流失）是两个维度。混淆会导致查询无法走索引、标签语义混乱。
+**入口自动识别**：发送系统发邮件后会将 `_status` 设为 `'已触达'`。CRM 管道自动识别这些联系人，将其归入"触达中"列。
 
-**修正**：管道阶段使用已有的 `contacts.opp_stage` 列（TEXT，默认值 `'待开发'`），加一条索引：
+管道列的数据来源分两类：
 
+| 列 | 数据来源 | 规则 |
+|---|---|---|
+| **触达中** | `_status` 自动驱动 | `_status IN ('已触达', '有回复', '自动回复')` 且 `opp_stage` 仍为默认值（`'待开发'` 或空） |
+| **报价中 / 试单 / 合作中 / 已流失** | `opp_stage` 手动驱动 | 用户在 CRM 中手动切换阶段后，以 `opp_stage` 值为准 |
+
+**切换逻辑**：当用户在 CRM 中将联系人从"触达中"拖到"报价中"时 → `opp_stage` 从 `'待开发'` 变为 `'报价中'`，此后该联系人**不再**根据 `_status` 自动归类，以 `opp_stage` 为准。
+
+查询 SQL 示例：
 ```sql
-CREATE INDEX IF NOT EXISTS idx_contacts_opp_stage ON contacts(opp_stage);
+-- "触达中" 列：自动识别
+SELECT ... FROM contacts c LEFT JOIN companies co
+WHERE c._status IN ('已触达', '有回复', '自动回复')
+  AND (c.opp_stage = '待开发' OR c.opp_stage = '' OR c.opp_stage IS NULL)
+
+-- "报价中" 列：手动设置
+SELECT ... FROM contacts c LEFT JOIN companies co
+WHERE c.opp_stage = '报价中'
 ```
 
-| opp_stage 值 | 显示名 | 颜色 | 含义 |
-|---|---|---|---|
-| `触达中` | 触达中 | #ff9800 | 已联系待回复 |
-| `报价中` | 报价中 | #2196f3 | 已发报价 |
-| `试单` | 试单 | #8e24aa | 小批量试单 |
-| `合作中` | 合作中 | #4caf50 | 稳定合作 |
-| `已流失` | 已流失 | #d93025 | 不再回复 |
-
-- `tags` 保持不变，继续存行为标签（replied / bounced_by_contact 等）
-- 管道筛选 `WHERE opp_stage IN (...)` 走索引，性能 O(log n)
-- 查询比 `json_extract` + `LIKE` 快一个数量级
+**不需要手动"加入 CRM"按钮**——只要系统发了邮件、`_status` 变了，联系人自动出现在管道里。
 
 ### 3.2 已有 `opportunities` 表 —— v1 不使用
 
@@ -264,10 +268,17 @@ const CRM = {
 
 ## 6. 关键交互流程
 
-### 6.1 联系人 → CRM（入口）
+### 6.1 自动进入 CRM（无需手动操作）
 
-现有联系人列表，对 `opp_stage === '待开发'` 的联系人显示"加入 CRM"按钮。
-点击 → `contacts-db.update(id, { opp_stage: '触达中' })` → 该联系人出现在 CRM 看板"触达中"列。
+```
+发送系统发邮件 → _status 变为 '已触达'
+  → CRM 管道"触达中"列自动出现该联系人
+  → 无需任何手动操作
+```
+
+用户在 CRM 中首次将联系人从"触达中"推进到"报价中"时：
+→ `opp_stage` 从 `'待开发'` 变为 `'报价中'`
+→ 此后该联系人脱离自动识别，以 `opp_stage` 为准驱动所在列
 
 ### 6.2 阶段切换 + 审计
 
