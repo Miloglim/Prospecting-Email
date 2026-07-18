@@ -148,42 +148,53 @@ function _bindInboxDelegates() {
     const idx = parseInt(item.dataset.idx);
     const m = _mails[idx];
     if (!m) return;
-    // 右键的邮件不在选中集 → 清空并仅选中当前
+    // 右键的邮件不在选中集 → 先选中，再弹菜单
     if (!_selectedSet.has(idx)) {
       _selectedSet = new Set([idx]);
       _selectedIdx = idx;
       renderInbox();
+      // 渲染后 DOM 已更新，延迟弹出菜单
+      setTimeout(() => {
+        const refreshedItem = listEl.querySelector(`.inbox-item[data-idx="${idx}"]`);
+        if (refreshedItem) {
+          _showContextMenu(e.clientX, e.clientY, m, idx);
+        }
+      }, 50);
       return;
     }
-    document.getElementById('ctx-menu')?.remove();
-    const menu = document.createElement('div');
-    menu.id = 'ctx-menu';
-    menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
-    const isImportant = m.important;
-    const hasMatched = m.contactCompany || (m.matchedContacts || []).some(c => c.matched);
-    const curType = m.type || 'other';
-    const TYPE_LABEL = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
-    const selCount = _selectedSet.size;
-    menu.innerHTML = `
-      <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}</div>
-      <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读</div>
-      ${hasMatched ? `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="del-matched" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除匹配联系人</div>` : ''}
-      <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-      ${['bounce','reply','auto-reply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
-      <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-      <div style="padding:4px 14px;color:var(--text-secondary);font-size:10px">联系人标签</div>
-      ${TAG_OPTIONS.map(t => `<div style="padding:4px 14px 4px 24px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px" data-action="set-tag" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${t.label}</div>`).join('')}
-      <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-      <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${selCount > 1 ? `删除选中的 ${selCount} 封` : '删除邮件'}</div>
-    `;
-    // 绑定菜单事件
-    _bindMenuActions(menu, m, idx);
-    document.body.appendChild(menu);
-    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
-    setTimeout(() => document.addEventListener('click', close), 0);
+    _showContextMenu(e.clientX, e.clientY, m, idx);
   });
+}
+
+// 右键菜单弹出
+function _showContextMenu(x, y, m, idx) {
+  document.getElementById('ctx-menu')?.remove();
+  const menu = document.createElement('div');
+  menu.id = 'ctx-menu';
+  menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  const isImportant = m.important;
+  const hasMatched = m.contactCompany || (m.matchedContacts || []).some(c => c.matched);
+  const curType = m.type || 'other';
+  const TYPE_LABEL = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
+  const selCount = _selectedSet.size;
+  menu.innerHTML = `
+    <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}</div>
+    <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读</div>
+    ${hasMatched ? `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="del-matched" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除匹配联系人</div>` : ''}
+    <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+    ${['bounce','reply','auto-reply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
+    <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+    <div style="padding:4px 14px;color:var(--text-secondary);font-size:10px">联系人标签</div>
+    ${TAG_OPTIONS.map(t => `<div style="padding:4px 14px 4px 24px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px" data-action="set-tag" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${t.label}</div>`).join('')}
+    <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+    <div style="padding:6px 14px;cursor:pointer;white-space:nowrap;color:#e5484d" data-action="delete" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${selCount > 1 ? `删除选中的 ${selCount} 封` : '删除邮件'}</div>
+  `;
+  _bindMenuActions(menu, m, idx);
+  document.body.appendChild(menu);
+  const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 // 右键菜单事件绑定（从 _bindInboxDelegates 抽离）
