@@ -80,6 +80,7 @@ function setupIPC() {
   require("./modules/ipc/system-ipc").register(ipcMain, deps);
   require("./modules/ipc/account-ipc").register(ipcMain);
   require("./modules/ipc/inbox-ipc").register(ipcMain, deps);
+  require("./modules/ipc/crm-ipc").register(ipcMain, deps);
   require("./modules/send-ipc").register(ipcMain, deps);
   // try { require("./modules/acquisition-ipc").register(ipcMain, deps); } catch (e) { Log.error("main", "客户开发模块加载失败", e); }
   _sendCleanup = require("./modules/send-ipc").cleanup;
@@ -135,6 +136,10 @@ function createWindow() {
     deps.mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
     deps.mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  }
+  // ponytail: 开发端在标题栏显示红色 DEV 标记
+  if (!__dirname.includes('.asar')) {
+    deps.mainWindow.webContents.insertCSS('#dev-badge { display: inline !important; }');
   }
   // 开发快捷键：F12 / Ctrl+Shift+I 打开 DevTools
   deps.mainWindow.webContents.on("before-input-event", (_e, input) => {

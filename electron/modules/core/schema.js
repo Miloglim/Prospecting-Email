@@ -78,6 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_stage ON contacts(stage);
 CREATE INDEX IF NOT EXISTS idx_contacts_bounced ON contacts(is_bounced);
 CREATE INDEX IF NOT EXISTS idx_contacts_type ON contacts(client_type);
+CREATE INDEX IF NOT EXISTS idx_contacts_opp_stage ON contacts(opp_stage);
 CREATE INDEX IF NOT EXISTS idx_companies_country ON companies(country);
 CREATE INDEX IF NOT EXISTS idx_interactions_contact ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_time ON interactions(created_at);

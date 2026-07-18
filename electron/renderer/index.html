@@ -133,7 +133,7 @@
 
   <!-- ========== 自定义标题栏 ========== -->
   <div id="titlebar">
-    <div class="titlebar-drag"></div>
+    <div class="titlebar-drag"><span id="dev-badge" style="display:none;background:#e5484d;color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;margin-left:4px;letter-spacing:1px">DEV</span></div>
     <div class="titlebar-controls">
       <button id="tb-minimize" title="最小化"><svg width="10" height="10" viewBox="0 0 10 10"><rect y="4" width="10" height="1.5" fill="white"/></svg></button>
       <button id="tb-maximize" title="最大化"><svg width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" x="0" y="0" fill="none" stroke="white" stroke-width="1.5" rx="1"/></svg></button>
@@ -150,6 +150,7 @@
       <li class="nav-item" data-page="inbox"><span class="nav-icon" data-icon="inbox"></span> 收件箱<span class="nav-dot" id="inbox-nav-dot"></span></li>
       <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
+      <li class="nav-item" data-page="crm"><span class="nav-icon" data-icon="trending-up"></span> 客户跟进<span class="nav-dot" id="crm-nav-dot"></span></li>
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
       <!-- <li class="nav-item" data-page="auto-send"><span class="nav-icon" data-icon="radio-tower"></span> 自动发送</li> -->
@@ -291,6 +292,23 @@
         </div>
       </div>
       <p class="placeholder" id="contacts-empty">暂无联系人 — 从「导入客户」导入</p>
+    </section>
+
+    <!-- 📊 CRM 客户跟进 -->
+    <section id="page-crm" class="page">
+      <div class="crm-header">
+        <h2>客户跟进</h2>
+        <div class="crm-filters">
+          <input type="text" id="crm-search" placeholder="🔍 搜索公司或联系人..." style="width:220px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <select id="crm-country-filter" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+            <option value="">全部国家</option>
+          </select>
+        </div>
+      </div>
+      <div class="crm-layout">
+        <div id="crm-pipeline" class="crm-pipeline"></div>
+        <div id="crm-detail-panel" class="crm-detail-panel" style="display:none"></div>
+      </div>
     </section>
 
     <!-- 🔍 背调详情 -->

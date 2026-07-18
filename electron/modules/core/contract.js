@@ -356,6 +356,24 @@ const DISCOVER = {
   REVEAL: "discover:reveal",
 };
 
+// ── CRM 客户跟进（crm）───────────────────────────────────────────────────────
+const CRM = {
+  /** 获取管道数据（自动识别 _status 已触达 + opp_stage 手动阶段） */
+  LIST_PIPELINE: "crm:listPipeline",
+  /** 设置联系人销售阶段（驱动管道列切换） */
+  SET_STAGE: "crm:setStage",
+  /** 更新联系人扩展字段（偏好/提醒日期） */
+  UPDATE_EXTRA: "crm:updateExtra",
+  /** 获取联系人详情（基本信息 + 偏好 + 备注时间线） */
+  GET_DETAIL: "crm:getDetail",
+  /** 保存跟进备注 */
+  SAVE_NOTE: "crm:saveNote",
+  /** 检查到期提醒 */
+  CHECK_REMINDERS: "crm:checkReminders",
+  /** 联系人变更事件（main → renderer） */
+  CHANGED: "crm:changed",
+};
+
 // ── 客户表（table）──────────────────────────────────────────────────────────
 const TABLE = {
   /** 从文件导入客户表 */
@@ -393,6 +411,7 @@ const IPC = {
   TABLE,
   AUTO_SEND,
   COMPANY,
+  CRM,
   LOG,
 };
 
@@ -614,5 +633,6 @@ module.exports = {
   TABLE,
   AUTO_SEND,
   COMPANY,
+  CRM,
   LOG,
 };

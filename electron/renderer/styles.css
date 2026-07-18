@@ -1368,3 +1368,61 @@ select option { font-size: 12px; }
 .btn-link { background: none; border: none; color: var(--text-secondary); font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline; }
 .btn-link:hover { color: var(--danger); }
 
+/* ── CRM 客户跟进管道 ──────────────────────────────────────────────── */
+.crm-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.crm-header h2 { margin: 0; font-size: 16px; }
+.crm-filters { display: flex; gap: 8px; }
+.crm-layout { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+.crm-pipeline { display: flex; gap: 12px; flex: 1; overflow-x: auto; padding: 16px; min-height: 0; }
+.crm-column { flex: 0 0 220px; display: flex; flex-direction: column; min-height: 0; }
+.crm-col-header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: var(--card-bg); border-radius: 8px 8px 0 0; border: 1px solid var(--border); border-bottom: none; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.crm-col-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.crm-col-label { flex: 1; }
+.crm-col-count { background: var(--bg); padding: 1px 8px; border-radius: 10px; font-size: 11px; color: var(--text-secondary); }
+.crm-col-cards { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; padding: 8px; background: var(--card-bg); display: flex; flex-direction: column; gap: 8px; }
+.crm-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; cursor: pointer; transition: all .15s; border-left: 3px solid transparent; }
+.crm-card:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.crm-card.active { border-color: var(--primary); background: var(--primary-light, #f5f5ff); }
+.crm-card.crm-due-soon { border-left-color: #ff9800; }
+.crm-card.crm-overdue { border-left-color: #d93025; background: #fff5f5; }
+.crm-card-name { font-size: 13px; font-weight: 600; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crm-card-company { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crm-card-country { font-size: 11px; color: var(--text-secondary); }
+.crm-card-time { font-size: 10px; margin-top: 4px; font-weight: 500; }
+.crm-card-footer { margin-top: 6px; display: flex; align-items: center; }
+.crm-stage-tag { font-size: 10px; padding: 1px 6px; border-radius: 6px; cursor: pointer; user-select: none; }
+.crm-stage-tag:hover { opacity: .8; }
+.crm-card-empty { color: var(--text-secondary); font-size: 11px; text-align: center; padding: 12px 0; }
+.crm-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; color: var(--text-secondary); font-size: 14px; gap: 8px; }
+
+/* 详情面板 */
+.crm-detail-panel { flex: 0 0 340px; border-left: 1px solid var(--border); background: var(--card-bg); display: flex; flex-direction: column; overflow: hidden; }
+.crm-detail-loading, .crm-detail-error { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-secondary); font-size: 13px; gap: 8px; }
+.crm-detail-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.crm-detail-name { font-size: 14px; font-weight: 600; }
+.crm-detail-close-btn { background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 2px; border-radius: 4px; }
+.crm-detail-close-btn:hover { background: var(--bg); color: var(--text); }
+.crm-detail-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 8px; }
+.crm-tab { background: none; border: none; padding: 8px 12px; font-size: 11px; cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent; }
+.crm-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.crm-detail-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+.crm-tab-content { display: none; }
+.crm-tab-content.active { display: block; }
+.crm-field-row { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-light, #f5f5f5); font-size: 12px; }
+.crm-field-row label { width: 80px; flex-shrink: 0; color: var(--text-secondary); font-size: 11px; padding-top: 4px; }
+.crm-field-row span { flex: 1; }
+.crm-field-row select, .crm-field-row input[type="text"], .crm-field-row input[type="datetime-local"], .crm-field-row textarea { flex: 1; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--bg); color: var(--text); }
+.crm-field-row textarea { resize: vertical; min-height: 40px; }
+
+/* 时间线 */
+.crm-timeline-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-light, #f5f5f5); }
+.crm-timeline-dot { width: 8px; height: 8px; border-radius: 50%; background: #4caf50; flex-shrink: 0; margin-top: 4px; }
+.crm-timeline-dot.is-note { background: #2196f3; }
+.crm-timeline-body { flex: 1; min-width: 0; }
+.crm-timeline-time { font-size: 10px; color: var(--text-secondary); }
+.crm-timeline-subject { font-size: 12px; font-weight: 500; margin-top: 1px; }
+.crm-timeline-snippet { font-size: 11px; color: var(--text-secondary); margin-top: 1px; white-space: pre-wrap; word-break: break-all; }
+
+/* 导航红点 */
+#crm-nav-dot { display: none; }
+

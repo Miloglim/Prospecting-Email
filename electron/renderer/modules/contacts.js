@@ -937,13 +937,11 @@ export function renderContactDetail(company) {
         `<div style="border-top:1px solid var(--border);margin:4px 0"></div>` +
         `<div style="padding:5px 14px;cursor:pointer;color:var(--text-secondary);font-size:11px" data-action="clear-tags" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'">清除标签</div>`;
 
-      // 多选：点击切换标签
+      // 单选：点击替换标签，再次点击同一标签则清除
       popup.querySelectorAll('[data-tag]').forEach(div => {
         div.addEventListener('click', async () => {
           const tagVal = div.dataset.tag;
-          const newTags = currentTags.includes(tagVal)
-            ? currentTags.filter(t => t !== tagVal)
-            : [...currentTags, tagVal];
+          const newTags = currentTags.includes(tagVal) ? [] : [tagVal];
           popup.remove();
           await window.electronAPI.setContactTags(contactId, newTags);
           contact.tags = newTags;

@@ -137,6 +137,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("history:changed", cb);
   },
 
+  // CRM 客户跟进
+  crmListPipeline: (filters) => ipcRenderer.invoke("crm:listPipeline", filters),
+  crmSetStage: (contactId, newStage) => ipcRenderer.invoke("crm:setStage", contactId, newStage),
+  crmUpdateExtra: (contactId, patch) => ipcRenderer.invoke("crm:updateExtra", contactId, patch),
+  crmGetDetail: (contactId) => ipcRenderer.invoke("crm:getDetail", contactId),
+  crmSaveNote: (contactId, content) => ipcRenderer.invoke("crm:saveNote", contactId, content),
+  crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
+  onCrmChanged: (cb) => {
+    ipcRenderer.on("crm:changed", cb);
+    return () => ipcRenderer.removeListener("crm:changed", cb);
+  },
+
   checkBounces: () => ipcRenderer.invoke("bounce:check"),
   clearBounceCursor: () => ipcRenderer.invoke("bounce:clear"),
   testImap: (cfg) => ipcRenderer.invoke("imap:test", cfg),
