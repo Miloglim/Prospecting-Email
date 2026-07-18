@@ -256,6 +256,7 @@ async function openDetailPanel(contactId) {
   panel.querySelector('#crm-record-cancel')?.addEventListener('click', () => {
     panel.querySelector('#crm-record-form').style.display = 'none';
   });
+}
 
 function closeDetailPanel() {
   _currentDetailId = null;
