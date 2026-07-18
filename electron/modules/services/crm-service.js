@@ -40,7 +40,7 @@ function listPipeline(filters = {}) {
 
   // "触达中" 列：自动识别 _status 已触达的客户
   const autoParams = [];
-  let autoWhere = `c._status IN ('已触达', '有回复', '自动回复') AND (c.opp_stage = '待开发' OR c.opp_stage = '' OR c.opp_stage IS NULL)`;
+  let autoWhere = `c._status IN ('已触达', '有回复', '自动回复', 'reached', 'replied', 'autoreply') AND (c.opp_stage = '待开发' OR c.opp_stage = '' OR c.opp_stage IS NULL)`;
   if (filters.search) {
     const q = `%${filters.search.toLowerCase()}%`;
     autoWhere += ` AND (lower(co.name) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.email) LIKE ?)`;
@@ -230,7 +230,7 @@ function checkReminders() {
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
      WHERE c._extra LIKE '%nextFollowupAt%'
        AND (c.opp_stage IN (${MANUAL_STAGES.map(() => "?").join(",")})
-            OR c._status IN ('已触达', '有回复', '自动回复'))`
+            OR c._status IN ('已触达', '有回复', '自动回复', 'reached', 'replied', 'autoreply'))`
   ).all(...MANUAL_STAGES).map(r => {
     try { r._extra = JSON.parse(r._extra || "{}"); } catch { r._extra = {}; }
     return r;
