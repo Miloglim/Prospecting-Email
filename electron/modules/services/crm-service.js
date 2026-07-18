@@ -8,21 +8,30 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段定义 — 对齐联系人列表标签字段 */
+/** 管道阶段定义 — 对齐联系人列表标签字段 + 收件箱自动标签 */
 const PIPELINE_STAGES = [
   { stage: "有回复",   color: "#22a644" },
   { stage: "自动回复", color: "#e6a817" },
-  { stage: "已触达",   color: "#3b82f6" },
   { stage: "退信",     color: "#d93025" },
+  { stage: "报价中",   color: "#2196f3" },
+  { stage: "试单",     color: "#8e24aa" },
+  { stage: "合作中",   color: "#4caf50" },
+  { stage: "已流失",   color: "#b0b0b0" },
+  { stage: "触达中",   color: "#ff9800" },
   { stage: "未标签",   color: "#9e9e9e" },
 ];
 
-// 标签匹配优先级：有回复 > 自动回复 > 已触达 > 退信 > 未标签
+// 标签匹配优先级：收件箱标签 > 联系人面板标签 > 未标签
+// tags[0] = 写入时使用的标准值（联系人面板中文）
 const TAG_RULES = [
-  { stage: "有回复",   tags: ["replied", "有回复"] },
-  { stage: "自动回复", tags: ["autoreply", "auto_reply", "自动回复"] },
-  { stage: "已触达",   tags: ["reached", "已触达"] },
-  { stage: "退信",     tags: ["bounced_by_contact"] },
+  { stage: "有回复",   tags: ["有回复", "replied"] },
+  { stage: "自动回复", tags: ["自动回复", "autoreply", "auto_reply"] },
+  { stage: "退信",     tags: ["退信", "bounced_by_contact"] },
+  { stage: "报价中",   tags: ["报价中"] },
+  { stage: "试单",     tags: ["试单"] },
+  { stage: "合作中",   tags: ["合作中"] },
+  { stage: "已流失",   tags: ["已流失"] },
+  { stage: "触达中",   tags: ["触达中", "已触达", "reached"] },
 ];
 
 /** opp_stage 手动阶段白名单 */

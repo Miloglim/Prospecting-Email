@@ -602,7 +602,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     }
     totalCompanies = seen.size;
   }
-  const tagCounts = { reached: 0, replied: 0, autoreply: 0, bounced_by_contact: 0, left_company: 0, '已触达':0, '有回复':0, '自动回复':0 };
+  const tagCounts = { reached: 0, replied: 0, autoreply: 0, bounced_by_contact: 0, left_company: 0, '已触达':0, '有回复':0, '自动回复':0, '退信':0 };
   for (const c of S.contactsData) {
     for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
   }
@@ -621,7 +621,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     'tag:replied': `有回复 ${(tagCounts.replied||0) + (tagCounts['有回复']||0)}`,
     'tag:autoreply': `自动回复 ${(tagCounts.autoreply||0) + (tagCounts['自动回复']||0)}`,
     'tag:left_company': `已离职 ${tagCounts.left_company}`,
-    'tag:bounced_by_contact': `退信 ${tagCounts.bounced_by_contact}`,
+    'tag:bounced_by_contact': `退信 ${(tagCounts.bounced_by_contact||0) + (tagCounts['退信']||0)}`,
     has_phone: `有电话 ${S.contactsData.filter(c => c.phone && c.phone.trim()).length}`,
     archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
   };
@@ -858,7 +858,7 @@ export function renderContactDetail(company) {
   if (delBouncedBtn) {
     delBouncedBtn.addEventListener('click', async () => {
       const allMembers = S.contactsGroupMap.get(company) || [];
-      const bounced = allMembers.filter(m => (m.tags || []).includes('bounced_by_contact'));
+      const bounced = allMembers.filter(m => (m.tags || []).some(t => t === 'bounced_by_contact' || t === '退信'));
       if (!bounced.length) { showToast('该公司无退信联系人', 'warn'); return; }
       let ok = (S._deleteSkipUntil || 0) > Date.now();
       if (!ok) {
