@@ -171,14 +171,12 @@ async function openDetailPanel(contactId) {
     <div class="crm-detail-tabs">
       <button class="crm-tab active" data-tab="info">基本信息</button>
       <button class="crm-tab" data-tab="prefs">偏好设置</button>
-      <button class="crm-tab" data-tab="reminder">跟进提醒</button>
-      <button class="crm-tab" data-tab="timeline">时间线</button>
+      <button class="crm-tab" data-tab="followup">跟进记录</button>
     </div>
     <div class="crm-detail-body">
       <div class="crm-tab-content active" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content" data-content="prefs">${prefsTab(contactId,prefs)}</div>
-      <div class="crm-tab-content" data-content="reminder">${reminderTab(contactId,reminder)}</div>
-      <div class="crm-tab-content" data-content="timeline">${timelineTab(contactId,notes,interactions)}</div>
+      <div class="crm-tab-content" data-content="followup">${followupTab(contactId, reminder, notes, interactions)}</div>
     </div>`;
 
   panel.querySelectorAll('.crm-tab').forEach(tab => {
@@ -230,7 +228,7 @@ async function openDetailPanel(contactId) {
       const r3 = await window.electronAPI.crmSaveNote(contactId, c);
       if (r3.ok) { ni.value = ''; showToast('已保存','ok');
         const d = await window.electronAPI.crmGetDetail(contactId);
-        if (d.ok) { const tl = panel.querySelector('[data-content="timeline"]'); if (tl) tl.innerHTML = timelineTab(contactId, d.data.notes, d.data.interactions); }
+        if (d.ok) { const tl = panel.querySelector('[data-content="followup"]'); if (tl) tl.innerHTML = followupTab(contactId, d.data._extra?.crmReminder || {}, d.data.notes, d.data.interactions); }
       }
     });
   }
@@ -263,15 +261,9 @@ function prefsTab(cid, prefs) {
     <div class="crm-field-row"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" rows="3" placeholder="自由备注...">${escapeHtml(prefs.memo||'')}</textarea></div>`;
 }
 
-function reminderTab(cid, r) {
-  const na = r.nextFollowupAt || '', fn = r.followupNote || '';
-  return `
-    <div class="crm-field-row"><label>下次跟进日期</label><input type="datetime-local" class="crm-reminder-input" data-rem-key="nextFollowupAt" value="${escapeHtml(na)}"></div>
-    <div class="crm-field-row"><label>提醒备注</label><input class="crm-reminder-input" data-rem-key="followupNote" value="${escapeHtml(fn)}" placeholder="如：确认报价、发合同"></div>
-    ${na ? `<div class="crm-field-row"><span style="font-size:11px;color:var(--text-secondary)">${isOverdue(na)?'🔴 已逾期':isSoon(na)?'🟠 即将到期':'🟢 正常'}</span></div>` : ''}`;
-}
-
-function timelineTab(cid, notes, interactions) {
+function followupTab(cid, reminder, notes, interactions) {
+  const na = reminder.nextFollowupAt || '';
+  const fn = reminder.followupNote || '';
   const items = [
     ...((notes||[]).map(n => ({ type:'note', time:n.created_at, content:n.content }))),
     ...((interactions||[]).map(i => ({ type:i.type, time:i.created_at, subject:i.subject, snippet:i.snippet }))),
@@ -281,7 +273,16 @@ function timelineTab(cid, notes, interactions) {
     <div class="crm-timeline-item"><div class="crm-timeline-dot ${i.type==='note'?'is-note':''}"></div><div class="crm-timeline-body"><div class="crm-timeline-time">${fmtDT(i.time)}</div>${i.subject?`<div class="crm-timeline-subject">${escapeHtml(i.subject)}</div>`:''}<div class="crm-timeline-snippet">${escapeHtml(i.snippet||i.content||'')}</div></div></div>`).join('')
     : '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无记录</div>';
 
-  return list + `<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"><textarea id="crm-note-input" rows="2" placeholder="添加跟进备注..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></textarea><button id="crm-add-note-btn" class="primary" style="font-size:12px;padding:6px 14px;margin-top:6px">保存备注</button></div>`;
+  return `
+    <div class="crm-field-row"><label>下次跟进</label><input type="datetime-local" class="crm-reminder-input" data-rem-key="nextFollowupAt" value="${escapeHtml(na)}"></div>
+    <div class="crm-field-row"><label>提醒内容</label><input class="crm-reminder-input" data-rem-key="followupNote" value="${escapeHtml(fn)}" placeholder="如：确认报价、发合同"></div>
+    ${na ? `<div class="crm-field-row"><span style="font-size:11px;color:var(--text-secondary)">${isOverdue(na)?'🔴 已逾期':isSoon(na)?'🟠 即将到期':'🟢 正常'}</span></div>` : ''}
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">历史记录</div>
+    ${list}
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+      <textarea id="crm-note-input" rows="2" placeholder="添加跟进备注..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></textarea>
+      <button id="crm-add-note-btn" class="primary" style="font-size:12px;padding:6px 14px;margin-top:6px">保存备注</button>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
