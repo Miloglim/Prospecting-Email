@@ -137,10 +137,6 @@ function createWindow() {
   } else {
     deps.mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   }
-  // ponytail: 开发端在标题栏显示红色 DEV 标记
-  if (!__dirname.includes('.asar')) {
-    deps.mainWindow.webContents.insertCSS('#dev-badge { display: inline !important; }');
-  }
   // 开发快捷键：F12 / Ctrl+Shift+I 打开 DevTools
   deps.mainWindow.webContents.on("before-input-event", (_e, input) => {
     if (
