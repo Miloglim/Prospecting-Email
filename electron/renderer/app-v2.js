@@ -20,6 +20,11 @@ document.getElementById('tb-close')?.addEventListener('click', () => window.elec
 
 initIcons();
 initNavigation();
+// 开发端标识：http 协议 = Vite dev server
+if (location.protocol === 'http:') {
+  const badge = document.getElementById('dev-badge');
+  if (badge) badge.style.display = 'inline';
+}
 
 // 启动：仪表盘数据就绪后加载层淡出 + 主界面滑入
 // 默认最少显示 1000ms，可在设置 → 通用 → 关闭加载动画 中跳过
