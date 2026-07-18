@@ -210,29 +210,52 @@ async function openDetailPanel(contactId) {
     });
   });
 
-  // 提醒保存
-  panel.querySelectorAll('.crm-reminder-input').forEach(inp => {
-    inp.addEventListener('change', async () => {
-      const p = {}; panel.querySelectorAll('.crm-reminder-input').forEach(el => p[el.dataset.remKey] = el.value);
-      const r2 = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: p });
-      if (r2.ok) { scheduleReminder(contactId, p.nextFollowupAt); showToast('已更新','ok'); }
+  // 下次跟进日期变更即保存
+  const nextFollowupEl = panel.querySelector('#crm-next-followup');
+  if (nextFollowupEl) {
+    nextFollowupEl.addEventListener('change', async () => {
+      const val = nextFollowupEl.value;
+      const r2 = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
+      if (r2.ok) { scheduleReminder(contactId, val); showToast('已更新','ok'); }
     });
-  });
+  }
 
-  // 备注
-  const nb = panel.querySelector('#crm-add-note-btn');
-  const ni = panel.querySelector('#crm-note-input');
-  if (nb && ni) {
-    nb.addEventListener('click', async () => {
-      const c = ni.value.trim(); if (!c) return;
-      const r3 = await window.electronAPI.crmSaveNote(contactId, c);
-      if (r3.ok) { ni.value = ''; showToast('已保存','ok');
+  // 添加记录按钮 → 展开表单
+  const addBtn = panel.querySelector('#crm-add-record-btn');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      const form = panel.querySelector('#crm-record-form');
+      form.style.display = form.style.display === 'none' ? 'block' : 'none';
+      if (form.style.display === 'block') panel.querySelector('#crm-record-content')?.focus();
+    });
+  }
+
+  // 保存记录
+  const saveBtn = panel.querySelector('#crm-record-save');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const content = panel.querySelector('#crm-record-content')?.value?.trim();
+      if (!content) { showToast('请输入内容','warn'); return; }
+      const r3 = await window.electronAPI.crmSaveNote(contactId, content);
+      if (r3.ok) {
+        panel.querySelector('#crm-record-content').value = '';
+        panel.querySelector('#crm-record-form').style.display = 'none';
+        showToast('已保存','ok');
         const d = await window.electronAPI.crmGetDetail(contactId);
-        if (d.ok) { const tl = panel.querySelector('[data-content="followup"]'); if (tl) tl.innerHTML = followupTab(contactId, d.data._extra?.crmReminder || {}, d.data.notes, d.data.interactions); }
+        if (d.ok) {
+          const fl = panel.querySelector('[data-content="followup"]');
+          if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+          // 重新绑定事件
+          rebindFollowupEvents(panel, contactId);
+        }
       }
     });
   }
-}
+
+  // 取消
+  panel.querySelector('#crm-record-cancel')?.addEventListener('click', () => {
+    panel.querySelector('#crm-record-form').style.display = 'none';
+  });
 
 function closeDetailPanel() {
   _currentDetailId = null;
@@ -263,26 +286,35 @@ function prefsTab(cid, prefs) {
 
 function followupTab(cid, reminder, notes, interactions) {
   const na = reminder.nextFollowupAt || '';
-  const fn = reminder.followupNote || '';
+  // 合并 notes + interactions 按时间倒序
   const items = [
     ...((notes||[]).map(n => ({ type:'note', time:n.created_at, content:n.content }))),
     ...((interactions||[]).map(i => ({ type:i.type, time:i.created_at, subject:i.subject, snippet:i.snippet }))),
   ].sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
-  const list = items.length ? items.map(i => `
-    <div class="crm-timeline-item"><div class="crm-timeline-dot ${i.type==='note'?'is-note':''}"></div><div class="crm-timeline-body"><div class="crm-timeline-time">${fmtDT(i.time)}</div>${i.subject?`<div class="crm-timeline-subject">${escapeHtml(i.subject)}</div>`:''}<div class="crm-timeline-snippet">${escapeHtml(i.snippet||i.content||'')}</div></div></div>`).join('')
-    : '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无记录</div>';
+  const listHtml = items.length ? items.map(i => `
+    <div class="crm-followup-item">
+      <div class="crm-followup-time">${fmtDT(i.time)} ${i.type==='stage_changed'?'🔄':i.type==='note'?'📝':'📧'}</div>
+      ${i.subject?`<div style="font-size:12px;font-weight:500">${escapeHtml(i.subject)}</div>`:''}
+      <div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.snippet||i.content||'')}</div>
+    </div>`).join('')
+    : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
 
   return `
-    <div class="crm-field-row"><label>下次跟进</label><input type="datetime-local" class="crm-reminder-input" data-rem-key="nextFollowupAt" value="${escapeHtml(na)}"></div>
-    <div class="crm-field-row"><label>提醒内容</label><input class="crm-reminder-input" data-rem-key="followupNote" value="${escapeHtml(fn)}" placeholder="如：确认报价、发合同"></div>
-    ${na ? `<div class="crm-field-row"><span style="font-size:11px;color:var(--text-secondary)">${isOverdue(na)?'🔴 已逾期':isSoon(na)?'🟠 即将到期':'🟢 正常'}</span></div>` : ''}
-    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">历史记录</div>
-    ${list}
-    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
-      <textarea id="crm-note-input" rows="2" placeholder="添加跟进备注..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:12px"></textarea>
-      <button id="crm-add-note-btn" class="primary" style="font-size:12px;padding:6px 14px;margin-top:6px">保存备注</button>
-    </div>`;
+    <div class="crm-followup-top">
+      <div class="crm-field-row"><label>下次跟进</label><input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px"></div>
+      <button id="crm-add-record-btn" class="primary" style="width:100%;margin-top:8px;padding:8px;font-size:13px">+ 添加跟进记录</button>
+    </div>
+    <div id="crm-record-form" class="crm-record-form" style="display:none;margin-top:8px">
+      <input type="datetime-local" id="crm-record-date" value="${fmtDT(new Date().toISOString()).slice(0,16)}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;margin-bottom:6px">
+      <textarea id="crm-record-content" rows="3" placeholder="记录内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button id="crm-record-save" class="primary" style="flex:1;padding:6px;font-size:12px">保存</button>
+        <button id="crm-record-cancel" class="secondary" style="padding:6px 12px;font-size:12px">取消</button>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">记录列表</div>
+    <div class="crm-followup-list">${listHtml}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -315,6 +347,40 @@ function fmtDate(i) { try { const d=new Date(i); return `${d.getMonth()+1}/${d.g
 function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return i||''; } }
 function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch { return false; } }
 function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
+
+function rebindFollowupEvents(panel, contactId) {
+  const nf = panel.querySelector('#crm-next-followup');
+  if (nf) nf.addEventListener('change', async () => {
+    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: nf.value } });
+    scheduleReminder(contactId, nf.value); showToast('已更新','ok');
+  });
+  const ab = panel.querySelector('#crm-add-record-btn');
+  if (ab) ab.addEventListener('click', () => {
+    const f = panel.querySelector('#crm-record-form');
+    f.style.display = f.style.display === 'none' ? 'block' : 'none';
+    if (f.style.display === 'block') panel.querySelector('#crm-record-content')?.focus();
+  });
+  const sb = panel.querySelector('#crm-record-save');
+  if (sb) sb.addEventListener('click', async () => {
+    const c = panel.querySelector('#crm-record-content')?.value?.trim();
+    if (!c) { showToast('请输入内容','warn'); return; }
+    const r3 = await window.electronAPI.crmSaveNote(contactId, c);
+    if (r3.ok) {
+      panel.querySelector('#crm-record-content').value = '';
+      panel.querySelector('#crm-record-form').style.display = 'none';
+      showToast('已保存','ok');
+      const d = await window.electronAPI.crmGetDetail(contactId);
+      if (d.ok) {
+        const fl = panel.querySelector('[data-content="followup"]');
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        rebindFollowupEvents(panel, contactId);
+      }
+    }
+  });
+  panel.querySelector('#crm-record-cancel')?.addEventListener('click', () => {
+    panel.querySelector('#crm-record-form').style.display = 'none';
+  });
+}
 
 window.__pageHandlers = window.__pageHandlers || {};
 window.__pageHandlers['crm'] = initCrmPipeline;
