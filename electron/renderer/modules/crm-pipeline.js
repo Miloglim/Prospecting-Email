@@ -77,15 +77,15 @@ async function refreshPipeline() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function renderStage(col) {
-  const sd = STAGES.find(s => s.stage === col.stage) || { color: '#999' };
+  const color = col.color || (STAGES.find(s => s.stage === col.stage) || {}).color || '#999';
   const rows = col.contacts.length
-    ? col.contacts.map(c => renderContact(c, col.stage)).join('')
+    ? col.contacts.map(c => renderContact(c, col.stage, color)).join('')
     : `<div class="crm-contact-row crm-contact-none">暂无</div>`;
 
   return `
     <div class="crm-stage-block">
-      <div class="crm-stage-head" style="border-left:3px solid ${sd.color}">
-        <span class="crm-stage-dot" style="background:${sd.color}"></span>
+      <div class="crm-stage-head" style="border-left:3px solid ${color}">
+        <span class="crm-stage-dot" style="background:${color}"></span>
         <span class="crm-stage-label">${col.label}</span>
         <span class="crm-stage-count">${col.contacts.length}</span>
       </div>
@@ -93,7 +93,7 @@ function renderStage(col) {
     </div>`;
 }
 
-function renderContact(c, stage) {
+function renderContact(c, stage, color) {
   const reminder = c._extra?.crmReminder;
   const nextAt = reminder?.nextFollowupAt;
   let timeHtml = '';
@@ -103,7 +103,6 @@ function renderContact(c, stage) {
     timeHtml = `<span class="crm-time ${cls}">${t <= Date.now() ? '⏰ 逾期' : '⏰ ' + fmtDate(nextAt)}</span>`;
   }
   const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
-  const sd = STAGES.find(s => s.stage === stage) || { color: '#999' };
 
   return `
     <div class="crm-contact-row" data-contact-id="${c.id}">
@@ -111,7 +110,7 @@ function renderContact(c, stage) {
       <span class="crm-contact-co">${escapeHtml(c.company || '—')}</span>
       <span class="crm-contact-ctry">${escapeHtml(c.country || '')}</span>
       ${timeHtml}
-      <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stage}" style="background:${sd.color}18;color:${sd.color}">${stage}</span>
+      <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stage}" style="background:${color}18;color:${color}">${stage}</span>
     </div>`;
 }
 

@@ -247,7 +247,10 @@ function checkReminders() {
 
 function _normalizeRow(r) {
   if (!r) return r;
-  try { r.tags = JSON.parse(r.tags || "[]"); } catch { r.tags = []; }
+  if (typeof r.tags === 'string') {
+    try { r.tags = JSON.parse(r.tags || "[]"); } catch { r.tags = []; }
+  }
+  if (!Array.isArray(r.tags)) r.tags = [];
   try { r._extra = JSON.parse(r._extra || "{}"); } catch { r._extra = {}; }
   r.company = r.company_name || "";
   r.country = r.company_country || "";
