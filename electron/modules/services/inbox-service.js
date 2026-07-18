@@ -303,6 +303,15 @@ function _syncTagsToContacts(newMails) {
     }
     for (const id of ids) {
       if (contactsDb.addTag(id, tag)) synced++;
+      // _status 同步：有回复直接覆盖，自动回复只在空/已是自动回复时写
+      if (m.type === 'reply') {
+        contactsDb.update(id, { _status: '有回复' });
+      } else if (m.type === 'auto-reply') {
+        const ct = contactsDb.getById(id);
+        if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
+          contactsDb.update(id, { _status: '自动回复' });
+        }
+      }
       if (m.type === 'bounce') {
         contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
       }
@@ -833,6 +842,15 @@ function setMailType(index, newType) {
     for (const c of (m.matchedContacts || [])) addByEmail(c.email);
     for (const id of ids) {
       if (oldTag) contactsDb.removeTag(id, oldTag);
+      // _status 同步
+      if (newType === 'reply') {
+        contactsDb.update(id, { _status: '有回复' });
+      } else if (newType === 'auto-reply') {
+        const ct = contactsDb.getById(id);
+        if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
+          contactsDb.update(id, { _status: '自动回复' });
+        }
+      }
       if (newTag) contactsDb.addTag(id, newTag);
     }
   }
