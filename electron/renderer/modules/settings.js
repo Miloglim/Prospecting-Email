@@ -527,9 +527,9 @@ function initAccountManager() {
         e.stopPropagation();
         const action = btn.dataset.action;
         const id = btn.dataset.id;
-        if (action === "edit") openEditor(id);
-        else if (action === "toggle") { await window.electronAPI.toggleAccount(id); render(); }
-        else if (action === "delete") { if (await showConfirm("确定删除该账号？")) { await window.electronAPI.deleteAccount(id); render(); } }
+        if (action === "edit") await openEditor(id);
+        else if (action === "toggle") { await window.electronAPI.toggleAccount(id); await render(); }
+        else if (action === "delete") { if (await showConfirm("确定删除该账号？")) { await window.electronAPI.deleteAccount(id); await render(); } }
       });
     }
   }
@@ -542,9 +542,12 @@ function initAccountManager() {
 
   // 打开编辑框
   let _openingEditor = false;
+  let _openingEditorTimer = 0;
   async function openEditor(id) {
     if (_openingEditor) return; // 防重入：上一次还没打开完成
     _openingEditor = true;
+    clearTimeout(_openingEditorTimer);
+    _openingEditorTimer = setTimeout(() => { _openingEditor = false; }, 10000); // 10s 超时兜底，防止 flag 卡死
     const setVal = (elId, v) => { const el = document.getElementById(elId); if (el) el.value = v; };
     const setChk = (elId, v) => { const el = document.getElementById(elId); if (el) el.checked = v; };
     try {
@@ -601,6 +604,7 @@ function initAccountManager() {
       showToast('编辑失败: ' + (e.message || ''), 'error');
     } finally {
       _openingEditor = false;
+      clearTimeout(_openingEditorTimer);
     }
   }
 
@@ -641,7 +645,7 @@ function initAccountManager() {
   }
 
   // 事件绑定
-  document.getElementById('btn-add-account')?.addEventListener('click', () => openEditor(null));
+  document.getElementById('btn-add-account')?.addEventListener('click', async () => { await openEditor(null); });
   document.getElementById('btn-acct-cancel')?.addEventListener('click', closeEditor);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeEditor(); });
 
@@ -671,7 +675,7 @@ function initAccountManager() {
         } catch { /* 渲染层降级：操作失败不影响 UI */ }
       }
       closeEditor();
-      render();
+      await render();
     } catch (e) {
       showAlert('保存失败: ' + (e.message || '未知错误'));
     } finally {
@@ -703,7 +707,7 @@ function initAccountManager() {
         await window.electronAPI.updateAccount(editId, {
           _lastTest: { ok: r.ok, at: new Date().toISOString(), error: r.error || '' }
         });
-        render();
+        await render();
       }
     } catch (e) {
       resultEl.className = 'acct-test-status fail';
@@ -767,7 +771,7 @@ function initAccountManager() {
     if (origHandler) await origHandler();
     // ponytail: 每次切到设置页重新绑定添加按钮，防止模块加载时序导致漏绑
     const addBtn = document.getElementById('btn-add-account');
-    if (addBtn && !addBtn._bound) { addBtn._bound = true; addBtn.addEventListener('click', () => openEditor(null)); }
-    render();
+    if (addBtn && !addBtn._bound) { addBtn._bound = true; addBtn.addEventListener('click', async () => { await openEditor(null); }); }
+    await render();
   };
 }
