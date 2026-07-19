@@ -202,8 +202,8 @@ async function openDetailPanel(contactId) {
       const tgt = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
       if (tgt) tgt.classList.add('active');
       if (tab.dataset.tab === 'emails' && !_emailsLoaded) {
-        _emailsLoaded = true;
         const r = await window.electronAPI.crmGetContactEmails(contactId);
+        _emailsLoaded = true;
         if (r.ok && r.data.length) {
           tgt.innerHTML = r.data.map(m => `
             <div class="crm-email-item">
@@ -222,7 +222,7 @@ async function openDetailPanel(contactId) {
             });
           });
         } else {
-          tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无邮件往来</div>';
+          tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">' + (r.ok ? '暂无邮件往来' : '加载失败: ' + escapeHtml(r.error||'')) + '</div>';
         }
       }
     });
