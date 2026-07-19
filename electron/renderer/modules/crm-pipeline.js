@@ -179,7 +179,7 @@ async function openDetailPanel(contactId) {
   const reminder = contact._extra?.crmReminder || {};
 
   panel.innerHTML = `
-    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}</span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
+    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}<button id="crm-find-contact" class="crm-find-btn" title="在联系人中查找">${lucide('search',13)}</button></span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
     <div class="crm-detail-tabs">
       <button class="crm-tab active" data-tab="info">基本信息</button>
       <button class="crm-tab" data-tab="prefs">偏好设置</button>
@@ -204,6 +204,16 @@ async function openDetailPanel(contactId) {
   });
 
   document.getElementById('crm-detail-close')?.addEventListener('click', closeDetailPanel);
+
+  // 查找联系人 → 跳转联系人页面搜索
+  document.getElementById('crm-find-contact')?.addEventListener('click', () => {
+    const q = contact.email || [contact.firstName, contact.lastName].filter(Boolean).join(' ');
+    document.querySelector('.nav-item[data-page="contacts"]')?.click();
+    setTimeout(() => {
+      const si = document.getElementById('contacts-search');
+      if (si) { si.value = q; si.dispatchEvent(new Event('input', { bubbles: true })); }
+    }, 200);
+  });
 
   // 偏好保存
   panel.querySelectorAll('.crm-pref-input').forEach(inp => {

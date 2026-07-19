@@ -1404,7 +1404,9 @@ select option { font-size: 12px; }
 .crm-detail-panel { flex: 0 0 340px; border-left: 1px solid var(--border); background: var(--card-bg); display: flex; flex-direction: column; overflow: hidden; }
 .crm-detail-loading, .crm-detail-error { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-secondary); font-size: 13px; gap: 8px; }
 .crm-detail-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.crm-detail-name { font-size: 14px; font-weight: 600; }
+.crm-detail-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.crm-find-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 5px; cursor: pointer; color: var(--text-secondary); display: inline-flex; align-items: center; }
+.crm-find-btn:hover { background: var(--bg); color: var(--primary); border-color: var(--primary); }
 .crm-detail-close-btn { background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 2px; border-radius: 4px; }
 .crm-detail-close-btn:hover { background: var(--bg); color: var(--text); }
 .crm-detail-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 8px; }
