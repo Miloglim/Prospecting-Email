@@ -86,7 +86,8 @@ function generate(aiFn) {
     dueCount, overdueCount, followupItems, aiText,
   });
 
-  return { html, data: { dateCN, now, sentToday, failedToday, successRate } };
+  const data = { dateCN, now, sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces, replyRate, bounceRate, stageCounts, toQuoting, toTrial, toCoop, dueCount, overdueCount };
+  return { html, data };
 }
 
 // ── HTML 生成 ─────────────────────────────────────────────────────────────────
@@ -186,18 +187,18 @@ function saveToDb(d) {
   const db = getDb();
   const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }))
     .toISOString().slice(0, 10);
+  const sc = d.stageCounts || {};
   db.prepare(`INSERT OR REPLACE INTO daily_reports
     (date, sent_total, sent_failed, success_rate, inbox_total, replies, autoreplies, bounces,
      reply_rate, bounce_rate, stage_reaching, stage_quoting, stage_trial, stage_cooperating, stage_lost,
      to_quoting_rate, to_trial_rate, to_coop_rate, due_count, overdue_count)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    today, d.sentToday, d.failedToday, d.successRate,
-    d.newMails, d.replies, d.autoreplies, d.bounces,
-    d.replyRate, d.bounceRate,
-    d.stageCounts.reaching||0, d.stageCounts.quoting||0, d.stageCounts.trial||0,
-    d.stageCounts.cooperating||0, d.stageCounts.lost||0,
-    d.toQuoting, d.toTrial, d.toCoop,
-    d.dueCount, d.overdueCount
+    today, d.sentToday||0, d.failedToday||0, d.successRate||0,
+    d.newMails||0, d.replies||0, d.autoreplies||0, d.bounces||0,
+    d.replyRate||0, d.bounceRate||0,
+    sc.reaching||0, sc.quoting||0, sc.trial||0, sc.cooperating||0, sc.lost||0,
+    d.toQuoting||0, d.toTrial||0, d.toCoop||0,
+    d.dueCount||0, d.overdueCount||0
   );
   Log.info("报告", `日报数据已写入 ${today}`);
 }
