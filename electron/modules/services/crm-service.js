@@ -8,18 +8,17 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
+/** 入口标签：有这些标签的联系人进入 CRM 库 */
+const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
+
 /** 管道阶段 + 标签匹配规则（优先级从高到低） */
 const PIPELINE_STAGES = [
   { stage: "报价中", color: "#2196f3", match: ["报价中"] },
   { stage: "试单",   color: "#8e24aa", match: ["试单"] },
   { stage: "合作中", color: "#4caf50", match: ["合作中"] },
   { stage: "已流失", color: "#b0b0b0", match: ["已流失"] },
-  { stage: "有回复", color: "#22a644", match: ["有回复", "replied"] },
   { stage: "触达中", color: "#ff9800", match: ["触达中", "已触达", "reached"] }, // 默认
 ];
-
-// 入口条件：有任意管线标签就进 CRM
-const ENTRY_TAGS = PIPELINE_STAGES.flatMap(s => s.match);
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -58,9 +57,10 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选
+  // 入口筛选：有 有回复/触达中 标签，或已有管线标签（报价中等）
+  const ALL_MATCH = PIPELINE_STAGES.flatMap(s => s.match);
   const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
+    (c.tags || []).some(t => ENTRY_TAGS.includes(t) || ALL_MATCH.includes(t))
   );
 
   // 第二层：按标签分类
