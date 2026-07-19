@@ -44,14 +44,18 @@ function generate(aiFn) {
   const bounceRate = sentToday > 0 ? Math.round(bounces / sentToday * 1000) / 10 : 0;
 
   // 管线数据
-  const crmService = require("./crm-service");
-  const pipeline = crmService.listPipeline();
-  const stageCounts = {};
+  const stageCounts = { reaching: 0, quoting: 0, trial: 0, cooperating: 0, lost: 0 };
   let totalInPipeline = 0;
-  for (const col of pipeline.columns) {
-    stageCounts[col.key] = col.contacts.length;
-    totalInPipeline += col.contacts.length;
-  }
+  try {
+    const crmService = require("./crm-service");
+    const pipeline = crmService.listPipeline();
+    if (pipeline?.columns) {
+      for (const col of pipeline.columns) {
+        stageCounts[col.key] = col.contacts.length;
+        totalInPipeline += col.contacts.length;
+      }
+    }
+  } catch (e) { Log.warn("报告", "管线数据获取失败", e.message); }
   const toQuoting = stageCounts.reaching > 0 ? Math.round(stageCounts.quoting / stageCounts.reaching * 1000) / 10 : 0;
   const toTrial = stageCounts.quoting > 0 ? Math.round(stageCounts.trial / stageCounts.quoting * 1000) / 10 : 0;
   const toCoop = totalInPipeline > 0 ? Math.round(stageCounts.cooperating / totalInPipeline * 1000) / 10 : 0;
