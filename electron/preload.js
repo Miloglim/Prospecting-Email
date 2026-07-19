@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("contacts:getFollowups", contactId),
   listNotes: (contactId) => ipcRenderer.invoke("contacts:listNotes", contactId),
   addNote: (contactId, content) => ipcRenderer.invoke("contacts:addNote", contactId, content),
+  updateNote: (noteId, content) => ipcRenderer.invoke("contacts:updateNote", noteId, content),
   deleteNote: (noteId) => ipcRenderer.invoke("contacts:deleteNote", noteId),
 
   // 模板

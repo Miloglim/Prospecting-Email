@@ -251,6 +251,30 @@ async function openDetailPanel(contactId) {
       }
     }
   });
+
+  // 编辑历史备注
+  panel.querySelectorAll('.crm-note-edit').forEach(p => {
+    p.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const noteId = p.dataset.noteId;
+      const item = p.closest('.crm-followup-item');
+      const cd = item.querySelector('.crm-note-content');
+      const orig = cd.textContent;
+      const ta = document.createElement('textarea');
+      ta.value = orig; ta.rows = 3;
+      ta.style.cssText = 'width:100%;padding:6px;border:1px solid var(--primary);border-radius:4px;font-size:12px';
+      cd.replaceWith(ta); ta.focus();
+      const save = async () => {
+        const val = ta.value.trim();
+        if (val === orig) { ta.replaceWith(cd); return; }
+        await window.electronAPI.updateNote(noteId, val);
+        cd.textContent = val; ta.replaceWith(cd);
+        showToast('已更新','ok');
+      };
+      ta.addEventListener('blur', save);
+      ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); } });
+    });
+  });
 }
 
 function closeDetailPanel() {
@@ -289,10 +313,10 @@ function followupTab(cid, reminder, notes, interactions) {
   ].sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
   const listHtml = items.length ? items.map(i => `
-    <div class="crm-followup-item">
-      <div class="crm-followup-time">${fmtDT(i.time)} ${i.type==='stage_changed'?'🔄':i.type==='note'?'📝':'📧'}</div>
+    <div class="crm-followup-item" data-note-id="${i.id||''}" data-type="${i.type}">
+      <div class="crm-followup-time">${fmtDT(i.time)} ${i.type==='stage_changed'?'🔄':i.type==='note'?'📝':'📧'}${i.type==='note'?` <span class="crm-note-edit" data-note-id="${i.id}">${lucide('pencil',11)}</span>`:''}</div>
       ${i.subject?`<div style="font-size:12px;font-weight:500">${escapeHtml(i.subject)}</div>`:''}
-      <div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.snippet||i.content||'')}</div>
+      <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.snippet||i.content||'')}</div>
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
 
@@ -356,6 +380,30 @@ function rebindFollowupEvents(panel, contactId) {
         rebindFollowupEvents(panel, contactId);
       }
     }
+  });
+
+  // 编辑历史备注
+  panel.querySelectorAll('.crm-note-edit').forEach(p => {
+    p.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const noteId = p.dataset.noteId;
+      const item = p.closest('.crm-followup-item');
+      const cd = item.querySelector('.crm-note-content');
+      const orig = cd.textContent;
+      const ta = document.createElement('textarea');
+      ta.value = orig; ta.rows = 3;
+      ta.style.cssText = 'width:100%;padding:6px;border:1px solid var(--primary);border-radius:4px;font-size:12px';
+      cd.replaceWith(ta); ta.focus();
+      const save = async () => {
+        const val = ta.value.trim();
+        if (val === orig) { ta.replaceWith(cd); return; }
+        await window.electronAPI.updateNote(noteId, val);
+        cd.textContent = val; ta.replaceWith(cd);
+        showToast('已更新','ok');
+      };
+      ta.addEventListener('blur', save);
+      ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); } });
+    });
   });
 }
 

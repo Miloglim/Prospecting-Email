@@ -341,8 +341,14 @@ function addNote(contactId, content) {
   getDb().prepare("INSERT INTO contact_notes (id,contact_id,content,created_at,updated_at) VALUES (?,?,?,?,?)").run(id, contactId, content.trim(), now, now);
   return { id, contact_id: contactId, content: content.trim(), created_at: now, updated_at: now };
 }
+function updateNote(noteId, content) {
+  if (!content?.trim()) return false;
+  const now = new Date().toISOString();
+  getDb().prepare("UPDATE contact_notes SET content = ?, updated_at = ? WHERE id = ?").run(content.trim(), now, noteId);
+  return true;
+}
 function deleteNote(noteId) {
   getDb().prepare("DELETE FROM contact_notes WHERE id = ?").run(noteId);
 }
 
-module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson, listNotes, addNote, deleteNote };
+module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson, listNotes, addNote, updateNote, deleteNote };

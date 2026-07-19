@@ -484,6 +484,11 @@ function register(ipcMain, deps) {
     if (!note) return { ok: false, error: '内容为空' };
     return { ok: true, data: note };
   });
+  ipcMain.handle('contacts:updateNote', async (_e, noteId, content) => {
+    const ok = db.updateNote(noteId, content);
+    if (!ok) return { ok: false, error: '内容为空' };
+    return { ok: true };
+  });
   ipcMain.handle('contacts:deleteNote', async (_e, noteId) => {
     db.deleteNote(noteId);
     return { ok: true };
