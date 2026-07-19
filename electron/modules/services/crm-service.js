@@ -66,14 +66,16 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选（key + alias 都认）
-  const entryMatch = (tags) => {
-    for (const t of [TAG.replied, TAG.reached]) {
-      if (tags.some(x => x === t.key || (t.alias || []).includes(x))) return true;
-    }
+  // 入口筛选：有 replied/reached，或有任意管线标签
+  const ALL_TAG_KEYS = Object.values(TAG).flatMap(t => [t.key, ...(t.alias || [])]);
+  const isEntry = (tags) => {
+    // 门票：replied 或 reached
+    if (tags.some(x => [TAG.replied, TAG.reached].some(t => x === t.key || (t.alias || []).includes(x)))) return true;
+    // 已有管线阶段标签的直接进
+    if (tags.some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))) return true;
     return false;
   };
-  const entered = allContacts.filter(c => entryMatch(c.tags || []));
+  const entered = allContacts.filter(c => isEntry(c.tags || []));
 
   // 按管线阶段分类
   const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color, contacts: [] }));
