@@ -185,53 +185,64 @@ export async function loadDashboard(){
     }else{
       document.getElementById('dash-stage-dist').textContent='加载失败';
     }
-    // 待办详情
+    // 待办详情（逐条记录，含缺失字段明细）
     try{
-      const rm=await window.electronAPI.crmCheckReminders();
-      const items=[]; // { type:'overdue'|'due'|'missing', text, detail }
+      const PREF_LABELS={preferredRoutes:'偏好路线',cargoTypes:'货物类型',decisionRole:'决策角色',priceSensitivity:'价格敏感度',preferredPorts:'偏好港口',annualVolume:'年货量'};
+      const PREFS_KEYS=Object.keys(PREF_LABELS);
+      const items=[]; // { type:'overdue'|'due'|'missing', name, company, detail }
       const now=Date.now();
-      // CRM 到期提醒
+      // 1) CRM 跟进提醒
+      const rm=await window.electronAPI.crmCheckReminders();
       if(rm.ok&&rm.data){
-        const due=rm.data.due||[],overdue=rm.data.overdue||[];
-        for(const r of overdue){
-          const days=Math.ceil((now-new Date(r._extra?.crmReminder?.nextFollowupAt).getTime())/(86400000));
+        for(const r of(rm.data.overdue||[])){
+          const days=Math.ceil((now-new Date(r._extra?.crmReminder?.nextFollowupAt).getTime())/(86400000))||1;
           const name=(r.first_name||'')+' '+(r.last_name||'');
-          const co=r.company_name||'';
-          items.push({type:'overdue',text:name.trim()||r.email,detail:`${co} · 已逾${days||1}天`});
+          items.push({type:'overdue',name:name.trim()||r.email,company:r.company_name||'',detail:`跟进逾期${days}天`});
         }
-        if(due.length&&!overdue.length){
-          // 只有今日到期没有逾期时，只显示计数（没那么紧急）
-          items.push({type:'due',text:`${due.length} 位联系人`});
+        for(const r of(rm.data.due||[])){
+          const name=(r.first_name||'')+' '+(r.last_name||'');
+          items.push({type:'due',name:name.trim()||r.email,company:r.company_name||'',detail:'今日跟进'});
         }
       }
-      // 偏好缺失
-      const prefsKeys=['preferredRoutes','cargoTypes','decisionRole','priceSensitivity','preferredPorts','annualVolume'];
-      const missingByStage={};
+      // 2) 字段完整性：逐人列出缺失的偏好字段
       for(const c of allPipelineContacts){
         let extra={};
         try{extra=typeof c._extra==='string'?JSON.parse(c._extra):(c._extra||{});}catch{}
         const p=extra.crmPreferences||{};
-        if(!prefsKeys.some(k=>p[k]!==undefined&&p[k]!==''&&p[k]!==null)){
-          const st=contactStageMap[c.id]||'触达中';
-          missingByStage[st]=(missingByStage[st]||0)+1;
-        }
+        const missing=PREFS_KEYS.filter(k=>!p[k]||(typeof p[k]==='string'&&!p[k].trim()));
+        if(!missing.length) continue;
+        const name=(c.first_name||'')+' '+(c.last_name||'');
+        items.push({type:'missing',name:name.trim()||c.email,company:c.company_name||c.company||'',detail:`缺${missing.map(k=>PREF_LABELS[k]).join('/')}`,contactId:c.id});
       }
-      const totalMissing=Object.values(missingByStage).reduce((a,b)=>a+b,0);
-      if(totalMissing>0){
-        const detail=Object.entries(missingByStage).map(([k,v])=>`${k}${v}`).join(' · ');
-        items.push({type:'missing',text:`${totalMissing} 位资料不全`,detail});
-      }
+      // 排序：逾期 → 今日到期 → 缺失
+      items.sort((a,b)=>{const o={overdue:0,due:1,missing:2};return o[a.type]-o[b.type]||a.name.localeCompare(b.name);});
       // 渲染
-      const listEl=document.getElementById('dash-todo-list');
+      const box=document.getElementById('dash-todo-box');
       if(!items.length){
-        listEl.innerHTML='<span class="dash-todo-item" style="color:var(--text-secondary)">✓ 无待办</span>';
+        box.innerHTML='<span style="color:var(--success);font-size:11px">✓ 无待办</span>';
       }else{
-        listEl.innerHTML=items.map(i=>{
-          const dotClass=i.type==='overdue'?'overdue':i.type==='due'?'due':'missing';
-          return `<div class="dash-todo-item"><span class="dash-todo-dot ${dotClass}"></span><span class="dash-todo-label">${escapeHtml(i.text)}</span>${i.detail?`<span class="dash-todo-detail">${escapeHtml(i.detail)}</span>`:''}</div>`;
+        const TYPE_COLOR={overdue:'var(--danger)',due:'#e65100',missing:'var(--text-secondary)'};
+        const TYPE_DOT={overdue:'var(--danger)',due:'#ff9800',missing:'#9e9e9e'};
+        box.innerHTML=items.map(i=>{
+          const label=i.company?`${i.name}(${i.company})`:i.name;
+          const cid=i.contactId?` data-contact-id="${escapeHtml(i.contactId)}"`:'';
+          const cls=i.contactId?' class="dash-todo-item dash-todo-clickable"':'class="dash-todo-item"';
+          return `<div${cls}${cid}><span class="dash-todo-dot" style="background:${TYPE_DOT[i.type]}"></span><span style="color:${TYPE_COLOR[i.type]}">${escapeHtml(label)}</span> <span style="color:var(--text-secondary)">${escapeHtml(i.detail)}</span></div>`;
         }).join('');
+        // 点击字段缺失条目 → 跳转 CRM 联系人详情
+        box.querySelectorAll('.dash-todo-clickable').forEach(el=>{
+          el.addEventListener('click',()=>{
+            const cid=el.dataset.contactId;
+            if(!cid) return;
+            // 导航到 CRM 页面
+            const nav=document.querySelector('[data-page="crm"]');
+            if(nav) nav.click();
+            // 等页面渲染后打开详情
+            setTimeout(()=>{if(window.__crmOpenDetail) window.__crmOpenDetail(cid);},400);
+          });
+        });
       }
-    }catch(e){document.getElementById('dash-todo-list').innerHTML='<span class="dash-todo-item">—</span>';}
+    }catch(e){document.getElementById('dash-todo-box').innerHTML='<span class="dash-todo-item">—</span>';}
   }catch(e){document.getElementById('dash-stage-dist').textContent='—';document.getElementById('dash-todo-list').innerHTML='<span class="dash-todo-item">—</span>';}
 }
 
@@ -253,7 +264,7 @@ document.getElementById('dash-gen-report')?.addEventListener('click',async funct
   try{
     const r=await window.electronAPI.generateReport();
     if(!r.ok){alert('生成失败: '+r.error);return}
-    alert('报告已生成\n'+r.data.path);
+    await window.electronAPI.openPath(r.data.path);
   }catch(e){alert('生成失败: '+e.message)}
   finally{btn.disabled=false;btn.textContent='生成今日报告';}
 });

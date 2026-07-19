@@ -124,6 +124,18 @@ function register(ipcMain, deps) {
     try { if (fs.existsSync(rlp)) return { ok: true, data: JSON.parse(fs.readFileSync(rlp, 'utf-8')) }; } catch { /* 文件损坏 */ }
     return { ok: true, data: [] };
   });
+  ipcMain.handle('reply:getCount', async () => {
+    const reply = require('../services/reply-checker');
+    return reply.getReplyCount();
+  });
+
+  ipcMain.handle("shell:openPath", async (_e, filePath) => {
+    try {
+      const { shell } = require("electron");
+      await shell.openPath(filePath);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
 }
 
 module.exports = { register };

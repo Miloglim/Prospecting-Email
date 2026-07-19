@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 今日报告
   generateReport: () => ipcRenderer.invoke("report:generate"),
+  openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),
   exportReportPdf: (html) => ipcRenderer.invoke("report:exportPdf", html),
   onCrmChanged: (cb) => {
     ipcRenderer.on("crm:changed", cb);
