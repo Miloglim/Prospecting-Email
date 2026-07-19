@@ -235,41 +235,21 @@ async function openDetailPanel(contactId) {
     });
   }
 
-  // 添加记录按钮 → 展开表单
-  const addBtn = panel.querySelector('#crm-add-record-btn');
-  if (addBtn) {
-    addBtn.addEventListener('click', () => {
-      const form = panel.querySelector('#crm-record-form');
-      form.style.display = form.style.display === 'none' ? 'block' : 'none';
-      if (form.style.display === 'block') panel.querySelector('#crm-record-content')?.focus();
-    });
-  }
-
-  // 保存记录
-  const saveBtn = panel.querySelector('#crm-record-save');
-  if (saveBtn) {
-    saveBtn.addEventListener('click', async () => {
-      const content = panel.querySelector('#crm-record-content')?.value?.trim();
-      if (!content) { showToast('请输入内容','warn'); return; }
-      const r3 = await window.electronAPI.crmSaveNote(contactId, content);
-      if (r3.ok) {
-        panel.querySelector('#crm-record-content').value = '';
-        panel.querySelector('#crm-record-form').style.display = 'none';
-        showToast('已保存','ok');
-        const d = await window.electronAPI.crmGetDetail(contactId);
-        if (d.ok) {
-          const fl = panel.querySelector('[data-content="followup"]');
-          if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
-          // 重新绑定事件
-          rebindFollowupEvents(panel, contactId);
-        }
+  // 保存跟进记录
+  panel.querySelector('#crm-record-save')?.addEventListener('click', async () => {
+    const content = panel.querySelector('#crm-record-content')?.value?.trim();
+    if (!content) { showToast('请输入内容','warn'); return; }
+    const r3 = await window.electronAPI.crmSaveNote(contactId, content);
+    if (r3.ok) {
+      panel.querySelector('#crm-record-content').value = '';
+      showToast('已保存','ok');
+      const d = await window.electronAPI.crmGetDetail(contactId);
+      if (d.ok) {
+        const fl = panel.querySelector('[data-content="followup"]');
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        rebindFollowupEvents(panel, contactId);
       }
-    });
-  }
-
-  // 取消
-  panel.querySelector('#crm-record-cancel')?.addEventListener('click', () => {
-    panel.querySelector('#crm-record-form').style.display = 'none';
+    }
   });
 }
 
@@ -317,19 +297,11 @@ function followupTab(cid, reminder, notes, interactions) {
     : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
 
   return `
-    <div class="crm-followup-top">
-      <div class="crm-field-row"><label>下次跟进</label><input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px"></div>
-      <button id="crm-add-record-btn" class="primary" style="width:100%;margin-top:8px;padding:8px;font-size:13px">+ 添加跟进记录</button>
-    </div>
-    <div id="crm-record-form" class="crm-record-form" style="display:none;margin-top:8px">
-      <input type="datetime-local" id="crm-record-date" value="${fmtDT(new Date().toISOString()).slice(0,16)}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;margin-bottom:6px">
-      <textarea id="crm-record-content" rows="3" placeholder="记录内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
-      <div style="display:flex;gap:6px;margin-top:6px">
-        <button id="crm-record-save" class="primary" style="flex:1;padding:6px;font-size:12px">保存</button>
-        <button id="crm-record-cancel" class="secondary" style="padding:6px 12px;font-size:12px">取消</button>
-      </div>
-    </div>
-    <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">记录列表</div>
+    <div class="crm-field-row"><label>下次跟进</label><input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px"></div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">添加记录</div>
+    <textarea id="crm-record-content" rows="3" placeholder="记录内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:12px;margin-top:4px"></textarea>
+    <button id="crm-record-save" class="primary" style="width:100%;margin-top:6px;padding:8px;font-size:13px">保存跟进记录</button>
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">历史记录</div>
     <div class="crm-followup-list">${listHtml}</div>`;
 }
 
@@ -365,25 +337,17 @@ function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch 
 function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
 
 function rebindFollowupEvents(panel, contactId) {
-  const nf = panel.querySelector('#crm-next-followup');
-  if (nf) nf.addEventListener('change', async () => {
-    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: nf.value } });
-    scheduleReminder(contactId, nf.value); showToast('已更新','ok');
+  panel.querySelector('#crm-next-followup')?.addEventListener('change', async () => {
+    const val = panel.querySelector('#crm-next-followup').value;
+    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
+    scheduleReminder(contactId, val); showToast('已更新','ok');
   });
-  const ab = panel.querySelector('#crm-add-record-btn');
-  if (ab) ab.addEventListener('click', () => {
-    const f = panel.querySelector('#crm-record-form');
-    f.style.display = f.style.display === 'none' ? 'block' : 'none';
-    if (f.style.display === 'block') panel.querySelector('#crm-record-content')?.focus();
-  });
-  const sb = panel.querySelector('#crm-record-save');
-  if (sb) sb.addEventListener('click', async () => {
+  panel.querySelector('#crm-record-save')?.addEventListener('click', async () => {
     const c = panel.querySelector('#crm-record-content')?.value?.trim();
     if (!c) { showToast('请输入内容','warn'); return; }
     const r3 = await window.electronAPI.crmSaveNote(contactId, c);
     if (r3.ok) {
       panel.querySelector('#crm-record-content').value = '';
-      panel.querySelector('#crm-record-form').style.display = 'none';
       showToast('已保存','ok');
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
@@ -392,9 +356,6 @@ function rebindFollowupEvents(panel, contactId) {
         rebindFollowupEvents(panel, contactId);
       }
     }
-  });
-  panel.querySelector('#crm-record-cancel')?.addEventListener('click', () => {
-    panel.querySelector('#crm-record-form').style.display = 'none';
   });
 }
 
