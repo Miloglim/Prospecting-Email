@@ -8,6 +8,7 @@ const STAGES = [
   { stage: "试单",   color: "#8e24aa" },
   { stage: "合作中", color: "#4caf50" },
   { stage: "已流失", color: "#b0b0b0" },
+  { stage: "有回复", color: "#22a644" },
   { stage: "触达中", color: "#ff9800" },
 ];
 

@@ -8,17 +8,18 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段 — 直接读取 contacts.tags */
+/** 管道阶段 + 标签匹配规则（优先级从高到低） */
 const PIPELINE_STAGES = [
-  { stage: "报价中", color: "#2196f3" },
-  { stage: "试单",   color: "#8e24aa" },
-  { stage: "合作中", color: "#4caf50" },
-  { stage: "已流失", color: "#b0b0b0" },
-  { stage: "触达中", color: "#ff9800" }, // 默认
+  { stage: "报价中", color: "#2196f3", match: ["报价中"] },
+  { stage: "试单",   color: "#8e24aa", match: ["试单"] },
+  { stage: "合作中", color: "#4caf50", match: ["合作中"] },
+  { stage: "已流失", color: "#b0b0b0", match: ["已流失"] },
+  { stage: "有回复", color: "#22a644", match: ["有回复", "replied"] },
+  { stage: "触达中", color: "#ff9800", match: ["触达中", "已触达", "reached"] }, // 默认
 ];
 
-// 入口条件
-const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
+// 入口条件（两层过滤第一层）
+const ENTRY_TAGS = PIPELINE_STAGES.slice(-2).flatMap(s => s.match); // 有回复 + 触达中 的所有别名
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -62,21 +63,20 @@ function listPipeline(filters = {}) {
     (c.tags || []).some(t => ENTRY_TAGS.includes(t))
   );
 
-  // 按 tags 分列（优先级：报价中 > 试单 > 合作中 > 已流失 > 触达中）
+  // 第二层：按标签分类
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
+  const defaultCol = columns.find(x => x.stage === "触达中");
   for (const c of entered) {
     const tags = c.tags || [];
     let matched = false;
     for (const s of PIPELINE_STAGES) {
-      if (tags.includes(s.stage)) {
+      if (tags.some(t => s.match.includes(t))) {
         columns.find(x => x.stage === s.stage)?.contacts.push(c);
         matched = true;
         break;
       }
     }
-    if (!matched) {
-      columns.find(x => x.stage === "触达中")?.contacts.push(c);
-    }
+    if (!matched && defaultCol) defaultCol.contacts.push(c);
   }
 
   return { columns };
@@ -94,8 +94,10 @@ function setStage(contactId, newStage) {
   if (!contact) return { ok: false, error: "联系人不存在" };
 
   // 移除旧管线标签，写入新标签
-  const ALL_STAGE_TAGS = PIPELINE_STAGES.map(s => s.stage);
-  const newTags = [...new Set([...(contact.tags || []).filter(t => !ALL_STAGE_TAGS.includes(t)), newStage])];
+  const ALL_MATCH_TAGS = PIPELINE_STAGES.flatMap(s => s.match);
+  const rule = PIPELINE_STAGES.find(s => s.stage === newStage);
+  const writeTag = rule ? rule.match[0] : newStage; // 用中文标准值
+  const newTags = [...new Set([...(contact.tags || []).filter(t => !ALL_MATCH_TAGS.includes(t)), writeTag])];
 
   const oldTags = contact.tags || [];
   contactsDb.update(contactId, { tags: newTags });
