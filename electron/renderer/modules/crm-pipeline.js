@@ -207,13 +207,12 @@ async function openDetailPanel(contactId) {
         if (r.ok && r.data.length) {
           tgt.innerHTML = r.data.map(m => `
             <div class="crm-email-item">
-              <div class="crm-email-meta">
-                <span>${m.type==='reply'?'📥':m.type==='bounce'?'↩️':'📧'} ${escapeHtml(m.subject||'(无主题)')}</span>
-                <span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${escapeHtml((m.date||'').slice(0,16))}</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':'var(--text-secondary)'}">${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
+                <span style="flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.subject||'(无主题)')}</span>
+                <span style="font-size:10px;color:var(--text-secondary);white-space:nowrap">${escapeHtml(fmtDT(m.date))}</span>
               </div>
-              <div style="font-size:11px;color:var(--text-secondary)">
-                ${m.type==='reply'?'发件人':'收件人'}: ${escapeHtml(m.from_name||m.from_addr||'')}${m.from_addr ? ` &lt;${escapeHtml(m.from_addr)}&gt;` : ''}
-              </div>
+              <div style="font-size:11px;color:var(--text-secondary);padding-left:20px">${escapeHtml(m.from_name||m.from_addr||'')}</div>
             </div>`).join('');
           tgt.querySelectorAll('.crm-email-item').forEach((row, i) => {
             row.addEventListener('click', () => {
