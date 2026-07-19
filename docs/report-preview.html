@@ -11,9 +11,9 @@
     --bg: #fafafa;
     --card: #ffffff;
     --text: #1d1d1f;
-    --text2: #6e6e73;
+    --text2: #86868b;
     --text3: #aeaeb2;
-    --sep: #f0f0f0;
+    --sep: #ededed;
   }
 
   body {
@@ -22,41 +22,38 @@
     color: var(--text);
     display: flex;
     justify-content: center;
-    padding: 64px 24px;
+    padding: 56px 20px;
     -webkit-font-smoothing: antialiased;
   }
 
-  .report {
-    width: 560px;
-    max-width: 100%;
-  }
+  .report { width: 560px; max-width: 100%; }
 
   .report-header {
-    padding: 0 0 48px;
+    padding: 0 0 40px;
   }
 
   .report-title {
-    font-size: 34px;
-    font-weight: 300;
-    letter-spacing: -0.03em;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
   }
 
   .report-date {
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text2);
-    margin-top: 4px;
-    font-weight: 300;
+    margin-top: 3px;
+    font-weight: 400;
   }
 
   .section {
-    margin-bottom: 36px;
+    margin-bottom: 30px;
   }
 
   .section-label {
     font-size: 11px;
-    font-weight: 400;
-    color: var(--text3);
-    letter-spacing: 0.04em;
+    font-weight: 500;
+    color: var(--text2);
+    letter-spacing: 0.03em;
     margin-bottom: 10px;
     padding-left: 2px;
   }
@@ -76,15 +73,15 @@
 
   .metric-card .val {
     font-size: 26px;
-    font-weight: 300;
+    font-weight: 500;
     letter-spacing: -0.03em;
   }
 
   .metric-card .lbl {
     font-size: 12px;
     color: var(--text2);
-    margin-top: 2px;
-    font-weight: 300;
+    margin-top: 3px;
+    font-weight: 400;
   }
 
   .pipe-row {
@@ -105,7 +102,7 @@
 
   .pipe-item .n {
     font-size: 20px;
-    font-weight: 300;
+    font-weight: 500;
     letter-spacing: -0.03em;
   }
 
@@ -113,19 +110,19 @@
     font-size: 11px;
     color: var(--text2);
     margin-top: 2px;
-    font-weight: 300;
+    font-weight: 400;
   }
 
   .followup-list {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 4px;
   }
 
   .followup-item {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     padding: 10px 14px;
     background: var(--card);
     border-radius: 8px;
@@ -142,7 +139,7 @@
   .fu-dot.today { background: #ff9f0a; }
 
   .fu-name {
-    font-weight: 400;
+    font-weight: 500;
     font-size: 13px;
   }
 
@@ -150,18 +147,38 @@
     font-size: 12px;
     color: var(--text2);
     margin-left: auto;
-    font-weight: 300;
+    font-weight: 400;
+  }
+
+  .briefing {
+    background: var(--card);
+    border: 0.5px solid var(--sep);
+    border-radius: 10px;
+    padding: 18px 18px 14px;
+  }
+
+  .briefing p {
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--text);
+    margin-bottom: 6px;
+    font-weight: 400;
+  }
+
+  .briefing .highlight {
+    font-weight: 500;
+    color: #1d1d1f;
   }
 
   .report-footer {
-    margin-top: 48px;
+    margin-top: 40px;
     padding-top: 12px;
     border-top: 0.5px solid var(--sep);
     font-size: 11px;
     color: var(--text3);
     display: flex;
     justify-content: space-between;
-    font-weight: 300;
+    font-weight: 400;
   }
 </style>
 </head>
@@ -222,6 +239,14 @@
         <span class="fu-name">Fabio Ferraro</span>
         <span class="fu-co">Grupo Basser</span>
       </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">简报</div>
+    <div class="briefing">
+      <p>今日发送 <span class="highlight">12</span> 封，成功率 <span class="highlight">91.7%</span>。收到 <span class="highlight">3</span> 封客户回复，回复率 <span class="highlight">25%</span>。退信 <span class="highlight">2</span> 封需清理。</p>
+      <p>管线总计 <span class="highlight">18</span> 人。其中 <span class="highlight">9</span> 人处于触达中阶段待推进，<span class="highlight">5</span> 人已进入稳定合作。今日有 <span class="highlight">3</span> 人需跟进，其中 <span class="highlight">1</span> 人已逾期。</p>
     </div>
   </div>
 
