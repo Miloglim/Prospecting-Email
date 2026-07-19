@@ -1420,6 +1420,7 @@ select option { font-size: 12px; }
 .crm-field-row span { flex: 1; }
 .crm-field-row select, .crm-field-row input[type="text"], .crm-field-row input[type="datetime-local"], .crm-field-row textarea { flex: 1; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; background: var(--bg); color: var(--text); }
 .crm-field-row textarea { resize: vertical; min-height: 40px; }
+input[type="datetime-local"] { font-family: inherit; color-scheme: dark; }
 
 /* 跟进记录 */
 .crm-followup-top { margin-bottom: 4px; }
