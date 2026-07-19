@@ -44,10 +44,10 @@ function generate(aiFn) {
   const bounceRate = sentToday > 0 ? Math.round(bounces / sentToday * 1000) / 10 : 0;
 
   // 管线数据
+  const crmService = require("./crm-service");
   const stageCounts = { reaching: 0, quoting: 0, trial: 0, cooperating: 0, lost: 0 };
   let totalInPipeline = 0;
   try {
-    const crmService = require("./crm-service");
     const pipeline = crmService.listPipeline();
     if (pipeline?.columns) {
       for (const col of pipeline.columns) {
