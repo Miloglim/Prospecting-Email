@@ -268,6 +268,34 @@ async function openDetailPanel(contactId) {
     });
   });
 
+  // 邮件详情弹窗
+  panel.querySelectorAll('.crm-email-item').forEach(row => {
+    row.addEventListener('click', async () => {
+      const uid = row.dataset.uid;
+      const acct = row.dataset.account;
+      if (!uid || !acct) return;
+      const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+      if (!r.ok) { showToast('无法加载邮件','err'); return; }
+      const m = r.data;
+      const popup = document.createElement('div');
+      popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+      popup.innerHTML = `
+        <div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div>
+            </div>
+            <button class="crm-detail-close-btn">${lucide('x',16)}</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div>
+        </div>`;
+      document.body.appendChild(popup);
+      popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+      popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+    });
+  });
+
   // 编辑历史备注
   panel.querySelectorAll('.crm-note-edit').forEach(p => {
     p.addEventListener('click', (ev) => {
@@ -322,11 +350,13 @@ function prefsTab(cid, prefs) {
 
 function followupTab(cid, reminder, notes, interactions) {
   const na = reminder.nextFollowupAt || '';
-  // 只看手动备注，不显示邮件互动
-  const items = (notes||[]).map(n => ({ id: n.id, type:'note', time:n.created_at, content:n.content }))
+  // 手动备注
+  const noteItems = (notes||[]).map(n => ({ id: n.id, type:'note', time:n.created_at, content:n.content }))
     .sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
+  // 邮件互动
+  const emailItems = (interactions||[]).filter(i => i.type !== 'stage_changed').slice(0,30);
 
-  const listHtml = items.length ? items.map(i => `
+  const notesHtml = noteItems.length ? noteItems.map(i => `
     <div class="crm-followup-item" data-note-id="${i.id||''}">
       <div class="crm-followup-time">
         📝 ${fmtDT(i.time)}
@@ -337,7 +367,17 @@ function followupTab(cid, reminder, notes, interactions) {
       </div>
       <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.content||'')}</div>
     </div>`).join('')
-    : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
+    : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
+
+  const emailsHtml = emailItems.length ? emailItems.map(i => `
+    <div class="crm-email-item" data-uid="${escapeHtml(i.email_uid||'')}" data-account="${escapeHtml(i.email_account||'')}">
+      <div class="crm-email-meta">
+        <span>${i.direction==='in'?'📥':'📤'} ${escapeHtml(i.subject||'(无主题)')}</span>
+        <span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${fmtDT(i.created_at)}</span>
+      </div>
+      <div class="crm-email-snippet" style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.snippet||'')}</div>
+    </div>`).join('')
+    : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
 
   const statusDot = na ? (isOverdue(na) ? '🔴' : isSoon(na) ? '🟠' : '🟢') : '⚪';
   const statusText = na ? (isOverdue(na) ? '已逾期' : isSoon(na) ? '即将到期' : '正常') : '未设置';
@@ -347,11 +387,13 @@ function followupTab(cid, reminder, notes, interactions) {
       <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card-bg);color:var(--text)">
       <span style="font-size:11px;white-space:nowrap">${statusDot} ${statusText}</span>
     </div>
-    <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">添加记录</div>
-    <textarea id="crm-record-content" rows="3" placeholder="记录内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:12px;margin-top:4px"></textarea>
-    <button id="crm-record-save" class="primary" style="width:100%;margin-top:6px;padding:8px;font-size:13px">保存跟进记录</button>
-    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">历史记录</div>
-    <div class="crm-followup-list">${listHtml}</div>`;
+    <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
+    <textarea id="crm-record-content" rows="2" placeholder="记录内容..." style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
+    <button id="crm-record-save" class="primary" style="width:100%;margin-top:4px;padding:6px;font-size:12px">保存</button>
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--text-secondary);font-weight:600">跟进备注</div>
+    <div class="crm-followup-list">${notesHtml}</div>
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--text-secondary);font-weight:600">邮件往来</div>
+    <div class="crm-email-list">${emailsHtml}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -420,6 +462,34 @@ function rebindFollowupEvents(panel, contactId) {
         if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
         rebindFollowupEvents(panel, contactId);
       }
+    });
+  });
+
+  // 邮件详情弹窗
+  panel.querySelectorAll('.crm-email-item').forEach(row => {
+    row.addEventListener('click', async () => {
+      const uid = row.dataset.uid;
+      const acct = row.dataset.account;
+      if (!uid || !acct) return;
+      const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+      if (!r.ok) { showToast('无法加载邮件','err'); return; }
+      const m = r.data;
+      const popup = document.createElement('div');
+      popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+      popup.innerHTML = `
+        <div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div>
+            </div>
+            <button class="crm-detail-close-btn">${lucide('x',16)}</button>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div>
+        </div>`;
+      document.body.appendChild(popup);
+      popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+      popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
     });
   });
 

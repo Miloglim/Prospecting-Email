@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   crmUpdateExtra: (contactId, patch) => ipcRenderer.invoke("crm:updateExtra", contactId, patch),
   crmGetDetail: (contactId) => ipcRenderer.invoke("crm:getDetail", contactId),
   crmSaveNote: (contactId, content) => ipcRenderer.invoke("crm:saveNote", contactId, content),
+  crmGetEmailBody: (uid, accountId) => ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
   crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
   onCrmChanged: (cb) => {
     ipcRenderer.on("crm:changed", cb);

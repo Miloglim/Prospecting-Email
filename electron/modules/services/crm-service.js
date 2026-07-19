@@ -226,4 +226,14 @@ function _normalizeRow(r) {
   return r;
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, PIPELINE_STAGES, TAG };
+// ── 邮件正文查询 ──────────────────────────────────────────────────────────────
+
+function getEmailBody(uid, accountId) {
+  if (!uid || !accountId) return { ok: false, error: "参数缺失" };
+  const db = getDb();
+  const row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? AND account_id = ?").get(uid, accountId);
+  if (!row) return { ok: false, error: "邮件不存在" };
+  return { ok: true, data: row };
+}
+
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getEmailBody, PIPELINE_STAGES, TAG };
