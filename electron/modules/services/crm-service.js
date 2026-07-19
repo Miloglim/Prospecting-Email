@@ -63,6 +63,7 @@ function listPipeline(filters = {}) {
   );
 
   // 按 opp_stage 分列
+  Log.info("CRM", `入口: ${entered.length}人, opp_stage分布: ${[...new Set(entered.map(c => c.opp_stage || '(空)'))].join(', ')}`);
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
   for (const c of entered) {
     const stage = (c.opp_stage && c.opp_stage !== "待开发") ? c.opp_stage : "触达中";
