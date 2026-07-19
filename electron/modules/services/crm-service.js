@@ -6,21 +6,30 @@ const interactionsDb = require("./interactions-db");
 const { getDb } = require("./db");
 const { Log } = require("../core/logger");
 
-// ── 标签定义：联系人面板的值是主 key，英文 inbox 值是别名 ──────────────────
+// ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
 
-// 入口标签（门票）
-const ENTRY_MATCH = ["replied", "有回复", "reached", "已触达"];
+const TAG = {
+  replied:     { key: "replied",     label: "有回复",   color: "#22a644", alias: ["有回复"] },
+  autoreply:   { key: "autoreply",   label: "自动回复", color: "#e6a817", alias: ["自动回复", "auto_reply"] },
+  bounced:     { key: "bounced",     label: "退信",     color: "#d93025", alias: ["bounced_by_contact", "退信"] },
+  reached:     { key: "reached",     label: "已触达",   color: "#3b82f6", alias: ["已触达"] },
+  quoting:     { key: "quoting",     label: "报价中",   color: "#2196f3", alias: ["报价中"] },
+  trial:       { key: "trial",       label: "试单",     color: "#8e24aa", alias: ["试单"] },
+  cooperating: { key: "cooperating", label: "合作中",   color: "#4caf50", alias: ["合作中"] },
+  lost:        { key: "lost",        label: "已流失",   color: "#b0b0b0", alias: ["已流失"] },
+  reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中"] },
+};
 
-// 管线阶段（优先级从高到低）— 直接用联系人面板的标签值
+// 管线阶段（优先级从高到低）
 const PIPELINE_STAGES = [
-  { key: "报价中", color: "#2196f3", alias: ["quoting"] },
-  { key: "试单",   color: "#8e24aa", alias: ["trial"] },
-  { key: "合作中", color: "#4caf50", alias: ["cooperating"] },
-  { key: "已流失", color: "#b0b0b0", alias: ["lost"] },
-  { key: "触达中", color: "#ff9800", alias: ["reaching", "已触达", "reached"] }, // 默认
+  { key: TAG.quoting.key,     label: TAG.quoting.label,     color: TAG.quoting.color },
+  { key: TAG.trial.key,       label: TAG.trial.label,       color: TAG.trial.color },
+  { key: TAG.cooperating.key, label: TAG.cooperating.label, color: TAG.cooperating.color },
+  { key: TAG.lost.key,        label: TAG.lost.label,        color: TAG.lost.color },
+  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color }, // 默认
 ];
 
-const PIPELINE_KEYS = PIPELINE_STAGES.flatMap(s => [s.key, ...s.alias]);
+const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -57,27 +66,34 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口：replied/reached（门票）+ 已有管线标签的（被手动分类过）
-  const ALL_MATCH = [...ENTRY_MATCH, ...PIPELINE_STAGES.flatMap(s => [s.key, ...s.alias])];
-  const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ALL_MATCH.includes(t))
-  );
+  // 入口筛选：有 replied/reached，或有任意管线标签
+  const isEntry = (tags) => {
+    // 门票：replied 或 reached
+    if (tags.some(x => [TAG.replied, TAG.reached].some(t => x === t.key || (t.alias || []).includes(x)))) return true;
+    // 已有管线阶段标签的直接进
+    if (tags.some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))) return true;
+    return false;
+  };
+  const entered = allContacts.filter(c => isEntry(c.tags || []));
 
-  // 分列：直接读联系人已有 tags，匹配管线阶段（key + alias）
-  const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.key, color: s.color, contacts: [] }));
-  const defaultCol = columns.find(x => x.key === "触达中");
+  // 按管线阶段分类
+  const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color, contacts: [] }));
+  const defaultCol = columns.find(x => x.key === TAG.reaching.key);
+  const matchKey = (tags, stageDef) => {
+    const keys = [stageDef.key, ...Object.values(TAG).find(t => t.key === stageDef.key)?.alias || []];
+    return tags.some(t => keys.includes(t));
+  };
   for (const c of entered) {
     const tags = c.tags || [];
     let matched = false;
     for (const s of PIPELINE_STAGES) {
-      const allKeys = [s.key, ...s.alias];
-      if (tags.some(t => allKeys.includes(t))) {
+      if (matchKey(tags, s)) {
         columns.find(x => x.key === s.key)?.contacts.push(c);
         matched = true;
         break;
       }
     }
-    if (!matched && defaultCol) defaultCol.contacts.push(c);
+    if (!matched && defaultCol) { defaultCol.contacts.push(c); }
   }
 
   Log.info("CRM", `入口: ${entered.length}人 列: ${columns.map(c => c.label + '(' + c.contacts.length + ')').join(' ')}`);
@@ -87,16 +103,16 @@ function listPipeline(filters = {}) {
 // ── 阶段切换 ──────────────────────────────────────────────────────────────────
 
 function setStage(contactId, newKey) {
-  const stageDef = PIPELINE_STAGES.find(s => s.key === newKey);
-  if (!stageDef) return { ok: false, error: `无效阶段: ${newKey}` };
+  if (!PIPELINE_KEYS.includes(newKey)) {
+    return { ok: false, error: `无效阶段: ${newKey}` };
+  }
 
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
   // 清除旧管线标签，写入新标签
-  const allStageTags = PIPELINE_STAGES.flatMap(s => [s.key, ...s.alias]);
   const oldTags = contact.tags || [];
-  const newTags = [...new Set([...oldTags.filter(t => !allStageTags.includes(t)), newKey])];
+  const newTags = [...new Set([...oldTags.filter(t => !PIPELINE_KEYS.includes(t)), newKey])];
 
   contactsDb.update(contactId, { tags: newTags });
 
@@ -210,4 +226,4 @@ function _normalizeRow(r) {
   return r;
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, PIPELINE_STAGES };
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, PIPELINE_STAGES, TAG };
