@@ -5,11 +5,11 @@ import { escapeHtml, lucide, showToast } from './shared.js';
 
 // 后端存英文 key，前端显示中文 label
 const STAGES = [
-  { key: "quoting",     label: "报价中", color: "#2196f3" },
-  { key: "trial",       label: "试单",   color: "#8e24aa" },
-  { key: "cooperating", label: "合作中", color: "#4caf50" },
-  { key: "lost",        label: "已流失", color: "#b0b0b0" },
-  { key: "reaching",    label: "触达中", color: "#ff9800" },
+  { key: "报价中", color: "#2196f3" },
+  { key: "试单",   color: "#8e24aa" },
+  { key: "合作中", color: "#4caf50" },
+  { key: "已流失", color: "#b0b0b0" },
+  { key: "触达中", color: "#ff9800" },
 ];
 
 let _pipelineData = null;
@@ -132,7 +132,7 @@ function showStagePicker(anchor, contactId, cur) {
 
   p.innerHTML = STAGES.map(s => {
     const is = s.key === cur;
-    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.label}</div>`;
+    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.key}</div>`;
   }).join('');
 
   p.querySelectorAll('[data-s]').forEach(d => {
