@@ -17,7 +17,7 @@ const TAG = {
   trial:       { key: "trial",       label: "试单",     color: "#8e24aa", alias: ["试单"] },
   cooperating: { key: "cooperating", label: "合作中",   color: "#4caf50", alias: ["合作中"] },
   lost:        { key: "lost",        label: "已流失",   color: "#b0b0b0", alias: ["已流失"] },
-  reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中"] },
+  reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中", "已触达"] },
 };
 
 // 管线阶段（优先级从高到低）
