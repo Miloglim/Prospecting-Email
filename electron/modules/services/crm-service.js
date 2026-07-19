@@ -66,18 +66,24 @@ function listPipeline(filters = {}) {
   // 第二层：按标签分类
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
   const defaultCol = columns.find(x => x.stage === "触达中");
+  const classifyLog = [];
   for (const c of entered) {
     const tags = c.tags || [];
     let matched = false;
     for (const s of PIPELINE_STAGES) {
       if (tags.some(t => s.match.includes(t))) {
         columns.find(x => x.stage === s.stage)?.contacts.push(c);
+        classifyLog.push(`${c.email}: tags=${JSON.stringify(tags)} → ${s.stage}`);
         matched = true;
         break;
       }
     }
-    if (!matched && defaultCol) defaultCol.contacts.push(c);
+    if (!matched && defaultCol) {
+      defaultCol.contacts.push(c);
+      classifyLog.push(`${c.email}: tags=${JSON.stringify(tags)} → 触达中(默认)`);
+    }
   }
+  Log.info("CRM", `分类明细:\n  ${classifyLog.join('\n  ')}`);
 
   return { columns };
 }
