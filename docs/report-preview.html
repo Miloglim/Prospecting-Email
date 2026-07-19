@@ -60,15 +60,13 @@
   }
 
   /* ── Metric Cards ── */
-  .metric-row { display: flex; gap: 8px; }
+  .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .metric-card {
-    flex: 1;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 14px 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
   }
-  .metric-card .val { font-size: 24px; font-weight: 600; letter-spacing: -0.03em; }
-  .metric-card .lbl { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .metric-card .val { font-size: 22px; font-weight: 600; letter-spacing: -0.03em; }
+  .metric-card .lbl { font-size: 12px; color: var(--text2); }
 
   /* ── Pipeline ── */
   .pipe-row { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
@@ -145,9 +143,9 @@
     </div>
   </div>
 
-  <!-- 管线 -->
+  <!-- 客户跟进总览 -->
   <div class="section">
-    <div class="section-head">管线</div>
+    <div class="section-head">客户跟进总览</div>
     <div class="pipe-row">
       <div class="pipe-item"><div class="n">9</div><div class="t">触达中</div></div>
       <div class="pipe-item"><div class="n">2</div><div class="t">报价中</div></div>
