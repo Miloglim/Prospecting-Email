@@ -69,14 +69,14 @@
   .metric-card .lbl { font-size: 12px; color: var(--text2); }
 
   /* ── Pipeline ── */
-  .pipe-row { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .pipe-item {
+  .funnel-row { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .funnel-item {
     flex: 1; text-align: center; padding: 12px 4px;
     border-right: 1px solid var(--line); background: #fafafa;
   }
-  .pipe-item:last-child { border-right: none; }
-  .pipe-item .n { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
-  .pipe-item .t { font-size: 11px; color: var(--text2); margin-top: 1px; }
+  .funnel-item:last-child { border-right: none; }
+  .funnel-item .n { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+  .funnel-item .t { font-size: 11px; color: var(--text2); margin-top: 1px; }
 
   /* ── Text Report ── */
   .text-report { border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
@@ -132,6 +132,18 @@
     </div>
   </div>
 
+  <!-- 客户跟进总览 -->
+  <div class="section">
+    <div class="section-head">客户跟进总览</div>
+    <div class="funnel-row">
+      <div class="funnel-item"><div class="n" style="color:#ff9800">9</div><div class="t">触达中</div></div>
+      <div class="funnel-item"><div class="n" style="color:#2196f3">2</div><div class="t">报价中</div></div>
+      <div class="funnel-item"><div class="n" style="color:#8e24aa">1</div><div class="t">试单</div></div>
+      <div class="funnel-item"><div class="n" style="color:#4caf50">5</div><div class="t">合作中</div></div>
+      <div class="funnel-item"><div class="n" style="color:#b0b0b0">1</div><div class="t">已流失</div></div>
+    </div>
+  </div>
+
   <!-- 文字汇报 -->
   <div class="section">
     <div class="section-head">摘要</div>
@@ -142,7 +154,7 @@
         收到客户回复 <span class="highlight">3</span> 封、自动回复 <span class="highlight">1</span> 封、退信 <span class="highlight">2</span> 封。
       </p>
       <p>
-        管线方面，当前 <span class="highlight">9</span> 人处于触达阶段，<span class="highlight">2</span> 人已进入报价，
+        客户跟进方面，当前 <span class="highlight">9</span> 人处于触达阶段，<span class="highlight">2</span> 人已进入报价，
         <span class="highlight">1</span> 人试单中，<span class="highlight">5</span> 人稳定合作，<span class="highlight">1</span> 人已流失。
         建议优先跟进已报价客户，推动进入试单阶段。
       </p>
