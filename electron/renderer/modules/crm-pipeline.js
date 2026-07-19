@@ -105,9 +105,9 @@ function renderStage(col) {
         <span class="crm-stage-dot" style="background:${color}"></span>
         <span class="crm-stage-label">${label}</span>
         <span class="crm-stage-count">${count}</span>
-        <span class="crm-stage-toggle">${lucide('chevron-down', 14)}</span>
+        <span class="crm-stage-toggle">${lucide('chevron-right', 14)}</span>
       </div>
-      <div class="crm-stage-body">${rows}</div>
+      <div class="crm-stage-body" style="display:none">${rows}</div>
     </div>`;
 }
 
