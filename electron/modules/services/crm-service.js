@@ -20,14 +20,16 @@ const TAG = {
   reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中"] },
 };
 
-// 管线阶段（优先级从高到低）
+// 管线阶段（分类优先级：高级阶段优先）
 const PIPELINE_STAGES = [
   { key: TAG.quoting.key,     label: TAG.quoting.label,     color: TAG.quoting.color },
   { key: TAG.trial.key,       label: TAG.trial.label,       color: TAG.trial.color },
   { key: TAG.cooperating.key, label: TAG.cooperating.label, color: TAG.cooperating.color },
-  { key: TAG.lost.key,        label: TAG.lost.key,          color: TAG.lost.color },
-  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color }, // 默认
+  { key: TAG.lost.key,        label: TAG.lost.label,        color: TAG.lost.color },
+  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color },
 ];
+// 显示顺序：触达中 → 报价中 → 试单 → 合作中 → 已流失
+const DISPLAY_ORDER = [TAG.reaching.key, TAG.quoting.key, TAG.trial.key, TAG.cooperating.key, TAG.lost.key];
 
 const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);
 
@@ -96,6 +98,8 @@ function listPipeline(filters = {}) {
     if (!matched && defaultCol) { defaultCol.contacts.push(c); }
   }
 
+  // 按显示顺序排列
+  columns.sort((a, b) => DISPLAY_ORDER.indexOf(a.key) - DISPLAY_ORDER.indexOf(b.key));
   return { columns };
 }
 
