@@ -60,14 +60,13 @@
   }
 
   /* ── Metric Cards ── */
-  .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  @media print { .metric-row { grid-template-columns: 1fr 1fr; } }
+  .metric-row { display: flex; flex-direction: column; gap: 6px; }
   .metric-card {
-    display: flex; align-items: center; justify-content: space-between;
-    border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 0.5px solid var(--line); padding: 8px 0;
   }
-  .metric-card .val { font-size: 22px; font-weight: 600; letter-spacing: -0.03em; }
-  .metric-card .lbl { font-size: 12px; color: var(--text2); }
+  .metric-card .val { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; min-width: 60px; }
+  .metric-card .lbl { font-size: 12px; color: var(--text2); text-align: right; }
 
   /* ── Pipeline ── */
   .funnel-row { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
