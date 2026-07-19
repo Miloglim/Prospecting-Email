@@ -61,6 +61,7 @@
 
   /* ── Metric Cards ── */
   .metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media print { .metric-row { grid-template-columns: 1fr 1fr; } }
   .metric-card {
     display: flex; align-items: center; justify-content: space-between;
     border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
@@ -110,6 +111,16 @@
     border-top: 1px solid var(--line);
     font-size: 11px; color: var(--text3);
     display: flex; justify-content: space-between;
+  }
+
+  @media print {
+    @page { size: A4; margin: 16mm; }
+    body { background: #fff; padding: 0; }
+    .report { width: 100%; }
+    .metric-card { border: 1px solid #e5e5ea; }
+    .funnel-row, .followup-item { border-color: #e5e5ea; }
+    .text-report { border-color: #e5e5ea; }
+    .section { page-break-inside: avoid; }
   }
 </style>
 </head>
