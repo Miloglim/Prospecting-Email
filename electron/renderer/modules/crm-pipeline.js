@@ -1,7 +1,7 @@
 // ── Prospector — CRM 跟进管道 ──────────────────────────────────────────────
 "use strict";
 
-import { escapeHtml, lucide, showToast } from './shared.js';
+import { escapeHtml, lucide, showToast, showConfirm } from './shared.js';
 
 // 后端存英文 key，前端显示中文 label
 const STAGES = [
@@ -252,6 +252,22 @@ async function openDetailPanel(contactId) {
     }
   });
 
+  // 删除历史备注
+  panel.querySelectorAll('.crm-note-del').forEach(del => {
+    del.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!await showConfirm('删除该记录？')) return;
+      await window.electronAPI.deleteNote(del.dataset.noteId);
+      showToast('已删除','ok');
+      const d = await window.electronAPI.crmGetDetail(contactId);
+      if (d.ok) {
+        const fl = panel.querySelector('[data-content="followup"]');
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        rebindFollowupEvents(panel, contactId);
+      }
+    });
+  });
+
   // 编辑历史备注
   panel.querySelectorAll('.crm-note-edit').forEach(p => {
     p.addEventListener('click', (ev) => {
@@ -306,17 +322,20 @@ function prefsTab(cid, prefs) {
 
 function followupTab(cid, reminder, notes, interactions) {
   const na = reminder.nextFollowupAt || '';
-  // 合并 notes + interactions 按时间倒序
-  const items = [
-    ...((notes||[]).map(n => ({ type:'note', time:n.created_at, content:n.content }))),
-    ...((interactions||[]).map(i => ({ type:i.type, time:i.created_at, subject:i.subject, snippet:i.snippet }))),
-  ].sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
+  // 只看手动备注，不显示邮件互动
+  const items = (notes||[]).map(n => ({ id: n.id, type:'note', time:n.created_at, content:n.content }))
+    .sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
   const listHtml = items.length ? items.map(i => `
-    <div class="crm-followup-item" data-note-id="${i.id||''}" data-type="${i.type}">
-      <div class="crm-followup-time">${fmtDT(i.time)} ${i.type==='stage_changed'?'🔄':i.type==='note'?'📝':'📧'}${i.type==='note'?` <span class="crm-note-edit" data-note-id="${i.id}">${lucide('pencil',11)}</span>`:''}</div>
-      ${i.subject?`<div style="font-size:12px;font-weight:500">${escapeHtml(i.subject)}</div>`:''}
-      <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.snippet||i.content||'')}</div>
+    <div class="crm-followup-item" data-note-id="${i.id||''}">
+      <div class="crm-followup-time">
+        📝 ${fmtDT(i.time)}
+        <span class="crm-note-actions">
+          <span class="crm-note-edit" data-note-id="${i.id}" title="编辑">${lucide('pencil',11)}</span>
+          <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash-2',11)}</span>
+        </span>
+      </div>
+      <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.content||'')}</div>
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
 
@@ -387,6 +406,22 @@ function rebindFollowupEvents(panel, contactId) {
         rebindFollowupEvents(panel, contactId);
       }
     }
+  });
+
+  // 删除历史备注
+  panel.querySelectorAll('.crm-note-del').forEach(del => {
+    del.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!await showConfirm('删除该记录？')) return;
+      await window.electronAPI.deleteNote(del.dataset.noteId);
+      showToast('已删除','ok');
+      const d = await window.electronAPI.crmGetDetail(contactId);
+      if (d.ok) {
+        const fl = panel.querySelector('[data-content="followup"]');
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        rebindFollowupEvents(panel, contactId);
+      }
+    });
   });
 
   // 编辑历史备注
