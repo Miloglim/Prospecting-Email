@@ -20,9 +20,7 @@ export async function initCrmPipeline() {
   await refreshPipeline();
 
   const si = document.getElementById('crm-search');
-  const cs = document.getElementById('crm-country-filter');
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
-  if (cs) cs.addEventListener('change', refreshPipeline);
 
   window.electronAPI.onCrmChanged(() => refreshPipeline());
   window.electronAPI.onContactsChanged(() => refreshPipeline());
@@ -35,9 +33,8 @@ async function refreshPipeline() {
   if (!el) return;
 
   const search = document.getElementById('crm-search')?.value?.trim() || '';
-  const country = document.getElementById('crm-country-filter')?.value || '';
 
-  const r = await window.electronAPI.crmListPipeline({ search, country });
+  const r = await window.electronAPI.crmListPipeline({ search });
   if (!r.ok) { el.innerHTML = `<div class="crm-empty">${escapeHtml(r.error)}</div>`; return; }
 
   _pipelineData = r.data;

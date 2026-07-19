@@ -41,6 +41,7 @@ function _logInboxInteractions(newMails) {
         subject: m.subject || '',
         snippet: (m.body || '').slice(0, 200),
         email_uid: m.uid || '',
+        email_account: m.accountId || m.accountLabel || '',
       });
     }
   } catch { /* 互动记录不影响收件箱 */ }
