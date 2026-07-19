@@ -57,10 +57,9 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：有 有回复/触达中 标签，或已有管线标签（报价中等）
-  const ALL_MATCH = PIPELINE_STAGES.flatMap(s => s.match);
+  // 入口筛选：只有 有回复/已触达 能进门
   const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_TAGS.includes(t) || ALL_MATCH.includes(t))
+    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
   );
 
   // 第二层：按标签分类
