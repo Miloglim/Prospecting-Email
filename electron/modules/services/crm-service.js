@@ -9,7 +9,7 @@ const { Log } = require("../core/logger");
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
 /** 入口标签：有这些标签的联系人进入 CRM 库 */
-const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
+const ENTRY_TAGS = ["有回复", "replied", "已触达", "reached"];
 
 /** 管道阶段 + 标签匹配规则（优先级从高到低） */
 const PIPELINE_STAGES = [
