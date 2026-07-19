@@ -74,6 +74,11 @@ function listPipeline(filters = {}) {
     );
   };
   const entered = allContacts.filter(c => isEntry(c.tags || []));
+  // 调试：有管线标签但无入口标签（被挡在门外）
+  const blocked = allContacts.filter(c => !isEntry(c.tags || [])).filter(c =>
+    (c.tags || []).some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))
+  );
+  if (blocked.length) Log.warn("CRM", `被挡门外(${blocked.length}人): ${blocked.map(c => c.email + ' tags=' + JSON.stringify(c.tags)).join(', ')}`);
 
   // 按管线阶段分类
   const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color, contacts: [] }));
