@@ -8,34 +8,21 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段定义 — 对齐联系人列表标签字段 + 收件箱自动标签 */
+/** 管道阶段 — 只含入口识别标签：有回复/自动回复/触达中/未标签 */
 const PIPELINE_STAGES = [
   { stage: "有回复",   color: "#22a644" },
   { stage: "自动回复", color: "#e6a817" },
-  { stage: "退信",     color: "#d93025" },
-  { stage: "报价中",   color: "#2196f3" },
-  { stage: "试单",     color: "#8e24aa" },
-  { stage: "合作中",   color: "#4caf50" },
-  { stage: "已流失",   color: "#b0b0b0" },
   { stage: "触达中",   color: "#ff9800" },
   { stage: "未标签",   color: "#9e9e9e" },
 ];
 
-// 标签匹配优先级：收件箱标签 > 联系人面板标签 > 未标签
-// tags[0] = 写入时使用的标准值（联系人面板中文）
+// 优先级：有回复 > 自动回复 > 触达中 > 未标签
+// tags[0] = 写入标准值
 const TAG_RULES = [
   { stage: "有回复",   tags: ["有回复", "replied"] },
   { stage: "自动回复", tags: ["自动回复", "autoreply", "auto_reply"] },
-  { stage: "退信",     tags: ["退信", "bounced_by_contact"] },
-  { stage: "报价中",   tags: ["报价中"] },
-  { stage: "试单",     tags: ["试单"] },
-  { stage: "合作中",   tags: ["合作中"] },
-  { stage: "已流失",   tags: ["已流失"] },
   { stage: "触达中",   tags: ["触达中", "已触达", "reached"] },
 ];
-
-/** opp_stage 手动阶段白名单 */
-const MANUAL_STAGES = ["报价中", "试单", "合作中", "已流失"];
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -63,8 +50,7 @@ function listPipeline(filters = {}) {
     params.push(filters.country);
   }
 
-  // 排除 opp_stage 已手动归入报价中/试单/合作中/已流失的联系人（这些由 CRM 人工管）
-  const manualSet = new Set(MANUAL_STAGES);
+  // 全量联系人（不再排除 opp_stage，标签驱动分类）
   const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
             c.phone, c.linkedin, c.position, c.contact_name,
@@ -74,7 +60,7 @@ function listPipeline(filters = {}) {
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
      WHERE ${where}
      ORDER BY c.last_sent_at DESC`
-  ).all(...params).map(_normalizeRow).filter(c => !manualSet.has(c.opp_stage));
+  ).all(...params).map(_normalizeRow);
 
   // 按标签分类
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
