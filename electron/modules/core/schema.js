@@ -157,6 +157,30 @@ CREATE TABLE IF NOT EXISTS opportunities (
     updated_at    TEXT DEFAULT (datetime('now','localtime'))
   );
   CREATE INDEX IF NOT EXISTS idx_notes_contact ON contact_notes(contact_id);
+
+  CREATE TABLE IF NOT EXISTS daily_reports (
+    date            TEXT PRIMARY KEY,
+    sent_total      INTEGER DEFAULT 0,
+    sent_failed     INTEGER DEFAULT 0,
+    success_rate    REAL DEFAULT 0,
+    inbox_total     INTEGER DEFAULT 0,
+    replies         INTEGER DEFAULT 0,
+    autoreplies     INTEGER DEFAULT 0,
+    bounces         INTEGER DEFAULT 0,
+    reply_rate      REAL DEFAULT 0,
+    bounce_rate     REAL DEFAULT 0,
+    stage_reaching  INTEGER DEFAULT 0,
+    stage_quoting   INTEGER DEFAULT 0,
+    stage_trial     INTEGER DEFAULT 0,
+    stage_cooperating INTEGER DEFAULT 0,
+    stage_lost      INTEGER DEFAULT 0,
+    to_quoting_rate REAL DEFAULT 0,
+    to_trial_rate   REAL DEFAULT 0,
+    to_coop_rate    REAL DEFAULT 0,
+    due_count       INTEGER DEFAULT 0,
+    overdue_count   INTEGER DEFAULT 0,
+    created_at      TEXT DEFAULT (datetime('now','localtime'))
+  );
 `;
 
 function initSchema(db) {

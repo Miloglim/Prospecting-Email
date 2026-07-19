@@ -253,9 +253,7 @@ document.getElementById('dash-gen-report')?.addEventListener('click',async funct
   try{
     const r=await window.electronAPI.generateReport();
     if(!r.ok){alert('生成失败: '+r.error);return}
-    const html=r.data.html;
-    const w=window.open('','_blank','width=700,height=900');
-    w.document.write(html);w.document.close();
+    alert('报告已生成\n'+r.data.path);
   }catch(e){alert('生成失败: '+e.message)}
   finally{btn.disabled=false;btn.textContent='生成今日报告';}
 });

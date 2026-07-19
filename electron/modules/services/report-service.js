@@ -176,4 +176,26 @@ ${d.aiText ? `<div class="section"><div class="section-head">AI 分析与建议<
 
 function esc(s) { return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
-module.exports = { generate };
+// ── 写库 ──────────────────────────────────────────────────────────────────────
+
+function saveToDb(d) {
+  const db = getDb();
+  const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }))
+    .toISOString().slice(0, 10);
+  db.prepare(`INSERT OR REPLACE INTO daily_reports
+    (date, sent_total, sent_failed, success_rate, inbox_total, replies, autoreplies, bounces,
+     reply_rate, bounce_rate, stage_reaching, stage_quoting, stage_trial, stage_cooperating, stage_lost,
+     to_quoting_rate, to_trial_rate, to_coop_rate, due_count, overdue_count)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    today, d.sentToday, d.failedToday, d.successRate,
+    d.newMails, d.replies, d.autoreplies, d.bounces,
+    d.replyRate, d.bounceRate,
+    d.stageCounts.reaching||0, d.stageCounts.quoting||0, d.stageCounts.trial||0,
+    d.stageCounts.cooperating||0, d.stageCounts.lost||0,
+    d.toQuoting, d.toTrial, d.toCoop,
+    d.dueCount, d.overdueCount
+  );
+  Log.info("报告", `日报数据已写入 ${today}`);
+}
+
+module.exports = { generate, saveToDb };

@@ -74,7 +74,20 @@ function register(ipcMain, deps) {
     try {
       const reportService = require("../services/report-service");
       const result = reportService.generate(null);
-      return { ok: true, data: { html: result.html } };
+      reportService.saveToDb(result.data);
+
+      const { BrowserWindow } = require("electron");
+      const win = new BrowserWindow({ width: 800, height: 1000, show: false });
+      await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(result.html));
+      const { APP_ROOT } = require("../config");
+      const today = new Date().toISOString().slice(0, 10);
+      const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}.pdf`);
+      const dir = path.dirname(pdfPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const pdfData = await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+      fs.writeFileSync(pdfPath, pdfData);
+      win.close();
+      return { ok: true, data: { path: pdfPath } };
     } catch (e) { return { ok: false, error: e.message }; }
   });
 
@@ -84,7 +97,8 @@ function register(ipcMain, deps) {
       const win = new BrowserWindow({ width: 800, height: 1000, show: false });
       await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
       const { APP_ROOT } = require("../config");
-      const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${new Date().toISOString().slice(0,10)}.pdf`);
+      const today = new Date().toISOString().slice(0, 10);
+      const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}.pdf`);
       const dir = path.dirname(pdfPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const data = await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
