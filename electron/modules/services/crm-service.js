@@ -57,9 +57,10 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口：仅 replied/reached（门票）
+  // 入口：replied/reached（门票）+ 已有管线标签的（被手动分类过）
+  const ALL_MATCH = [...ENTRY_MATCH, ...PIPELINE_STAGES.flatMap(s => [s.key, ...s.alias])];
   const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_MATCH.includes(t))
+    (c.tags || []).some(t => ALL_MATCH.includes(t))
   );
 
   // 分列：直接读联系人已有 tags，匹配管线阶段（key + alias）
