@@ -147,6 +147,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   crmGetContactEmails: (contactId) => ipcRenderer.invoke("crm:getContactEmails", contactId),
   crmGetEmailBody: (uid, accountId) => ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
   crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
+
+  // 今日报告
+  generateReport: () => ipcRenderer.invoke("report:generate"),
+  exportReportPdf: (html) => ipcRenderer.invoke("report:exportPdf", html),
   onCrmChanged: (cb) => {
     ipcRenderer.on("crm:changed", cb);
     return () => ipcRenderer.removeListener("crm:changed", cb);
@@ -166,6 +170,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 回复检测
   checkReplies: () => ipcRenderer.invoke("reply:check"),
   loadReplyLog: () => ipcRenderer.invoke("reply:log"),
+  getReplyCount: () => ipcRenderer.invoke("reply:getCount"),
   onReplyDetected: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on("reply:detected", handler);

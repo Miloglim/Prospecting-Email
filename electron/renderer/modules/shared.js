@@ -92,24 +92,29 @@ export async function loadDashboard(){
     document.getElementById('stat-sent').textContent=s.sentToday;
     document.getElementById('stat-remaining').textContent=s.remaining;
     document.getElementById('stat-queue').textContent=S.queue.filter(e=>e.status==='pending').length;
-    // 回复邮件 — 统计标签含 replied/reached 的联系人
+    // 回复邮件 — 独立计数器（删联系人不影响），区分今日/累计
     try{
-      const contacts=await window.electronAPI.getContacts();
-      const repliedN=contacts.filter(c=>(c.tags||[]).includes('replied')).length;
-      const reachedN=contacts.filter(c=>(c.tags||[]).includes('reached')).length;
-      document.getElementById('dash-reply-rate').textContent=repliedN+reachedN>0?repliedN+reachedN:'—';
-      document.getElementById('dash-reply-label').textContent=`回复邮件 · 有回复${repliedN} 已触达${reachedN}`;
+      const rc=await window.electronAPI.getReplyCount();
+      const contactsAll=await window.electronAPI.getContacts();
+      const totalContacts=contactsAll.length;
+      const sentToday=s.sentToday||0;
+      // 卡片大数字
+      document.getElementById('dash-reply-rate').textContent=rc.total>0?rc.total:'—';
+      // 副标题：今日/累计 + 触达率
+      const globalRate=totalContacts>0?(rc.total/totalContacts*100).toFixed(1):'0.0';
+      const todayRate=sentToday>0?(rc.today/sentToday*100).toFixed(1):'0.0';
+      document.getElementById('dash-reply-label').textContent=`回复邮件 · 今日${rc.today} 累计${rc.total} · 触达率 ${globalRate}% · 今日 ${todayRate}%`;
       // 今日新增线索
       const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
-      const todayNew=contacts.filter(c=>(c.addedAt||'').slice(0,10)===today);
+      const todayNew=contactsAll.filter(c=>(c.addedAt||'').slice(0,10)===today);
       const newCompanies=new Set(todayNew.map(c=>c.company).filter(Boolean)).size;
       document.getElementById('stat-new').textContent=todayNew.length?`${todayNew.length}人 / ${newCompanies}家`:'—';
     }catch(e){document.getElementById('dash-reply-rate').textContent='—';document.getElementById('stat-new').textContent='—';}
-    // 退回邮件 — 独立计数器（删联系人不影响）
+    // 退回邮件 — 独立计数器，仅今日
     try{
       const bc=await window.electronAPI.getBounceCount();
-      document.getElementById('dash-bounce-rate').textContent=bc.total>0?bc.total:'—';
-      document.getElementById('dash-bounce-label').textContent=`退回邮件 · 今日${bc.today} 累计${bc.total}`;
+      document.getElementById('dash-bounce-rate').textContent=bc.today>0?bc.today:'—';
+      document.getElementById('dash-bounce-label').textContent='退回邮件';
     }catch(e){document.getElementById('dash-bounce-rate').textContent='—';}
     // 进度条
     const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;
@@ -150,28 +155,84 @@ export async function loadDashboard(){
     const cfg=await window.electronAPI.loadConfig();
     const sc=cfg?.schedule||{};
     const startH=sc.start_hour_beijing??19,endH=sc.end_hour_beijing??3;
+    const windowEnabled=sc.time_window_enabled!==false; // 默认开启
     const h=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).getHours();
     const inWin=startH<endH?h>=startH&&h<endH:h>=startH||h<endH;
     const el=document.getElementById('dash-window');
     el.className='dash-metric-value small';
     el.textContent=startH+':00 ~ '+endH+':00'+(endH<10?' (次日)':'');
-    el.style.color=inWin?'var(--success)':'var(--text-secondary)';
+    el.style.color=windowEnabled?(inWin?'var(--success)':'var(--text-secondary)'):'var(--text-secondary)';
   }catch(e){}
 
-  // 最近动态消息流
+  // 客户跟进：CRM 管线阶段 + 待办详情
   try{
-    const result=await window.electronAPI.getSendLog({limit:8,offset:0});
-    const items=(result.records||[]).slice(0,5);
-    const feed=document.getElementById('dash-feed-list');
-    if(!items.length){feed.innerHTML='<span style="font-size:12px;color:var(--text-secondary)">暂无活动</span>';}else{
-      feed.innerHTML=items.map(r=>{
-        const t=r.time?new Date(new Date(r.time).getTime()+8*3600000).toISOString().slice(11,16):'';
-        if(r.status==='failed')return`<div class="dash-feed-item"><span class="dash-feed-dot bounce"></span>${escapeHtml(r.company||'?')} 退信<span class="dash-feed-time">${t}</span></div>`;
-        if(r._stage&&r._stage!=='cold')return`<div class="dash-feed-item"><span class="dash-feed-dot reply"></span>${escapeHtml(r.company||'?')} 回复<span class="dash-feed-time">${t}</span></div>`;
-        return`<div class="dash-feed-item"><span class="dash-feed-dot sent"></span>${escapeHtml(r.company||'?')}<span class="dash-feed-time">${t}</span></div>`;
-      }).join('');
+    const pr=await window.electronAPI.crmListPipeline({});
+    let allPipelineContacts=[];
+    const contactStageMap={}; // id → stage label
+    if(pr.ok&&pr.data){
+      const cols=pr.data.columns||[];
+      const parts=cols.map(c=>`${c.label} ${c.contacts.length}`).join(' · ');
+      const total=cols.reduce((s,c)=>s+c.contacts.length,0);
+      document.getElementById('dash-stage-dist').textContent=parts||'暂无跟进客户';
+      document.getElementById('dash-stage-dist').style.color=total>0?'var(--text)':'var(--text-secondary)';
+      const seen=new Set();
+      for(const col of cols){
+        for(const c of col.contacts){
+          if(!seen.has(c.id)){seen.add(c.id);allPipelineContacts.push(c);}
+          contactStageMap[c.id]=col.label;
+        }
+      }
+    }else{
+      document.getElementById('dash-stage-dist').textContent='加载失败';
     }
-  }catch(e){}
+    // 待办详情
+    try{
+      const rm=await window.electronAPI.crmCheckReminders();
+      const items=[]; // { type:'overdue'|'due'|'missing', text, detail }
+      const now=Date.now();
+      // CRM 到期提醒
+      if(rm.ok&&rm.data){
+        const due=rm.data.due||[],overdue=rm.data.overdue||[];
+        for(const r of overdue){
+          const days=Math.ceil((now-new Date(r._extra?.crmReminder?.nextFollowupAt).getTime())/(86400000));
+          const name=(r.first_name||'')+' '+(r.last_name||'');
+          const co=r.company_name||'';
+          items.push({type:'overdue',text:name.trim()||r.email,detail:`${co} · 已逾${days||1}天`});
+        }
+        if(due.length&&!overdue.length){
+          // 只有今日到期没有逾期时，只显示计数（没那么紧急）
+          items.push({type:'due',text:`${due.length} 位联系人`});
+        }
+      }
+      // 偏好缺失
+      const prefsKeys=['preferredRoutes','cargoTypes','decisionRole','priceSensitivity','preferredPorts','annualVolume'];
+      const missingByStage={};
+      for(const c of allPipelineContacts){
+        let extra={};
+        try{extra=typeof c._extra==='string'?JSON.parse(c._extra):(c._extra||{});}catch{}
+        const p=extra.crmPreferences||{};
+        if(!prefsKeys.some(k=>p[k]!==undefined&&p[k]!==''&&p[k]!==null)){
+          const st=contactStageMap[c.id]||'触达中';
+          missingByStage[st]=(missingByStage[st]||0)+1;
+        }
+      }
+      const totalMissing=Object.values(missingByStage).reduce((a,b)=>a+b,0);
+      if(totalMissing>0){
+        const detail=Object.entries(missingByStage).map(([k,v])=>`${k}${v}`).join(' · ');
+        items.push({type:'missing',text:`${totalMissing} 位资料不全`,detail});
+      }
+      // 渲染
+      const listEl=document.getElementById('dash-todo-list');
+      if(!items.length){
+        listEl.innerHTML='<span class="dash-todo-item" style="color:var(--text-secondary)">✓ 无待办</span>';
+      }else{
+        listEl.innerHTML=items.map(i=>{
+          const dotClass=i.type==='overdue'?'overdue':i.type==='due'?'due':'missing';
+          return `<div class="dash-todo-item"><span class="dash-todo-dot ${dotClass}"></span><span class="dash-todo-label">${escapeHtml(i.text)}</span>${i.detail?`<span class="dash-todo-detail">${escapeHtml(i.detail)}</span>`:''}</div>`;
+        }).join('');
+      }
+    }catch(e){document.getElementById('dash-todo-list').innerHTML='<span class="dash-todo-item">—</span>';}
+  }catch(e){document.getElementById('dash-stage-dist').textContent='—';document.getElementById('dash-todo-list').innerHTML='<span class="dash-todo-item">—</span>';}
 }
 
 // 快捷操作按钮
@@ -183,8 +244,20 @@ document.addEventListener('click',function(e){
   else document.querySelector('.nav-item[data-page="'+page+'"]')?.click();
 });
 document.getElementById('dash-bounce-check')?.addEventListener('click',function(){
-  document.querySelector('.nav-sub[data-page="inbox"]')?.click();
+  document.querySelector('.nav-item[data-page="inbox"]')?.click();
   setTimeout(()=>{const b=document.getElementById('inbox-refresh');if(b)b.click();},300);
+});
+document.getElementById('dash-gen-report')?.addEventListener('click',async function(){
+  const btn=document.getElementById('dash-gen-report');
+  btn.disabled=true;btn.textContent='生成中...';
+  try{
+    const r=await window.electronAPI.generateReport();
+    if(!r.ok){alert('生成失败: '+r.error);return}
+    const html=r.data.html;
+    const w=window.open('','_blank','width=700,height=900');
+    w.document.write(html);w.document.close();
+  }catch(e){alert('生成失败: '+e.message)}
+  finally{btn.disabled=false;btn.textContent='生成今日报告';}
 });
 export function initNavigation(){const n=document.querySelectorAll('.nav-item');const s=document.querySelectorAll('.nav-sub');const p=document.querySelectorAll('.page');document.querySelector('.nav-parent')?.addEventListener('click',function(e){e.stopPropagation();this.classList.toggle('open');s.forEach(s=>s.classList.toggle('show'))});[...n,...s].forEach(i=>{if(i.classList.contains('nav-parent'))return;i.addEventListener('click',()=>{n.forEach(n=>n.classList.remove('active'));s.forEach(s=>s.classList.remove('active'));i.classList.add('active');if(i.classList.contains('nav-sub'))document.querySelector('.nav-parent')?.classList.add('active');p.forEach(p=>p.classList.remove('active'));const id=i.dataset.page;document.getElementById(`page-${id}`)?.classList.add('active');window.__pageHandlers[id]?.()})})}
 export function findById(a,i){return a?.find(x=>x.id===i)}

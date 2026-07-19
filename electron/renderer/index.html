@@ -209,15 +209,21 @@
         </div>
       </div>
 
-      <!-- 今日新增 + 最近动态 -->
+      <!-- 今日新增 + 客户跟进 -->
       <div class="dash-row">
         <div class="dash-card dash-metric" data-card-id="stat-new">
           <div class="dash-card-label">今日新增</div>
           <div class="dash-metric-value" id="stat-new">—</div>
         </div>
         <div class="dash-card dash-feed" data-card-id="dash-feed">
-          <div class="dash-card-label">最近动态</div>
-          <div id="dash-feed-list" class="dash-feed-list">暂无活动</div>
+          <div class="dash-card-label">客户跟进</div>
+          <div id="dash-feed-list" class="dash-feed-list">
+            <div class="dash-followup-row"><span class="dash-followup-label">阶段</span><span class="dash-followup-val" id="dash-stage-dist">—</span></div>
+            <div class="dash-followup-section">
+              <div class="dash-followup-label">待办</div>
+              <div id="dash-todo-list" class="dash-todo-list">—</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -226,6 +232,7 @@
         <button class="secondary" data-nav="clients"><span data-icon="file-spreadsheet"></span> 导入客户</button>
         <button class="secondary" data-nav="email-send"><span data-icon="send"></span> 开始发送</button>
         <button class="secondary" id="dash-bounce-check" data-nav="inbox"><span data-icon="inbox"></span> 收件箱</button>
+        <button class="secondary" id="dash-gen-report"><span data-icon="file-text"></span> 生成今日报告</button>
       </div>
       </div><!-- #dash-canvas -->
     </section>
