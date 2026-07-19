@@ -187,11 +187,13 @@ async function openDetailPanel(contactId) {
       <button class="crm-tab active" data-tab="info">基本信息</button>
       <button class="crm-tab" data-tab="prefs">偏好设置</button>
       <button class="crm-tab" data-tab="followup">跟进记录</button>
+      <button class="crm-tab" data-tab="emails">邮件往来</button>
     </div>
     <div class="crm-detail-body">
       <div class="crm-tab-content active" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content" data-content="prefs">${prefsTab(contactId,prefs)}</div>
       <div class="crm-tab-content" data-content="followup">${followupTab(contactId, reminder, notes, interactions)}</div>
+      <div class="crm-tab-content" data-content="emails">${emailsTab(interactions)}</div>
     </div>`;
 
   panel.querySelectorAll('.crm-tab').forEach(tab => {
@@ -268,33 +270,27 @@ async function openDetailPanel(contactId) {
     });
   });
 
-  // 邮件详情弹窗
-  panel.querySelectorAll('.crm-email-item').forEach(row => {
-    row.addEventListener('click', async () => {
-      const uid = row.dataset.uid;
-      const acct = row.dataset.account;
-      if (!uid || !acct) return;
-      const r = await window.electronAPI.crmGetEmailBody(uid, acct);
-      if (!r.ok) { showToast('无法加载邮件','err'); return; }
-      const m = r.data;
-      const popup = document.createElement('div');
-      popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-      popup.innerHTML = `
-        <div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
-            <div>
-              <div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div>
-            </div>
-            <button class="crm-detail-close-btn">${lucide('x',16)}</button>
-          </div>
-          <div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div>
-        </div>`;
-      document.body.appendChild(popup);
-      popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
-      popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+  // 邮件详情弹窗（绑定到邮件往来 tab）
+  const bindEmailClicks = (container) => {
+    container.querySelectorAll('.crm-email-item').forEach(row => {
+      if (row._emailBound) return; row._emailBound = true;
+      row.addEventListener('click', async () => {
+        const uid = row.dataset.uid;
+        const acct = row.dataset.account;
+        if (!uid || !acct) return;
+        const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+        if (!r.ok) { showToast('无法加载邮件','err'); return; }
+        const m = r.data;
+        const popup = document.createElement('div');
+        popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+        popup.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div></div>`;
+        document.body.appendChild(popup);
+        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+        popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+      });
     });
-  });
+  };
+  bindEmailClicks(panel);
 
   // 编辑历史备注
   panel.querySelectorAll('.crm-note-edit').forEach(p => {
@@ -350,11 +346,8 @@ function prefsTab(cid, prefs) {
 
 function followupTab(cid, reminder, notes, interactions) {
   const na = reminder.nextFollowupAt || '';
-  // 手动备注
-  const noteItems = (notes||[]).map(n => ({ id: n.id, type:'note', time:n.created_at, content:n.content }))
+  const noteItems = (notes||[]).map(n => ({ id: n.id, time:n.created_at, content:n.content }))
     .sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
-  // 邮件互动
-  const emailItems = (interactions||[]).filter(i => i.type !== 'stage_changed').slice(0,30);
 
   const notesHtml = noteItems.length ? noteItems.map(i => `
     <div class="crm-followup-item" data-note-id="${i.id||''}">
@@ -369,16 +362,6 @@ function followupTab(cid, reminder, notes, interactions) {
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
 
-  const emailsHtml = emailItems.length ? emailItems.map(i => `
-    <div class="crm-email-item" data-uid="${escapeHtml(i.email_uid||'')}" data-account="${escapeHtml(i.email_account||'')}">
-      <div class="crm-email-meta">
-        <span>${i.direction==='in'?'📥':'📤'} ${escapeHtml(i.subject||'(无主题)')}</span>
-        <span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${fmtDT(i.created_at)}</span>
-      </div>
-      <div class="crm-email-snippet" style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.snippet||'')}</div>
-    </div>`).join('')
-    : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
-
   const statusDot = na ? (isOverdue(na) ? '🔴' : isSoon(na) ? '🟠' : '🟢') : '⚪';
   const statusText = na ? (isOverdue(na) ? '已逾期' : isSoon(na) ? '即将到期' : '正常') : '未设置';
   return `
@@ -390,10 +373,21 @@ function followupTab(cid, reminder, notes, interactions) {
     <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
     <textarea id="crm-record-content" rows="2" placeholder="记录内容..." style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
     <button id="crm-record-save" class="primary" style="width:100%;margin-top:4px;padding:6px;font-size:12px">保存</button>
-    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--text-secondary);font-weight:600">跟进备注</div>
-    <div class="crm-followup-list">${notesHtml}</div>
-    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--text-secondary);font-weight:600">邮件往来</div>
-    <div class="crm-email-list">${emailsHtml}</div>`;
+    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;font-size:12px;color:var(--text-secondary);font-weight:600">历史备注</div>
+    <div class="crm-followup-list">${notesHtml}</div>`;
+}
+
+function emailsTab(interactions) {
+  const items = (interactions||[]).filter(i => i.type !== 'stage_changed').slice(0,30);
+  if (!items.length) return '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无邮件往来</div>';
+  return items.map(i => `
+    <div class="crm-email-item" data-uid="${escapeHtml(i.email_uid||'')}" data-account="${escapeHtml(i.email_account||'')}">
+      <div class="crm-email-meta">
+        <span>${i.direction==='in'?'📥':'📤'} ${escapeHtml(i.subject||'(无主题)')}</span>
+        <span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${fmtDT(i.created_at)}</span>
+      </div>
+      <div class="crm-email-snippet" style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(i.snippet||'')}</div>
+    </div>`).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -465,33 +459,27 @@ function rebindFollowupEvents(panel, contactId) {
     });
   });
 
-  // 邮件详情弹窗
-  panel.querySelectorAll('.crm-email-item').forEach(row => {
-    row.addEventListener('click', async () => {
-      const uid = row.dataset.uid;
-      const acct = row.dataset.account;
-      if (!uid || !acct) return;
-      const r = await window.electronAPI.crmGetEmailBody(uid, acct);
-      if (!r.ok) { showToast('无法加载邮件','err'); return; }
-      const m = r.data;
-      const popup = document.createElement('div');
-      popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-      popup.innerHTML = `
-        <div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
-            <div>
-              <div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div>
-              <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div>
-            </div>
-            <button class="crm-detail-close-btn">${lucide('x',16)}</button>
-          </div>
-          <div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div>
-        </div>`;
-      document.body.appendChild(popup);
-      popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
-      popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+  // 邮件详情弹窗（绑定到邮件往来 tab）
+  const bindEmailClicks = (container) => {
+    container.querySelectorAll('.crm-email-item').forEach(row => {
+      if (row._emailBound) return; row._emailBound = true;
+      row.addEventListener('click', async () => {
+        const uid = row.dataset.uid;
+        const acct = row.dataset.account;
+        if (!uid || !acct) return;
+        const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+        if (!r.ok) { showToast('无法加载邮件','err'); return; }
+        const m = r.data;
+        const popup = document.createElement('div');
+        popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+        popup.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div></div>`;
+        document.body.appendChild(popup);
+        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+        popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+      });
     });
-  });
+  };
+  bindEmailClicks(panel);
 
   // 编辑历史备注
   panel.querySelectorAll('.crm-note-edit').forEach(p => {
