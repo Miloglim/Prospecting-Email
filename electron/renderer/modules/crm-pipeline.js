@@ -24,6 +24,7 @@ export async function initCrmPipeline() {
   if (cs) cs.addEventListener('change', refreshPipeline);
 
   window.electronAPI.onCrmChanged(() => refreshPipeline());
+  window.electronAPI.onContactsChanged(() => refreshPipeline());
   setInterval(() => checkReminders(), 5 * 60 * 1000);
   checkReminders();
 }
