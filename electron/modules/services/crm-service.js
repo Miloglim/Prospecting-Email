@@ -18,8 +18,8 @@ const PIPELINE_STAGES = [
   { stage: "触达中", color: "#ff9800", match: ["触达中", "已触达", "reached"] }, // 默认
 ];
 
-// 入口条件（两层过滤第一层）
-const ENTRY_TAGS = PIPELINE_STAGES.slice(-2).flatMap(s => s.match); // 有回复 + 触达中 的所有别名
+// 入口条件：有任意管线标签就进 CRM
+const ENTRY_TAGS = PIPELINE_STAGES.flatMap(s => s.match);
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
