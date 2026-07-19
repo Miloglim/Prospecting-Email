@@ -374,7 +374,7 @@ function followupTab(cid, reminder, notes, interactions) {
   return `
     <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:10px">
       <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap">下次跟进</span>
-      <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card-bg);color:var(--text)">
+      <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--card-bg);color:var(--text);font-family:inherit;outline:none">
       <span style="font-size:11px;white-space:nowrap">${statusDot} ${statusText}</span>
     </div>
     <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
