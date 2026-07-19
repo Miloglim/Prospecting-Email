@@ -339,14 +339,13 @@ function followupTab(cid, reminder, notes, interactions) {
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:12px 0;font-size:12px">暂无记录</div>';
 
+  const statusDot = na ? (isOverdue(na) ? '🔴' : isSoon(na) ? '🟠' : '🟢') : '⚪';
+  const statusText = na ? (isOverdue(na) ? '已逾期' : isSoon(na) ? '即将到期' : '正常') : '未设置';
   return `
-    <div style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--bg);border-radius:8px;margin-bottom:12px">
-      <span style="font-size:24px">📅</span>
-      <div style="flex:1">
-        <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">下次跟进时间</div>
-        <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--card-bg);color:var(--text)">
-      </div>
-      ${na ? `<span style="font-size:13px;color:${isOverdue(na)?'#d93025':isSoon(na)?'#ff9800':'#4caf50'}">${isOverdue(na)?'已逾期':isSoon(na)?'即将到期':'正常'}</span>` : '<span style="font-size:12px;color:var(--text-secondary)">未设置</span>'}
+    <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:10px">
+      <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap">下次跟进</span>
+      <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--card-bg);color:var(--text)">
+      <span style="font-size:11px;white-space:nowrap">${statusDot} ${statusText}</span>
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);font-weight:600">添加记录</div>
     <textarea id="crm-record-content" rows="3" placeholder="记录内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;font-size:12px;margin-top:4px"></textarea>
