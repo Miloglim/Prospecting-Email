@@ -1379,9 +1379,10 @@ select option { font-size: 12px; }
 
 /* 阶段区块 */
 .crm-stage-block { margin-bottom: 4px; }
-.crm-stage-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--card-bg); border-radius: 6px 6px 0 0; border: 1px solid var(--border); border-bottom: none; position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none; }
-.crm-stage-head:hover { background: var(--bg); }
-.crm-stage-toggle { color: var(--text-secondary); flex-shrink: 0; transition: transform .2s; }
+.crm-stage-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--card-bg); border-radius: 6px; border: 1px solid var(--border); position: sticky; top: 0; z-index: 1; cursor: pointer; user-select: none; }
+.crm-stage-head.open { border-radius: 6px 6px 0 0; border-bottom: none; }
+.crm-stage-head:hover { filter: brightness(.97); }
+.crm-stage-arrow { color: var(--text-secondary); flex-shrink: 0; transition: transform .15s; }
 .crm-stage-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .crm-stage-label { font-size: 13px; font-weight: 600; flex: 1; }
 .crm-stage-count { font-size: 12px; color: var(--text-secondary); background: var(--bg); padding: 1px 8px; border-radius: 10px; }

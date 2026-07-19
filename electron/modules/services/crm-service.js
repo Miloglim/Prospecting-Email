@@ -22,11 +22,11 @@ const TAG = {
 
 // 管线阶段（优先级从高到低）
 const PIPELINE_STAGES = [
+  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color },
   { key: TAG.quoting.key,     label: TAG.quoting.label,     color: TAG.quoting.color },
   { key: TAG.trial.key,       label: TAG.trial.label,       color: TAG.trial.color },
   { key: TAG.cooperating.key, label: TAG.cooperating.label, color: TAG.cooperating.color },
   { key: TAG.lost.key,        label: TAG.lost.label,        color: TAG.lost.color },
-  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color }, // 默认
 ];
 
 const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);

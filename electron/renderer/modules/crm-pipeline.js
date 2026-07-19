@@ -5,11 +5,11 @@ import { escapeHtml, lucide, showToast } from './shared.js';
 
 // 后端存英文 key，前端显示中文 label
 const STAGES = [
-  { key: "报价中", color: "#2196f3" },
-  { key: "试单",   color: "#8e24aa" },
-  { key: "合作中", color: "#4caf50" },
-  { key: "已流失", color: "#b0b0b0" },
-  { key: "触达中", color: "#ff9800" },
+  { key: "reaching",    label: "触达中", color: "#ff9800" },
+  { key: "quoting",     label: "报价中", color: "#2196f3" },
+  { key: "trial",       label: "试单",   color: "#8e24aa" },
+  { key: "cooperating", label: "合作中", color: "#4caf50" },
+  { key: "lost",        label: "已流失", color: "#b0b0b0" },
 ];
 
 let _pipelineData = null;
@@ -52,6 +52,18 @@ async function refreshPipeline() {
 
   el.innerHTML = columns.map(col => renderStage(col)).join('');
 
+  // 抽屉折叠
+  el.querySelectorAll('.crm-stage-head').forEach(head => {
+    head.addEventListener('click', () => {
+      const body = head.nextElementSibling;
+      const arrow = head.querySelector('.crm-stage-arrow');
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : 'block';
+      head.classList.toggle('open', !open);
+      if (arrow) arrow.innerHTML = lucide(open ? 'chevron-right' : 'chevron-down', 14);
+    });
+  });
+
   el.querySelectorAll('.crm-contact-row').forEach(row => {
     row.addEventListener('click', () => {
       const cid = row.dataset.contactId;
@@ -87,12 +99,13 @@ function renderStage(col) {
 
   return `
     <div class="crm-stage-block">
-      <div class="crm-stage-head" style="border-left:3px solid ${color}">
+      <div class="crm-stage-head" style="border-left:3px solid ${color}" data-stage="${col.key}">
+        <span class="crm-stage-arrow">${lucide('chevron-right', 14)}</span>
         <span class="crm-stage-dot" style="background:${color}"></span>
         <span class="crm-stage-label">${col.label}</span>
         <span class="crm-stage-count">${col.contacts.length}</span>
       </div>
-      <div class="crm-stage-body">${rows}</div>
+      <div class="crm-stage-body" style="display:none">${rows}</div>
     </div>`;
 }
 
@@ -132,7 +145,7 @@ function showStagePicker(anchor, contactId, cur) {
 
   p.innerHTML = STAGES.map(s => {
     const is = s.key === cur;
-    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.key}</div>`;
+    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.label}</div>`;
   }).join('');
 
   p.querySelectorAll('[data-s]').forEach(d => {
