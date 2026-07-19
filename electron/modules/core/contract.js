@@ -304,6 +304,8 @@ const REPLY = {
   CHECK: "reply:check",
   /** 获取回复日志 */
   LOG: "reply:log",
+  /** 获取回复计数（今日/累计） */
+  GET_COUNT: "reply:getCount",
   /** 自动检测到回复事件（main → renderer） */
   DETECTED: "reply:detected",
 };

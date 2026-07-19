@@ -13,7 +13,7 @@ const TAG_COLORS = {
 
 // ── 数据采集 ──────────────────────────────────────────────────────────────────
 
-function generate(aiFn) {
+async function generate(aiFn) {
   const db = getDb();
   const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }))
     .toISOString().slice(0, 10); // 上海时区当日
@@ -72,11 +72,11 @@ function generate(aiFn) {
   // AI 分析
   let aiText = "";
   if (aiFn) {
-    aiText = aiFn({
+    aiText = await aiFn({
       sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces,
       replyRate, bounceRate, stageCounts, toQuoting, toTrial, toCoop,
       dueCount, overdueCount, followupItems,
-    });
+    }) || "";
   }
 
   const html = buildHtml({

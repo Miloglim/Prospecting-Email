@@ -433,6 +433,33 @@ async function checkReplies() {
   return { ok: true, replies: allReplies, message: allReplies.length ? `发现 ${allReplies.length} 条邮件` : '未发现匹配邮件' };
 }
 
+// ── 回复计数器（独立于联系人库，删联系人不影响）─────────────────────────
+const REPLY_COUNT_PATH = path.join(APP_ROOT, 'data', 'dash-reply-count.json');
+
+function _readReplyCount() {
+  try {
+    if (fs.existsSync(REPLY_COUNT_PATH)) return JSON.parse(fs.readFileSync(REPLY_COUNT_PATH, 'utf-8'));
+  } catch { /* 静默 */ }
+  return { today: 0, total: 0, date: '' };
+}
+
+function _incrementReplyCount(n) {
+  if (n <= 0) return;
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10);
+  const c = _readReplyCount();
+  if (c.date !== today) { c.today = 0; c.date = today; }
+  c.today += n;
+  c.total += n;
+  try { fs.writeFileSync(REPLY_COUNT_PATH, JSON.stringify(c)); } catch { /* 静默 */ }
+}
+
+function getReplyCount() {
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10);
+  const c = _readReplyCount();
+  if (c.date !== today) { c.today = 0; c.date = today; }
+  return c;
+}
+
 // ── 应用回复标记（由 IPC 层调用）───────────────────────────────────────────
 // 只标记 type === 'reply' 的邮件到联系人（auto-reply 不标记）
 function applyReplies(replies) {
@@ -453,6 +480,9 @@ function applyReplies(replies) {
       if (contactsDb.addTag(contact.id, 'replied')) matched++;
     }
   }
+
+  // 累加回复计数（按邮件封数，非匹配联系人数）
+  if (matched > 0) _incrementReplyCount(realReplies.length);
 
   return { matched };
 }
@@ -490,4 +520,4 @@ function cleanup() {
   _autoReplyTimer = null;
 }
 
-module.exports = { checkReplies, applyReplies, scheduleAutoReplyCheck, cleanup };
+module.exports = { checkReplies, applyReplies, scheduleAutoReplyCheck, cleanup, getReplyCount, _incrementReplyCount };

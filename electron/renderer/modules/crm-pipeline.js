@@ -19,6 +19,8 @@ let _reminderTimers = {};
 
 export async function initCrmPipeline() {
   await refreshPipeline();
+  // 暴露给仪表盘待办点击跳转
+  window.__crmOpenDetail = openDetailPanel;
 
   const si = document.getElementById('crm-search');
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }

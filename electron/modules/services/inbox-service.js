@@ -319,6 +319,16 @@ function _syncTagsToContacts(newMails) {
     }
   }
   if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
+
+  // 累加回复计数（按邮件封数，非匹配联系人数）
+  const replyN = newMails.filter(m => m.type === 'reply').length;
+  if (replyN > 0) {
+    try {
+      const { _incrementReplyCount } = require('./reply-checker');
+      _incrementReplyCount(replyN);
+    } catch { /* 计数器不影响标签同步 */ }
+  }
+
   return synced;
 }
 

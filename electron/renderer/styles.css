@@ -392,10 +392,27 @@ button [data-icon] svg { width: 12px; height: 12px; vertical-align: middle; }
 .dash-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; width: 0%; transition: width 0.5s ease; }
 .dash-progress-text { font-size: 12px; color: var(--text-secondary); }
 
-/* 动态消息流 */
+/* 动态消息流 → 客户跟进 */
 .dash-feed { margin-bottom: 12px; }
-.dash-feed-list { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); min-height: 24px; }
+.dash-feed-list { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); min-height: 24px; }
 .dash-feed-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.dash-followup-row { display: flex; align-items: baseline; gap: 6px; }
+.dash-followup-label { font-size: 11px; color: var(--text-secondary); flex-shrink: 0; min-width: 28px; }
+.dash-followup-val { color: var(--text); }
+.dash-followup-section { display: flex; gap: 6px; flex: 1; min-height: 0; }
+.dash-todo-box { flex: 1; max-height: 100px; overflow-y: auto; font-size: 11px; line-height: 1.6; color: var(--text); }
+.dash-todo-box::-webkit-scrollbar { width: 3px; }
+.dash-todo-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.dash-todo-item { padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-todo-clickable { cursor: pointer; }
+.dash-todo-clickable:hover { text-decoration: underline; text-decoration-color: var(--text-secondary); }
+.dash-todo-item .l1 { color: #e65100; }
+.dash-todo-item .l2 { color: #c62828; }
+.dash-todo-item .l3 { color: #b71c1c; font-weight: 600; }
+.dash-todo-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; margin-right: 4px; vertical-align: middle; position: relative; top: -1px; }
+.dash-todo-dot.l1 { background: #ff9800; }
+.dash-todo-dot.l2 { background: #f44336; }
+.dash-todo-dot.l3 { background: #b71c1c; }
 .dash-feed-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .dash-feed-dot.sent { background: var(--accent); }
 .dash-feed-dot.reply { background: #4caf50; }
