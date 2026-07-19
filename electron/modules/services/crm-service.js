@@ -8,7 +8,7 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段 — opp_stage 驱动 */
+/** 管道阶段 — 直接读取 contacts.tags */
 const PIPELINE_STAGES = [
   { stage: "报价中", color: "#2196f3" },
   { stage: "试单",   color: "#8e24aa" },
@@ -17,7 +17,7 @@ const PIPELINE_STAGES = [
   { stage: "触达中", color: "#ff9800" }, // 默认
 ];
 
-// 入口条件：标签含这些才进入 CRM 库
+// 入口条件
 const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
 
 /** _extra.crmPreferences 白名单 */
@@ -49,7 +49,7 @@ function listPipeline(filters = {}) {
   const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
             c.phone, c.linkedin, c.position, c.contact_name,
-            c.client_type, c.stage, c.tags, c.opp_stage,
+            c.client_type, c.stage, c.tags,
             c._extra, c.last_sent_at,
             co.name as company_name, co.country as company_country, co.website as company_website
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
@@ -57,19 +57,26 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：标签含 有回复/触达中，或 opp_stage 已被手动推进
+  // 入口筛选
   const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_TAGS.includes(t)) ||
-    (c.opp_stage && c.opp_stage !== "待开发")
+    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
   );
 
-  // 按 opp_stage 分列
-  Log.info("CRM", `入口: ${entered.length}人, opp_stage分布: ${[...new Set(entered.map(c => c.opp_stage || '(空)'))].join(', ')}`);
+  // 按 tags 分列（优先级：报价中 > 试单 > 合作中 > 已流失 > 触达中）
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
   for (const c of entered) {
-    const stage = (c.opp_stage && c.opp_stage !== "待开发") ? c.opp_stage : "触达中";
-    const col = columns.find(x => x.stage === stage) || columns.find(x => x.stage === "触达中");
-    if (col) col.contacts.push(c);
+    const tags = c.tags || [];
+    let matched = false;
+    for (const s of PIPELINE_STAGES) {
+      if (tags.includes(s.stage)) {
+        columns.find(x => x.stage === s.stage)?.contacts.push(c);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      columns.find(x => x.stage === "触达中")?.contacts.push(c);
+    }
   }
 
   return { columns };
@@ -86,19 +93,23 @@ function setStage(contactId, newStage) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
-  const oldStage = contact.opp_stage || "触达中";
-  contactsDb.update(contactId, { opp_stage: newStage });
+  // 移除旧管线标签，写入新标签
+  const ALL_STAGE_TAGS = PIPELINE_STAGES.map(s => s.stage);
+  const newTags = [...new Set([...(contact.tags || []).filter(t => !ALL_STAGE_TAGS.includes(t)), newStage])];
+
+  const oldTags = contact.tags || [];
+  contactsDb.update(contactId, { tags: newTags });
 
   try {
     interactionsDb.add({
       contact_id: contactId, company_id: contact.company_id || "",
       type: "stage_changed", direction: "internal",
-      subject: "阶段变更", snippet: `${oldStage} → ${newStage}`,
+      subject: "阶段变更", snippet: `${oldTags.join(',') || '无'} → ${newStage}`,
     });
   } catch (e) { Log.error("CRM", "写审计记录失败", e.stack); }
 
-  Log.info("CRM", "阶段变更", { contactId, from: oldStage, to: newStage });
-  return { ok: true, data: { id: contactId, opp_stage: newStage } };
+  Log.info("CRM", "标签变更", { contactId, newTags });
+  return { ok: true, data: { id: contactId, tags: newTags } };
 }
 
 // ── 扩展字段更新 ──────────────────────────────────────────────────────────────
@@ -172,7 +183,7 @@ function checkReminders() {
   const db = getDb();
 
   const rows = db.prepare(
-    `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.tags, c.opp_stage,
+    `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.tags,
             co.name as company_name, co.country as company_country
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
      WHERE c._extra LIKE '%nextFollowupAt%'`

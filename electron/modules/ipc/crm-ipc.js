@@ -25,7 +25,7 @@ function register(ipcMain, deps) {
       const result = crmService.setStage(contactId, newStage);
       if (!result.ok) return { ok: false, error: result.error };
       // 广播变更事件
-      deps.mainWindow?.webContents.send(IPC.CRM.CHANGED, { contactId, opp_stage: newStage });
+      deps.mainWindow?.webContents.send(IPC.CRM.CHANGED, { contactId, tags: result.data.tags });
       return { ok: true, data: result.data };
     } catch (e) {
       return { ok: false, error: e.message };
