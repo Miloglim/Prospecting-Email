@@ -229,9 +229,15 @@ function _normalizeRow(r) {
 // ── 邮件正文查询 ──────────────────────────────────────────────────────────────
 
 function getEmailBody(uid, accountId) {
-  if (!uid || !accountId) return { ok: false, error: "参数缺失" };
+  if (!uid) return { ok: false, error: "参数缺失" };
   const db = getDb();
-  const row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? AND account_id = ?").get(uid, accountId);
+  let row;
+  if (accountId) {
+    row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? AND account_id = ?").get(uid, accountId);
+  }
+  if (!row) {
+    row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? LIMIT 1").get(uid);
+  }
   if (!row) return { ok: false, error: "邮件不存在" };
   return { ok: true, data: row };
 }
