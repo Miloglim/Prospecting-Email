@@ -207,8 +207,13 @@ async function openDetailPanel(contactId) {
         if (r.ok && r.data.length) {
           tgt.innerHTML = r.data.map(m => `
             <div class="crm-email-item">
-              <div class="crm-email-meta"><span>${m.type==='reply'?'📥':m.type==='bounce'?'↩️':'📧'} ${escapeHtml(m.subject||'(无主题)')}</span><span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${escapeHtml((m.date||'').slice(0,16))}</span></div>
-              <div style="font-size:11px;color:var(--text-secondary)">${escapeHtml(m.from_addr||'')} · ${escapeHtml(m.from_name||'')}</div>
+              <div class="crm-email-meta">
+                <span>${m.type==='reply'?'📥':m.type==='bounce'?'↩️':'📧'} ${escapeHtml(m.subject||'(无主题)')}</span>
+                <span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${escapeHtml((m.date||'').slice(0,16))}</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-secondary)">
+                ${m.type==='reply'?'发件人':'收件人'}: ${escapeHtml(m.from_name||m.from_addr||'')}${m.from_addr ? ` &lt;${escapeHtml(m.from_addr)}&gt;` : ''}
+              </div>
             </div>`).join('');
           tgt.querySelectorAll('.crm-email-item').forEach((row, i) => {
             row.addEventListener('click', () => {
