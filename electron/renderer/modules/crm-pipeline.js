@@ -4,10 +4,8 @@
 import { escapeHtml, lucide, showToast } from './shared.js';
 
 const STAGES = [
-  { stage: "有回复",   color: "#22a644" },
-  { stage: "自动回复", color: "#e6a817" },
-  { stage: "触达中",   color: "#ff9800" },
-  { stage: "未标签",   color: "#9e9e9e" },
+  { stage: "有回复", color: "#22a644" },
+  { stage: "触达中", color: "#ff9800" },
 ];
 
 let _pipelineData = null;

@@ -8,20 +8,19 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段 — 只含入口识别标签：有回复/自动回复/触达中/未标签 */
+/** 管道阶段 */
 const PIPELINE_STAGES = [
-  { stage: "有回复",   color: "#22a644" },
-  { stage: "自动回复", color: "#e6a817" },
-  { stage: "触达中",   color: "#ff9800" },
-  { stage: "未标签",   color: "#9e9e9e" },
+  { stage: "有回复", color: "#22a644" },
+  { stage: "触达中", color: "#ff9800" },
 ];
 
-// 优先级：有回复 > 自动回复 > 触达中 > 未标签
-// tags[0] = 写入标准值
+// 入口条件：标签含这些才进 CRM
+const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
+
+// 分类优先级：有回复 > 触达中
 const TAG_RULES = [
-  { stage: "有回复",   tags: ["有回复", "replied"] },
-  { stage: "自动回复", tags: ["自动回复", "autoreply", "auto_reply"] },
-  { stage: "触达中",   tags: ["触达中", "已触达", "reached"] },
+  { stage: "有回复", tags: ["有回复", "replied"] },
+  { stage: "触达中", tags: ["触达中", "已触达", "reached"] },
 ];
 
 /** _extra.crmPreferences 白名单 */
@@ -50,7 +49,7 @@ function listPipeline(filters = {}) {
     params.push(filters.country);
   }
 
-  // 全量联系人（不再排除 opp_stage，标签驱动分类）
+  // 全量联系人
   const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
             c.phone, c.linkedin, c.position, c.contact_name,
@@ -62,24 +61,22 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
+  // 入口筛选：只保留标签含 有回复/触达中 的联系人
+  const entered = allContacts.filter(c =>
+    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
+  );
+
   // 按标签分类
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
-  const untagged = [];
-
-  for (const c of allContacts) {
+  for (const c of entered) {
     const tags = c.tags || [];
-    let matched = false;
     for (const rule of TAG_RULES) {
       if (tags.some(t => rule.tags.includes(t))) {
         const col = columns.find(x => x.stage === rule.stage);
-        if (col) { col.contacts.push(c); matched = true; }
-        break;
+        if (col) { col.contacts.push(c); break; }
       }
     }
-    if (!matched) untagged.push(c);
   }
-  const untaggedCol = columns.find(x => x.stage === "未标签");
-  if (untaggedCol) untaggedCol.contacts = untagged;
 
   return { columns };
 }
