@@ -190,16 +190,41 @@ async function openDetailPanel(contactId) {
       <div class="crm-tab-content active" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content" data-content="prefs">${prefsTab(contactId,prefs)}</div>
       <div class="crm-tab-content" data-content="followup">${followupTab(contactId, reminder, notes, interactions)}</div>
-      <div class="crm-tab-content" data-content="emails">${emailsTab(interactions)}</div>
+      <div class="crm-tab-content" data-content="emails"><div class="crm-detail-loading" style="padding:20px">${lucide('loader-2',14,'spin')} 加载中...</div></div>
     </div>`;
 
+  let _emailsLoaded = false;
   panel.querySelectorAll('.crm-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', async () => {
       panel.querySelectorAll('.crm-tab').forEach(t => t.classList.remove('active'));
       panel.querySelectorAll('.crm-tab-content').forEach(c => c.classList.remove('active'));
       tab.classList.add('active');
       const tgt = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
       if (tgt) tgt.classList.add('active');
+      if (tab.dataset.tab === 'emails' && !_emailsLoaded) {
+        _emailsLoaded = true;
+        const r = await window.electronAPI.crmGetContactEmails(contactId);
+        if (r.ok && r.data.length) {
+          tgt.innerHTML = r.data.map(m => `
+            <div class="crm-email-item">
+              <div class="crm-email-meta"><span>${m.type==='reply'?'📥':m.type==='bounce'?'↩️':'📧'} ${escapeHtml(m.subject||'(无主题)')}</span><span style="font-size:10px;color:var(--text-secondary);margin-left:auto">${escapeHtml((m.date||'').slice(0,16))}</span></div>
+              <div style="font-size:11px;color:var(--text-secondary)">${escapeHtml(m.from_addr||'')} · ${escapeHtml(m.from_name||'')}</div>
+            </div>`).join('');
+          tgt.querySelectorAll('.crm-email-item').forEach((row, i) => {
+            row.addEventListener('click', () => {
+              const m = r.data[i];
+              const p = document.createElement('div');
+              p.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+              p.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary)">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6">${m.body||'(无内容)'}</div></div>`;
+              document.body.appendChild(p);
+              p.addEventListener('click', ev => { if (ev.target === p) p.remove(); });
+              p.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => p.remove());
+            });
+          });
+        } else {
+          tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">暂无邮件往来</div>';
+        }
+      }
     });
   });
 

@@ -65,6 +65,14 @@ function register(ipcMain, deps) {
     }
   });
 
+  ipcMain.handle("crm:getContactEmails", async (_e, contactId) => {
+    try {
+      const result = crmService.getContactEmails(contactId);
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, data: result.data };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+
   ipcMain.handle("crm:getEmailBody", async (_e, uid, accountId) => {
     try {
       const result = crmService.getEmailBody(uid, accountId);

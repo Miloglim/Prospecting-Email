@@ -226,7 +226,20 @@ function _normalizeRow(r) {
   return r;
 }
 
-// ── 邮件正文查询 ──────────────────────────────────────────────────────────────
+// ── 邮件查询 ──────────────────────────────────────────────────────────────────
+
+function getContactEmails(contactId) {
+  if (!contactId) return { ok: false, error: "参数缺失" };
+  const contact = contactsDb.getById(contactId);
+  if (!contact) return { ok: false, error: "联系人不存在" };
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT uid, subject, from_addr, from_name, date, body, type FROM inbox
+     WHERE from_addr = ? OR contact_db_id = ? OR contact_id = ?
+     ORDER BY date DESC LIMIT 50`
+  ).all(contact.email, contactId, contactId);
+  return { ok: true, data: rows };
+}
 
 function getEmailBody(uid, accountId) {
   if (!uid) return { ok: false, error: "参数缺失" };
@@ -242,4 +255,4 @@ function getEmailBody(uid, accountId) {
   return { ok: true, data: row };
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getEmailBody, PIPELINE_STAGES, TAG };
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getContactEmails, getEmailBody, PIPELINE_STAGES, TAG };
