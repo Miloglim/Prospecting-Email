@@ -6,19 +6,30 @@ const interactionsDb = require("./interactions-db");
 const { getDb } = require("./db");
 const { Log } = require("../core/logger");
 
-// ── 常量 ──────────────────────────────────────────────────────────────────────
+// ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
 
-/** 入口标签：有这些标签的联系人进入 CRM 库 */
-const ENTRY_TAGS = ["有回复", "replied", "已触达", "reached"];
+const TAG = {
+  replied:     { key: "replied",     label: "有回复",   color: "#22a644", alias: ["有回复"] },
+  autoreply:   { key: "autoreply",   label: "自动回复", color: "#e6a817", alias: ["自动回复", "auto_reply"] },
+  bounced:     { key: "bounced",     label: "退信",     color: "#d93025", alias: ["bounced_by_contact", "退信"] },
+  reached:     { key: "reached",     label: "已触达",   color: "#3b82f6", alias: ["已触达"] },
+  quoting:     { key: "quoting",     label: "报价中",   color: "#2196f3", alias: ["报价中"] },
+  trial:       { key: "trial",       label: "试单",     color: "#8e24aa", alias: ["试单"] },
+  cooperating: { key: "cooperating", label: "合作中",   color: "#4caf50", alias: ["合作中"] },
+  lost:        { key: "lost",        label: "已流失",   color: "#b0b0b0", alias: ["已流失"] },
+  reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中"] },
+};
 
-/** 管道阶段 + 标签匹配规则（优先级从高到低） */
+// 管线阶段（优先级从高到低）
 const PIPELINE_STAGES = [
-  { stage: "报价中", color: "#2196f3", match: ["报价中"] },
-  { stage: "试单",   color: "#8e24aa", match: ["试单"] },
-  { stage: "合作中", color: "#4caf50", match: ["合作中"] },
-  { stage: "已流失", color: "#b0b0b0", match: ["已流失"] },
-  { stage: "触达中", color: "#ff9800", match: ["触达中", "已触达", "reached"] }, // 默认
+  { key: TAG.quoting.key,     label: TAG.quoting.label,     color: TAG.quoting.color },
+  { key: TAG.trial.key,       label: TAG.trial.label,       color: TAG.trial.color },
+  { key: TAG.cooperating.key, label: TAG.cooperating.label, color: TAG.cooperating.color },
+  { key: TAG.lost.key,        label: TAG.lost.key,          color: TAG.lost.color },
+  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color }, // 默认
 ];
+
+const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -26,14 +37,12 @@ const PREFERENCE_KEYS = [
   "priceSensitivity", "preferredPorts", "annualVolume", "memo",
 ];
 
-/** _extra.crmReminder 白名单 */
 const REMINDER_KEYS = ["nextFollowupAt", "followupNote"];
 
 // ── 管道查询 ──────────────────────────────────────────────────────────────────
 
 function listPipeline(filters = {}) {
   const db = getDb();
-
   const params = [];
   let where = "1=1";
   if (filters.search) {
@@ -57,65 +66,64 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：只有 有回复/已触达 能进门
-  const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
-  );
+  // 入口筛选（key + alias 都认）
+  const entryMatch = (tags) => {
+    for (const t of [TAG.replied, TAG.reached]) {
+      if (tags.some(x => x === t.key || (t.alias || []).includes(x))) return true;
+    }
+    return false;
+  };
+  const entered = allContacts.filter(c => entryMatch(c.tags || []));
 
-  // 第二层：按标签分类
-  const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
-  const defaultCol = columns.find(x => x.stage === "触达中");
-  const classifyLog = [];
+  // 按管线阶段分类
+  const columns = PIPELINE_STAGES.map(s => ({ stage: s.key, label: s.label, color: s.color, contacts: [] }));
+  const defaultCol = columns.find(x => x.key === TAG.reaching.key);
+  const matchKey = (tags, stageDef) => {
+    const keys = [stageDef.key, ...Object.values(TAG).find(t => t.key === stageDef.key)?.alias || []];
+    return tags.some(t => keys.includes(t));
+  };
   for (const c of entered) {
     const tags = c.tags || [];
     let matched = false;
     for (const s of PIPELINE_STAGES) {
-      if (tags.some(t => s.match.includes(t))) {
-        columns.find(x => x.stage === s.stage)?.contacts.push(c);
-        classifyLog.push(`${c.email}: tags=${JSON.stringify(tags)} → ${s.stage}`);
+      if (matchKey(tags, s)) {
+        const target = columns.find(x => x.key === s.key);
+        if (target) target.contacts.push(c);
         matched = true;
         break;
       }
     }
-    if (!matched && defaultCol) {
-      defaultCol.contacts.push(c);
-      classifyLog.push(`${c.email}: tags=${JSON.stringify(tags)} → 触达中(默认)`);
-    }
+    if (!matched && defaultCol) { defaultCol.contacts.push(c); }
   }
-  Log.info("CRM", `分类明细:\n  ${classifyLog.join('\n  ')}`);
 
   return { columns };
 }
 
 // ── 阶段切换 ──────────────────────────────────────────────────────────────────
 
-function setStage(contactId, newStage) {
-  const validStages = PIPELINE_STAGES.map(s => s.stage);
-  if (!validStages.includes(newStage)) {
-    return { ok: false, error: `无效阶段: ${newStage}` };
+function setStage(contactId, newKey) {
+  if (!PIPELINE_KEYS.includes(newKey)) {
+    return { ok: false, error: `无效阶段: ${newKey}` };
   }
 
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
-  // 移除旧管线标签，写入新标签
-  const ALL_MATCH_TAGS = PIPELINE_STAGES.flatMap(s => s.match);
-  const rule = PIPELINE_STAGES.find(s => s.stage === newStage);
-  const writeTag = rule ? rule.match[0] : newStage; // 用中文标准值
-  const newTags = [...new Set([...(contact.tags || []).filter(t => !ALL_MATCH_TAGS.includes(t)), writeTag])];
-
+  // 清除旧管线标签，写入新标签
   const oldTags = contact.tags || [];
+  const newTags = [...new Set([...oldTags.filter(t => !PIPELINE_KEYS.includes(t)), newKey])];
+
   contactsDb.update(contactId, { tags: newTags });
 
   try {
     interactionsDb.add({
       contact_id: contactId, company_id: contact.company_id || "",
       type: "stage_changed", direction: "internal",
-      subject: "阶段变更", snippet: `${oldTags.join(',') || '无'} → ${newStage}`,
+      subject: "阶段变更", snippet: `${oldTags.join(',') || '无'} → ${newKey}`,
     });
   } catch (e) { Log.error("CRM", "写审计记录失败", e.stack); }
 
-  Log.info("CRM", "标签变更", { contactId, newTags });
+  Log.info("CRM", "阶段变更", { contactId, newKey });
   return { ok: true, data: { id: contactId, tags: newTags } };
 }
 
@@ -144,7 +152,6 @@ function updateExtra(contactId, patch) {
   }
 
   contactsDb.update(contactId, { _extra: extra });
-  Log.info("CRM", "扩展字段更新", { contactId });
   return { ok: true, data: { id: contactId, _extra: extra } };
 }
 
@@ -155,10 +162,7 @@ function getDetail(contactId) {
   if (!contact) return { ok: false, error: "联系人不存在" };
 
   const db = getDb();
-  const notes = db.prepare(
-    "SELECT id, content, created_at, updated_at FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC"
-  ).all(contactId);
-
+  const notes = db.prepare("SELECT id, content, created_at, updated_at FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC").all(contactId);
   const interactions = interactionsDb.list({ contact_id: contactId, limit: 100 });
 
   return { ok: true, data: { contact, notes, interactions } };
@@ -168,7 +172,6 @@ function getDetail(contactId) {
 
 function saveNote(contactId, content) {
   if (!content || !content.trim()) return { ok: false, error: "内容不能为空" };
-
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
@@ -176,9 +179,7 @@ function saveNote(contactId, content) {
   const db = getDb();
   const id = uuid();
   const now = new Date().toISOString();
-  db.prepare(
-    "INSERT INTO contact_notes (id, contact_id, content, created_at, updated_at) VALUES (?,?,?,?,?)"
-  ).run(id, contactId, content.trim(), now, now);
+  db.prepare("INSERT INTO contact_notes (id, contact_id, content, created_at, updated_at) VALUES (?,?,?,?,?)").run(id, contactId, content.trim(), now, now);
 
   Log.info("CRM", "跟进备注已保存", { contactId, noteId: id });
   return { ok: true, data: { id, contact_id: contactId, content: content.trim(), created_at: now, updated_at: now } };
@@ -188,7 +189,6 @@ function saveNote(contactId, content) {
 
 function checkReminders() {
   const db = getDb();
-
   const rows = db.prepare(
     `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.tags,
             co.name as company_name, co.country as company_country
@@ -199,22 +199,15 @@ function checkReminders() {
     return r;
   });
 
-  const due = [];
-  const overdue = [];
-
+  const due = []; const overdue = [];
   for (const r of rows) {
     const reminder = r._extra?.crmReminder;
     if (!reminder?.nextFollowupAt) continue;
-    const followupTime = new Date(reminder.nextFollowupAt).getTime();
-    if (isNaN(followupTime)) continue;
-
-    if (followupTime <= Date.now()) {
-      overdue.push(r);
-    } else if (followupTime <= Date.now() + 24 * 3600 * 1000) {
-      due.push(r);
-    }
+    const t = new Date(reminder.nextFollowupAt).getTime();
+    if (isNaN(t)) continue;
+    if (t <= Date.now()) overdue.push(r);
+    else if (t <= Date.now() + 24 * 3600 * 1000) due.push(r);
   }
-
   return { ok: true, data: { due, overdue } };
 }
 
@@ -222,9 +215,7 @@ function checkReminders() {
 
 function _normalizeRow(r) {
   if (!r) return r;
-  if (typeof r.tags === 'string') {
-    try { r.tags = JSON.parse(r.tags || "[]"); } catch { r.tags = []; }
-  }
+  if (typeof r.tags === 'string') { try { r.tags = JSON.parse(r.tags || "[]"); } catch { r.tags = []; } }
   if (!Array.isArray(r.tags)) r.tags = [];
   try { r._extra = JSON.parse(r._extra || "{}"); } catch { r._extra = {}; }
   r.company = r.company_name || "";
@@ -234,4 +225,4 @@ function _normalizeRow(r) {
   return r;
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, PIPELINE_STAGES };
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, PIPELINE_STAGES, TAG };

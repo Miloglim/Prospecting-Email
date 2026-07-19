@@ -3,12 +3,13 @@
 
 import { escapeHtml, lucide, showToast } from './shared.js';
 
+// 后端存英文 key，前端显示中文 label
 const STAGES = [
-  { stage: "报价中", color: "#2196f3" },
-  { stage: "试单",   color: "#8e24aa" },
-  { stage: "合作中", color: "#4caf50" },
-  { stage: "已流失", color: "#b0b0b0" },
-  { stage: "触达中", color: "#ff9800" },
+  { key: "quoting",     label: "报价中", color: "#2196f3" },
+  { key: "trial",       label: "试单",   color: "#8e24aa" },
+  { key: "cooperating", label: "合作中", color: "#4caf50" },
+  { key: "lost",        label: "已流失", color: "#b0b0b0" },
+  { key: "reaching",    label: "触达中", color: "#ff9800" },
 ];
 
 let _pipelineData = null;
@@ -78,9 +79,10 @@ async function refreshPipeline() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function renderStage(col) {
-  const color = col.color || (STAGES.find(s => s.stage === col.stage) || {}).color || '#999';
+  const color = col.color || '#999';
+  const label = col.label || col.stage || '';
   const rows = col.contacts.length
-    ? col.contacts.map(c => renderContact(c, col.stage, color)).join('')
+    ? col.contacts.map(c => renderContact(c, col.stage, label, color)).join('')
     : `<div class="crm-contact-row crm-contact-none">暂无</div>`;
 
   return `
@@ -94,7 +96,7 @@ function renderStage(col) {
     </div>`;
 }
 
-function renderContact(c, stage, color) {
+function renderContact(c, stageKey, label, color) {
   const reminder = c._extra?.crmReminder;
   const nextAt = reminder?.nextFollowupAt;
   let timeHtml = '';
@@ -111,7 +113,7 @@ function renderContact(c, stage, color) {
       <span class="crm-contact-co">${escapeHtml(c.company || '—')}</span>
       <span class="crm-contact-ctry">${escapeHtml(c.country || '')}</span>
       ${timeHtml}
-      <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stage}" style="background:${color}18;color:${color}">${stage}</span>
+      <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stageKey}" style="background:${color}18;color:${color}">${label}</span>
     </div>`;
 }
 
@@ -129,8 +131,8 @@ function showStagePicker(anchor, contactId, cur) {
   p.style.top = (rect.bottom + 4 > window.innerHeight - 200 ? rect.top - 200 : rect.bottom + 4) + 'px';
 
   p.innerHTML = STAGES.map(s => {
-    const is = s.stage === cur;
-    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.stage}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.stage}</div>`;
+    const is = s.key === cur;
+    return `<div style="padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${is?'font-weight:600':''}" data-s="${s.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${s.color};flex-shrink:0"></span>${is?' ✓':''} ${s.label}</div>`;
   }).join('');
 
   p.querySelectorAll('[data-s]').forEach(d => {

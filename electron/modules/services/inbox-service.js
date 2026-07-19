@@ -285,7 +285,7 @@ function _writeCursor(data) {
 // ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
 function _syncTagsToContacts(newMails) {
   const contactsDb = require('./contacts-db');
-  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: '有回复', 'auto-reply': '自动回复' };
+  const TYPE_TAG = { bounce: 'bounced', reply: 'replied', 'auto-reply': 'autoreply' };
   let synced = 0;
   for (const m of newMails) {
     const tag = TYPE_TAG[m.type];
@@ -826,7 +826,7 @@ function setMailType(index, newType) {
   Log.info('[收件箱]', `手动分类: [${index}] ${oldType} → ${newType}`);
 
   // 手动设置 → 覆盖式更新联系人标签（唯一值，不叠加）
-  const TYPE_TAG = { bounce: 'bounced_by_contact', reply: '有回复', 'auto-reply': '自动回复' };
+  const TYPE_TAG = { bounce: 'bounced', reply: 'replied', 'auto-reply': 'autoreply' };
   const oldTag = TYPE_TAG[oldType];
   const newTag = TYPE_TAG[newType];
   if (oldTag !== newTag) {
