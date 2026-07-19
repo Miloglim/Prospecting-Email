@@ -72,8 +72,33 @@ function register(ipcMain, deps) {
 
   ipcMain.handle("report:generate", async () => {
     try {
+      // AI 分析函数 — DeepSeek
+      const aiFn = (data) => {
+        try {
+          const cfgPath = path.join(require("../config").APP_ROOT, "send", "config.json");
+          if (!fs.existsSync(cfgPath)) return "";
+          const apiKey = JSON.parse(fs.readFileSync(cfgPath, "utf-8")).apiKeys?.deepseek;
+          if (!apiKey) return "";
+          const prompt = `你是货代CRM分析师。用简洁中文分析今日数据，3段：
+1. 整体表现 2. 回复质量 3. 优化建议（短期/中期/系统）
+数据：发出${data.sentToday}封失败${data.failedToday}封，回复${data.replies}封退信${data.bounces}封，回复率${data.replyRate}%。管线触达中${data.stageCounts?.reaching||0}报价中${data.stageCounts?.quoting||0}试单${data.stageCounts?.trial||0}合作中${data.stageCounts?.cooperating||0}。${data.dueCount||0}人待跟进${data.overdueCount||0}人逾期。`;
+          const body = JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 500 });
+          return new Promise((resolve) => {
+            const https = require("https");
+            const req = https.request({ hostname: "api.deepseek.com", path: "/v1/chat/completions", method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey }, timeout: 15000 }, (res) => {
+              let d = ""; res.on("data", c => d += c); res.on("end", () => {
+                try { resolve(JSON.parse(d)?.choices?.[0]?.message?.content?.split("\n").filter(Boolean).map(p => `<p>${p}</p>`).join("") || ""); }
+                catch { resolve(""); }
+              });
+            });
+            req.on("error", () => resolve(""));
+            req.on("timeout", () => { req.destroy(); resolve(""); });
+            req.end(body);
+          });
+        } catch { return ""; }
+      };
       const reportService = require("../services/report-service");
-      const result = reportService.generate(null);
+      const result = await reportService.generate(aiFn);
       reportService.saveToDb(result.data);
 
       const { BrowserWindow } = require("electron");
