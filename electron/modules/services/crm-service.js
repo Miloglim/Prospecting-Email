@@ -57,9 +57,10 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选 → 标签含 有回复/触达中 才进 CRM
+  // 入口筛选：标签含 有回复/触达中，或 opp_stage 已被手动推进
   const entered = allContacts.filter(c =>
-    (c.tags || []).some(t => ENTRY_TAGS.includes(t))
+    (c.tags || []).some(t => ENTRY_TAGS.includes(t)) ||
+    (c.opp_stage && c.opp_stage !== "待开发")
   );
 
   // 按 opp_stage 分列
