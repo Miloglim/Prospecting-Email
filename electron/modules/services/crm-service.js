@@ -8,20 +8,17 @@ const { Log } = require("../core/logger");
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 
-/** 管道阶段 */
+/** 管道阶段 — opp_stage 驱动 */
 const PIPELINE_STAGES = [
-  { stage: "有回复", color: "#22a644" },
-  { stage: "触达中", color: "#ff9800" },
+  { stage: "报价中", color: "#2196f3" },
+  { stage: "试单",   color: "#8e24aa" },
+  { stage: "合作中", color: "#4caf50" },
+  { stage: "已流失", color: "#b0b0b0" },
+  { stage: "触达中", color: "#ff9800" }, // 默认
 ];
 
-// 入口条件：标签含这些才进 CRM
+// 入口条件：标签含这些才进入 CRM 库
 const ENTRY_TAGS = ["有回复", "replied", "触达中", "已触达", "reached"];
-
-// 分类优先级：有回复 > 触达中
-const TAG_RULES = [
-  { stage: "有回复", tags: ["有回复", "replied"] },
-  { stage: "触达中", tags: ["触达中", "已触达", "reached"] },
-];
 
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
@@ -49,7 +46,6 @@ function listPipeline(filters = {}) {
     params.push(filters.country);
   }
 
-  // 全量联系人
   const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
             c.phone, c.linkedin, c.position, c.contact_name,
@@ -61,21 +57,18 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：只保留标签含 有回复/触达中 的联系人
+  // 入口筛选 → 标签含 有回复/触达中 才进 CRM
   const entered = allContacts.filter(c =>
     (c.tags || []).some(t => ENTRY_TAGS.includes(t))
   );
 
-  // 按标签分类
+  // 按 opp_stage 分列
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
   for (const c of entered) {
-    const tags = c.tags || [];
-    for (const rule of TAG_RULES) {
-      if (tags.some(t => rule.tags.includes(t))) {
-        const col = columns.find(x => x.stage === rule.stage);
-        if (col) { col.contacts.push(c); break; }
-      }
-    }
+    const stage = c.opp_stage || "触达中";
+    const col = columns.find(x => x.stage === stage);
+    if (col) col.contacts.push(c);
+    else columns.find(x => x.stage === "触达中")?.contacts.push(c);
   }
 
   return { columns };
@@ -83,11 +76,6 @@ function listPipeline(filters = {}) {
 
 // ── 阶段切换 ──────────────────────────────────────────────────────────────────
 
-/**
- * 设置联系人销售阶段，同时写审计记录
- * @param {string} contactId
- * @param {string} newStage
- */
 function setStage(contactId, newStage) {
   const validStages = PIPELINE_STAGES.map(s => s.stage);
   if (!validStages.includes(newStage)) {
@@ -97,33 +85,23 @@ function setStage(contactId, newStage) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
-  const oldTags = contact.tags || [];
-  // 清除旧标签类别，写入新标签
-  const ALL_TAG_VALS = TAG_RULES.flatMap(r => r.tags);
-  const newTags = oldTags.filter(t => !ALL_TAG_VALS.includes(t));
-  const rule = TAG_RULES.find(r => r.stage === newStage);
-  if (rule) newTags.push(rule.tags[0]); // 用标准 key（英文）
-  contactsDb.update(contactId, { tags: newTags });
+  const oldStage = contact.opp_stage || "触达中";
+  contactsDb.update(contactId, { opp_stage: newStage });
 
   try {
     interactionsDb.add({
       contact_id: contactId, company_id: contact.company_id || "",
       type: "stage_changed", direction: "internal",
-      subject: "标签变更", snippet: `${oldTags.join(',') || '无'} → ${newTags.join(',')}`,
+      subject: "阶段变更", snippet: `${oldStage} → ${newStage}`,
     });
   } catch (e) { Log.error("CRM", "写审计记录失败", e.stack); }
 
-  Log.info("CRM", "标签变更", { contactId, newTags });
-  return { ok: true, data: { id: contactId, tags: newTags } };
+  Log.info("CRM", "阶段变更", { contactId, from: oldStage, to: newStage });
+  return { ok: true, data: { id: contactId, opp_stage: newStage } };
 }
 
 // ── 扩展字段更新 ──────────────────────────────────────────────────────────────
 
-/**
- * 更新联系人 _extra 中的 CRM 相关字段（白名单校验）
- * @param {string} contactId
- * @param {{ crmPreferences?: object, crmReminder?: object }} patch
- */
 function updateExtra(contactId, patch) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
@@ -153,10 +131,6 @@ function updateExtra(contactId, patch) {
 
 // ── 联系人详情 ────────────────────────────────────────────────────────────────
 
-/**
- * 获取联系人详情（含偏好、备注时间线、互动记录）
- * @param {string} contactId
- */
 function getDetail(contactId) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
@@ -173,11 +147,6 @@ function getDetail(contactId) {
 
 // ── 跟进备注 ──────────────────────────────────────────────────────────────────
 
-/**
- * 保存跟进备注
- * @param {string} contactId
- * @param {string} content
- */
 function saveNote(contactId, content) {
   if (!content || !content.trim()) return { ok: false, error: "内容不能为空" };
 
@@ -198,14 +167,9 @@ function saveNote(contactId, content) {
 
 // ── 到期提醒检查 ──────────────────────────────────────────────────────────────
 
-/**
- * 检查到期/逾期提醒
- * @returns {{ due: object[], overdue: object[] }}
- */
 function checkReminders() {
   const db = getDb();
 
-  // 查所有有 nextFollowupAt 的联系人（不限标签/阶段）
   const rows = db.prepare(
     `SELECT c.id, c.first_name, c.last_name, c.email, c._extra, c.tags, c.opp_stage,
             co.name as company_name, co.country as company_country
@@ -216,8 +180,8 @@ function checkReminders() {
     return r;
   });
 
-  const due = [];   // 24h 内到期
-  const overdue = []; // 已逾期
+  const due = [];
+  const overdue = [];
 
   for (const r of rows) {
     const reminder = r._extra?.crmReminder;
