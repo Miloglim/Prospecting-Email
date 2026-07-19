@@ -52,3 +52,4 @@ send/send-log.json.tmp
 # IDE
 .vscode/
 .idea/
+nul
