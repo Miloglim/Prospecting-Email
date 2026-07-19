@@ -65,10 +65,9 @@ function listPipeline(filters = {}) {
   // 按 opp_stage 分列
   const columns = PIPELINE_STAGES.map(s => ({ ...s, label: s.stage, contacts: [] }));
   for (const c of entered) {
-    const stage = c.opp_stage || "触达中";
-    const col = columns.find(x => x.stage === stage);
+    const stage = (c.opp_stage && c.opp_stage !== "待开发") ? c.opp_stage : "触达中";
+    const col = columns.find(x => x.stage === stage) || columns.find(x => x.stage === "触达中");
     if (col) col.contacts.push(c);
-    else columns.find(x => x.stage === "触达中")?.contacts.push(c);
   }
 
   return { columns };
