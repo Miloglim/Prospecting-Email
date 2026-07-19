@@ -20,16 +20,14 @@ const TAG = {
   reaching:    { key: "reaching",    label: "触达中",   color: "#ff9800", alias: ["触达中"] },
 };
 
-// 管线阶段（分类优先级：高级阶段优先）
+// 管线阶段（优先级从高到低）
 const PIPELINE_STAGES = [
   { key: TAG.quoting.key,     label: TAG.quoting.label,     color: TAG.quoting.color },
   { key: TAG.trial.key,       label: TAG.trial.label,       color: TAG.trial.color },
   { key: TAG.cooperating.key, label: TAG.cooperating.label, color: TAG.cooperating.color },
   { key: TAG.lost.key,        label: TAG.lost.label,        color: TAG.lost.color },
-  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color },
+  { key: TAG.reaching.key,    label: TAG.reaching.label,    color: TAG.reaching.color }, // 默认
 ];
-// 显示顺序：触达中 → 报价中 → 试单 → 合作中 → 已流失
-const DISPLAY_ORDER = [TAG.reaching.key, TAG.quoting.key, TAG.trial.key, TAG.cooperating.key, TAG.lost.key];
 
 const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);
 
@@ -78,7 +76,7 @@ function listPipeline(filters = {}) {
   const entered = allContacts.filter(c => entryMatch(c.tags || []));
 
   // 按管线阶段分类
-  const columns = PIPELINE_STAGES.map(s => ({ stage: s.key, label: s.label, color: s.color, contacts: [] }));
+  const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color, contacts: [] }));
   const defaultCol = columns.find(x => x.key === TAG.reaching.key);
   const matchKey = (tags, stageDef) => {
     const keys = [stageDef.key, ...Object.values(TAG).find(t => t.key === stageDef.key)?.alias || []];
@@ -89,8 +87,7 @@ function listPipeline(filters = {}) {
     let matched = false;
     for (const s of PIPELINE_STAGES) {
       if (matchKey(tags, s)) {
-        const target = columns.find(x => x.key === s.key);
-        if (target) target.contacts.push(c);
+        columns.find(x => x.key === s.key)?.contacts.push(c);
         matched = true;
         break;
       }
@@ -98,8 +95,7 @@ function listPipeline(filters = {}) {
     if (!matched && defaultCol) { defaultCol.contacts.push(c); }
   }
 
-  // 按显示顺序排列
-  columns.sort((a, b) => DISPLAY_ORDER.indexOf(a.key) - DISPLAY_ORDER.indexOf(b.key));
+  Log.info("CRM", `入口: ${entered.length}人 列: ${columns.map(c => c.label + '(' + c.contacts.length + ')').join(' ')}`);
   return { columns };
 }
 

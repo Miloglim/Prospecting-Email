@@ -68,19 +68,6 @@ async function refreshPipeline() {
     });
   });
 
-  // 阶段头点击折叠/展开
-  el.querySelectorAll('.crm-stage-head').forEach(head => {
-    head.addEventListener('click', () => {
-      const body = head.parentElement?.querySelector('.crm-stage-body');
-      const toggle = head.querySelector('.crm-stage-toggle');
-      if (body) {
-        const collapsed = body.style.display === 'none';
-        body.style.display = collapsed ? '' : 'none';
-        if (toggle) toggle.innerHTML = lucide(collapsed ? 'chevron-down' : 'chevron-right', 14);
-      }
-    });
-  });
-
   if (_currentDetailId) {
     const row = el.querySelector(`.crm-contact-row[data-contact-id="${_currentDetailId}"]`);
     if (row) row.classList.add('active'); else closeDetailPanel();
@@ -93,21 +80,19 @@ async function refreshPipeline() {
 
 function renderStage(col) {
   const color = col.color || '#999';
-  const label = col.label || col.stage || '';
-  const count = col.contacts.length;
-  const rows = count
-    ? col.contacts.map(c => renderContact(c, col.stage, label, color)).join('')
+  const label = col.label || '';
+  const rows = col.contacts.length
+    ? col.contacts.map(c => renderContact(c, col.key, label, color)).join('')
     : `<div class="crm-contact-row crm-contact-none">暂无</div>`;
 
   return `
     <div class="crm-stage-block">
-      <div class="crm-stage-head" style="border-left:3px solid ${color}" data-stage="${col.stage}">
+      <div class="crm-stage-head" style="border-left:3px solid ${color}">
         <span class="crm-stage-dot" style="background:${color}"></span>
-        <span class="crm-stage-label">${label}</span>
-        <span class="crm-stage-count">${count}</span>
-        <span class="crm-stage-toggle">${lucide('chevron-right', 14)}</span>
+        <span class="crm-stage-label">${col.label}</span>
+        <span class="crm-stage-count">${col.contacts.length}</span>
       </div>
-      <div class="crm-stage-body" style="display:none">${rows}</div>
+      <div class="crm-stage-body">${rows}</div>
     </div>`;
 }
 
