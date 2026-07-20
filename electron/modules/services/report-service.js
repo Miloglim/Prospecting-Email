@@ -66,7 +66,7 @@ async function generate(aiFn) {
   } catch { /* 降级 */ }
 
   const quoteRate = reachedCount > 0 ? Math.round(stageCounts.quoting / reachedCount * 1000) / 10 : 0;
-  const orderRate = stageCounts.trial > 0 ? Math.round(stageCounts.quoting / stageCounts.trial * 1000) / 10 : 0;
+  const orderRate = stageCounts.quoting > 0 ? Math.round(stageCounts.trial / stageCounts.quoting * 1000) / 10 : 0;
   const coopRate = reachedCount > 0 ? Math.round(stageCounts.cooperating / reachedCount * 1000) / 10 : 0;
 
   // 待跟进
@@ -175,7 +175,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sy
   <div class="metric-card"><div class="val" style="color:#d93025">${d.bounceRate}%</div><div class="lbl">退信率 · ${d.bounces}/${d.sentToday}</div></div>
   <div class="metric-card"><div class="val">${d.successRate}%</div><div class="lbl">送达率 · ${d.sentToday-d.failedToday}/${d.sentToday}</div></div>
   <div class="metric-card"><div class="val" style="color:#2196f3">${d.quoteRate}%</div><div class="lbl">报价率 · 报价中 ${d.stageCounts.quoting||0} / 已触达 ${d.reachedCount||0}</div></div>
-  <div class="metric-card"><div class="val" style="color:#8e24aa">${d.orderRate}%</div><div class="lbl">出单率 · 报价中 ${d.stageCounts.quoting||0} / 试单 ${d.stageCounts.trial||0}</div></div>
+  <div class="metric-card"><div class="val" style="color:#8e24aa">${d.orderRate}%</div><div class="lbl">出单率 · 试单 ${d.stageCounts.trial||0} / 报价中 ${d.stageCounts.quoting||0}</div></div>
   <div class="metric-card"><div class="val" style="color:#4caf50">${d.coopRate}%</div><div class="lbl">合作率 · 合作中 ${d.stageCounts.cooperating||0} / 已触达 ${d.reachedCount||0}</div></div>
 </div></div>
 
