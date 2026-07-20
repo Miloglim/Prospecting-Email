@@ -815,9 +815,9 @@ async function addToQueue() {
     if (alreadySent.length) skippedDupOrBounced += alreadySent.length;
 
     if (!activeMembers.length && members.length > 0) {
+      // 跳过的原因已在上方各自追踪（alreadySent→skippedDupOrBounced, skipped→allSkipped, alreadyQueued→skippedQueued）
       if (alreadyQueued.length === members.length) continue;
       if (needReset.some(r => r.name === name)) continue;
-      skippedDupOrBounced += members.length;
       continue;
     }
     const emails = [...new Set(activeMembers.map(m => (m.email || '').trim()).filter(e => e))];

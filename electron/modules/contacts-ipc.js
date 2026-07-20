@@ -429,9 +429,13 @@ function register(ipcMain, deps) {
 
   ipcMain.handle('companies:update', async (_e, id, data) => {
     try {
-      const cdb = require('./services/contacts-db');
       const db = require('./services/db').getDb();
-      db.prepare('UPDATE companies SET country=?, updated_at=? WHERE id=?').run(data.country||'', new Date().toISOString(), id);
+      const fields = []; const params = [];
+      if (data.country !== undefined) { fields.push('country = ?'); params.push(data.country || ''); }
+      if (data.client_type !== undefined) { fields.push('client_type = ?'); params.push(data.client_type); }
+      if (!fields.length) return { ok: true };
+      fields.push('updated_at = ?'); params.push(new Date().toISOString()); params.push(id);
+      db.prepare(`UPDATE companies SET ${fields.join(', ')} WHERE id = ?`).run(...params);
     } catch (e) { return { ok: false, error: e.message }; }
     return { ok: true };
   });
@@ -459,14 +463,9 @@ function register(ipcMain, deps) {
       contact.company = company;
       contact._suspicious = _suspicious;
     }
-    // 只在渲染层明确传了 client_type/clientType 时才写入，不自动分类
-    const ct = contact.clientType || contact.client_type;
-    if (ct !== undefined && ct !== null) {
-      contact.clientType = ct;
-    } else {
-      delete contact.clientType;
-      delete contact.client_type;
-    }
+    // ponytail: client_type 已迁移到 companies 表，删除 contact 上的旧字段
+    delete contact.clientType;
+    delete contact.client_type;
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);

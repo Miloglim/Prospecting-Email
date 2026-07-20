@@ -70,7 +70,6 @@ const KNOWN_FIELDS = [
   { key: 'assignee', label: '跟进人' },
   { key: 'contactPerson', label: '对接人' },
   { key: 'stage', label: '阶段' },
-  { key: 'clientType', label: '类型' },
 ];
 
 export function renderClientsTable() {
@@ -535,7 +534,6 @@ const DETAIL_COLS = [
   { key: 'last_name', label: '姓', always: false },
   { key: 'email', label: '邮箱', always: false },
   { key: 'title', label: '职位', always: false },
-  { key: 'client_type', label: '类型', always: false },
   { key: 'phone', label: '电话', always: false },
   { key: 'linkedin', label: '领英', always: false },
   { key: 'country', label: '国家', always: false },
@@ -705,8 +703,6 @@ export function renderContactDetail(company) {
       case 'phone': return `<td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>`;
       case 'linkedin': return `<td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>`;
       case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
-      case 'clientType':
-      case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
       case 'stage': {
         const st = m.stage || m._stage || 'cold';
         const company = m.company || m.company_name || '';
@@ -751,7 +747,7 @@ export function renderContactDetail(company) {
 
   detail.innerHTML = `
     <div class="contacts-detail-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
+      <span>${escapeHtml(company)} · ${members.length} 位联系人 <span id="company-type-tag" class="company-type-tag" data-company-id="${escapeHtml(members[0]?.company_id || '')}" style="cursor:pointer;border-bottom:1px dashed var(--text-secondary)">${clientTypeTag(ctype)}</span></span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
     </div>
@@ -780,6 +776,50 @@ export function renderContactDetail(company) {
   // 列设置按钮
   const colBtn = document.getElementById('btn-col-toggle');
   if (colBtn) colBtn.addEventListener('click', (e) => { e.stopPropagation(); _showColToggle(colBtn); });
+
+  // 公司类型标签 — 点击切换
+  const typeTag = document.getElementById('company-type-tag');
+  if (typeTag) {
+    typeTag.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const cid = typeTag.dataset.companyId;
+      if (!cid) { showToast('该公司未关联数据库', 'warn'); return; }
+      const current = (members[0]?.clientType || 'unlabeled');
+      const opts = ['agent','direct','unlabeled'];
+      const labels = { agent:'代理', direct:'直客', unlabeled:'通用' };
+      const rect = typeTag.getBoundingClientRect();
+
+      document.getElementById('sel-popup')?.remove();
+      const popup = document.createElement('div');
+      popup.id = 'sel-popup';
+      popup.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:120px;font-size:12px';
+      popup.style.left = Math.min(rect.left, window.innerWidth - 140) + 'px';
+      popup.style.top = (rect.bottom + 2 > window.innerHeight - 160 ? rect.top - 160 : rect.bottom + 2) + 'px';
+
+      let saved = false;
+      for (const o of opts) {
+        const div = document.createElement('div');
+        div.style.cssText = `padding:6px 14px;cursor:pointer;white-space:nowrap;${o === current ? 'font-weight:600' : ''}`;
+        div.textContent = labels[o] + (o === current ? ' ●' : '');
+        div.addEventListener('mouseenter', () => div.style.background = 'var(--border)');
+        div.addEventListener('mouseleave', () => div.style.background = 'transparent');
+        div.addEventListener('click', async () => {
+          if (saved) return; saved = true;
+          popup.remove();
+          if (o === current) return;
+          await window.electronAPI.updateCompany(cid, { client_type: o });
+          for (const m of members) m.clientType = o;
+          typeTag.innerHTML = clientTypeTag(o);
+          CS.syncContactsUI();
+          showToast(`已改为 ${labels[o]}`, 'ok');
+        });
+        popup.appendChild(div);
+      }
+      document.body.appendChild(popup);
+      const close = (ev) => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
+    });
+  }
 
   // 编辑按钮
   detail.querySelectorAll('.btn-edit-contact').forEach(btn => {
@@ -1000,7 +1040,6 @@ export function renderContactDetail(company) {
 
   const SELECT_OPTS = {
     country: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'],
-    client_type: ['agent','direct','unlabeled'],
     stage: ['cold','f1','f2','f3','f4'],
     _status: ['', '已触达','有回复','自动回复'],
   };
@@ -1054,12 +1093,7 @@ export function renderContactDetail(company) {
         }
         const ref = S.contactsData.find(c => c.id === contactId);
         if (!ref) return;
-        if (selType === 'client_type') {
-          const company = ref.company || ref.company_name || '';
-          const members = S.contactsData.filter(c => (c.company || c.company_name) === company);
-          if (members.length > 1 && !await showConfirm(`「${company}」下 ${members.length} 人将全部改为「${labels[val] || val}」？`)) { td.textContent = orig; return; }
-          for (const m of members) { await window.electronAPI.upsertContact({ id: m.id, email: m.email, client_type: val }); m.clientType = val; }
-        } else if (selType === '_status') {
+        if (selType === '_status') {
           await window.electronAPI.upsertContact({ id: contactId, email: ref.email, _status: val || '' });
           ref._status = val || '';
           const members2 = S.contactsGroupMap.get(ref.company || ref.company_name || '');
@@ -1179,7 +1213,6 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
           <div class="ac-field"><label>电话</label><input id="ac-phone" placeholder="如 +52 555..."></div>
         </div>
         <div class="ac-row">
-          <div class="ac-field"><label>类型</label><select id="ac-type"><option value="unlabeled">未标签</option><option value="agent">代理</option><option value="direct">直客</option></select></div>
         </div>
       </div>`,
     buttons: [
@@ -1201,7 +1234,6 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         country: document.getElementById('ac-country')?.value.trim() || '',
         title: document.getElementById('ac-title')?.value.trim() || '',
         phone: document.getElementById('ac-phone')?.value.trim() || '',
-        clientType: document.getElementById('ac-type')?.value || 'unlabeled',
         tags: [],
         addedAt: new Date().toISOString(),
       };
@@ -1350,12 +1382,6 @@ function showContactEditor(contact) {
           <div class="ec-field"><label>跟进人</label><input id="ec-assignee" value="${escapeHtml(contact.assignee || '')}" placeholder="我方跟进人员"></div>
         </div>
         <div class="ec-panel" data-panel="status">
-          <div class="ec-row">
-            <div class="ec-field"><label>客户类型</label><select id="ec-client-type">
-              <option value="unlabeled" ${contact.clientType === 'unlabeled' ? 'selected' : ''}>未标签</option>
-              <option value="agent" ${contact.clientType === 'agent' ? 'selected' : ''}>代理</option>
-              <option value="direct" ${contact.clientType === 'direct' ? 'selected' : ''}>直客</option>
-            </select></div>
             <div class="ec-field"><label>阶段</label><select id="ec-stage">
               <option value="cold" ${(contact.stage || contact._stage) === 'cold' ? 'selected' : ''}>冷开发</option>
               <option value="f1" ${(contact.stage || contact._stage) === 'f1' ? 'selected' : ''}>F1</option>
@@ -1383,7 +1409,6 @@ function showContactEditor(contact) {
         title: document.getElementById('ec-title')?.value?.trim() || '',
         phone: document.getElementById('ec-phone')?.value?.trim() || '',
         linkedin: document.getElementById('ec-linkedin')?.value?.trim() || '',
-        clientType: document.getElementById('ec-client-type')?.value || 'unlabeled',
         stage: document.getElementById('ec-stage')?.value || 'cold',
         contact_person: document.getElementById('ec-contact-person')?.value?.trim() || '',
         assignee: document.getElementById('ec-assignee')?.value?.trim() || '',
