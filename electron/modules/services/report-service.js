@@ -56,9 +56,18 @@ async function generate(aiFn) {
       }
     }
   } catch (e) { Log.warn("报告", "管线数据获取失败", e.message); }
-  const toQuoting = stageCounts.reaching > 0 ? Math.round(stageCounts.quoting / stageCounts.reaching * 1000) / 10 : 0;
-  const toTrial = stageCounts.quoting > 0 ? Math.round(stageCounts.trial / stageCounts.quoting * 1000) / 10 : 0;
-  const toCoop = totalInPipeline > 0 ? Math.round(stageCounts.cooperating / totalInPipeline * 1000) / 10 : 0;
+  // 已触达联系人总数（_status 或 tags 含 已触达/reached）
+  let reachedCount = 0;
+  try {
+    const r = db.prepare(
+      "SELECT COUNT(*) as n FROM contacts WHERE _status IN ('已触达','reached') OR tags LIKE '%已触达%' OR tags LIKE '%reached%'"
+    ).get();
+    reachedCount = r?.n || 0;
+  } catch { /* 降级 */ }
+
+  const quoteRate = reachedCount > 0 ? Math.round(stageCounts.quoting / reachedCount * 1000) / 10 : 0;
+  const orderRate = stageCounts.trial > 0 ? Math.round(stageCounts.quoting / stageCounts.trial * 1000) / 10 : 0;
+  const coopRate = reachedCount > 0 ? Math.round(stageCounts.cooperating / reachedCount * 1000) / 10 : 0;
 
   // 待跟进
   const reminders = crmService.checkReminders();
@@ -74,7 +83,7 @@ async function generate(aiFn) {
   if (aiFn) {
     aiText = await aiFn({
       sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces,
-      replyRate, bounceRate, stageCounts, toQuoting, toTrial, toCoop,
+      replyRate, bounceRate, stageCounts, quoteRate, orderRate, coopRate,
       dueCount, overdueCount, followupItems,
     }) || "";
   }
@@ -82,11 +91,11 @@ async function generate(aiFn) {
   const html = buildHtml({
     dateCN, now, sentToday, failedToday, successRate,
     newMails, replies, autoreplies, bounces, replyRate, bounceRate,
-    stageCounts, toQuoting, toTrial, toCoop,
+    stageCounts, reachedCount, quoteRate, orderRate, coopRate,
     dueCount, overdueCount, followupItems, aiText,
   });
 
-  const data = { dateCN, now, sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces, replyRate, bounceRate, stageCounts, toQuoting, toTrial, toCoop, dueCount, overdueCount };
+  const data = { dateCN, now, sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces, replyRate, bounceRate, stageCounts, reachedCount, quoteRate, orderRate, coopRate, dueCount, overdueCount };
   return { html, data };
 }
 
@@ -165,9 +174,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sy
   <div class="metric-card"><div class="val" style="color:#22a644">${d.replyRate}%</div><div class="lbl">回复率 · ${d.replies}/${d.sentToday}</div></div>
   <div class="metric-card"><div class="val" style="color:#d93025">${d.bounceRate}%</div><div class="lbl">退信率 · ${d.bounces}/${d.sentToday}</div></div>
   <div class="metric-card"><div class="val">${d.successRate}%</div><div class="lbl">送达率 · ${d.sentToday-d.failedToday}/${d.sentToday}</div></div>
-  <div class="metric-card"><div class="val" style="color:#2196f3">${d.toQuoting}%</div><div class="lbl">触达→报价 · ${d.stageCounts.quoting||0}/${d.stageCounts.reaching||0}</div></div>
-  <div class="metric-card"><div class="val" style="color:#8e24aa">${d.toTrial}%</div><div class="lbl">报价→试单 · ${d.stageCounts.trial||0}/${d.stageCounts.quoting||1}</div></div>
-  <div class="metric-card"><div class="val" style="color:#4caf50">${d.toCoop}%</div><div class="lbl">触达→合作 · ${d.stageCounts.cooperating||0}/${(d.stageCounts.reaching||0)+(d.stageCounts.quoting||0)+(d.stageCounts.trial||0)+(d.stageCounts.cooperating||0)+(d.stageCounts.lost||0)||1}</div></div>
+  <div class="metric-card"><div class="val" style="color:#2196f3">${d.quoteRate}%</div><div class="lbl">报价率 · 报价中 ${d.stageCounts.quoting||0} / 已触达 ${d.reachedCount||0}</div></div>
+  <div class="metric-card"><div class="val" style="color:#8e24aa">${d.orderRate}%</div><div class="lbl">出单率 · 报价中 ${d.stageCounts.quoting||0} / 试单 ${d.stageCounts.trial||0}</div></div>
+  <div class="metric-card"><div class="val" style="color:#4caf50">${d.coopRate}%</div><div class="lbl">合作率 · 合作中 ${d.stageCounts.cooperating||0} / 已触达 ${d.reachedCount||0}</div></div>
 </div></div>
 
 ${d.aiText ? `<div class="section"><div class="section-head">AI 分析与建议</div><div class="text-report">${d.aiText}</div></div>` : ""}
@@ -197,7 +206,7 @@ function saveToDb(d) {
     d.newMails||0, d.replies||0, d.autoreplies||0, d.bounces||0,
     d.replyRate||0, d.bounceRate||0,
     sc.reaching||0, sc.quoting||0, sc.trial||0, sc.cooperating||0, sc.lost||0,
-    d.toQuoting||0, d.toTrial||0, d.toCoop||0,
+    d.quoteRate||0, d.orderRate||0, d.coopRate||0,
     d.dueCount||0, d.overdueCount||0
   );
   Log.info("报告", `日报数据已写入 ${today}`);
