@@ -315,17 +315,10 @@ export async function addReportToQueue() {
     added++;
   }
 
-  // toast 文字摘要
-  let skipText = '';
-  if (skipped.size) {
-    const parts = [];
-    for (const [reason, contacts] of skipped) {
-      const label = { noEmail:'无邮箱', bounced:'已退信', 'status:已触达':'已触达', 'status:reached':'已触达', 'status:有回复':'有回复', 'status:replied':'有回复', 'status:自动回复':'自动回复', 'status:autoreply':'自动回复', 'tags:已触达':'标签:已触达', 'tags:reached':'标签:已触达' }[reason] || reason;
-      parts.push(`${label} ${contacts.length}人`);
-    }
-    skipText = ' · ⚠️ 跳过: ' + parts.join(', ');
-  }
-  showToast(`✅ 已加入 ${added} 组共 ${validMembers.length} 人${skipText}`, skipText ? 'warn' : 'ok');
+  let summaryHtml = `<div style="text-align:center;margin-bottom:6px"><b>已加入 ${added} 组共 ${validMembers.length} 人</b></div>`;
+  const skipDetail = renderSkipDetail(skipped, 3);
+  if (skipDetail) summaryHtml += skipDetail;
+  await showAlert(summaryHtml, skipDetail ? 'warn' : 'info');
   saveQueue();
   document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
   // 跳转到发送队列

@@ -899,17 +899,10 @@ async function addToQueue() {
   saveQueue();
   const pendingCount = S.queue.filter(e => e.status === 'pending').length;
   document.getElementById('stat-queue').textContent = pendingCount;
-  // 构建跳过文字摘要（toast 不支持 HTML）
-  let skipText = '';
-  if (allSkipped.size) {
-    const parts = [];
-    for (const [reason, contacts] of allSkipped) {
-      const label = { noEmail:'无邮箱', bounced:'已退信', 'status:已触达':'已触达', 'status:reached':'已触达', 'status:有回复':'有回复', 'status:replied':'有回复', 'status:自动回复':'自动回复', 'status:autoreply':'自动回复', 'tags:已触达':'标签:已触达', 'tags:reached':'标签:已触达' }[reason] || reason;
-      parts.push(`${label} ${contacts.length}人`);
-    }
-    skipText = ' · ⚠️ 跳过: ' + parts.join(', ');
-  }
-  showToast(`已添加 ${added} 组 · 队列共 ${pendingCount} 组待发${skipText}`, skipText ? 'warn' : 'ok');
+  let summaryHtml = `<div style="text-align:center;margin-bottom:6px"><b>已添加 ${added} 组 · 队列共 ${pendingCount} 组待发</b></div>`;
+  const skipDetail = renderSkipDetail(allSkipped, 3);
+  if (skipDetail) summaryHtml += skipDetail;
+  await showAlert(summaryHtml, skipDetail ? 'warn' : 'info');
   // 清空选择，防止二次添加
   CS.clearSelection();
   // 跳转到发送队列
