@@ -288,6 +288,7 @@ function _writeCursor(data) {
 function _syncTagsToContacts(newMails) {
   const contactsDb = require('./contacts-db');
   let synced = 0;
+  let bounceContacts = 0;
   for (const m of newMails) {
     // ponytail: 实时从 SQLite 按邮箱匹配联系人，不依赖缓存的 contactDbId（可能过期/为空）
     const ids = new Set();
@@ -313,10 +314,11 @@ function _syncTagsToContacts(newMails) {
       } else if (m.type === 'bounce') {
         contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
         synced++;
+        bounceContacts++;
       }
     }
   }
-  if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人`);
+  if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人 · 退信 ${bounceContacts} 人`);
 
   // 累加回复计数（按邮件封数，非匹配联系人数）
   const replyN = newMails.filter(m => m.type === 'reply').length;
@@ -327,7 +329,7 @@ function _syncTagsToContacts(newMails) {
     } catch { /* 计数器不影响标签同步 */ }
   }
 
-  return synced;
+  return { synced, bounceContacts };
 }
 
 // ── 用 mailparser 解析 raw source → 统一格式 ────────────────────────────────
@@ -750,9 +752,8 @@ async function _fetchInbox(configPath) {
 
   // 同步分类标签到联系人表 + 退信计数 + 互动记录
   if (newMails.length) {
-    _syncTagsToContacts(newMails);
-    const bounceN = newMails.filter(m => m.type === 'bounce').length;
-    if (bounceN > 0) _incrementBounceCount(bounceN);
+    const { bounceContacts } = _syncTagsToContacts(newMails);
+    if (bounceContacts > 0) _incrementBounceCount(bounceContacts);
     _logInboxInteractions(newMails);
   }
 
