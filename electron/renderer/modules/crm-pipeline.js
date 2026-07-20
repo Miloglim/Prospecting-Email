@@ -383,7 +383,7 @@ function closeDetailPanel() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function infoTab(c) {
-  return [['姓名',[c.firstName,c.lastName].filter(Boolean).join(' ')],['邮箱',c.email],['公司',c.company],['国家',c.country],['职位',c.title||c.position],['电话',c.phone],['LinkedIn',c.linkedin],['标签',(c.tags||[]).join(', ')||'—']]
+  return [['姓名',[c.firstName,c.lastName].filter(Boolean).join(' ')],['邮箱',c.email],['公司',c.company],['国家',c.country],['职位',c.title],['电话',c.phone],['LinkedIn',c.linkedin],['标签',(c.tags||[]).join(', ')||'—']]
     .map(([l,v]) => `<div class="crm-field-row"><label>${l}</label><span>${escapeHtml(v||'—')}</span></div>`).join('');
 }
 

@@ -66,7 +66,6 @@ const KNOWN_FIELDS = [
   { key: 'category', label: '品类' },
   { key: 'website', label: '网站' },
   { key: 'linkedin', label: 'LinkedIn' },
-  { key: 'position', label: '职位' },
   { key: 'phone', label: '电话' },
   { key: 'assignee', label: '跟进人' },
   { key: 'contactPerson', label: '对接人' },
@@ -286,7 +285,7 @@ export function renderContactsList(filtered) {
   } else if (S.contactsFilter?.startsWith('tag:')) {
     const tag = S.contactsFilter.slice(4);
     // 同时匹配中英文 key（旧数据用英文，新数据用中文）
-    const ALT = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职' };
+    const ALT = { reached:'已触达' };
     const keys = [tag, ALT[tag]].filter(Boolean);
     data = data.filter(c => (c.tags || []).some(t => keys.includes(t)));
   } else if (S.contactsFilter !== 'all') {
@@ -536,10 +535,10 @@ const DETAIL_COLS = [
   { key: 'last_name', label: '姓', always: false },
   { key: 'email', label: '邮箱', always: false },
   { key: 'title', label: '职位', always: false },
+  { key: 'client_type', label: '类型', always: false },
   { key: 'phone', label: '电话', always: false },
   { key: 'linkedin', label: '领英', always: false },
   { key: 'country', label: '国家', always: false },
-  { key: 'client_type', label: '客户类型', always: false },
   { key: 'stage', label: '阶段', always: false },
   { key: '_status', label: '状态', always: true },
   { key: '_tags', label: '标签', always: false },
@@ -612,7 +611,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     }
     totalCompanies = seen.size;
   }
-  const tagCounts = { reached: 0, replied: 0, autoreply: 0, bounced_by_contact: 0, left_company: 0, '已触达':0, '有回复':0, '自动回复':0, '退信':0 };
+  const tagCounts = { reached: 0, '已触达':0 };
   for (const c of S.contactsData) {
     for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
   }
@@ -628,10 +627,6 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     unlabeled: `未标签 ${clientCounts.unlabeled || 0}`,
     anomaly: `⚠️ 异常 ${anomalyCount}`,
     'tag:reached': `已触达 ${(tagCounts.reached||0) + (tagCounts['已触达']||0)}`,
-    'tag:replied': `有回复 ${(tagCounts.replied||0) + (tagCounts['有回复']||0)}`,
-    'tag:autoreply': `自动回复 ${(tagCounts.autoreply||0) + (tagCounts['自动回复']||0)}`,
-    'tag:left_company': `已离职 ${tagCounts.left_company}`,
-    'tag:bounced_by_contact': `退信 ${(tagCounts.bounced_by_contact||0) + (tagCounts['退信']||0)}`,
     has_phone: `有电话 ${S.contactsData.filter(c => c.phone && c.phone.trim()).length}`,
     archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
   };
@@ -706,10 +701,11 @@ export function renderContactDetail(company) {
         const isNoEmail = (m.email || '').endsWith('@no.email');
         return `<td data-field="email" class="editable" data-value="${escapeHtml(m.email)}">${isNoEmail ? '<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:8px;cursor:text;display:inline-flex;align-items:center;gap:2px">'+lucide('mail',10)+' 无邮箱</span>' : escapeHtml(m.email)}</td>`;
       }
-      case 'title': return `<td data-field="title" class="editable">${escapeHtml(m.title || m.position || '')}</td>`;
+      case 'title': return `<td data-field="title" class="editable">${escapeHtml(m.title || '')}</td>`;
       case 'phone': return `<td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>`;
       case 'linkedin': return `<td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>`;
       case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
+      case 'clientType':
       case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
       case 'stage': {
         const st = m.stage || m._stage || 'cold';
@@ -724,20 +720,22 @@ export function renderContactDetail(company) {
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
       case '_tags': {
-        const TAG_LABEL = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职', auto_reply:'自动回复' };
+        const TAG_LABEL = { reaching:'触达中', quoting:'报价中', trial:'试单', cooperating:'合作中', lost:'已流失', reached:'已触达' };
         const ts = (m.tags || []).map(t => TAG_LABEL[t] || t);
         return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts.length ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts.join(','))}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
       }
       case 'contact_person': return `<td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>`;
       case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
       case '_followup': {
-        // ponytail: 管线标签集合（对齐 crm-service.js TAG 定义）
+        // ponytail: 管线入口 — tags CRM标签 或 _status 为 replied/autoreply
         const PIPELINE_ENTRY_TAGS = new Set([
-          'replied','有回复','reached','已触达',
+          'reached','已触达',
           'reaching','触达中','quoting','报价中',
           'trial','试单','cooperating','合作中','lost','已流失'
         ]);
-        const inPipeline = (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
+        const statusReplied = m._status === 'replied' || m._status === '有回复';
+        const statusAutoreply = m._status === 'autoreply' || m._status === '自动回复';
+        const inPipeline = statusReplied || statusAutoreply || (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
         if (inPipeline) {
           return `<td><span class="followup-btn followup-pipeline" data-id="${m.id}" data-pipeline="1" style="font-size:11px;cursor:pointer;color:var(--text);font-weight:600">备注</span></td>`;
         }
@@ -756,7 +754,6 @@ export function renderContactDetail(company) {
       <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
-      ${S.contactsFilter === 'tag:bounced_by_contact' ? `<button id="btn-delete-bounced" class="secondary" style="font-size:11px;padding:3px 10px;color:#e5484d;border-color:#e5484d">删除全部退信</button>` : ''}
     </div>
     <div class="contacts-detail-body" style="overflow-x:auto">
       <table style="white-space:nowrap">
@@ -881,12 +878,12 @@ export function renderContactDetail(company) {
     });
   }
 
-  // 删除全部退信联系人
+  // 删除全部退信联系人（通过 is_bounced 字段检测）
   const delBouncedBtn = document.getElementById('btn-delete-bounced');
   if (delBouncedBtn) {
     delBouncedBtn.addEventListener('click', async () => {
       const allMembers = S.contactsGroupMap.get(company) || [];
-      const bounced = allMembers.filter(m => (m.tags || []).some(t => t === 'bounced_by_contact' || t === '退信'));
+      const bounced = allMembers.filter(m => m.bounced);
       if (!bounced.length) { showToast('该公司无退信联系人', 'warn'); return; }
       let ok = (S._deleteSkipUntil || 0) > Date.now();
       if (!ok) {
@@ -1074,9 +1071,10 @@ export function renderContactDetail(company) {
           const ref2 = S.contactsData.find(c => c.id === contactId);
           if (ref2) { await window.electronAPI.upsertContact({ id: contactId, email: ref2.email, [field]: val }); ref2[field] = val; }
         }
-        if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
+        // ponytail: 只在不走 syncContactsUI 时才手动刷新
         if (selType === 'stage' || field === 'stage') {
           _updateSidebarItem(contactId);
+          if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
         } else {
           CS.syncContactsUI();
         }
@@ -1177,7 +1175,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         </div>
         <div class="ac-field"><label>国家</label><input id="ac-country" placeholder="如 Mexico"></div>
         <div class="ac-row">
-          <div class="ac-field"><label>职位</label><input id="ac-position" placeholder="如 Manager"></div>
+          <div class="ac-field"><label>职位</label><input id="ac-title" placeholder="如 Manager"></div>
           <div class="ac-field"><label>电话</label><input id="ac-phone" placeholder="如 +52 555..."></div>
         </div>
         <div class="ac-row">
@@ -1201,7 +1199,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         firstName, lastName,
         contactName: `${firstName} ${lastName}`.trim(),
         country: document.getElementById('ac-country')?.value.trim() || '',
-        position: document.getElementById('ac-position')?.value.trim() || '',
+        title: document.getElementById('ac-title')?.value.trim() || '',
         phone: document.getElementById('ac-phone')?.value.trim() || '',
         clientType: document.getElementById('ac-type')?.value || 'unlabeled',
         tags: [],
@@ -1342,7 +1340,7 @@ function showContactEditor(contact) {
         </div>
         <div class="ec-panel" data-panel="contact">
           <div class="ec-row">
-            <div class="ec-field"><label>职位</label><input id="ec-position" value="${escapeHtml(contact.position || contact.title || '')}"></div>
+            <div class="ec-field"><label>职位</label><input id="ec-title" value="${escapeHtml(contact.title || '')}"></div>
             <div class="ec-field"><label>电话</label><input id="ec-phone" value="${escapeHtml(contact.phone || '')}"></div>
           </div>
           <div class="ec-field"><label>领英</label><input id="ec-linkedin" value="${escapeHtml(contact.linkedin || '')}"></div>
@@ -1382,7 +1380,7 @@ function showContactEditor(contact) {
         firstName: document.getElementById('ec-firstname')?.value?.trim() || '',
         lastName: document.getElementById('ec-lastname')?.value?.trim() || '',
         country: document.getElementById('ec-country')?.value?.trim() || '',
-        position: document.getElementById('ec-position')?.value?.trim() || '',
+        title: document.getElementById('ec-title')?.value?.trim() || '',
         phone: document.getElementById('ec-phone')?.value?.trim() || '',
         linkedin: document.getElementById('ec-linkedin')?.value?.trim() || '',
         clientType: document.getElementById('ec-client-type')?.value || 'unlabeled',

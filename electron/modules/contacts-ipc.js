@@ -66,7 +66,7 @@ function register(ipcMain, deps) {
           company, companyId, country: c.country || '', category: c.category || '',
           email: placeholder, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
-          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          contactName: c.contactName || '', phone: c.phone || '',
           clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold', _status: c._status || '', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
@@ -86,7 +86,7 @@ function register(ipcMain, deps) {
           company, companyId, country: c.country || '', category: c.category || '',
           email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || '', lastName: c.lastName || '',
-          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          contactName: c.contactName || '', phone: c.phone || '',
           clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company || '', c.category || ''), assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold', _status: c._status || '', tags: [], _suspicious: 1, _extra: c._extra || {}, addedAt: new Date().toISOString(),
         });
@@ -110,7 +110,6 @@ function register(ipcMain, deps) {
         existingContact.website = c.website || existingContact.website;
         existingContact.linkedin = c.linkedin || existingContact.linkedin;
         existingContact.contactName = c.contactName || existingContact.contactName;
-        existingContact.position = c.position || existingContact.position;
         existingContact.phone = c.phone || existingContact.phone;
         existingContact.assignee = c.assignee || existingContact.assignee || '';
         existingContact.contactPerson = c.contactPerson || existingContact.contactPerson || '';
@@ -147,7 +146,7 @@ function register(ipcMain, deps) {
           email: cleanEmail, website: c.website || '', linkedin: c.linkedin || '',
           firstName: c.firstName || split.firstName || '',
           lastName: c.lastName || split.lastName || '',
-          contactName: c.contactName || '', position: c.position || '', phone: c.phone || '',
+          contactName: c.contactName || '', phone: c.phone || '',
           clientType: normalizeClientType(c.clientType || c.client_type) || classifyClient(c.company, c.category),
           assignee: c.assignee || '', contactPerson: c.contactPerson || '',
           stage: c.stage || 'cold',

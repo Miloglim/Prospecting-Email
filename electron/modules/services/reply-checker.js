@@ -476,8 +476,9 @@ function applyReplies(replies) {
     const key = r.from.toLowerCase().trim();
     const contact = contactsDb.getByEmail(key);
     if (contact) {
-      // ponytail: 用 tags 系统标记已回复（contacts 表无 replied 列）
-      if (contactsDb.addTag(contact.id, 'replied')) matched++;
+      // ponytail: 写 _status 标记已回复（不再用 tags）
+      contactsDb.update(contact.id, { _status: '有回复', is_bounced: false });
+      matched++;
     }
   }
 

@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS contacts (
     title         TEXT,
     phone         TEXT,
     linkedin      TEXT,
-    position      TEXT,
     contact_name  TEXT,
     client_type   TEXT DEFAULT 'unlabeled',
     category      TEXT,

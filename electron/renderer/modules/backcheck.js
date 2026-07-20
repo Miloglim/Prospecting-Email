@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany,countryToLang } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,ratingStars,renderMarkdown,pollBackcheckStatus,checkNetworkStatus,initIcons,findById,truncate,clientTypeTag,groupByCompany,countryToLang,isContactSendable,filterSendableContacts,renderSkipDetail } from './shared.js';
 
 // ===== 背调详情 ======================================================
 
@@ -281,12 +281,15 @@ export async function addReportToQueue() {
   const emailBody = extractEmailFromDetail(S.currentBackcheckDetail);
   if (!emailBody) { showToast('未找到开发信内容', 'err'); return; }
 
-  // 获取公司联系人
+  // 获取公司联系人 → 统一过滤
   const members = (S.contactsData || []).filter(c => (c.company || '').trim() === S.currentBackcheckCompany.trim());
   const ctype = members[0]?.clientType || 'unlabeled';
   const country = members[0]?.country || '';
-  const validMembers = members.filter(m => m.email && m.email.includes('@'));
-  if (!validMembers.length) { showToast('该公司无有效邮箱', 'err'); return; }
+  const { sendable: validMembers, skipped } = filterSendableContacts(members);
+  if (!validMembers.length) {
+    const skipDetail = renderSkipDetail(skipped, 3);
+    return await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>该公司联系人无法加入队列</b></div>${skipDetail}`);
+  }
 
   // 生成主题
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
@@ -312,7 +315,17 @@ export async function addReportToQueue() {
     added++;
   }
 
-  showToast(`✅ 已加入 ${added} 组共 ${validMembers.length} 位联系人到队列`, 'ok');
+  // toast 文字摘要
+  let skipText = '';
+  if (skipped.size) {
+    const parts = [];
+    for (const [reason, contacts] of skipped) {
+      const label = { noEmail:'无邮箱', bounced:'已退信', 'status:已触达':'已触达', 'status:reached':'已触达', 'status:有回复':'有回复', 'status:replied':'有回复', 'status:自动回复':'自动回复', 'status:autoreply':'自动回复', 'tags:已触达':'标签:已触达', 'tags:reached':'标签:已触达' }[reason] || reason;
+      parts.push(`${label} ${contacts.length}人`);
+    }
+    skipText = ' · ⚠️ 跳过: ' + parts.join(', ');
+  }
+  showToast(`✅ 已加入 ${added} 组共 ${validMembers.length} 人${skipText}`, skipText ? 'warn' : 'ok');
   saveQueue();
   document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
   // 跳转到发送队列

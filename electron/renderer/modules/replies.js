@@ -37,15 +37,13 @@ function initContextMenu() {
       if (!contact) { showToast('未找到联系人', 'warn'); return; }
 
       if (tag === 'none') {
-        await window.electronAPI.setContactTags(contact.id, []);
+        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '' });
       } else if (tag === 'autoreply') {
-        const tags = [...new Set([...(contact.tags || []), 'autoreply'])].filter(t => t !== 'replied');
-        await window.electronAPI.setContactTags(contact.id, tags);
+        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '自动回复' });
       } else if (tag === 'replied') {
-        const tags = [...new Set([...(contact.tags || []), 'replied'])].filter(t => t !== 'autoreply');
-        await window.electronAPI.setContactTags(contact.id, tags);
+        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '有回复' });
       }
-      showToast(`${escapeHtml(email)} → ${tag === 'none' ? '清除标签' : tag === 'autoreply' ? '自动回复' : '客户回复'}`, 'ok');
+      showToast(`${escapeHtml(email)} → ${tag === 'none' ? '清除状态' : tag === 'autoreply' ? '自动回复' : '客户回复'}`, 'ok');
       renderReplyList();
     });
   });

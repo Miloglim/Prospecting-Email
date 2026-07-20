@@ -1,5 +1,5 @@
 const S = window.S;
-import { lucide,escapeHtml,showToast,showAlert,showConfirm,countryToLang } from './shared.js';
+import { lucide,escapeHtml,showToast,showAlert,showConfirm,countryToLang,filterSendableContacts,renderSkipDetail } from './shared.js';
 import { saveQueue, renderQueue } from './send-queue.js';
 
 export function matchUserTemplates(templates, type, stage, lang) {
@@ -243,9 +243,16 @@ export async function generateMonthlyReports() {
     return;
   }
 
+  // 统一收集全部跳过联系人
+  const allSkipped = new Map();
   let added = 0;
   for (const [name, members] of archivedCompanies) {
-    const emails = members.map(m => m.email).filter(Boolean);
+    const { sendable, skipped } = filterSendableContacts(members);
+    for (const [reason, contacts] of skipped) {
+      if (!allSkipped.has(reason)) allSkipped.set(reason, []);
+      allSkipped.get(reason).push(...contacts);
+    }
+    const emails = sendable.map(m => m.email).filter(Boolean);
     if (!emails.length) continue;
 
     const ctype = members[0]?.clientType || 'unlabeled';
@@ -275,11 +282,20 @@ export async function generateMonthlyReports() {
     added++;
   }
 
-  if (!added) { await showAlert('归档公司无有效邮箱。'); return; }
+  if (!added) {
+    const skipDetail = renderSkipDetail(allSkipped, 3);
+    await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>归档公司无有效可发送联系人</b></div>${skipDetail || '<div style="font-size:12px;color:var(--text-secondary)">所有联系人已被状态标签或退信标记排除</div>'}`);
+    return;
+  }
 
   saveQueue();
   document.getElementById('stat-queue').textContent = S.queue.length;
-  await showAlert(`已生成 ${added} 封月度报告，已加入发送队列。`);
+  // 构建跳过摘要
+  let skipHtml = '';
+  if (allSkipped.size) {
+    skipHtml = '<div style="text-align:left;margin-top:10px;font-size:12px;color:var(--warning);font-weight:600">⚠️ 自动跳过以下联系人（未进队列）：</div>' + renderSkipDetail(allSkipped, 3);
+  }
+  await showAlert(`<div style="text-align:center;margin-bottom:6px">已生成 <b>${added}</b> 封月度报告，已加入发送队列。</div>${skipHtml}`);
   renderQueue();
   // 跳转到发送队列
   const queueNav = document.querySelector('[data-page="queue"]');

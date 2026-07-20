@@ -22,7 +22,7 @@ function exportAll() {
       '网站': c.company_website || c.website || '',
       '名': c.first_name || c.firstName || (c.contact_name || c.contactName || '').split(' ')[0] || ((c.email || '').split('@')[0] || ''),
       '姓': c.last_name || c.lastName || (c.contact_name || c.contactName || '').split(' ').slice(1).join(' ') || '',
-      '职位': c.title || c.position || '',
+      '职位': c.title || '',
       '电话': c.phone || '',
       '领英': c.linkedin || '',
       '客户类型': c.client_type || c.clientType || '',

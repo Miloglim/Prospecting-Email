@@ -283,14 +283,12 @@ function _writeCursor(data) {
   } catch { /* 静默 */ }
 }
 
-// ── 标签同步：收件箱分类 → 联系人 tags ──────────────────────────────────
+// ── 收件箱分类 → 联系人 _status / is_bounced ───────────────────────────
+// ponytail: replied/autoreply/bounced 已从 tags 迁移到 _status，不再写 tags
 function _syncTagsToContacts(newMails) {
   const contactsDb = require('./contacts-db');
-  const TYPE_TAG = { bounce: 'bounced', reply: 'replied', 'auto-reply': 'autoreply' };
   let synced = 0;
   for (const m of newMails) {
-    const tag = TYPE_TAG[m.type];
-    if (!tag) continue;
     // ponytail: 实时从 SQLite 按邮箱匹配联系人，不依赖缓存的 contactDbId（可能过期/为空）
     const ids = new Set();
     const addByEmail = (email) => {
@@ -303,18 +301,18 @@ function _syncTagsToContacts(newMails) {
       addByEmail(c.email);
     }
     for (const id of ids) {
-      if (contactsDb.addTag(id, tag)) synced++;
-      // _status 同步：有回复直接覆盖，自动回复只在空/已是自动回复时写
       if (m.type === 'reply') {
         contactsDb.update(id, { _status: '有回复' });
+        synced++;
       } else if (m.type === 'auto-reply') {
         const ct = contactsDb.getById(id);
         if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
           contactsDb.update(id, { _status: '自动回复' });
+          synced++;
         }
-      }
-      if (m.type === 'bounce') {
+      } else if (m.type === 'bounce') {
         contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
+        synced++;
       }
     }
   }
@@ -836,11 +834,8 @@ function setMailType(index, newType) {
   _writeCache(mails);
   Log.info('[收件箱]', `手动分类: [${index}] ${oldType} → ${newType}`);
 
-  // 手动设置 → 覆盖式更新联系人标签（唯一值，不叠加）
-  const TYPE_TAG = { bounce: 'bounced', reply: 'replied', 'auto-reply': 'autoreply' };
-  const oldTag = TYPE_TAG[oldType];
-  const newTag = TYPE_TAG[newType];
-  if (oldTag !== newTag) {
+  // 手动设置 → 覆盖式更新 _status / is_bounced（不再写 tags）
+  if (oldType !== newType) {
     const contactsDb = require('./contacts-db');
     const m = mails[index];
     const ids = new Set();
@@ -852,8 +847,6 @@ function setMailType(index, newType) {
     addByEmail(m.from);
     for (const c of (m.matchedContacts || [])) addByEmail(c.email);
     for (const id of ids) {
-      if (oldTag) contactsDb.removeTag(id, oldTag);
-      // _status + 退信标记 同步
       if (newType === 'reply') {
         contactsDb.update(id, { _status: '有回复', is_bounced: false });
       } else if (newType === 'auto-reply') {
@@ -866,7 +859,6 @@ function setMailType(index, newType) {
       } else if (newType === 'other') {
         contactsDb.update(id, { is_bounced: false });
       }
-      if (newTag) contactsDb.addTag(id, newTag);
     }
   }
   return true;

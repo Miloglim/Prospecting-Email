@@ -9,9 +9,7 @@ const { Log } = require("../core/logger");
 // ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
 
 const TAG = {
-  replied:     { key: "replied",     label: "有回复",   color: "#22a644", alias: ["有回复"] },
-  autoreply:   { key: "autoreply",   label: "自动回复", color: "#e6a817", alias: ["自动回复", "auto_reply"] },
-  bounced:     { key: "bounced",     label: "退信",     color: "#d93025", alias: ["bounced_by_contact", "退信"] },
+  // ponytail: replied/autoreply/bounced 已迁移到 _status 字段，tags 只保留CRM管线标签
   reached:     { key: "reached",     label: "已触达",   color: "#3b82f6", alias: ["已触达"] },
   quoting:     { key: "quoting",     label: "报价中",   color: "#2196f3", alias: ["报价中"] },
   trial:       { key: "trial",       label: "试单",     color: "#8e24aa", alias: ["试单"] },
@@ -57,8 +55,8 @@ function listPipeline(filters = {}) {
 
   const allContacts = db.prepare(
     `SELECT c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
-            c.phone, c.linkedin, c.position, c.contact_name,
-            c.client_type, c.stage, c.tags,
+            c.phone, c.linkedin, c.contact_name,
+            c.client_type, c.stage, c.tags, c._status,
             c._extra, c.last_sent_at,
             co.name as company_name, co.country as company_country, co.website as company_website
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
@@ -66,15 +64,17 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：有 replied/reached，或有任意管线标签
-  const isEntry = (tags) => {
-    // 门票：replied 或 reached
-    if (tags.some(x => [TAG.replied, TAG.reached].some(t => x === t.key || (t.alias || []).includes(x)))) return true;
+  // 入口筛选：_status 为 replied/autoreply，或 tags 含 reached，或已有管线标签
+  const isEntry = (row) => {
+    const tags = row.tags || [];
+    // 门票：replied/autoreply（来自 _status，兼容中英文）
+    if (row._status === 'replied' || row._status === '有回复' || row._status === 'autoreply' || row._status === '自动回复') return true;
+    if (tags.some(x => TAG.reached.key === x || (TAG.reached.alias || []).includes(x))) return true;
     // 已有管线阶段标签的直接进
     if (tags.some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))) return true;
     return false;
   };
-  const entered = allContacts.filter(c => isEntry(c.tags || []));
+  const entered = allContacts.filter(c => isEntry(c));
 
   // 按管线阶段分类
   const columns = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color, contacts: [] }));

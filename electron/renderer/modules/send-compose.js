@@ -1,5 +1,5 @@
 const S = window.S;
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag,countryToLang } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag,countryToLang,isContactSendable,filterSendableContacts,renderSkipDetail } from './shared.js';
 import { randomPick, assembleEmail, assembleMonthlyReport, generateMonthlyReports, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 import CS from './company-state.js';
@@ -740,15 +740,12 @@ async function addToQueue() {
     const members = S.sendCompanies[name] || [];
     if (!members.length) continue;
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
+    // 统一过滤：bounced/status/tags/noEmail 由 isContactSendable 判定
+    const { sendable } = filterSendableContacts(members);
+    // 上下文相关：已发送（历史 + contacts.json）
+    const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
+    const activeMembers = sendable.filter(m => !alreadySent.includes(m));
     const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => m._status === '已触达' || (m.tags || []).some(t => t === '已触达' || t === 'reached'));
-    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
-    const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
-    const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
-    const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
-    const noEmailMembers = members.filter(m => (m.email || '').endsWith('@no.email'));
-    const activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !noEmailMembers.includes(m));
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if ((!stage || stage === 'cold') && !S._justReactivated.has(name)) needReset.push({ name, count: members.length });
@@ -789,40 +786,36 @@ async function addToQueue() {
     }
   }
 
+  // 统一收集本次被跳过的联系人（用于最终 toast/alert）
+  const allSkipped = new Map();
+
   for (const name of selected) {
     const card = S.selectedCards[name];
     if (!card) continue;
     const members = S.sendCompanies[name] || [];
-    const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
-    const reachedMembers = members.filter(m => m._status === '已触达' || (m.tags || []).some(t => t === '已触达' || t === 'reached'));
-    const bouncedByContact = members.filter(m => (m.tags || []).includes('bounced_by_contact'));
-    const repliedMembers = members.filter(m => (m.tags || []).includes('replied'));
-    const leftCompany = members.filter(m => (m.tags || []).includes('left_company'));
+    // ── 统一过滤：bounced / status / tags / noEmail ──
+    const { sendable, skipped } = filterSendableContacts(members);
+    for (const [reason, contacts] of skipped) {
+      if (!allSkipped.has(reason)) allSkipped.set(reason, []);
+      allSkipped.get(reason).push(...contacts);
+    }
+
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
-    const alreadySent = members.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()));
-    const taggedSent = members.filter(m => sentByEmails.has((m.email || '').toLowerCase().trim()));
     const queuedEmails = new Set();
     S.queue.forEach(q => {
       if (q.status === 'pending' || q.status === 'sending') {
         (q.recipients || []).forEach(r => queuedEmails.add(r.toLowerCase().trim()));
       }
     });
-    const alreadyQueued = members.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
-    const noEmailMembers2 = members.filter(m => (m.email || '').endsWith('@no.email'));
-    let activeMembers = members.filter(m => !bouncedMembers.includes(m) && !alreadySent.includes(m) && !taggedSent.includes(m) && !reachedMembers.includes(m) && !bouncedByContact.includes(m) && !repliedMembers.includes(m) && !leftCompany.includes(m) && !alreadyQueued.includes(m) && !noEmailMembers2.includes(m));
+    // 上下文过滤：已发送 + 已在队列
+    const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
+    const alreadyQueued = sendable.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
+    let activeMembers = sendable.filter(m => !alreadySent.includes(m) && !alreadyQueued.includes(m));
     if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
-    if (taggedSent.length) skippedDupOrBounced += taggedSent.length;
+    if (alreadySent.length) skippedDupOrBounced += alreadySent.length;
 
     if (!activeMembers.length && members.length > 0) {
-      if (alreadyQueued.length === members.length) {
-        skippedQueued += 0; // already counted above
-        continue;
-      }
-      if (bouncedMembers.length) {
-        await showAlert(`${lucide('alert-triangle',12)} ${name} 所有联系人已退信（${bouncedMembers.length}/${members.length} 人），跳过`);
-        skippedDupOrBounced += members.length;
-        continue;
-      }
+      if (alreadyQueued.length === members.length) continue;
       if (needReset.some(r => r.name === name)) continue;
       skippedDupOrBounced += members.length;
       continue;
@@ -898,14 +891,25 @@ async function addToQueue() {
     if (skippedNoEmail) reasons.push(`<div>${lucide('mail',14)} ${skippedNoEmail} 家无邮箱</div>`);
     if (skippedInvalidEmail) reasons.push(`<div>${lucide('alert-triangle',14)} ${skippedInvalidEmail} 家邮箱格式无效</div>`);
     if (skippedQueued) reasons.push(`<div>${lucide('list',14)} ${skippedQueued} 人已在队列中</div>`);
-    if (skippedDupOrBounced) reasons.push(`<div>${lucide('x-circle',14)} ${skippedDupOrBounced} 家已退信/已发送</div>`);
-    return await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>所选公司无法加入队列</b></div>${reasons.join('')}`);
+    if (skippedDupOrBounced) reasons.push(`<div>${lucide('x-circle',14)} ${skippedDupOrBounced} 人已发送</div>`);
+    const skipDetail = renderSkipDetail(allSkipped, 3);
+    return await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>所选公司无法加入队列</b></div>${reasons.join('')}${skipDetail}`);
   }
   if (reactivatedCount > 0) showToast(`${reactivatedCount} 个联系人已重置`, 'ok');
   saveQueue();
   const pendingCount = S.queue.filter(e => e.status === 'pending').length;
   document.getElementById('stat-queue').textContent = pendingCount;
-  showToast(`已添加 ${added} 组 · 队列共 ${pendingCount} 组待发`, 'ok');
+  // 构建跳过文字摘要（toast 不支持 HTML）
+  let skipText = '';
+  if (allSkipped.size) {
+    const parts = [];
+    for (const [reason, contacts] of allSkipped) {
+      const label = { noEmail:'无邮箱', bounced:'已退信', 'status:已触达':'已触达', 'status:reached':'已触达', 'status:有回复':'有回复', 'status:replied':'有回复', 'status:自动回复':'自动回复', 'status:autoreply':'自动回复', 'tags:已触达':'标签:已触达', 'tags:reached':'标签:已触达' }[reason] || reason;
+      parts.push(`${label} ${contacts.length}人`);
+    }
+    skipText = ' · ⚠️ 跳过: ' + parts.join(', ');
+  }
+  showToast(`已添加 ${added} 组 · 队列共 ${pendingCount} 组待发${skipText}`, skipText ? 'warn' : 'ok');
   // 清空选择，防止二次添加
   CS.clearSelection();
   // 跳转到发送队列

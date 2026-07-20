@@ -147,8 +147,8 @@ export async function renderQueue() {
 
   // 聚合各公司的联系人标签（用于队列卡片展示）
   const companyTagMap = {};
-  const TAG_LABEL = { autoreply: '自动回复', reached: '已触达', replied: '有回复', bounced_by_contact: '退回' };
-  const TAG_COLOR = { autoreply: '#e6a817', reached: '#22a644', replied: '#3b82f6', bounced_by_contact: '#8b8b8b' };
+  const TAG_LABEL = { reaching: '触达中', quoting: '报价中', trial: '试单', cooperating: '合作中', lost: '已流失', reached: '已触达' };
+  const TAG_COLOR = { reaching: '#ff9800', quoting: '#2196f3', trial: '#8e24aa', cooperating: '#4caf50', lost: '#b0b0b0', reached: '#22a644' };
   try {
     const contacts = S.contactsData || await window.electronAPI.getContacts();
     for (const c of contacts) {

@@ -474,7 +474,7 @@ async function renderDetail() {
         const tags = c?.tags || [];
         const diag = c ? `[找到:${c.id} tags:${JSON.stringify(tags)}]` : `[查无:${m.from} 共${(S.contactsData||[]).length}条]`;
         if (!tags.length) return `<span class="muted" title="${escapeHtml(diag)}">—</span>`;
-        const TL = { reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced_by_contact:'退信', left_company:'已离职', auto_reply:'自动回复' };
+        const TL = { reaching:'触达中', quoting:'报价中', trial:'试单', cooperating:'合作中', lost:'已流失', reached:'已触达' };
         return tags.map(t => `<span style="display:inline-block;background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;font-size:10px;margin-right:2px" title="${escapeHtml(diag)}">${escapeHtml(TL[t] || t)}</span>`).join('');
       })()}</span></div>
       <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a>` : '未关联'}</span></div>

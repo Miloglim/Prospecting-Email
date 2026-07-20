@@ -317,5 +317,89 @@ export function initIcons(root=document){root.querySelectorAll('[data-icon]').fo
 export async function checkNetworkStatus(){try{const r=await window.electronAPI.checkNetwork();const p=S.foreignNetworkOk;if(r){S.foreignNetworkOk=true;CS.setNetworkDismissed(false);if(!p){const e=document.getElementById('network-status');if(e){e.style.display='none'}}return}S.foreignNetworkOk=false;if(CS.getNetworkDismissed())return;const e=document.getElementById('network-status');if(e){e.textContent='网络不可用';e.style.display='block';e.style.cssText='padding:8px 16px;background:var(--danger);color:#fff;text-align:center;font-size:12px;cursor:pointer';e.onclick=()=>{CS.setNetworkDismissed(true);e.style.display='none'}}}catch{/* 网络检测 IPC 不可用 → 静默降级 */}}
 export function clientTypeTag(t){var m={};m.agent=lucide('globe',12)+' 代理';m.direct=lucide('building',12)+' 直客';m.unlabeled='';m.no_company='<span class="ctype-tag" style="background:#fce4ec;color:#c62828;font-size:10px;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:2px">'+lucide('building',10)+' 无公司</span>';m.no_email='<span class="ctype-tag" style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:2px">'+lucide('mail',10)+' 无邮箱</span>';m.invalid_email='<span class="ctype-tag" style="background:#fce4ec;color:#c62828;font-size:10px;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:2px">'+lucide('alert-circle',10)+' 异常邮箱</span>';m.agent='<span class="ctype-tag ctype-agent">'+m.agent+'</span>';m.direct='<span class="ctype-tag ctype-direct">'+m.direct+'</span>';return m[t]||''}
 export function groupByCompany(data){const g={};for(const c of data){const k=c.company||'未命名';if(!g[k])g[k]=[];g[k].push(c)}return Object.entries(g).sort((a,b)=>a[0].localeCompare(b[0]))}
+
+// ── 发送队列入队前过滤 ──────────────────────────────────────────────────
+// 统一入口：所有入队路径（手动/背调/月度报告/自动发送）必须经过此判定
+
+/** 禁止发送的 _status 值（中英文） */
+const SKIP_STATUSES = new Set(['已触达','reached','有回复','replied','自动回复','autoreply']);
+
+/** 禁止发送的 tags 值 */
+const SKIP_TAGS = new Set(['已触达','reached']);
+
+/** 跳过原因 → 中文展示标签 */
+const SKIP_LABEL = {
+  noEmail: '无邮箱', bounced: '已退信',
+  'status:已触达': '已触达', 'status:reached': '已触达',
+  'status:有回复': '有回复', 'status:replied': '有回复',
+  'status:自动回复': '自动回复', 'status:autoreply': '自动回复',
+  'tags:已触达': '标签:已触达', 'tags:reached': '标签:已触达',
+};
+
+/**
+ * 判定单个联系人是否可发送。
+ * @param {object} c - 联系人对象（含 email, bounced, bounceType, _status, tags）
+ * @returns {{ ok: boolean, reason?: string }}
+ */
+export function isContactSendable(c) {
+  if (!c.email || !c.email.includes('@') || c.email.endsWith('@no.email'))
+    return { ok: false, reason: 'noEmail' };
+  if (c.bounced && c.bounceType !== 'temporary')
+    return { ok: false, reason: 'bounced' };
+  if (c._status && SKIP_STATUSES.has(c._status))
+    return { ok: false, reason: 'status:' + c._status };
+  if ((c.tags || []).some(t => SKIP_TAGS.has(t))) {
+    const hit = (c.tags || []).find(t => SKIP_TAGS.has(t));
+    return { ok: false, reason: 'tags:' + hit };
+  }
+  return { ok: true };
+}
+
+/**
+ * 批量过滤联系人 → 可发送列表 + 跳过分组。
+ * @param {object[]} members
+ * @returns {{ sendable: object[], skipped: Map<string, object[]> }}
+ *   skipped key = reason（如 "status:有回复"），value = 被跳过的联系人数组
+ */
+export function filterSendableContacts(members) {
+  const sendable = [];
+  const skipped = new Map();
+  for (const m of members) {
+    const r = isContactSendable(m);
+    if (r.ok) { sendable.push(m); continue; }
+    const reason = r.reason || 'unknown';
+    if (!skipped.has(reason)) skipped.set(reason, []);
+    skipped.get(reason).push(m);
+  }
+  return { sendable, skipped };
+}
+
+/**
+ * 渲染跳过明细 HTML（用于 toast / alert / modal）。
+ * @param {Map<string, object[]>} skipped - filterSendableContacts 返回的 skipped
+ * @param {number} maxPerGroup - 每组最多显示的邮箱数，超出折叠（默认 3）
+ * @returns {string} HTML 片段
+ */
+export function renderSkipDetail(skipped, maxPerGroup) {
+  if (!skipped || !skipped.size) return '';
+  const maxN = maxPerGroup || 3;
+  let html = '';
+  for (const [reason, contacts] of skipped) {
+    const label = SKIP_LABEL[reason] || reason;
+    const total = contacts.length;
+    const show = contacts.slice(0, maxN);
+    html += '<div style="margin-bottom:6px;font-size:12px;line-height:1.6">' +
+      '<span style="font-weight:600;color:var(--text)">' + label + ' (' + total + '人)</span>' +
+      '<div style="padding-left:8px;color:var(--text-secondary);word-break:break-all">' +
+      show.map(c => '· ' + escapeHtml(c.email || '')).join('<br>') +
+      '</div>';
+    if (total > maxN) {
+      html += '<span style="font-size:10px;color:var(--text-secondary);padding-left:8px">▸ 及其他 ' + (total - maxN) + ' 人...</span>';
+    }
+    html += '</div>';
+  }
+  // 跳过明细容器：限定最大高度，超出滚动
+  return '<div style="text-align:left;max-height:220px;overflow-y:auto;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">' + html + '</div>';
+}
 window.addEventListener('error',(e)=>{const m=`JS错误: ${e.message} (${e.filename}:${e.lineno})`;console.error(m,e.error);const b=document.createElement('div');b.style.cssText='position:fixed;top:0;left:0;right:0;background:#f44336;color:#fff;padding:8px 16px;font-size:12px;z-index:99999';b.textContent=m;document.body.prepend(b)});
 window.__pageHandlers['dashboard'] = async () => { await loadDashboard(); try { const { syncCards } = await import('./dashboard-editor.js'); syncCards(); } catch { /* 渲染层降级：操作失败不影响 UI */ } };
