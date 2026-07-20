@@ -459,6 +459,8 @@ function register(ipcMain, deps) {
       contact.company = company;
       contact._suspicious = _suspicious;
     }
+    // 邮箱格式有效 → 自动清除可疑标记（用户已修复）
+    if (email && EMAIL_RE.test(email)) contact._suspicious = 0;
     // 只在渲染层明确传了 client_type/clientType 时才写入，不自动分类
     const ct = contact.clientType || contact.client_type;
     if (ct !== undefined && ct !== null) {
