@@ -1124,15 +1124,21 @@ export function renderContactDetail(company) {
         await window.electronAPI.upsertContact(payload);
         // 只刷新当前公司详情，不重建整个列表
         ref[field] = val;
-        if (field === 'email') ref.email = val;
+        if (field === 'email') {
+          ref.email = val;
+          // 邮箱修好了 → 同步清除可疑标记
+          if (val && S.EMAIL_RE.test(val)) ref._suspicious = 0;
+        }
         const company = ref.company || ref.company_name || '';
         const members = S.contactsGroupMap.get(company);
         if (members) {
           const m = members.find(x => x.id === contactId);
-          if (m) { m[field] = val; if (field === 'email') m.email = val; }
+          if (m) { m[field] = val; if (field === 'email') { m.email = val; if (val && S.EMAIL_RE.test(val)) m._suspicious = 0; } }
         }
       }
       if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
+      // 刷新列表以更新异常等筛选视图
+      renderContactsList();
     };
     input.addEventListener('blur', save);
     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); save(); } if (ev.key === 'Escape') { input.remove(); restore(); } });
