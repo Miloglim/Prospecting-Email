@@ -248,6 +248,8 @@ const SYSTEM = {
   // -- 网络
   /** 检查网络连通性 */
   NETWORK_CHECK: "network:check",
+  /** 自动检测系统代理 */
+  DETECT_PROXY: "system:detectProxy",
   // -- 配置
   /** 加载应用配置 */
   CONFIG_LOAD: "config:load",
@@ -565,6 +567,7 @@ const IPC = {
  * SYSTEM_APP_EXTERNAL    (url: string)   → IpcResponse<void>
  * SYSTEM_APP_LOG         ()              → IpcResponse<void>
  * SYSTEM_NETWORK_CHECK   ()              → IpcResponse<{ online: boolean }>
+ * SYSTEM_DETECT_PROXY    ()              → IpcResponse<{ host: string, source: 'env'|'system' }>
  * SYSTEM_CONFIG_LOAD     ()              → IpcResponse<AppConfig>
  * SYSTEM_CONFIG_SAVE     (config: AppConfig) → IpcResponse<void>
  * SYSTEM_AUTO_LAUNCH_SET (enabled: boolean) → IpcResponse<void>

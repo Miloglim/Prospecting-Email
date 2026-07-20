@@ -115,6 +115,19 @@ export async function initSettings() {
 
   const config = await window.electronAPI.loadConfig();
   if (config) loadSettingsIntoForm(config);
+
+  // 首次加载时如果代理为空，自动检测（复用 checkNetwork 的 proxy 检测）
+  const proxyEl = document.getElementById('cfg-proxy-host');
+  if (proxyEl && !proxyEl.value.trim()) {
+    try {
+      const r = await window.electronAPI.checkNetwork();
+      if (r?.proxy) {
+        proxyEl.value = r.proxy;
+        proxyEl.title = '已自动检测';
+      }
+    } catch { /* 检测失败不阻塞 */ }
+  }
+
   toggleTimeWindow();
   checkCrossDay();
   updateBatchPauseMinutes();

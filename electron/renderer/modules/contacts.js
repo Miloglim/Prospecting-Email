@@ -1158,6 +1158,7 @@ document.getElementById('contacts-search')?.addEventListener('input', async (e) 
 
 // 「添加客户」→ 弹出录入框
 document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
+  const preselectedCompany = escapeHtml(S.selectedContactCompany || '');
   showModal({
     title: '添加联系人',
     closeOnOverlay: false,
@@ -1171,7 +1172,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         .ac-field input:focus, .ac-field select:focus { border-color:var(--primary); }
       </style>
       <div class="ac-form">
-        <div class="ac-field"><label>公司名</label><input id="ac-company" placeholder="必填"></div>
+        <div class="ac-field"><label>公司名</label><input id="ac-company" placeholder="必填" value="${preselectedCompany}"></div>
         <div class="ac-field"><label>邮箱</label><input id="ac-email" placeholder="必填"></div>
         <div class="ac-row">
           <div class="ac-field"><label>名</label><input id="ac-firstname" placeholder="如 Julio"></div>

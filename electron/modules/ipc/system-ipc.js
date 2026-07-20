@@ -79,6 +79,38 @@ function register(ipcMain, deps) {
     return { proxy: proxy ? `${proxy.hostname}:${proxy.port}` : null, results };
   });
 
+  // ── 自动检测系统代理 ──
+  ipcMain.handle('system:detectProxy', async () => {
+    // 1. 环境变量优先
+    const envProxy = process.env.HTTPS_PROXY || process.env.https_proxy
+      || process.env.HTTP_PROXY || process.env.http_proxy
+      || process.env.ALL_PROXY || process.env.all_proxy;
+    if (envProxy) {
+      // 去掉 http:// 前缀，提取 host:port
+      const host = envProxy.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+      return { ok: true, host, source: 'env' };
+    }
+
+    // 2. Windows 系统代理（注册表）
+    if (process.platform === 'win32') {
+      try {
+        const regKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+        const { execSync } = require('child_process');
+        const enabled = execSync(`reg query "${regKey}" /v ProxyEnable`, { encoding: 'utf-8', timeout: 3000 });
+        if (enabled.includes('0x1')) {
+          const server = execSync(`reg query "${regKey}" /v ProxyServer`, { encoding: 'utf-8', timeout: 3000 });
+          const m = server.match(/ProxyServer\s+REG_SZ\s+(.+)/);
+          if (m?.[1]) {
+            const host = m[1].trim().replace(/^https?:\/\//i, '').replace(/\/$/, '');
+            return { ok: true, host, source: 'system' };
+          }
+        }
+      } catch { /* 注册表读取失败 → 无系统代理 */ }
+    }
+
+    return { ok: false, host: null, reason: '未检测到系统代理' };
+  });
+
   // ── 客户开发 → 已迁移到 electron/modules/acquisition-ipc.js ──
 
   // ── 系统功能 ──

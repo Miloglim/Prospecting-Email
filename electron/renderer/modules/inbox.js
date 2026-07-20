@@ -477,7 +477,7 @@ async function renderDetail() {
         const TL = { reaching:'触达中', quoting:'报价中', trial:'试单', cooperating:'合作中', lost:'已流失', reached:'已触达' };
         return tags.map(t => `<span style="display:inline-block;background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;font-size:10px;margin-right:2px" title="${escapeHtml(diag)}">${escapeHtml(TL[t] || t)}</span>`).join('');
       })()}</span></div>
-      <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a>` : '未关联'}</span></div>
+      <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a> <button class="inbox-btn-backcheck" data-company="${escapeHtml(m.contactCompany)}" style="font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text-secondary);cursor:pointer;margin-left:4px">背调</button>` : '未关联'}</span></div>
     </div>
     ${(() => {
       const allMatched = [];
@@ -597,6 +597,16 @@ async function renderDetail() {
       searchInput.value = m.contactCompany;
       searchInput.dispatchEvent(new Event('input'));
     }
+  });
+
+  // 背调按钮 → 跳转背调页并预选公司
+  el.querySelector('.inbox-btn-backcheck')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const company = e.target.dataset.company;
+    if (!company) return;
+    S.discoverPreselectCompany = company;
+    document.querySelector('.nav-sub[data-page="backcheck"]')?.click();
   });
 }
 

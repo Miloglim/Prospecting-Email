@@ -174,6 +174,7 @@ function showStagePicker(anchor, contactId, cur) {
 
 async function openDetailPanel(contactId) {
   _currentDetailId = contactId;
+  _currentTab = 'info'; // 每次打开面板重置 tab，避免邮件往来假性加载中
   const panel = document.getElementById('crm-detail-panel');
   if (!panel) return;
   panel.style.display = 'flex';

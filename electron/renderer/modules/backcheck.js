@@ -157,11 +157,12 @@ export async function loadBackcheck() {
     });
   });
 
-  // 从客户开发页面预选跳转 → 自动点击对应公司
-  if (S.discoverPreselectCompany) {
-    const target = container.querySelector(`.backcheck-company[data-company="${escapeHtml(discoverPreselectCompany)}"]`);
+  // 从收件箱/客户开发页面预选跳转 → 自动点击对应公司
+  const preselect = CS.getDiscoverPreselect();
+  if (preselect) {
+    const target = container.querySelector(`.backcheck-company[data-company="${escapeHtml(preselect)}"]`);
     if (target) target.click();
-    CS.setDiscoverPreselect($1);
+    CS.setDiscoverPreselect(null);
   }
 
   // 工具栏事件委托（一次性绑定）

@@ -224,6 +224,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 网络
   checkNetwork: () => ipcRenderer.invoke("network:check"),
+  detectProxy: () => ipcRenderer.invoke("system:detectProxy"),
 
   // 客户开发（通过 IPC 代理，安全）
   discoverProfiles: () => ipcRenderer.invoke("discover:profiles"),

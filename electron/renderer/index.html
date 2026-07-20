@@ -828,7 +828,8 @@
             <span class="setting-status"></span>
           </div>
           <div class="setting-card-body">
-            <div class="form-row"><label>HTTP 代理</label><input type="text" id="cfg-proxy-host" placeholder="127.0.0.1:7890"></div>
+            <div class="form-row"><label>HTTP 代理</label><div style="display:flex;gap:6px;flex:1"><input type="text" id="cfg-proxy-host" placeholder="127.0.0.1:7890" style="flex:1"><button id="btn-detect-proxy" class="secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap" onclick="var b=this;var i=document.getElementById('cfg-proxy-host');var s=document.getElementById('proxy-status');b.disabled=true;b.textContent='检测中...';s.textContent='';window.electronAPI.checkNetwork().then(function(r){if(r&&r.proxy){i.value=r.proxy;s.textContent='已检测到 '+r.proxy;s.style.color='#22a644'}else{s.textContent='未检测到系统代理';s.style.color='var(--text-secondary)'}b.textContent='检测';b.disabled=false}).catch(function(){s.textContent='检测失败，请检查网络';s.style.color='var(--danger)';b.textContent='检测';b.disabled=false})">检测</button></div></div>
+            <div id="proxy-status" style="font-size:11px;padding:2px 0 4px 82px;min-height:18px"></div>
           </div>
         </div>
 

@@ -111,8 +111,8 @@ function _classify(subject, from, bodySnippet) {
   const f = (from || '').toLowerCase();
   const b = (bodySnippet || '').toLowerCase();
 
-  // 0. 回复/转发标题 → 直接判回复，不再检查退信关键词（避免正文引用内容误判）
-  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
+  // 0. 自动回复优先检测（必须在 reply 之前，因为自动回复标题也常带 Re:）
+  if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'auto-reply';
 
   // 1. 退信
   // 1a. 标题含退信关键词
@@ -125,8 +125,8 @@ function _classify(subject, from, bodySnippet) {
   // 1d. 离职/人已不在 → 也是退信
   if (kw.bounce_left.some(k => b.includes(k))) return 'bounce';
 
-  // 2. 自动回复：标题 或 正文前 500 字符
-  if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'auto-reply';
+  // 2. 回复/转发标题 → 回复
+  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
 
   // 3. 询盘关键词
   if (kw.inquiry.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'reply';
@@ -851,10 +851,7 @@ function setMailType(index, newType) {
       if (newType === 'reply') {
         contactsDb.update(id, { _status: '有回复', is_bounced: false });
       } else if (newType === 'auto-reply') {
-        const ct = contactsDb.getById(id);
-        if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
-          contactsDb.update(id, { _status: '自动回复', is_bounced: false });
-        }
+        contactsDb.update(id, { _status: '自动回复', is_bounced: false });
       } else if (newType === 'bounce') {
         contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
       } else if (newType === 'other') {

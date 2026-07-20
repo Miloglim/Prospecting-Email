@@ -64,11 +64,13 @@ function listPipeline(filters = {}) {
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
 
-  // 入口筛选：_status 为 replied/autoreply，或 tags 含 reached，或已有管线标签
+  // 入口筛选：_status 为 replied/reached，或 tags 含 reached，或已有管线标签
   const isEntry = (row) => {
+    // 自动回复硬排除：即使有管线标签也不进管道
+    if (row._status === 'autoreply' || row._status === '自动回复') return false;
     const tags = row.tags || [];
-    // 门票：replied/autoreply（来自 _status，兼容中英文）
-    if (row._status === 'replied' || row._status === '有回复' || row._status === 'autoreply' || row._status === '自动回复') return true;
+    // 门票：replied（来自 _status，兼容中英文）
+    if (row._status === 'replied' || row._status === '有回复') return true;
     if (tags.some(x => TAG.reached.key === x || (TAG.reached.alias || []).includes(x))) return true;
     // 已有管线阶段标签的直接进
     if (tags.some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))) return true;

@@ -197,10 +197,6 @@ export async function renderQueue() {
           ${lucide('users',12)} ${sentCount}/${totalCount} 已发${failCount > 0 ? ` · ${failCount} 失败` : ''}
         </div>`
       : '';
-    const detailRows = rs.map(r => {
-      const err = r._error ? ` <span style="font-size:10px;color:var(--danger)">${escapeHtml(r._error)}</span>` : '';
-      return `<div class="qc-recipient ${r.status}"><span>${statusIcon(r.status)}</span><span style="font-family:monospace;flex:1">${escapeHtml(r.email)}</span>${err}</div>`;
-    }).join('');
     const cardCls = 'queue-card' + (e.status === 'sending' && S.sendInProgress ? ' sending' : '');
 
     const chkId = 'qchk-' + e.id;
@@ -222,7 +218,7 @@ export async function renderQueue() {
         ${retryBtn}
       </div>
       ${failInfo}
-      <div class="qc-detail">${detailRows}</div>
+      <div class="qc-detail"></div>
     </div>`;
   };
 
@@ -273,49 +269,65 @@ export async function renderQueue() {
   }
   list.innerHTML = html;
 
-  // 自动滚动到正在发送的组
+  // ponytail: 事件委托 — 单一监听器处理所有卡片交互
+  if (!list._delegated) {
+    list._delegated = true;
+    list.addEventListener('click', (ev) => {
+      // ── 重发按钮 ──
+      const retryBtn = ev.target.closest('.qc-retry');
+      if (retryBtn) {
+        ev.stopPropagation();
+        const item = S.queue.find(e => e.id == retryBtn.dataset.id);
+        if (item) {
+          item.status = 'pending';
+          delete item._error;
+          if (item._recipientStatus) item._recipientStatus.forEach(r => { r.status = 'pending'; delete r._error; });
+          saveQueue();
+          renderQueue();
+        }
+        return;
+      }
 
-  // 分组折叠/展开
-  list.querySelectorAll('.queue-group-head').forEach(head => {
-    head.addEventListener('click', () => {
-      const gid = head.dataset.group;
-      const cards = list.querySelector(`.queue-group-cards[data-group="${gid}"]`);
-      const arrow = head.querySelector('.qg-arrow');
-      if (!cards) return;
-      const hidden = cards.style.display === 'none';
-      cards.style.display = hidden ? 'block' : 'none';
-      if (arrow) arrow.style.transform = hidden ? 'rotate(90deg)' : '';
-    });
-  });
+      // ── 分组折叠/展开 ──
+      const head = ev.target.closest('.queue-group-head');
+      if (head) {
+        const gid = head.dataset.group;
+        const cards = list.querySelector(`.queue-group-cards[data-group="${gid}"]`);
+        const arrow = head.querySelector('.qg-arrow');
+        if (!cards) return;
+        const hidden = cards.style.display === 'none';
+        cards.style.display = hidden ? 'block' : 'none';
+        if (arrow) arrow.style.transform = hidden ? 'rotate(90deg)' : '';
+        return;
+      }
 
-  // 卡片点击 → 展开收件人详情
-  list.querySelectorAll('.queue-card').forEach(card => {
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('button')) return;
+      // ── 卡片点击 → 懒渲染 + 展开收件人详情 ──
+      const card = ev.target.closest('.queue-card');
+      if (!card || ev.target.closest('button')) return;
       const detail = card.querySelector('.qc-detail');
       const btn = card.querySelector('.qc-expand');
       if (!detail) return;
-      const isOpen = detail.classList.toggle('open');
-      if (btn) btn.innerHTML = isOpen
-        ? `<span style="display:inline-block;transform:rotate(180deg)">${lucide('chevron-down',12)}</span> 收起`
-        : `${lucide('chevron-down',12)} 展开`;
-    });
-  });
-
-  // 重发按钮
-  list.querySelectorAll('.qc-retry').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const item = S.queue.find(e => e.id == btn.dataset.id);
-      if (item) {
-        item.status = 'pending';
-        delete item._error;
-        if (item._recipientStatus) item._recipientStatus.forEach(r => { r.status = 'pending'; delete r._error; });
-        saveQueue();
-        renderQueue();
+      const isOpen = !detail.classList.contains('open');
+      if (isOpen) {
+        detail.classList.add('open');
+        // 懒渲染：首次展开时生成收件人列表
+        if (!detail.children.length) {
+          const id = card.dataset.id;
+          const item = S.queue.find(e => e.id == id);
+          const rs = item?._recipientStatus || item?.recipients?.map(r => ({ email: r, status: 'pending' })) || [];
+          detail.innerHTML = rs.map(r => {
+            const err = r._error ? ` <span style="font-size:10px;color:var(--danger)">${escapeHtml(r._error)}</span>` : '';
+            const icon = r.status === 'sent' ? lucide('check-circle',14) : r.status === 'failed' ? lucide('x-circle',14) : r.status === 'sending' ? lucide('refresh-cw',14,'spin') : lucide('clock',14);
+            return `<div class="qc-recipient ${r.status}"><span>${icon}</span><span style="font-family:monospace;flex:1">${escapeHtml(r.email)}</span>${err}</div>`;
+          }).join('');
+        }
+        if (btn) btn.innerHTML = `<span style="display:inline-block;transform:rotate(180deg)">${lucide('chevron-down',12)}</span> 收起`;
+      } else {
+        detail.classList.remove('open');
+        if (btn) btn.innerHTML = `${lucide('chevron-down',12)} 展开`;
       }
     });
-  });
+  }
 
   document.getElementById('queue-start').disabled = S.sendInProgress;
   document.getElementById('queue-pause').disabled = !S.sendInProgress;
