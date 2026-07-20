@@ -471,6 +471,15 @@ function register(ipcMain, deps) {
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);
+    // 联系人 _status 变更 → 反向同步收件箱邮件 type
+    if (contact._status !== undefined && existing) {
+      const oldStatus = existing._status || '';
+      const newStatus = contact._status || '';
+      if (oldStatus !== newStatus) {
+        try { require('./services/inbox-service').syncMailTypeByContactEmail(result?.email || email, newStatus); }
+        catch (e) { Log.error('联系人', '反向同步收件箱失败', e.stack); }
+      }
+    }
     _notify();
     return { ok: true, action: existing ? 'updated' : 'created', contact: result };
   });

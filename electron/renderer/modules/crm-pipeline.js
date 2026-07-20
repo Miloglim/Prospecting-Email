@@ -21,6 +21,11 @@ export async function initCrmPipeline() {
   await refreshPipeline();
   // 暴露给仪表盘待办点击跳转
   window.__crmOpenDetail = openDetailPanel;
+  // 暴露给联系人备注列跳转（定位到跟进记录 tab）
+  window.__crmOpenFollowup = (contactId) => {
+    _currentTab = 'followup';
+    openDetailPanel(contactId);
+  };
 
   const si = document.getElementById('crm-search');
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
@@ -277,6 +282,16 @@ async function openDetailPanel(contactId) {
     });
   }
 
+  // 清除跟进日期
+  panel.querySelector('#crm-clear-followup')?.addEventListener('click', async () => {
+    if (nextFollowupEl) nextFollowupEl.value = '';
+    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: '' } });
+    scheduleReminder(contactId, '');
+    _renderFollowupStatus(panel);
+    panel.querySelector('#crm-clear-followup')?.remove();
+    showToast('已清除', 'ok');
+  });
+
   // 保存跟进记录
   panel.querySelector('#crm-record-save')?.addEventListener('click', async () => {
     const content = panel.querySelector('#crm-record-content')?.value?.trim();
@@ -402,13 +417,15 @@ function followupTab(cid, reminder, notes, interactions) {
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
 
-  const statusDot = na ? (isOverdue(na) ? '🔴' : isSoon(na) ? '🟠' : '🟢') : '⚪';
-  const statusText = na ? (isOverdue(na) ? '已逾期' : isSoon(na) ? '即将到期' : '正常') : '未设置';
+  const isOd = isOverdue(na); const isSn = !isOd && isSoon(na);
+  const dotColor = na ? (isOd ? 'var(--danger)' : isSn ? '#ff9800' : 'var(--success)') : 'var(--text-secondary)';
+  const statusText = na ? (isOd ? '已逾期' : isSn ? '即将到期' : '正常') : '未设置';
   return `
     <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:10px">
       <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap">下次跟进</span>
       <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--card-bg);color:var(--text);font-family:inherit;outline:none">
-      <span style="font-size:11px;white-space:nowrap">${statusDot} ${statusText}</span>
+      ${na ? `<button id="crm-clear-followup" title="清除跟进日期" style="padding:2px 4px;border:none;background:none;color:var(--text-secondary);cursor:pointer;font-size:14px;line-height:1;border-radius:3px;flex-shrink:0">${lucide('x',13)}</button>` : ''}
+      <span id="crm-followup-status" style="font-size:11px;white-space:nowrap;display:flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>${statusText}</span>
     </div>
     <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
     <textarea id="crm-record-content" rows="2" placeholder="记录内容..." style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
@@ -436,7 +453,7 @@ function emailsTab(interactions) {
 
 function scheduleReminder(cid, na) {
   if (_reminderTimers[cid]) { clearTimeout(_reminderTimers[cid]); delete _reminderTimers[cid]; }
-  if (!na) return;
+  if (!na) { refreshPipeline(); return; }
   const d = new Date(na).getTime() - Date.now();
   if (d <= 0) return;
   _reminderTimers[cid] = setTimeout(() => { refreshPipeline(); delete _reminderTimers[cid]; }, d);
@@ -461,19 +478,59 @@ function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${Stri
 function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch { return false; } }
 function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
 
+// ponytail: 渲染跟进状态指示器（圆点 + 文本）
+function _renderFollowupStatus(panel) {
+  const statusEl = panel.querySelector('#crm-followup-status');
+  const input = panel.querySelector('#crm-next-followup');
+  if (!statusEl || !input) return;
+  const val = input.value;
+  const isOd = val ? isOverdue(val) : false;
+  const isSn = val ? (!isOd && isSoon(val)) : false;
+  const dotColor = val ? (isOd ? 'var(--danger)' : isSn ? '#ff9800' : 'var(--success)') : 'var(--text-secondary)';
+  const label = val ? (isOd ? '已逾期' : isSn ? '即将到期' : '正常') : '未设置';
+  statusEl.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>${label}`;
+}
+
 function rebindFollowupEvents(panel, contactId) {
-  panel.querySelector('#crm-next-followup')?.addEventListener('change', async () => {
-    const val = panel.querySelector('#crm-next-followup').value;
-    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
-    scheduleReminder(contactId, val); showToast('已更新','ok');
+  const input = panel.querySelector('#crm-next-followup');
+  const statusEl = panel.querySelector('#crm-followup-status');
+  let savedVal = input?.value || '';
+
+  // 输入变更 → 状态区变为「保存」按钮
+  input?.addEventListener('input', () => {
+    if (input.value !== savedVal) {
+      statusEl.innerHTML = `<button id="crm-followup-save" style="padding:2px 8px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--bg);color:var(--text-secondary);cursor:pointer;white-space:nowrap">${lucide('save',11)} 保存</button>`;
+      statusEl.querySelector('#crm-followup-save')?.addEventListener('click', async () => {
+        const val = input.value;
+        await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
+        scheduleReminder(contactId, val);
+        savedVal = val;
+        _renderFollowupStatus(panel);
+        showToast('已更新', 'ok');
+      });
+    }
   });
+
+  // 清除跟进日期
+  panel.querySelector('#crm-clear-followup')?.addEventListener('click', async () => {
+    input.value = '';
+    savedVal = '';
+    await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: '' } });
+    scheduleReminder(contactId, '');
+    _renderFollowupStatus(panel);
+    // 移除清除按钮
+    panel.querySelector('#crm-clear-followup')?.remove();
+    showToast('已清除', 'ok');
+  });
+
+  // 备注保存（仅保存备注，不处理跟进时间）
   panel.querySelector('#crm-record-save')?.addEventListener('click', async () => {
     const c = panel.querySelector('#crm-record-content')?.value?.trim();
-    if (!c) { showToast('请输入内容','warn'); return; }
+    if (!c) { showToast('请输入内容', 'warn'); return; }
     const r3 = await window.electronAPI.crmSaveNote(contactId, c);
     if (r3.ok) {
       panel.querySelector('#crm-record-content').value = '';
-      showToast('已保存','ok');
+      showToast('已保存', 'ok');
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');

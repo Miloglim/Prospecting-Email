@@ -193,6 +193,10 @@ function _showContextMenu(x, y, m, idx) {
   `;
   _bindMenuActions(menu, m, idx);
   document.body.appendChild(menu);
+  // 边界检测：防止菜单超出视口
+  const rect = menu.getBoundingClientRect();
+  if (rect.bottom > window.innerHeight) menu.style.top = Math.max(0, y - rect.height) + 'px';
+  if (rect.right > window.innerWidth) menu.style.left = Math.max(0, x - rect.width) + 'px';
   const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
   setTimeout(() => document.addEventListener('click', close), 0);
 }
@@ -233,6 +237,14 @@ function _bindMenuActions(menu, m, idx) {
       if (delEmails.has((mail.from || '').toLowerCase())) { mail.contactCompany = ''; mail.contactId = ''; mail.contactDbId = ''; }
       if (mail.matchedContacts) mail.matchedContacts = mail.matchedContacts.filter(mc => !delEmails.has((mc.email || '').toLowerCase()));
     }
+    // 删除后一键已读所有涉及的邮件
+    for (const i of targetIdxes) {
+      const mail = _mails[i];
+      if (!mail) continue;
+      const mk = `${mail.accountId}|${mail.uid}|${mail.from}|${mail.subject}`;
+      _viewedKeys.add(mk);
+    }
+    _saveViewedKeys();
     renderDetail(); renderInbox();
     showToast(`已删除 ${allMatched.length} 个联系人`, 'ok');
   });

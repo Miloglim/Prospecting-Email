@@ -196,7 +196,7 @@ async function _sendOne(ctx, email, log, deps) {
   let toList = email.recipients?.length ? email.recipients : (typeof email.to === 'string' ? email.to.split(',').map(s => s.trim()).filter(Boolean) : []);
   // ponytail: 防御性过滤 — 占位邮箱不可发送
   toList = toList.filter(addr => !addr.endsWith('@no.email') && !addr.endsWith('@placeholder.local'));
-  if (!toList.length) { Log.warn("发信", "跳过: 所有收件人均无有效邮箱"); return { ok: false, n: 0, skippedNoEmail: true }; }
+  if (!toList.length) { Log.warn("发信", `跳过: ${email.company || '?'} | 所有收件人均无有效邮箱`); return { ok: false, n: 0, skippedNoEmail: true }; }
 
   // ponytail: 过滤已发送收件人，防止中断恢复后重复发信
   const alreadySent = new Set(
@@ -243,6 +243,7 @@ async function _sendOne(ctx, email, log, deps) {
         if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (email.body || '').slice(0, 200) });
       }
     } catch { /* 互动记录不影响发送 */ }
+    Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 成功 | ${accountId}`);
     return { ok: true, n: toList.length };
   } catch (err) {
     const em = err.message || '';
@@ -266,6 +267,7 @@ async function _sendOne(ctx, email, log, deps) {
         log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
         log.daily_count = (log.daily_count || 0) + toList.length;
         _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
+        Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 重试成功 | ${accountId}`);
         return { ok: true, n: toList.length };
       } catch (retryErr) { err = retryErr; }
     }
@@ -275,6 +277,7 @@ async function _sendOne(ctx, email, log, deps) {
       return { ok: false, n: 0, fused: true };
     }
     for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, '', 'failed', finalErr, accountId, email)); }
+    Log.error('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 失败: ${finalErr}`, '');
     return { ok: false, n: 0 };
   }
 }

@@ -40,6 +40,9 @@ try {
   );
   if (r.migrated) _Log.info("启动", `SQLite 联系人迁移: ${r.migrated} 人`);
   else if (r.message) _Log.info("启动", "SQLite: " + r.message);
+  // 修复 DB 中非标准 stage 值（中文/大小写混用 → 标准 key）
+  const fixedStages = contactsDb.normalizeStages();
+  if (fixedStages > 0) _Log.info("启动", `stage 标准化: ${fixedStages} 条`);
 } catch (e) { require("./modules/core/logger").Log.error("启动", "SQLite 联系人迁移失败", e); }
 
 // send-log 迁移

@@ -214,15 +214,47 @@ export async function loadDashboard(){
         const name=(c.first_name||'')+' '+(c.last_name||'');
         items.push({type:'missing',name:name.trim()||c.email,company:c.company_name||c.company||'',detail:`缺${missing.map(k=>PREF_LABELS[k]).join('/')}`,contactId:c.id});
       }
-      // 排序：逾期 → 今日到期 → 缺失
-      items.sort((a,b)=>{const o={overdue:0,due:1,missing:2};return o[a.type]-o[b.type]||a.name.localeCompare(b.name);});
+      // 3) 待办助手：显式跟进日期 + 自动计算（last_sent_at + 阶段间隔）
+      const STAGE_INTERVAL={cold:3,f1:4,f2:5,f3:6};
+      const seenIds=new Set(items.map(i=>i.contactId).filter(Boolean));
+      for(const c of allPipelineContacts){
+        if(seenIds.has(c.id)) continue;
+        let extra={};
+        try{extra=typeof c._extra==='string'?JSON.parse(c._extra):(c._extra||{});}catch{}
+        let dueTime=0,autoLabel='';
+        // 优先显式日期，否则自动计算
+        const na=extra.crmReminder?.nextFollowupAt;
+        if(na){dueTime=new Date(na).getTime();}
+        else if(c.last_sent_at&&c.stage&&c.stage!=='f4'){
+          const interval=STAGE_INTERVAL[c.stage]||3;
+          dueTime=new Date(c.last_sent_at).getTime()+interval*86400000;
+          autoLabel='(自动)';
+        }
+        if(!dueTime||isNaN(dueTime)) continue;
+        // 日历日比较：对齐到午夜，避免"明天设的日期今晚就变今日"
+        const nowDay=new Date(now).setHours(0,0,0,0);
+        const dueDay=new Date(dueTime).setHours(0,0,0,0);
+        const dayDiff=Math.round((dueDay-nowDay)/86400000);
+        const name=(c.first_name||'')+' '+(c.last_name||'');
+        const label=name.trim()||c.email;
+        const company=c.company_name||c.company||'';
+        if(dayDiff<=-1){
+          items.push({type:'overdue',name:label,company,detail:`逾期${Math.abs(dayDiff)}天${autoLabel}`,contactId:c.id});
+        }else if(dayDiff<=0){
+          items.push({type:'due',name:label,company,detail:`今日跟进${autoLabel}`,contactId:c.id});
+        }else{
+          items.push({type:'upcoming',name:label,company,detail:`还有${dayDiff}天${autoLabel}`,contactId:c.id});
+        }
+      }
+      // 排序：逾期 → 今日到期 → 即将 → 缺失
+      items.sort((a,b)=>{const o={overdue:0,due:1,upcoming:2,missing:3};return o[a.type]-o[b.type]||a.name.localeCompare(b.name);});
       // 渲染
       const box=document.getElementById('dash-todo-box');
       if(!items.length){
         box.innerHTML='<span style="color:var(--success);font-size:11px">✓ 无待办</span>';
       }else{
-        const TYPE_COLOR={overdue:'var(--danger)',due:'#e65100',missing:'var(--text-secondary)'};
-        const TYPE_DOT={overdue:'var(--danger)',due:'#ff9800',missing:'#9e9e9e'};
+        const TYPE_COLOR={overdue:'var(--danger)',due:'#e65100',upcoming:'var(--success)',missing:'var(--text-secondary)'};
+        const TYPE_DOT={overdue:'var(--danger)',due:'#ff9800',upcoming:'#22a644',missing:'#9e9e9e'};
         box.innerHTML=items.map(i=>{
           const label=i.company?`${i.name}(${i.company})`:i.name;
           const cid=i.contactId?` data-contact-id="${escapeHtml(i.contactId)}"`:'';

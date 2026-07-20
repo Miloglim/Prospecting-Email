@@ -63,7 +63,8 @@ function register(ipcMain, deps) {
       const cur = (h[name]?.stage || 'cold');
       const idx = STAGES.indexOf(cur);
       const next = STAGES[idx >= 0 && idx < STAGES.length - 1 ? idx + 1 : idx];
-      _advanceCompany(name, next, 'advance');
+      const n = _advanceCompany(name, next, 'advance');
+      Log.info('阶段', `${name}: ${cur}→${next} | ${n}人`);
       // 更新内存 hist 供返回值
       h[name] = { ...h[name], stage: next, lastSent: now, sentCount: (h[name]?.sentCount || 0) + 1, sentContacts: [] };
       if (!h[name]?.startedAt) h[name].startedAt = now;

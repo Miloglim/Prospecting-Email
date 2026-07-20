@@ -186,6 +186,23 @@ function setStage(contactId, newStage, reason) {
   return true;
 }
 
+// ponytail: 一次性修复 DB 中非标准 stage 值（如中文标签、大小写混用）
+function normalizeStages() {
+  const STAGE_MAP = { '冷开发': 'cold', 'F1': 'f1', 'F2': 'f2', 'F3': 'f3', 'F4': 'f4' };
+  const db = getDb();
+  const rows = db.prepare('SELECT id, stage FROM contacts WHERE stage NOT IN (\'cold\',\'f1\',\'f2\',\'f3\',\'f4\')').all();
+  let fixed = 0;
+  for (const r of rows) {
+    const normalized = STAGE_MAP[r.stage] || (typeof r.stage === 'string' ? r.stage.toLowerCase() : 'cold');
+    if (VALID_STAGES.includes(normalized) && normalized !== r.stage) {
+      db.prepare('UPDATE contacts SET stage = ? WHERE id = ?').run(normalized, r.id);
+      fixed++;
+    }
+  }
+  if (fixed > 0) Log.info('DB', `stage 标准化: ${fixed} 条`);
+  return fixed;
+}
+
 // ── 标签：唯一写入入口 ──────────────────────────────────────────────────────
 
 function addTag(contactId, tag) {
@@ -351,4 +368,4 @@ function deleteNote(noteId) {
   getDb().prepare("DELETE FROM contact_notes WHERE id = ?").run(noteId);
 }
 
-module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson, listNotes, addNote, updateNote, deleteNote };
+module.exports = { listAll, query, getById, getByEmail, search, upsert, update, setStage, normalizeStages, addTag, removeTag, remove, removeMany, ensureCompany, listCompanies, migrateFromJson, listNotes, addNote, updateNote, deleteNote };

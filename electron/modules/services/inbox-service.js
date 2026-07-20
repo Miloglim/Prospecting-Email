@@ -853,19 +853,44 @@ function setMailType(index, newType) {
     for (const c of (m.matchedContacts || [])) addByEmail(c.email);
     for (const id of ids) {
       if (oldTag) contactsDb.removeTag(id, oldTag);
-      // _status 同步
+      // _status + 退信标记 同步
       if (newType === 'reply') {
-        contactsDb.update(id, { _status: '有回复' });
+        contactsDb.update(id, { _status: '有回复', is_bounced: false });
       } else if (newType === 'auto-reply') {
         const ct = contactsDb.getById(id);
         if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
-          contactsDb.update(id, { _status: '自动回复' });
+          contactsDb.update(id, { _status: '自动回复', is_bounced: false });
         }
+      } else if (newType === 'bounce') {
+        contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
+      } else if (newType === 'other') {
+        contactsDb.update(id, { is_bounced: false });
       }
       if (newTag) contactsDb.addTag(id, newTag);
     }
   }
   return true;
+}
+
+// ponytail: 联系人 _status → 收件箱 type 反向同步
+// 当联系人的 _status 被手动修改时，同步更新所有匹配邮件的 type
+const STATUS_TO_TYPE = { '有回复': 'reply', '自动回复': 'auto-reply' };
+function syncMailTypeByContactEmail(email, newStatus) {
+  const newType = STATUS_TO_TYPE[newStatus];
+  if (!newType) return; // 只处理有回复/自动回复，其他状态不改变 inbox type
+  const mails = _readCache();
+  let changed = false;
+  const lower = (email || '').toLowerCase();
+  for (const m of mails) {
+    if ((m.from || '').toLowerCase() === lower && m.type !== newType) {
+      m.type = newType;
+      changed = true;
+    }
+  }
+  if (changed) {
+    _writeCache(mails);
+    Log.info('[收件箱]', `联系人同步: ${email} _status=${newStatus} → 更新匹配邮件为 ${newType}`);
+  }
 }
 
 function linkContact(index, contactId, company) {
@@ -928,4 +953,4 @@ function removeMatchedContactsBatch(items) {
   _writeCache(mails);
 }
 
-module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, getBounceCount, toggleImportant, toggleImportantByKey, setMailType, _migrateInboxFromJson };
+module.exports = { fetchInbox, listInbox, getBody, markProcessed, linkContact, deleteMail, removeMatchedContact, removeMatchedContactsBatch, getBounceCount, toggleImportant, toggleImportantByKey, setMailType, syncMailTypeByContactEmail, _migrateInboxFromJson };

@@ -420,11 +420,12 @@ export function renderCompanyList(filter) {
       '</div>';
     }).join('');
   } else {
-    // 活跃视图：按阶段分组
+    // 活跃视图：按阶段分组（兼容 DB 中残留的中文/大写 stage 值）
+    const STAGE_NORM = { '冷开发':'cold', 'F1':'f1', 'F2':'f2', 'F3':'f3', 'F4':'f4' };
     const stageGroups = {};
-    const STAGES = ['cold','f1','f2','f3','f4'];
     visible.forEach(([name, members]) => {
-      const stage = members[0]?.stage || members[0]?._stage || 'cold';
+      const raw = members[0]?.stage || members[0]?._stage || 'cold';
+      const stage = STAGE_NORM[raw] || (typeof raw === 'string' ? raw.toLowerCase() : 'cold');
       if (!stageGroups[stage]) stageGroups[stage] = [];
       stageGroups[stage].push([name, members]);
     });

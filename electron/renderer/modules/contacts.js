@@ -246,21 +246,31 @@ export async function loadContacts() {
       });
     });
   }
-  renderContactsList();
-  // 如果有预设搜索词（如从收件箱跳转过来），自动触发搜索
+  // 有搜索词时走 DB 搜索（而非先渲染再二次触发），避免闪烁
   const si = document.getElementById('contacts-search');
-  if (si && si.value.trim()) si.dispatchEvent(new Event('input'));
+  if (si && si.value.trim()) {
+    const results = await window.electronAPI.searchContacts(si.value.trim());
+    S.selectedContactCompany = null;
+    renderContactsList(results);
+  } else {
+    renderContactsList();
+  }
 }
 
 // clientTypeTag / groupByCompany 从 shared.js 导入
 
 export function renderContactsList(filtered) {
-  // ponytail: 保留搜索状态 — 搜索框有值时自动过滤，保持 filtered 模式避免自动选中
+  // ponytail: 保留搜索状态 — 搜索框有值时走 DB 搜索（匹配 email/名/姓/公司），
+  // 避免本地 company 过滤遗漏人名匹配结果导致"暂无联系人"
   const si = document.getElementById('contacts-search');
   if (!filtered && si && si.value.trim()) {
-    const q = si.value.trim().toLowerCase();
+    const q = si.value.trim();
     S._searchQuery = q;
-    filtered = S.contactsData.filter(c => (c.company || '').toLowerCase().includes(q));
+    window.electronAPI.searchContacts(q).then(results => {
+      S.selectedContactCompany = null;
+      renderContactsList(results);
+    });
+    return;
   } else if (!filtered) {
     S._searchQuery = '';
   }
@@ -704,7 +714,7 @@ export function renderContactDetail(company) {
       case 'stage': {
         const st = m.stage || m._stage || 'cold';
         const company = m.company || m.company_name || '';
-        return `<td data-field="stage" data-select="stage" data-labels="${escapeHtml(JSON.stringify(STAGE_LABEL))}" class="editable" data-company="${escapeHtml(company)}">${STAGE_LABEL[st]||st}</td>`;
+        return `<td data-field="stage" data-company="${escapeHtml(company)}">${STAGE_LABEL[st]||st}</td>`;
       }
       case '_status': {
         const v = m._status || '';
@@ -720,7 +730,19 @@ export function renderContactDetail(company) {
       }
       case 'contact_person': return `<td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>`;
       case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
-      case '_followup': return `<td><span class="followup-btn" data-id="${m.id}" style="font-size:11px;cursor:pointer;color:var(--text-secondary)">备注</span></td>`;
+      case '_followup': {
+        // ponytail: 管线标签集合（对齐 crm-service.js TAG 定义）
+        const PIPELINE_ENTRY_TAGS = new Set([
+          'replied','有回复','reached','已触达',
+          'reaching','触达中','quoting','报价中',
+          'trial','试单','cooperating','合作中','lost','已流失'
+        ]);
+        const inPipeline = (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
+        if (inPipeline) {
+          return `<td><span class="followup-btn followup-pipeline" data-id="${m.id}" data-pipeline="1" style="font-size:11px;cursor:pointer;color:var(--text);font-weight:600">备注</span></td>`;
+        }
+        return `<td><span style="font-size:11px;color:#ccc">—</span></td>`;
+      }
       case '_actions': return `<td><button class="btn-edit-contact" data-id="${m.id}">${lucide('pencil',12)}</button><button class="btn-delete" data-id="${m.id}">${lucide('trash-2',12)}</button></td>`;
       default: return `<td>${escapeHtml(String(m[col.key] || ''))}</td>`;
     }
@@ -776,6 +798,12 @@ export function renderContactDetail(company) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = btn.dataset.id;
+      // 管线联系人 → 跳转 CRM 跟进页
+      if (btn.dataset.pipeline === '1') {
+        document.querySelector('.nav-item[data-page="crm"]')?.click();
+        setTimeout(() => { window.__crmOpenFollowup?.(id); }, 200);
+        return;
+      }
       const contact = members.find(m => m.id === id);
       if (contact) showFollowupEditor(contact);
     });
