@@ -16,11 +16,8 @@ const DEFAULT_RULES = {
 
 // ── 常量 ─────────────────────────────────────────────────────────────────────
 
-/** 禁止自动发送的 _status 值（中英文） */
-const SKIP_STATUSES = new Set(['已触达','reached','有回复','replied','自动回复','autoreply']);
-
-/** 禁止自动发送的 tags 值 */
-const SKIP_TAGS = new Set(['已触达','reached']);
+/** 已废弃 — 行为标签已迁移到 _status/is_bounced 字段，保留为兼容占位 */
+const SKIP_TAGS = [];
 
 /** 阶段顺序（用于下一阶段推导） */
 const STAGE_ORDER = ["cold", "f1", "f2", "f3", "f4"];
@@ -113,25 +110,14 @@ function evaluateContact(contact, contactCache, rules, nowDate) {
     return { shouldSend: false, stage: "", reason: "已退信" };
   }
 
-  // 2. 状态标签 → 跳过（已触达/有回复/自动回复）
-  if (contact._status && SKIP_STATUSES.has(contact._status)) {
-    return { shouldSend: false, stage: "", reason: "状态:" + contact._status };
-  }
-
-  // 3. 排除标签 → 跳过
-  if ((contact.tags || []).some(t => SKIP_TAGS.has(t))) {
-    const hit = (contact.tags || []).find(t => SKIP_TAGS.has(t));
-    return { shouldSend: false, stage: "", reason: "标签:" + hit };
-  }
-
-  // 4. 无邮箱 → 跳过
+  // 2. 无邮箱 → 跳过
   if (!contact.email || !contact.email.includes("@")) {
     return { shouldSend: false, stage: "", reason: "无有效邮箱" };
   }
 
   const email = contact.email.toLowerCase().trim();
 
-  // 5. 从缓存获取或推导阶段
+  // 3. 从缓存获取或推导阶段
   let currentStage = "cold";
   let lastSentAt = null;
 
@@ -140,17 +126,17 @@ function evaluateContact(contact, contactCache, rules, nowDate) {
     lastSentAt = contactCache[email].lastSentAt || null;
   }
 
-  // 6. 如果没有任何发送记录 → 冷开发
+  // 4. 如果没有任何发送记录 → 冷开发
   if (!lastSentAt) {
     return { shouldSend: true, stage: "cold", reason: "新联系人" };
   }
 
-  // 7. 已到 f4 → 终点，不再发送
+  // 5. 已到 f4 → 终点，不再发送
   if (currentStage === "f4") {
     return { shouldSend: false, stage: "f4", reason: "已达最终阶段 f4" };
   }
 
-  // 8. 计算是否到了下一阶段的时间
+  // 6. 计算是否到了下一阶段的时间
   const next = nextStage(currentStage);
   if (!next) {
     return { shouldSend: false, stage: currentStage, reason: "无下一阶段" };
@@ -268,10 +254,9 @@ function buildForecast(contacts, contactCache, rules, nowDate) {
   const tomorrow = initDay();
 
   for (const c of contacts) {
-    // 跳过状态标签
+    // 跳过标签
     const tags = c.tags || [];
-    if ((c.tags || []).some(t => SKIP_TAGS.has(t))) continue;
-    if (c._status && SKIP_STATUSES.has(c._status)) continue;
+    if (SKIP_TAGS.some((t) => tags.includes(t))) continue;
     if (!c.email || !c.email.includes("@")) continue;
 
     const email = c.email.toLowerCase().trim();

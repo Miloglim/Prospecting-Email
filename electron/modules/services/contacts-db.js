@@ -8,13 +8,12 @@ const { Log } = require("../core/logger");
 const CONTACT_SELECT = `
   c.id, c.company_id, c.email, c.first_name, c.last_name, c.title,
   c.phone, c.linkedin, c.contact_name,
-  c.category, c.stage, c._status, c.last_sent_at, c.last_sent_acct,
+  c.client_type, c.category, c.stage, c._status, c.last_sent_at, c.last_sent_acct,
   c.is_bounced, c.bounce_type, c.bounce_reason, c.bounced_at,
   c.tags, c.opp_stage, c._suspicious, c.followup_note, c._extra,
   c.created_at, c.updated_at,
   co.name as company_name, co.country as company_country,
-  co.website as company_website,
-  co.client_type as company_client_type
+  co.website as company_website
 `;
 
 const CONTACT_FROM = `contacts c LEFT JOIN companies co ON co.id = c.company_id`;
@@ -29,7 +28,6 @@ function _row(r) {
   r.contactName = r.contact_name || "";
   r.firstName = r.first_name || "";
   r.lastName = r.last_name || "";
-  r.clientType = r.company_client_type || r.client_type || 'unlabeled';
   r.bounced = !!r.is_bounced;
   r._sentBy = r.last_sent_acct || "";
   r._sentAt = r.last_sent_at || "";
@@ -57,7 +55,7 @@ function query({ stage, client_type, company_id, is_bounced, limit, offset } = {
   const db = getDb();
   const conds = []; const params = [];
   if (stage) { conds.push("c.stage = ?"); params.push(stage); }
-  if (client_type) { conds.push("co.client_type = ?"); params.push(client_type); }
+  if (client_type) { conds.push("c.client_type = ?"); params.push(client_type); }
   if (company_id) { conds.push("c.company_id = ?"); params.push(company_id); }
   if (is_bounced !== undefined) { conds.push("c.is_bounced = ?"); params.push(is_bounced ? 1 : 0); }
   const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
@@ -93,7 +91,7 @@ function upsert(data) {
   const companyName = data.company_name || data.company || "";
   const companyId = ensureCompany(
     companyName || (email.split('@')[1] || '未知公司').trim(),
-    { country: data.country || data.company_country || "", website: data.website || "", client_type: data.clientType || data.client_type || "unlabeled" }
+    { country: data.country || data.company_country || "", website: data.website || "" }
   );
 
   // ponytail: 有 id 时按 id 更新（支持改邮箱），否则按 email 查重
@@ -105,13 +103,13 @@ function upsert(data) {
   const now = new Date().toISOString();
   // ponytail: 完整 INSERT（关外键避免 company_id 空值报错），字段名兼容新旧两种命名
   db.pragma("foreign_keys = OFF");
-  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,contact_name,category,stage,_status,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,_extra,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  db.prepare(`INSERT INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,contact_name,client_type,category,stage,_status,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,assignee,_suspicious,followup_note,_extra,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, companyId, email,
     data.first_name || data.firstName || "", data.last_name || data.lastName || "",
     data.title || "", data.phone || "", data.linkedin || "",
     data.contact_name || data.contactName || "",
-    data.category || "",
+    data.client_type || data.clientType || "unlabeled", data.category || "",
     data.stage || "cold", data._status || "", data.last_sent_at || data._sentAt || "",
     data.last_sent_acct || data._sentAccount || "",
     data.is_bounced || data.bounced ? 1 : 0,
@@ -129,12 +127,12 @@ function update(id, data) {
   // 联系人表的实际列名
   const VALID_COLS = new Set([
     "company_id", "email", "first_name", "last_name", "title", "phone", "linkedin",
-    "contact_name", "category", "stage", "_status",
+    "contact_name", "client_type", "category", "stage", "_status",
     "last_sent_at", "last_sent_acct", "is_bounced", "bounce_type", "bounce_reason",
     "bounced_at", "tags", "tags_updated_at", "opp_stage", "assignee", "contact_person", "_suspicious", "followup_note", "_extra",
   ]);
   // ponytail: camelCase → snake_case 映射（contacts-ipc 传 camelCase，DB 列是 snake_case）
-  const FIELD_ALIAS = { firstName: "first_name", lastName: "last_name", contactName: "contact_name", contactPerson: "contact_person" };
+  const FIELD_ALIAS = { firstName: "first_name", lastName: "last_name", contactName: "contact_name", clientType: "client_type", contactPerson: "contact_person" };
   // ponytail: 当 camelCase 别名和 snake_case 原始键同时存在时，camelCase 优先（代表 JS 层更新意图）
   for (const [alias, target] of Object.entries(FIELD_ALIAS)) {
     if (alias in data && target in data) delete data[target];
@@ -269,8 +267,8 @@ function ensureCompany(name, extra = {}) {
   }
   const id = uuid();
   const now = new Date().toISOString();
-  db.prepare(`INSERT INTO companies (id,name,raw_name,country,website,client_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`)
-    .run(id, clean, clean, extra.country || "", extra.website || "", extra.client_type || "unlabeled", now, now);
+  db.prepare(`INSERT INTO companies (id,name,raw_name,country,website,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, clean, clean, extra.country || "", extra.website || "", now, now);
   return id;
 }
 
@@ -315,13 +313,13 @@ function migrateFromJson(contactsPath, sendLogPath) {
     }
   } catch { /* 无 send-log 则全为 cold */ }
 
-  const insertContact = db.prepare(`INSERT OR IGNORE INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,contact_name,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,_suspicious,followup_note,_extra,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insertContact = db.prepare(`INSERT OR IGNORE INTO contacts (id,company_id,email,first_name,last_name,title,phone,linkedin,contact_name,client_type,category,stage,last_sent_at,last_sent_acct,is_bounced,bounce_type,bounce_reason,tags,_suspicious,followup_note,_extra,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   let n = 0;
   const batch = db.transaction(() => {
     for (const c of contacts) {
       if (!c.email) continue;
-      const companyId = c.company ? ensureCompany(c.company, { country: c.country, website: c.website, client_type: c.clientType || c.client_type || "unlabeled" }) : null;
+      const companyId = c.company ? ensureCompany(c.company, { country: c.country, website: c.website }) : null;
       const tags = Array.isArray(c.tags) ? c.tags : (typeof c.tags === "string" ? [c.tags] : []);
       const email = (c.email || "").toLowerCase().trim();
       insertContact.run(

@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
 import { randomPick, assembleEmail } from './templates.js';
 
 // ===== 发送队列 =======================================================
@@ -33,7 +33,7 @@ export async function initQueue() {
     S._catchupDone = true;
     try {
       const r = await window.electronAPI.catchupStage();
-      if (r?.caught > 0) showAlert(`阶段追回: ${r.caught} 家公司 cold → f1`, 'ok');
+      if (r?.caught > 0) showToast(`阶段追回: ${r.caught} 家公司 cold → f1`, 'ok');
     } catch { /* 追回失败不阻塞 UI */ }
   }
   let changed = false;
@@ -716,12 +716,12 @@ document.getElementById('queue-test-send')?.addEventListener('click', async () =
 
     const result = await window.electronAPI.sendTestOne({ body, subject });
     if (result.ok) {
-      showAlert(`测试邮件已发送 → ${result.to}`, 'ok');
+      showToast(`测试邮件已发送 → ${result.to}`, 'ok');
     } else {
-      showAlert(`❌ 发送失败: ${result.error}`, 'err');
+      showToast(`❌ 发送失败: ${result.error}`, 'err');
     }
   } catch (e) {
-    showAlert(`❌ 发送异常: ${e.message}`, 'err');
+    showToast(`❌ 发送异常: ${e.message}`, 'err');
   }
 
   btn.disabled = false;
@@ -776,7 +776,7 @@ export function startAutoBounceInterval() {
           for (const r of matched) {
             window.electronAPI.updateBounce(r.email, { type: r.type || 'unknown', reason: r.reason || '未知原因' }).catch(()=>{});
           }
-          showAlert(`📨 自动扫描: ${result.bounced.length} 封退信，${matched.length} 人匹配`, 'warn');
+          showToast(`📨 自动扫描: ${result.bounced.length} 封退信，${matched.length} 人匹配`, 'warn');
         }
       }
     } catch { /* 渲染层降级：操作失败不影响 UI */ }
@@ -882,7 +882,7 @@ export async function doQueueRefresh() {
   saveQueue();
   renderQueue();
   resetQueueTimer();
-  showAlert(`已刷新分组：${pending.length} → ${newPending.length} 个队列项（${groupSize} 人/组）`, 'ok');
+  showToast(`已刷新分组：${pending.length} → ${newPending.length} 个队列项（${groupSize} 人/组）`, 'ok');
   } catch(e) { console.error('刷新分组失败:', e); await showAlert('刷新失败: ' + (e.message || '未知错误')); }
 }
 export function doQueueClearDone() {

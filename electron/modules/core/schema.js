@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS companies (
     phone       TEXT,
     address     TEXT,
     size        TEXT,
-    client_type TEXT DEFAULT 'unlabeled',
     main_routes TEXT,
     cargo_types TEXT,
     ports       TEXT,
@@ -194,7 +193,6 @@ function initSchema(db) {
   try { db.exec("ALTER TABLE contacts ADD COLUMN contact_person TEXT DEFAULT ''"); } catch { /* 已存在 */ }
   try { db.exec("ALTER TABLE contacts ADD COLUMN _extra TEXT DEFAULT '{}'"); } catch { /* 已存在 */ }
   try { db.exec("ALTER TABLE contacts ADD COLUMN _status TEXT DEFAULT ''"); } catch { /* 已存在 */ }
-  try { db.exec("ALTER TABLE companies ADD COLUMN client_type TEXT DEFAULT 'unlabeled'"); } catch { /* 已存在 */ }
 
   const v = db.prepare("SELECT MAX(version) as v FROM _schema").get()?.v || 0;
   if (v < SCHEMA_VERSION) {
