@@ -5,7 +5,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 
 const STAGE_LABEL = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
-const STATUS_LABEL = { '已触达': '已触达', '有回复': '有回复', '自动回复': '自动回复', '': '未触达' };
+const STATUS_LABEL = { reached: '已触达', replied: '有回复', autoreply: '自动回复', '': '未触达' };
 
 function exportAll() {
   const wb = XLSX.utils.book_new();

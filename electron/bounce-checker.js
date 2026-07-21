@@ -496,6 +496,8 @@ function imapCheck(cfg, senderEmail, effectiveKw, apiKey) {
             for (const { headers, body } of messages) {
               const subj = (headers.match(/Subject: (.+)/i) || [])[1] || '';
               const decodedSubj = decodeMimeHeader(subj).trim();
+              // ponytail: 跳过正常邮件回复，退信通知不会用 RE:/RES:/FWD: 等前缀
+              if (/^(RE|RES|ENC|FWD|RV|AW|WG|R|SV|VS|ODP|YNT):\s/i.test(decodedSubj)) continue;
               // 本地关键词匹配（标题 + 正文前 500 字）
               const bodySnippet2 = body.slice(0, 1000);
               if (!effectiveKw.some(kw => decodedSubj.toLowerCase().includes(kw.toLowerCase()) || bodySnippet2.toLowerCase().includes(kw.toLowerCase()))) continue;

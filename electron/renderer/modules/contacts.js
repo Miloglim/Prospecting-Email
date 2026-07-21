@@ -611,7 +611,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     }
     totalCompanies = seen.size;
   }
-  const tagCounts = { reached: 0, '已触达':0 };
+  const tagCounts = { reached: 0 };
   for (const c of S.contactsData) {
     for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
   }
@@ -626,7 +626,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     direct: `直客 ${clientCounts.direct || 0}`,
     unlabeled: `未标签 ${clientCounts.unlabeled || 0}`,
     anomaly: `⚠️ 异常 ${anomalyCount}`,
-    'tag:reached': `已触达 ${(tagCounts.reached||0) + (tagCounts['已触达']||0)}`,
+    'tag:reached': `已触达 ${tagCounts.reached||0}`,
     has_phone: `有电话 ${S.contactsData.filter(c => c.phone && c.phone.trim()).length}`,
     archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
   };
@@ -686,7 +686,7 @@ export function renderContactDetail(company) {
   // ── 构建列头和数据单元格 ──────────────────────────────────────────
   const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
   const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
-  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', '已触达':'已触达', '有回复':'有回复', '自动回复':'自动回复' };
+  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复' };
 
   const _th = (col, isExtra) => {
     const style = isExtra ? 'color:#999;font-weight:400' : '';
@@ -714,7 +714,7 @@ export function renderContactDetail(company) {
       case '_status': {
         const v = m._status || '';
         const label = STATUS_LABEL[v] || '未触达';
-        const DOT = { '已触达':'#3b82f6', '有回复':'#22a644', '自动回复':'#e6a817' };
+        const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817' };
         const dot = DOT[v] || 'var(--text-secondary)';
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
@@ -732,8 +732,8 @@ export function renderContactDetail(company) {
           'reaching','触达中','quoting','报价中',
           'trial','试单','cooperating','合作中','lost','已流失'
         ]);
-        const statusReplied = m._status === 'replied' || m._status === '有回复';
-        const statusAutoreply = m._status === 'autoreply' || m._status === '自动回复';
+        const statusReplied = m._status === 'replied';
+        const statusAutoreply = m._status === 'autoreply';
         const inPipeline = statusReplied || statusAutoreply || (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
         if (inPipeline) {
           return `<td><span class="followup-btn followup-pipeline" data-id="${m.id}" data-pipeline="1" style="font-size:11px;cursor:pointer;color:var(--text);font-weight:600">备注</span></td>`;
@@ -1001,7 +1001,7 @@ export function renderContactDetail(company) {
     country: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'],
     client_type: ['agent','direct','unlabeled'],
     stage: ['cold','f1','f2','f3','f4'],
-    _status: ['', '已触达','有回复','自动回复'],
+    _status: ['', 'reached','replied','autoreply'],
   };
 
   const INPUT_STYLE = 'min-width:140px;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
@@ -1040,7 +1040,7 @@ export function renderContactDetail(company) {
         if (selType === 'stage') {
           td.textContent = labels[val] || val;
         } else if (selType === '_status') {
-          const dotColors = { '已触达':'#3b82f6', reached:'#3b82f6', '有回复':'#22a644', replied:'#22a644', '自动回复':'#e6a817', autoreply:'#e6a817' };
+          const dotColors = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817' };
           const dot = dotColors[val] || 'var(--text-secondary)';
           td.innerHTML = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${labels[val] || val}</span>`;
         } else {

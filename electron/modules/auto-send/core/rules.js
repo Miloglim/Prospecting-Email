@@ -17,10 +17,10 @@ const DEFAULT_RULES = {
 // ── 常量 ─────────────────────────────────────────────────────────────────────
 
 /** 禁止自动发送的 _status 值（中英文） */
-const SKIP_STATUSES = new Set(['已触达','reached','有回复','replied','自动回复','autoreply']);
+const SKIP_STATUSES = new Set(['reached','replied','autoreply']);
 
 /** 禁止自动发送的 tags 值 */
-const SKIP_TAGS = new Set(['已触达','reached']);
+const SKIP_TAGS = new Set(['reached']);
 
 /** 阶段顺序（用于下一阶段推导） */
 const STAGE_ORDER = ["cold", "f1", "f2", "f3", "f4"];

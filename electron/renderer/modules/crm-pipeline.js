@@ -31,7 +31,8 @@ export async function initCrmPipeline() {
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
 
   window.electronAPI.onCrmChanged(() => refreshPipeline());
-  window.electronAPI.onContactsChanged(() => refreshPipeline());
+  // 切回 CRM 页面时自动刷新，捕捉 inbox 自动收件带来的状态变化
+  window.__pageHandlers['crm'] = () => refreshPipeline();
   setInterval(() => checkReminders(), 5 * 60 * 1000);
   checkReminders();
 }
@@ -117,11 +118,16 @@ function renderStage(col) {
 function renderContact(c, stageKey, label, color) {
   const reminder = c._extra?.crmReminder;
   const nextAt = reminder?.nextFollowupAt;
-  let timeHtml = '';
+  let noteHtml = c.last_note_at
+    ? `<span class="crm-time" title="最后跟进: ${fmtDT(c.last_note_at)}">📝 ${daysAgo(c.last_note_at)}</span>`
+    : '<span class="crm-time" style="color:var(--text-secondary)">—</span>';
+  let nextHtml = '';
   if (nextAt) {
     const t = new Date(nextAt).getTime();
-    const cls = t <= Date.now() ? 'overdue' : t <= Date.now() + 24*3600*1000 ? 'soon' : '';
-    timeHtml = `<span class="crm-time ${cls}">${t <= Date.now() ? '⏰ 逾期' : '⏰ ' + fmtDate(nextAt)}</span>`;
+    const overdue = t <= Date.now();
+    const soon = !overdue && t <= Date.now() + 24*3600*1000;
+    const cls = overdue ? 'overdue' : soon ? 'soon' : '';
+    nextHtml = `<span class="crm-time ${cls}" title="下次跟进: ${fmtDT(nextAt)}">${overdue ? '⏰ 逾期'+daysAgo(nextAt).replace('今天','') : '⏰ '+daysUntil(nextAt)}</span>`;
   }
   const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
 
@@ -130,7 +136,7 @@ function renderContact(c, stageKey, label, color) {
       <span class="crm-contact-name">${escapeHtml(name)}</span>
       <span class="crm-contact-co">${escapeHtml(c.company || '—')}</span>
       <span class="crm-contact-ctry">${escapeHtml(c.country || '')}</span>
-      ${timeHtml}
+      ${noteHtml}${nextHtml}
       <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stageKey}" style="background:${color}18;color:${color}">${label}</span>
     </div>`;
 }
@@ -178,7 +184,7 @@ async function openDetailPanel(contactId) {
   const panel = document.getElementById('crm-detail-panel');
   if (!panel) return;
   panel.style.display = 'flex';
-  panel.innerHTML = `<div class="crm-detail-loading">${lucide('loader-2',16,'spin')} 加载中...</div>`;
+  panel.innerHTML = `<div class="crm-detail-loading">${lucide('loader',16,'spin')} 加载中...</div>`;
 
   const r = await window.electronAPI.crmGetDetail(contactId);
   if (!r.ok) { panel.innerHTML = `<div class="crm-detail-error">${escapeHtml(r.error)}</div>`; return; }
@@ -199,7 +205,7 @@ async function openDetailPanel(contactId) {
       <div class="crm-tab-content${_currentTab==='info'?' active':''}" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content${_currentTab==='prefs'?' active':''}" data-content="prefs">${prefsTab(contactId,prefs)}</div>
       <div class="crm-tab-content${_currentTab==='followup'?' active':''}" data-content="followup">${followupTab(contactId, reminder, notes, interactions)}</div>
-      <div class="crm-tab-content${_currentTab==='emails'?' active':''}" data-content="emails"><div class="crm-detail-loading" style="padding:20px">${lucide('loader-2',14,'spin')} 加载中...</div></div>
+      <div class="crm-tab-content${_currentTab==='emails'?' active':''}" data-content="emails"><div class="crm-detail-loading" style="padding:20px">${lucide('loader',14,'spin')} 加载中...</div></div>
     </div>`;
 
   let _emailsLoaded = false;
@@ -301,6 +307,7 @@ async function openDetailPanel(contactId) {
     if (r3.ok) {
       panel.querySelector('#crm-record-content').value = '';
       showToast('已保存','ok');
+      refreshPipeline();
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
@@ -317,6 +324,7 @@ async function openDetailPanel(contactId) {
       if (!await showConfirm('删除该记录？')) return;
       await window.electronAPI.deleteNote(del.dataset.noteId);
       showToast('已删除','ok');
+      refreshPipeline();
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
@@ -397,7 +405,7 @@ function prefsTab(cid, prefs) {
     <div class="crm-field-row"><label>价格敏感度</label>${sel('priceSensitivity',['高','中','低'],prefs.priceSensitivity)}</div>
     <div class="crm-field-row"><label>偏好港口</label><input class="crm-pref-input" data-pref-key="preferredPorts" value="${escapeHtml(prefs.preferredPorts||'')}" placeholder="上海/宁波"></div>
     <div class="crm-field-row"><label>年货量</label>${sel('annualVolume',['<100TEU','100-500TEU','500-2000TEU','>2000TEU'],prefs.annualVolume)}</div>
-    <div class="crm-field-row"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" rows="3" placeholder="自由备注...">${escapeHtml(prefs.memo||'')}</textarea></div>`;
+    <div class="crm-field-row crm-field-row-memo"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" placeholder="自由备注..." style="width:100%;flex:1;resize:none;font-size:13px;line-height:1.5">${escapeHtml(prefs.memo||'')}</textarea></div>`;
 }
 
 function followupTab(cid, reminder, notes, interactions) {
@@ -411,7 +419,7 @@ function followupTab(cid, reminder, notes, interactions) {
         📝 ${fmtDT(i.time)}
         <span class="crm-note-actions">
           <span class="crm-note-edit" data-note-id="${i.id}" title="编辑">${lucide('pencil',11)}</span>
-          <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash-2',11)}</span>
+          <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash',11)}</span>
         </span>
       </div>
       <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.content||'')}</div>
@@ -475,6 +483,8 @@ async function checkReminders() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 function fmtDate(i) { try { const d=new Date(i); return `${d.getMonth()+1}/${d.getDate()}`; } catch { return ''; } }
+function daysAgo(i) { try { const diff=Math.floor((Date.now()-new Date(i).getTime())/86400000); return diff<=0?'今天':diff===1?'1天前':`${diff}天前`; } catch { return ''; } }
+function daysUntil(i) { try { const diff=Math.floor((new Date(i).getTime()-Date.now())/86400000); return diff<=0?'今天':diff===1?'1天后':`${diff}天后`; } catch { return ''; } }
 function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return i||''; } }
 function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch { return false; } }
 function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
@@ -548,6 +558,7 @@ function rebindFollowupEvents(panel, contactId) {
       if (!await showConfirm('删除该记录？')) return;
       await window.electronAPI.deleteNote(del.dataset.noteId);
       showToast('已删除','ok');
+      refreshPipeline();
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');

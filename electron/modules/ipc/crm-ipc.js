@@ -45,6 +45,7 @@ function register(ipcMain, deps) {
     try {
       if (!contactId || !content) return { ok: false, error: "参数缺失" };
       const result = crmService.saveNote(contactId, content);
+      if (result.ok) deps.mainWindow?.webContents.send(IPC.CRM.CHANGED, { contactId });
       return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
     } catch (e) { return { ok: false, error: e.message }; }
   });

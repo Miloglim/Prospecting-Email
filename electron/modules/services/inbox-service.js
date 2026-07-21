@@ -32,7 +32,7 @@ function _logInboxInteractions(newMails) {
         if (c) contactId = c.id;
       }
       if (!contactId) continue;
-      const itype = m.type === 'bounce' ? 'bounced' : m.type === 'reply' ? 'received' : m.type === 'auto-reply' ? 'received' : 'noted';
+      const itype = m.type === 'bounce' ? 'bounced' : m.type === 'replied' ? 'received' : m.type === 'autoreply' ? 'received' : 'noted';
       interactionsDb.add({
         contact_id: contactId,
         company_id: m.contactId || '',
@@ -112,7 +112,7 @@ function _classify(subject, from, bodySnippet) {
   const b = (bodySnippet || '').toLowerCase();
 
   // 0. 自动回复优先检测（必须在 reply 之前，因为自动回复标题也常带 Re:）
-  if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'auto-reply';
+  if (kw.auto_reply.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'autoreply';
 
   // 1. 退信
   // 1a. 标题含退信关键词
@@ -126,10 +126,10 @@ function _classify(subject, from, bodySnippet) {
   if (kw.bounce_left.some(k => b.includes(k))) return 'bounce';
 
   // 2. 回复/转发标题 → 回复
-  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'reply';
+  if (kw.reply_prefix.some(k => s.startsWith(k))) return 'replied';
 
   // 3. 询盘关键词
-  if (kw.inquiry.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'reply';
+  if (kw.inquiry.some(k => s.includes(k) || b.slice(0, 500).includes(k))) return 'replied';
 
   // 4. 其余
   return 'other';
@@ -213,7 +213,14 @@ const CACHE_PATH_JSON = CACHE_PATH;
 function _readCache() {
   try {
     const { getDb } = require('./db');
-    const rows = getDb().prepare('SELECT * FROM inbox ORDER BY important DESC, date DESC LIMIT 500').all();
+    const db = getDb();
+    // 一次性迁移：将旧 type 值更新为新值
+    if (!_readCache._migrated) {
+      _readCache._migrated = true;
+      db.prepare("UPDATE inbox SET type='replied' WHERE type='reply'").run();
+      db.prepare("UPDATE inbox SET type='autoreply' WHERE type='auto-reply'").run();
+    }
+    const rows = db.prepare('SELECT * FROM inbox ORDER BY important DESC, date DESC LIMIT 500').all();
     return rows.map(r => {
       try { r.contactTags = JSON.parse(r.contact_tags || '[]'); } catch { r.contactTags = []; }
       try { r.matchedContacts = JSON.parse(r.matched_contacts || '[]'); } catch { r.matchedContacts = []; }
@@ -224,6 +231,9 @@ function _readCache() {
       r.contactDbId = r.contact_db_id;
       r.accountId = r.account_id;
       r.accountLabel = r.account_label;
+      // 迁移旧 type 值
+      if (r.type === 'reply') r.type = 'replied';
+      else if (r.type === 'auto-reply') r.type = 'autoreply';
       return r;
     });
   } catch { return []; }
@@ -302,13 +312,13 @@ function _syncTagsToContacts(newMails) {
       addByEmail(c.email);
     }
     for (const id of ids) {
-      if (m.type === 'reply') {
-        contactsDb.update(id, { _status: '有回复' });
+      if (m.type === 'replied') {
+        contactsDb.update(id, { _status: 'replied' });
         synced++;
-      } else if (m.type === 'auto-reply') {
+      } else if (m.type === 'autoreply') {
         const ct = contactsDb.getById(id);
-        if (!ct._status || ct._status === '自动回复' || ct._status === 'autoreply') {
-          contactsDb.update(id, { _status: '自动回复' });
+        if (!ct._status || ct._status === 'autoreply') {
+          contactsDb.update(id, { _status: 'autoreply' });
           synced++;
         }
       } else if (m.type === 'bounce') {
@@ -321,7 +331,7 @@ function _syncTagsToContacts(newMails) {
   if (synced > 0) Log.info('[收件箱]', `标签同步: ${synced} 个联系人 · 退信 ${bounceContacts} 人`);
 
   // 累加回复计数（按邮件封数，非匹配联系人数）
-  const replyN = newMails.filter(m => m.type === 'reply').length;
+  const replyN = newMails.filter(m => m.type === 'replied').length;
   if (replyN > 0) {
     try {
       const { _incrementReplyCount } = require('./reply-checker');
@@ -354,7 +364,7 @@ async function _parseRaw(rawSource, uid, accountId) {
     }
     // 匹配到联系人的 unknown 邮件升级为 reply；已分类为 bounce/auto-reply 的不覆盖
     const hasMatch = contact || (matchedContacts || []).some(c => c.matched);
-    if (hasMatch && type === 'other') type = 'reply';
+    if (hasMatch && type === 'other') type = 'replied';
 
     let body = parsed.html || parsed.text || '';
     // mailparser 解析失败时用 raw 原文兜底，防止正文完全空白
@@ -826,7 +836,7 @@ function toggleImportantByKey(mailKey) {
   }
 }
 function setMailType(index, newType) {
-  const VALID_TYPES = ['bounce', 'reply', 'auto-reply', 'other'];
+  const VALID_TYPES = ['bounce', 'replied', 'autoreply', 'other'];
   if (!VALID_TYPES.includes(newType)) return false;
   const mails = _readCache();
   if (!mails[index]) return false;
@@ -848,10 +858,10 @@ function setMailType(index, newType) {
     addByEmail(m.from);
     for (const c of (m.matchedContacts || [])) addByEmail(c.email);
     for (const id of ids) {
-      if (newType === 'reply') {
-        contactsDb.update(id, { _status: '有回复', is_bounced: false });
-      } else if (newType === 'auto-reply') {
-        contactsDb.update(id, { _status: '自动回复', is_bounced: false });
+      if (newType === 'replied') {
+        contactsDb.update(id, { _status: 'replied', is_bounced: false });
+      } else if (newType === 'autoreply') {
+        contactsDb.update(id, { _status: 'autoreply', is_bounced: false });
       } else if (newType === 'bounce') {
         contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
       } else if (newType === 'other') {
@@ -864,7 +874,7 @@ function setMailType(index, newType) {
 
 // ponytail: 联系人 _status → 收件箱 type 反向同步
 // 当联系人的 _status 被手动修改时，同步更新所有匹配邮件的 type
-const STATUS_TO_TYPE = { '有回复': 'reply', '自动回复': 'auto-reply' };
+const STATUS_TO_TYPE = { 'replied': 'replied', 'autoreply': 'autoreply' };
 function syncMailTypeByContactEmail(email, newStatus) {
   const newType = STATUS_TO_TYPE[newStatus];
   if (!newType) return; // 只处理有回复/自动回复，其他状态不改变 inbox type

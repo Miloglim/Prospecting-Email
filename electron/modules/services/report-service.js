@@ -60,7 +60,7 @@ async function generate(aiFn) {
   let reachedCount = 0;
   try {
     const r = db.prepare(
-      "SELECT COUNT(*) as n FROM contacts WHERE _status IN ('已触达','reached') OR tags LIKE '%已触达%' OR tags LIKE '%reached%'"
+      "SELECT COUNT(*) as n FROM contacts WHERE _status = 'reached' OR tags LIKE '%reached%'"
     ).get();
     reachedCount = r?.n || 0;
   } catch { /* 降级 */ }

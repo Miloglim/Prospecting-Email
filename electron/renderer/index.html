@@ -145,16 +145,24 @@
   <!-- ========== 左侧导航 ========== -->
   <nav id="sidebar">
     <div class="nav-brand"><span class="nav-subtitle">Milogin's</span><h1>Prospector .</h1></div>
-    <ul class="nav-list">
+    <!-- 仪表盘：独立 -->
+    <ul class="nav-group">
       <li class="nav-item active" data-page="dashboard"><span class="nav-icon" data-icon="dashboard"></span> 仪表盘</li>
+    </ul>
+    <!-- 高频 -->
+    <ul class="nav-group">
       <li class="nav-item" data-page="inbox"><span class="nav-icon" data-icon="inbox"></span> 收件箱<span class="nav-dot" id="inbox-nav-dot"></span></li>
-      <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
       <li class="nav-item" data-page="contacts"><span class="nav-icon" data-icon="users"></span> 联系人</li>
       <li class="nav-item" data-page="crm"><span class="nav-icon" data-icon="user-check"></span> 客户跟进<span class="nav-dot" id="crm-nav-dot"></span></li>
+    </ul>
+    <!-- 中频 -->
+    <ul class="nav-group">
       <li class="nav-item" data-page="email-send"><span class="nav-icon" data-icon="send"></span> 邮件发送</li>
       <li class="nav-item" data-page="queue"><span class="nav-icon" data-icon="list-checks"></span> 发送队列</li>
-      <!-- <li class="nav-item" data-page="auto-send"><span class="nav-icon" data-icon="radio-tower"></span> 自动发送</li> -->
       <li class="nav-item" data-page="history"><span class="nav-icon" data-icon="file-text"></span> 发送总览</li>
+    </ul>
+    <!-- 低频 -->
+    <ul class="nav-group">
       <li class="nav-item nav-parent">
         <span class="nav-icon" data-icon="mail"></span> 邮件工坊 <span class="nav-arrow" data-icon="chevron-down"></span>
       </li>
@@ -162,12 +170,13 @@
       <li class="nav-sub" data-page="signature"><span class="nav-icon" data-icon="pencil"></span> 签名管理</li>
       <li class="nav-sub" data-page="template-preview"><span class="nav-icon" data-icon="eye"></span> 模板预览</li>
       <li class="nav-sub" data-page="backcheck"><span class="nav-icon" data-icon="search"></span> 背调详情</li>
-      <!-- <li class="nav-sub" data-page="discover"><span class="nav-icon" data-icon="globe"></span> 客户开发</li> -->
+      <li class="nav-item" data-page="clients"><span class="nav-icon" data-icon="file-spreadsheet"></span> 导入客户</li>
     </ul>
     <ul class="nav-bottom">
       <li class="nav-item" data-page="settings"><span class="nav-icon" data-icon="settings"></span> 设置</li>
     </ul>
     <div class="nav-footer"><span class="nav-version" id="nav-version">v2.6.0</span></div>
+
   </nav>
 
   <!-- ========== 右侧内容区 ========== -->
@@ -646,8 +655,8 @@
             <div class="inbox-filter-row">
               <button class="inbox-filter-btn active" data-filter="all">全部<span class="filter-badge"></span></button>
               <button class="inbox-filter-btn" data-filter="important"><span class="filter-dot" style="color:#e6a817">★</span> 重要<span class="filter-badge"></span></button>
-              <button class="inbox-filter-btn" data-filter="reply"><span class="filter-dot" style="color:#22a644">●</span> 回复<span class="filter-badge"></span></button>
-              <button class="inbox-filter-btn" data-filter="auto-reply"><span class="filter-dot" style="color:#e6a817">●</span> 自动回复<span class="filter-badge"></span></button>
+              <button class="inbox-filter-btn" data-filter="replied"><span class="filter-dot" style="color:#22a644">●</span> 回复<span class="filter-badge"></span></button>
+              <button class="inbox-filter-btn" data-filter="autoreply"><span class="filter-dot" style="color:#e6a817">●</span> 自动回复<span class="filter-badge"></span></button>
               <button class="inbox-filter-btn" data-filter="bounce"><span class="filter-dot" style="color:#e5484d">●</span> 退信<span class="filter-badge"></span></button>
               <button class="inbox-filter-btn" data-filter="other"><span class="filter-dot" style="color:#8b8b8b">●</span> 其他<span class="filter-badge"></span></button>
             </div>

@@ -30,8 +30,8 @@ function _saveViewedKeys() {
 const _viewedKeys = _loadViewedKeys();
 let _initialLoadDone = false;
 
-const TYPE_LABELS = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
-const TYPE_DOT = { bounce: '#e5484d', reply: '#22a644', 'auto-reply': '#e6a817', other: '#8b8b8b' };
+const TYPE_LABELS = { bounce: '退信', replied: '回复', autoreply: '自动回复', other: '其他' };
+const TYPE_DOT = { bounce: '#e5484d', replied: '#22a644', autoreply: '#e6a817', other: '#8b8b8b' };
 
 export async function initInbox() {
   // 进入收件箱 → 消红点
@@ -177,14 +177,14 @@ function _showContextMenu(x, y, m, idx) {
   const isImportant = m.important;
   const hasMatched = m.contactCompany || (m.matchedContacts || []).some(c => c.matched);
   const curType = m.type || 'other';
-  const TYPE_LABEL = { bounce: '退信', reply: '回复', 'auto-reply': '自动回复', other: '其他' };
+  const TYPE_LABEL = { bounce: '退信', replied: '回复', autoreply: '自动回复', other: '其他' };
   const selCount = _selectedSet.size;
   menu.innerHTML = `
     <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="important" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${isImportant ? '取消重要' : '标记重要'}</div>
     <div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="read" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">一键已读</div>
     ${hasMatched ? `<div style="padding:6px 14px;cursor:pointer;white-space:nowrap" data-action="del-matched" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">删除匹配联系人</div>` : ''}
     <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-    ${['bounce','reply','auto-reply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
+    ${['bounce','replied','autoreply','other'].filter(t => t !== curType).map(t => `<div style="padding:6px 14px 6px 24px;cursor:pointer;white-space:nowrap;color:${TYPE_DOT[t]}" data-action="set-type" data-type="${t}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">● 设为 ${TYPE_LABEL[t]}</div>`).join('')}
     <div style="border-top:1px solid var(--border);margin:4px 0"></div>
     <div style="padding:4px 14px;color:var(--text-secondary);font-size:10px">联系人标签</div>
     ${TAG_OPTIONS.map(t => `<div style="padding:4px 14px 4px 24px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px" data-action="set-tag" data-tag="${t.val}" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${t.label}</div>`).join('')}
@@ -340,15 +340,15 @@ function renderInbox() {
   filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
   // 统计
-  const counts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
-  const newCounts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
+  const counts = { bounce: 0, replied: 0, autoreply: 0, other: 0 };
+  const newCounts = { bounce: 0, replied: 0, autoreply: 0, other: 0 };
   _mails.forEach(m => {
     if (counts[m.type] !== undefined) counts[m.type]++;
     const mkey = `${m.accountId}|${m.uid}|${m.from}|${m.subject}`;
     if (!_viewedKeys.has(mkey)) newCounts[m.type]++;
   });
   if (countEl) {
-    let html = `共 ${_mails.length} 封 · 退信 ${counts.bounce} · 回复 ${counts.reply} · 自动回复 ${counts['auto-reply']} · 其他 ${counts.other}`;
+    let html = `共 ${_mails.length} 封 · 退信 ${counts.bounce} · 回复 ${counts.replied} · 自动回复 ${counts['autoreply']} · 其他 ${counts.other}`;
     // 分账号计数：直接从 _mails 聚合，任何时候都准确
     const acctCounts = {};
     for (const m of _mails) {
@@ -611,7 +611,7 @@ async function renderDetail() {
 }
 
 function _updateBadges(newCounts) {
-  ['important','reply','auto-reply','bounce','other'].forEach(type => {
+  ['important','replied','autoreply','bounce','other'].forEach(type => {
     const badge = document.querySelector(`#inbox-filter .inbox-filter-btn[data-filter="${type}"] .filter-badge`);
     if (badge) {
       const n = type === 'important' ? _mails.filter(m => m.important && !_viewedKeys.has(`${m.accountId}|${m.uid}|${m.from}|${m.subject}`)).length : newCounts[type];
@@ -624,7 +624,7 @@ function _updateBadges(newCounts) {
 function _updateBadgesAfterView(mkey) {
   const m = _mails.find(m => `${m.accountId}|${m.uid}|${m.from}|${m.subject}` === mkey);
   if (!m) return;
-  const newCounts = { bounce: 0, reply: 0, 'auto-reply': 0, other: 0 };
+  const newCounts = { bounce: 0, replied: 0, autoreply: 0, other: 0 };
   _mails.forEach(m2 => {
     const k = `${m2.accountId}|${m2.uid}|${m2.from}|${m2.subject}`;
     if (!_viewedKeys.has(k) && newCounts[m2.type] !== undefined) newCounts[m2.type]++;

@@ -119,9 +119,9 @@ async function _aiAsk(prompt, maxTokens) {
 // 关键词快速匹配
 function _classifyByKeyword(subject) {
   const s = (subject || '').toLowerCase();
-  if (_effIndicators.some(kw => s.startsWith(kw))) return 'reply';
+  if (_effIndicators.some(kw => s.startsWith(kw))) return 'replied';
   if (_effBounceKws.some(kw => s.includes(kw))) return 'bounce';
-  if (_effAutoReplyKws.some(kw => s.includes(kw))) return 'auto-reply';
+  if (_effAutoReplyKws.some(kw => s.includes(kw))) return 'autoreply';
   return '';
 }
 
@@ -138,7 +138,7 @@ async function classifySubject(subject, bodySnippet) {
     const prompt = '分析这封邮件，只返回一个词：reply（客户回复/询价/订单）、bounce（退信/投递失败/邮箱不存在）、auto-reply（自动回复/休假/OOO）、other（以上都不是）。\n\n' +
       '主题：' + (subject || '') + '\n正文：' + (bodySnippet || '').slice(0, 800);
     const answer = await _aiAsk(prompt, 20);
-    if (['reply', 'bounce', 'auto-reply', 'other'].includes(answer)) return answer;
+    if (['replied', 'bounce', 'autoreply', 'other'].includes(answer)) return answer;
   }
 
   return 'other';
@@ -461,12 +461,12 @@ function getReplyCount() {
 }
 
 // ── 应用回复标记（由 IPC 层调用）───────────────────────────────────────────
-// 只标记 type === 'reply' 的邮件到联系人（auto-reply 不标记）
+// 只标记 type === 'replied' 的邮件到联系人（auto-reply 不标记）
 function applyReplies(replies) {
   if (!replies?.length) return { matched: 0 };
 
   // 只处理真实回复，跳过自动回复
-  const realReplies = replies.filter(r => r.type === 'reply');
+  const realReplies = replies.filter(r => r.type === 'replied');
   if (!realReplies.length) return { matched: 0 };
 
   const contactsDb = require('./contacts-db');
@@ -477,7 +477,7 @@ function applyReplies(replies) {
     const contact = contactsDb.getByEmail(key);
     if (contact) {
       // ponytail: 写 _status 标记已回复（不再用 tags）
-      contactsDb.update(contact.id, { _status: '有回复', is_bounced: false });
+      contactsDb.update(contact.id, { _status: 'replied', is_bounced: false });
       matched++;
     }
   }

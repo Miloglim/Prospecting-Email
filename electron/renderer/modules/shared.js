@@ -322,18 +322,16 @@ export function groupByCompany(data){const g={};for(const c of data){const k=c.c
 // 统一入口：所有入队路径（手动/背调/月度报告/自动发送）必须经过此判定
 
 /** 禁止发送的 _status 值（中英文） */
-const SKIP_STATUSES = new Set(['已触达','reached','有回复','replied','自动回复','autoreply']);
+const SKIP_STATUSES = new Set(['reached','replied','autoreply']);
 
 /** 禁止发送的 tags 值 */
-const SKIP_TAGS = new Set(['已触达','reached']);
+const SKIP_TAGS = new Set(['reached']);
 
 /** 跳过原因 → 中文展示标签 */
 const SKIP_LABEL = {
   noEmail: '无邮箱', bounced: '已退信',
-  'status:已触达': '已触达', 'status:reached': '已触达',
-  'status:有回复': '有回复', 'status:replied': '有回复',
-  'status:自动回复': '自动回复', 'status:autoreply': '自动回复',
-  'tags:已触达': '标签:已触达', 'tags:reached': '标签:已触达',
+  'status:reached': '已触达', 'status:replied': '有回复', 'status:autoreply': '自动回复',
+  'tags:reached': '标签:已触达',
 };
 
 /**

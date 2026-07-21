@@ -39,9 +39,9 @@ function initContextMenu() {
       if (tag === 'none') {
         await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '' });
       } else if (tag === 'autoreply') {
-        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '自动回复' });
+        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: 'autoreply' });
       } else if (tag === 'replied') {
-        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: '有回复' });
+        await window.electronAPI.upsertContact({ id: contact.id, email: contact.email, _status: 'replied' });
       }
       showToast(`${escapeHtml(email)} → ${tag === 'none' ? '清除状态' : tag === 'autoreply' ? '自动回复' : '客户回复'}`, 'ok');
       renderReplyList();
@@ -154,7 +154,7 @@ async function renderReplyListFromData(items) {
   }
 
   // 排序：已匹配优先 → 同状态内 reply > bounce > auto-reply > other
-  const TYPE_ORDER = { reply: 0, bounce: 1, 'auto-reply': 2, other: 3 };
+  const TYPE_ORDER = { replied: 0, bounce: 1, autoreply: 2, other: 3 };
   const sortedGroups = Object.entries(grouped).sort(([a, ra], [b, rb]) => {
     const ma = !!contactMap[a.toLowerCase().trim()];
     const mb = !!contactMap[b.toLowerCase().trim()];
@@ -167,7 +167,7 @@ async function renderReplyListFromData(items) {
   const TYPE_DEF = {
     reply:      { cls: 'reply-tag-client', icon: 'corner-up-left', text: '客户回复' },
     bounce:     { cls: 'reply-tag-bounce', icon: 'alert-circle',    text: '退信' },
-    'auto-reply': { cls: 'reply-tag-auto', icon: 'bot',             text: '自动回复' },
+    'autoreply': { cls: 'reply-tag-auto', icon: 'bot',             text: '自动回复' },
     other:      { cls: 'reply-tag-other',  icon: 'help-circle',     text: '其他' },
   };
 

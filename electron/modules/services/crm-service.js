@@ -6,11 +6,21 @@ const interactionsDb = require("./interactions-db");
 const { getDb } = require("./db");
 const { Log } = require("../core/logger");
 
+// ── CRM 邮件本地缓存（独立于 inbox，永久保留）────────────────────────────
+function _ensureEmailCache() {
+  getDb().exec(`CREATE TABLE IF NOT EXISTS crm_email_cache (
+    account_id TEXT NOT NULL, uid TEXT NOT NULL,
+    subject TEXT, from_addr TEXT, from_name TEXT, date TEXT, body TEXT,
+    cached_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, uid)
+  )`);
+}
+
 // ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
 
 const TAG = {
   // ponytail: replied/autoreply/bounced 已迁移到 _status 字段，tags 只保留CRM管线标签
-  reached:     { key: "reached",     label: "已触达",   color: "#3b82f6", alias: ["已触达"] },
+  reached:     { key: "reached",     label: "已触达",   color: "#3b82f6", alias: [] },
   quoting:     { key: "quoting",     label: "报价中",   color: "#2196f3", alias: ["报价中"] },
   trial:       { key: "trial",       label: "试单",     color: "#8e24aa", alias: ["试单"] },
   cooperating: { key: "cooperating", label: "合作中",   color: "#4caf50", alias: ["合作中"] },
@@ -58,7 +68,8 @@ function listPipeline(filters = {}) {
             c.phone, c.linkedin, c.contact_name,
             c.client_type, c.stage, c.tags, c._status,
             c._extra, c.last_sent_at,
-            co.name as company_name, co.country as company_country, co.website as company_website
+            co.name as company_name, co.country as company_country, co.website as company_website,
+            (SELECT MAX(cn.created_at) FROM contact_notes cn WHERE cn.contact_id = c.id) as last_note_at
      FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
      WHERE ${where}
      ORDER BY c.last_sent_at DESC`
@@ -67,10 +78,10 @@ function listPipeline(filters = {}) {
   // 入口筛选：_status 为 replied/reached，或 tags 含 reached，或已有管线标签
   const isEntry = (row) => {
     // 自动回复硬排除：即使有管线标签也不进管道
-    if (row._status === 'autoreply' || row._status === '自动回复') return false;
+    if (row._status === 'autoreply') return false;
     const tags = row.tags || [];
     // 门票：replied（来自 _status，兼容中英文）
-    if (row._status === 'replied' || row._status === '有回复') return true;
+    if (row._status === 'replied') return true;
     if (tags.some(x => TAG.reached.key === x || (TAG.reached.alias || []).includes(x))) return true;
     // 已有管线阶段标签的直接进
     if (tags.some(x => PIPELINE_KEYS.some(k => x === k || Object.values(TAG).find(t => t.key === k)?.alias?.includes(x)))) return true;
@@ -245,7 +256,14 @@ function getContactEmails(contactId) {
 
 function getEmailBody(uid, accountId) {
   if (!uid) return { ok: false, error: "参数缺失" };
+  _ensureEmailCache();
   const db = getDb();
+
+  // 1. 先查本地永久缓存
+  const cached = db.prepare("SELECT subject, from_addr, from_name, date, body FROM crm_email_cache WHERE uid = ? AND account_id = ?").get(uid, accountId || '');
+  if (cached) return { ok: true, data: cached };
+
+  // 2. 缓存未命中 → 查 inbox
   let row;
   if (accountId) {
     row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? AND account_id = ?").get(uid, accountId);
@@ -254,6 +272,13 @@ function getEmailBody(uid, accountId) {
     row = db.prepare("SELECT subject, from_addr, from_name, date, body, type FROM inbox WHERE uid = ? LIMIT 1").get(uid);
   }
   if (!row) return { ok: false, error: "邮件不存在" };
+
+  // 3. 写入永久缓存（异步，不阻塞返回）
+  try {
+    db.prepare("INSERT OR IGNORE INTO crm_email_cache (account_id, uid, subject, from_addr, from_name, date, body, cached_at) VALUES (?,?,?,?,?,?,?,?)").run(
+      accountId || '', uid, row.subject, row.from_addr, row.from_name, row.date, row.body, new Date().toISOString());
+  } catch { /* 缓存写入失败不影响主流程 */ }
+
   return { ok: true, data: row };
 }
 
