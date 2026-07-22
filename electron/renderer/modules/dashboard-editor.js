@@ -6,7 +6,7 @@ const ALIGN = 3;              // 对齐阈值
 const MIN_W = 120, MIN_H = 60;
 const STORAGE_KEY = 'dashboard-layout';
 const RESIZE_HANDLES = ['nw','n','ne','e','se','s','sw','w'];
-const LAYOUT_VERSION = 4;
+const LAYOUT_VERSION = 5;
 
 // 预设布局：x, y, w, h 均为像素值（基于 ~1000px 宽容器）
 const W = 998;
