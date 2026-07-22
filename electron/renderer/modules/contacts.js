@@ -1135,8 +1135,8 @@ export function renderContactDetail(company) {
         }
       }
       if (S.selectedContactCompany) renderContactDetail(S.selectedContactCompany);
-      // 刷新列表以更新异常等筛选视图
-      renderContactsList();
+      // 只刷新当前行，避免全表重建（几百行时极卡）
+      CS.syncContactsUI();
     };
     input.addEventListener('blur', save);
     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); save(); } if (ev.key === 'Escape') { input.remove(); restore(); } });

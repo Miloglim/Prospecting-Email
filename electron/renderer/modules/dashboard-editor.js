@@ -121,7 +121,7 @@ function applyLayout(layout) {
 
 // ── 编辑模式 ────────────────────────────────────────────────────────────────
 
-export function toggleEdit() { _editing ? exitEdit() : enterEdit(); }
+export function toggleEdit() { /* 编辑功能已禁用 */ }
 
 function enterEdit() {
   if (_editing) return;

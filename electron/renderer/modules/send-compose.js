@@ -717,7 +717,8 @@ async function addToQueue() {
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const sendMode = config.schedule?.mode || 'multi';
   const GROUP_SIZE = sendMode === 'batch' ? (config.schedule?.batch_size || 10) : (config.schedule?.group_size || 20);
-  let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, reactivatedCount = 0;
+  let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, skippedDupEmail = 0, reactivatedCount = 0;
+  const _dupEmails = [];
 
   // 拉最新 contacts.json，确保 _sentBy 是最新的（内存快照可能过期）
   const freshContacts = await window.electronAPI.getContacts();
@@ -820,7 +821,17 @@ async function addToQueue() {
       if (needReset.some(r => r.name === name)) continue;
       continue;
     }
-    const emails = [...new Set(activeMembers.map(m => (m.email || '').trim()).filter(e => e))];
+    const rawEmails = activeMembers.map(m => (m.email || '').trim()).filter(e => e);
+    const dupCount = rawEmails.length - new Set(rawEmails).size;
+    if (dupCount) {
+      skippedDupEmail += dupCount;
+      // 找出具体重复邮箱
+      const seen = new Set(); const dups = new Set();
+      for (const e of rawEmails) { if (seen.has(e)) dups.add(e); else seen.add(e); }
+      if (!_dupEmails) _dupEmails = [];
+      for (const e of dups) _dupEmails.push({ company: name, email: e });
+    }
+    const emails = [...new Set(rawEmails)];
     if (!emails.length) { skippedNoEmail++; continue; }
     const valid = emails.filter(e => S.EMAIL_RE.test(e));
     const invalid = emails.filter(e => !S.EMAIL_RE.test(e));
@@ -890,6 +901,7 @@ async function addToQueue() {
     const reasons = [];
     if (skippedNoEmail) reasons.push(`<div>${lucide('mail',14)} ${skippedNoEmail} 家无邮箱</div>`);
     if (skippedInvalidEmail) reasons.push(`<div>${lucide('alert-triangle',14)} ${skippedInvalidEmail} 家邮箱格式无效</div>`);
+    if (skippedDupEmail) reasons.push(`<div>${lucide('copy',14)} ${skippedDupEmail} 人重复邮箱</div>`);
     if (skippedQueued) reasons.push(`<div>${lucide('list',14)} ${skippedQueued} 人已在队列中</div>`);
     if (skippedDupOrBounced) reasons.push(`<div>${lucide('x-circle',14)} ${skippedDupOrBounced} 人已发送</div>`);
     const skipDetail = renderSkipDetail(allSkipped, 3);
@@ -900,6 +912,11 @@ async function addToQueue() {
   const pendingCount = S.queue.filter(e => e.status === 'pending').length;
   document.getElementById('stat-queue').textContent = pendingCount;
   let summaryHtml = `<div style="text-align:center;margin-bottom:6px"><b>已添加 ${added} 组 · 队列共 ${pendingCount} 组待发</b></div>`;
+  if (_dupEmails.length) {
+    const dupList = _dupEmails.slice(0, 5).map(d => `· ${escapeHtml(d.email)}（${escapeHtml(d.company)}）`).join('<br>');
+    const more = _dupEmails.length > 5 ? `<br>...等 ${_dupEmails.length} 个` : '';
+    summaryHtml += `<div style="font-size:11px;color:var(--warning);margin-top:4px">${lucide('alert-triangle',12)} 重复邮箱 ${skippedDupEmail} 人已合并：<br>${dupList}${more}</div>`;
+  }
   const skipDetail = renderSkipDetail(allSkipped, 3);
   if (skipDetail) summaryHtml += skipDetail;
   await showAlert(summaryHtml, skipDetail ? 'warn' : 'info');

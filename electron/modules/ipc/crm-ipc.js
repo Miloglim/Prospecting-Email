@@ -94,10 +94,10 @@ function register(ipcMain, deps) {
       const { APP_ROOT } = require("../config");
       const cfgPath = path.join(APP_ROOT, "send", "config.json");
       addTrace("③ cfg=" + cfgPath);
-      let apiKey = "";
-      try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8")); apiKey = cfg?.translate?.deepseek?.apiKey || ""; } } catch (e) { addTrace("③ err:" + e.message); }
+      let apiKey = "", senderName = "";
+      try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8")); apiKey = cfg?.translate?.deepseek?.apiKey || ""; senderName = cfg?.sender?.name || ""; } } catch (e) { addTrace("③ err:" + e.message); }
       if (!apiKey) { addTrace("④ 无Key"); return { ok: false, error: "请先配置 DeepSeek API Key", _trace: trace }; }
-      addTrace("④ Key=..." + apiKey.slice(-4));
+      addTrace("④ Key=..." + apiKey.slice(-4) + " sender=" + (senderName||'?'));
 
       // ── CRM 上下文 ──
       const stageMap = { reaching: '触达中', quoting: '报价中', trial: '试单', cooperating: '合作中', lost: '已流失' };
@@ -117,7 +117,7 @@ function register(ipcMain, deps) {
             prefsText = parts.join(' | ');
           }
         } catch { /* 降级 */ }
-        try { historyText = crmService.getEmailHistorySummary(contactId, 5); } catch { /* 降级 */ }
+        try { historyText = crmService.getEmailHistorySummary(contactId, 3, senderName); } catch { /* 降级 */ }
         addTrace("⑤ ctx stage=" + (stageLabel||'?') + " hist=" + historyText.length + " prefs=" + (prefsText||'?'));
       }
 
@@ -132,9 +132,11 @@ function register(ipcMain, deps) {
 - 话术给原文，可复制发送
 - 像人说话，不像机器
 ${stageLabel ? '- 当前阶段：' + stageLabel : ''}
+- 【AI回复】用客户邮件的语言写（根据邮件正文自动判断）
 
+${senderName ? '【我方身份】你是 ' + senderName + '，货代销售。不要在回复中混淆自己和客户的身份。' : ''}
 ${prefsText ? '客户画像：' + prefsText : ''}
-${historyText ? '最近往来：\n' + historyText : ''}
+${historyText ? '最近往来（最近3封）：\n' + historyText : ''}
 
 客户邮件${fromName ? '（' + fromName + '）' : ''}：
 ---
@@ -145,7 +147,7 @@ ${promptBody}
 【摘要】15字以内一句话概括
 【总结】客户意图、决策链、真实诉求
 【下一步建议】具体打法和心理博弈策略
-【AI回复】直接可用的回复文案`;
+【AI回复】用客户语言写，直接可用的回复文案`;
 
       addTrace("⑦ API prompt=" + prompt.length + "字");
       const resp = await new Promise((resolve, reject) => {

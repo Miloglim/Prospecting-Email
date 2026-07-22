@@ -58,8 +58,18 @@ async function refreshPipeline() {
 
   el.innerHTML = columns.map(col => renderStage(col)).join('');
 
-  // 抽屉折叠
+  // 抽屉折叠（记忆状态）
+  const stageState = (() => { try { return JSON.parse(localStorage.getItem('crm-stage-state') || '{}'); } catch { return {}; } })();
   el.querySelectorAll('.crm-stage-head').forEach(head => {
+    const stageKey = head.dataset.stage;
+    // 恢复记忆状态
+    if (stageState[stageKey]) {
+      const body = head.nextElementSibling;
+      body.style.display = 'block';
+      head.classList.add('open');
+      const arrow = head.querySelector('.crm-stage-arrow');
+      if (arrow) arrow.innerHTML = lucide('chevron-down', 14);
+    }
     head.addEventListener('click', () => {
       const body = head.nextElementSibling;
       const arrow = head.querySelector('.crm-stage-arrow');
@@ -67,6 +77,9 @@ async function refreshPipeline() {
       body.style.display = open ? 'none' : 'block';
       head.classList.toggle('open', !open);
       if (arrow) arrow.innerHTML = lucide(open ? 'chevron-right' : 'chevron-down', 14);
+      // 记忆
+      stageState[stageKey] = !open;
+      localStorage.setItem('crm-stage-state', JSON.stringify(stageState));
     });
   });
 
@@ -118,16 +131,21 @@ function renderStage(col) {
 function renderContact(c, stageKey, label, color) {
   const reminder = c._extra?.crmReminder;
   const nextAt = reminder?.nextFollowupAt;
-  let noteHtml = c.last_note_at
-    ? `<span class="crm-time" title="最后跟进: ${fmtDT(c.last_note_at)}">📝 ${daysAgo(c.last_note_at)}</span>`
-    : '<span class="crm-time" style="color:var(--text-secondary)">—</span>';
+  let noteHtml;
+  if (c.last_note_at) {
+    const snippet = (c.last_note_content || '').slice(0, 15);
+    const label = snippet ? `${daysAgo(c.last_note_at)} - ${snippet}` : daysAgo(c.last_note_at);
+    noteHtml = `<span class="crm-time" title="最后跟进: ${fmtDT(c.last_note_at)}">${lucide('sticky-note',11)} ${escapeHtml(label)}</span>`;
+  } else {
+    noteHtml = '<span class="crm-time" style="color:var(--text-secondary)">—</span>';
+  }
   let nextHtml = '';
   if (nextAt) {
     const t = new Date(nextAt).getTime();
     const overdue = t <= Date.now();
     const soon = !overdue && t <= Date.now() + 24*3600*1000;
     const cls = overdue ? 'overdue' : soon ? 'soon' : '';
-    nextHtml = `<span class="crm-time ${cls}" title="下次跟进: ${fmtDT(nextAt)}">${overdue ? '⏰ 逾期'+daysAgo(nextAt).replace('今天','') : '⏰ '+daysUntil(nextAt)}</span>`;
+    nextHtml = `<span class="crm-time ${cls}" title="下次跟进: ${fmtDT(nextAt)}">${lucide('clock',11)} ${overdue ? '逾期'+daysAgo(nextAt).replace('今天','') : daysUntil(nextAt)}</span>`;
   }
   const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || c.email || '—';
 
@@ -176,6 +194,78 @@ function showStagePicker(anchor, contactId, cur) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 详情面板
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ── 基本信息栏热编辑 ──────────────────────────────────────────────────────────
+function bindInfoEdits(panel, contact) {
+  panel.querySelectorAll('.crm-info-edit').forEach(row => {
+    if (row._infoEditBound) return; row._infoEditBound = true;
+    row.addEventListener('click', async () => {
+      if (row.querySelector('input,select')) return;
+      const field = row.dataset.field;
+      const type = row.dataset.type;
+      const val = row.dataset.val || '';
+      const span = row.querySelector('span');
+      const cid = contact.id;
+
+      if (type === 'select') {
+        const opts = JSON.parse(row.dataset.opts || '[]');
+        const labels = JSON.parse(row.dataset.labels || '{}');
+        const dots = JSON.parse(row.dataset.dot || '{}');
+        const rect = row.getBoundingClientRect();
+        document.getElementById('sel-popup')?.remove();
+        const popup = document.createElement('div'); popup.id = 'sel-popup';
+        popup.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+        popup.style.left = Math.min(rect.left, window.innerWidth - 160) + 'px';
+        popup.style.top = (rect.bottom + 2 > window.innerHeight - 250 ? rect.top - 220 : rect.bottom + 2) + 'px';
+        opts.forEach(o => {
+          const label = labels[o] || o || '未设置';
+          const active = o === val;
+          const dot = dots[o];
+          const div = document.createElement('div');
+          div.style.cssText = `padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${active?'font-weight:600':''}`;
+          div.innerHTML = (dot ? `<span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>` : '') + label + (active ? ' ●' : '');
+          div.addEventListener('click', async () => {
+            popup.remove();
+            if (o === val) return;
+            if (field === 'stageTag') {
+              await window.electronAPI.crmSetStage(cid, o);
+              contact.tags = [o];
+            } else {
+              const payload = { id: cid, email: contact.email, [field]: o };
+              await window.electronAPI.upsertContact(payload);
+              contact[field] = o;
+            }
+            const infoEl = panel.querySelector('[data-content="info"]');
+            if (infoEl) { infoEl.innerHTML = infoTab(contact); bindInfoEdits(panel, contact); }
+            refreshPipeline();
+          });
+          popup.appendChild(div);
+        });
+        document.body.appendChild(popup);
+        const close = ev => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+        setTimeout(() => document.addEventListener('click', close), 0);
+        return;
+      }
+
+      const input = document.createElement('input');
+      input.value = val === '—' ? '' : val;
+      input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--primary);border-radius:3px;font-size:12px;background:var(--bg);color:var(--text);outline:none';
+      span.textContent = ''; span.appendChild(input); input.focus(); input.select();
+      const save = async () => {
+        if (!input.parentNode) return;
+        const newVal = input.value.trim(); input.remove();
+        if (newVal === val || (newVal === '' && val === '—')) { span.textContent = escapeHtml(val||'—'); return; }
+        span.textContent = escapeHtml(newVal||'—');
+        await window.electronAPI.upsertContact({ id: cid, email: contact.email, [field]: newVal });
+        contact[field] = newVal;
+        if (field === 'company') contact.company = newVal;
+        refreshPipeline();
+      };
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') { input.value = val; input.blur(); } });
+    });
+  });
+}
 
 async function openDetailPanel(contactId) {
   _currentDetailId = contactId;
@@ -239,31 +329,28 @@ async function openDetailPanel(contactId) {
             </div>`).join('');
           // 鼠标悬停展开 AI 总结
           tgt.querySelectorAll('.crm-email-item-wrapper').forEach(wrapper => {
-            let _aiTimer = 0, _aiLoaded = false;
-            const item = wrapper.querySelector('.crm-email-item');
+            let _aiTimer = 0;
             const aiCard = wrapper.querySelector('.crm-email-ai');
             const aiText = aiCard.querySelector('.crm-email-ai-text');
             const uid = aiCard.dataset.uid;
             const accountId = aiCard.dataset.account;
 
+            const loadHoverSummary = () => {
+              aiText.textContent = '';
+              _aiTimer = setTimeout(async () => {
+                try {
+                  const s = await window.electronAPI.aiSummarizeEmail({ uid, accountId, preview: true });
+                  if (s.ok && (s.data.summaryBrief || s.data.summary)) {
+                    aiText.textContent = (s.data.summaryBrief || s.data.summary || '').replace(/[《》「」『』]/g, '');
+                  }
+                } catch { /* 静默降级 */ }
+              }, 200);
+            };
+
             wrapper.addEventListener('mouseenter', () => {
               aiCard.style.display = 'block';
               requestAnimationFrame(() => aiCard.classList.add('open'));
-              if (!_aiLoaded) {
-                aiText.innerHTML = lucide('loader',11,'spin');
-                _aiTimer = setTimeout(async () => {
-                  try {
-                    // 悬停只读缓存，不调 API；首次点击弹窗时才会真调用
-                    const s = await window.electronAPI.aiSummarizeEmail({ uid, accountId, preview: true });
-                    if (s.ok && (s.data.summaryBrief || s.data.summary)) {
-                      aiText.textContent = (s.data.summaryBrief || s.data.summary || '').replace(/[《》「」『』]/g, '');
-                    } else {
-                      aiText.textContent = '';
-                    }
-                  } catch { aiText.textContent = ''; }
-                  _aiLoaded = true;
-                }, 200);
-              }
+              loadHoverSummary();
             });
             wrapper.addEventListener('mouseleave', () => {
               clearTimeout(_aiTimer);
@@ -294,6 +381,8 @@ async function openDetailPanel(contactId) {
       if (si) { si.value = q; si.dispatchEvent(new Event('input', { bubbles: true })); }
     }, 200);
   });
+
+  bindInfoEdits(panel, contact);
 
   // 偏好保存
   panel.querySelectorAll('.crm-pref-input').forEach(inp => {
@@ -340,13 +429,20 @@ async function openDetailPanel(contactId) {
     if (r3.ok) {
       panel.querySelector('#crm-record-content').value = '';
       showToast('已保存','ok');
-      refreshPipeline();
+      // 只刷新详情面板的跟进记录，不重建整个管道
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
         if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
         rebindFollowupEvents(panel, contactId);
       }
+      // 异步刷新管道卡片（静默，不关面板）
+      refreshPipeline();
+      // 刷新后重新激活当前联系人的卡片高亮
+      setTimeout(() => {
+        const row = document.querySelector(`.crm-contact-row[data-contact-id="${contactId}"]`);
+        if (row) row.classList.add('active');
+      }, 100);
     }
   });
 
@@ -357,13 +453,17 @@ async function openDetailPanel(contactId) {
       if (!await showConfirm('删除该记录？')) return;
       await window.electronAPI.deleteNote(del.dataset.noteId);
       showToast('已删除','ok');
-      refreshPipeline();
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
         if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
         rebindFollowupEvents(panel, contactId);
       }
+      refreshPipeline();
+      setTimeout(() => {
+        const row = document.querySelector(`.crm-contact-row[data-contact-id="${contactId}"]`);
+        if (row) row.classList.add('active');
+      }, 100);
     });
   });
 
@@ -509,8 +609,35 @@ function closeDetailPanel() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function infoTab(c) {
-  return [['姓名',[c.firstName,c.lastName].filter(Boolean).join(' ')],['邮箱',c.email],['公司',c.company],['国家',c.country],['职位',c.title],['电话',c.phone],['LinkedIn',c.linkedin],['标签',(c.tags||[]).join(', ')||'—']]
-    .map(([l,v]) => `<div class="crm-field-row"><label>${l}</label><span>${escapeHtml(v||'—')}</span></div>`).join('');
+  const statusLabel = { '': '未触达', replied: '有回复', autoreply: '自动回复', bounced: '退信', reached: '已触达', unlabeled: '未分类' };
+  const statusDot = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817', bounced:'#e5484d' };
+  const st = c._status || '';
+  const pipeLabels = { reaching: '触达中', quoting: '报价中', trial: '试单', cooperating: '合作中', lost: '已流失' };
+  const stageTag = (c.tags||[]).find(t => pipeLabels[t]) || '';
+  const stageDisplay = pipeLabels[stageTag] || stageTag || '—';
+  const rows = [
+    { label: '姓名', field: 'firstName', val: [c.firstName,c.lastName].filter(Boolean).join(' ')||'—', type: 'inline-double', field2: 'lastName', val1: c.firstName||'', val2: c.lastName||'' },
+    { label: '邮箱', field: 'email', val: c.email||'—', type: 'inline' },
+    { label: '公司', field: 'company', val: c.company||'—', type: 'inline' },
+    { label: '国家', field: 'country', val: c.country||'—', type: 'select', opts: ['','巴西','墨西哥','哥伦比亚','智利','秘鲁','阿根廷','厄瓜多尔','美国','中国','西班牙','葡萄牙'] },
+    { label: '状态', field: '_status', val: st, type: 'select', opts: ['','replied','reached','autoreply','bounced'], labels: statusLabel, dot: statusDot },
+    { label: '阶段', field: 'stageTag', val: stageTag, type: 'select', opts: ['','reaching','quoting','trial','cooperating','lost'], labels: pipeLabels },
+    { label: '职位', field: 'title', val: c.title||'—', type: 'inline' },
+    { label: '跟进人', field: 'assignee', val: c.assignee||'—', type: 'inline' },
+  ];
+  return rows.map(r => {
+    let display;
+    if (r.type === 'select' && r.dot) {
+      display = `<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:${r.dot[r.val]||'var(--text-secondary)'};flex-shrink:0"></span>${r.labels?.[r.val]||r.val||'未触达'}</span>`;
+    } else if (r.type === 'select' && r.labels) {
+      display = r.labels[r.val] || r.val || '—';
+    } else if (r.type === 'select') {
+      display = r.val || '—';
+    } else {
+      display = escapeHtml(r.val||'—');
+    }
+    return `<div class="crm-field-row crm-info-edit" data-field="${r.field}" data-type="${r.type}" data-val="${escapeHtml(r.val||'')}" data-opts="${escapeHtml(JSON.stringify(r.opts||[]))}" data-labels="${escapeHtml(JSON.stringify(r.labels||{}))}" data-dot="${escapeHtml(JSON.stringify(r.dot||{}))}"><label>${r.label}</label><span>${display}</span></div>`;
+  }).join('');
 }
 
 function prefsTab(cid, prefs) {
@@ -527,20 +654,36 @@ function prefsTab(cid, prefs) {
 
 function followupTab(cid, reminder, notes, interactions) {
   const na = reminder.nextFollowupAt || '';
-  const noteItems = (notes||[]).map(n => ({ id: n.id, time:n.created_at, content:n.content }))
+  // 合并备注 + 状态变更记录，按时间混排
+  const noteItems = (notes||[]).map(n => ({ id: n.id, time:n.created_at, type:'note', content:n.content }));
+  const changeItems = (interactions||[])
+    .filter(i => i.type === 'stage_changed' || i.type === 'tags_changed' || i.type === 'status_changed')
+    .map(i => ({
+      id: i.id, time: i.created_at, type: 'change',
+      icon: i.type === 'stage_changed' ? 'arrow-right-circle' : 'tag',
+      content: i.snippet || i.type
+    }));
+  const allItems = [...noteItems, ...changeItems]
     .sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
-  const notesHtml = noteItems.length ? noteItems.map(i => `
-    <div class="crm-followup-item" data-note-id="${i.id||''}">
+  const notesHtml = allItems.length ? allItems.map(i => {
+    if (i.type === 'change') {
+      return `<div class="crm-followup-item">
+        <div class="crm-followup-time">${lucide(i.icon||'refresh-cw',11)} ${fmtDT(i.time)}</div>
+        <div class="crm-note-content" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(i.content||'')}</div>
+      </div>`;
+    }
+    return `<div class="crm-followup-item" data-note-id="${i.id||''}">
       <div class="crm-followup-time">
-        📝 ${fmtDT(i.time)}
+        ${lucide('sticky-note',11)} ${fmtDT(i.time)}
         <span class="crm-note-actions">
           <span class="crm-note-edit" data-note-id="${i.id}" title="编辑">${lucide('pencil',11)}</span>
           <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash',11)}</span>
         </span>
       </div>
       <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.content||'')}</div>
-    </div>`).join('')
+    </div>`;
+  }).join('')
     : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
 
   return `
@@ -661,13 +804,17 @@ function rebindFollowupEvents(panel, contactId) {
       if (!await showConfirm('删除该记录？')) return;
       await window.electronAPI.deleteNote(del.dataset.noteId);
       showToast('已删除','ok');
-      refreshPipeline();
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
         if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
         rebindFollowupEvents(panel, contactId);
       }
+      refreshPipeline();
+      setTimeout(() => {
+        const row = document.querySelector(`.crm-contact-row[data-contact-id="${contactId}"]`);
+        if (row) row.classList.add('active');
+      }, 100);
     });
   });
 

@@ -96,8 +96,16 @@ function upsert(data) {
 
   // ponytail: 有 id 时按 id 更新（支持改邮箱），否则按 email 查重
   if (data.id) { const byId = getById(data.id); if (byId) return update(data.id, data); }
-  const existing = db.prepare("SELECT id FROM contacts WHERE email = ?").get(email);
-  if (existing) return update(existing.id, data);
+  const existing = db.prepare("SELECT id, first_name, last_name, company_id FROM contacts WHERE email = ?").get(email);
+  if (existing) {
+    // 检测真正重复：不同 name 或不同 company → 标记可疑
+    const newName = [data.first_name || '', data.last_name || ''].join(' ').trim();
+    const oldName = [existing.first_name || '', existing.last_name || ''].join(' ').trim();
+    if ((newName && oldName && newName !== oldName) || (data.company_id && existing.company_id && data.company_id !== existing.company_id)) {
+      data._suspicious = 1;
+    }
+    return update(existing.id, data);
+  }
 
   const id = data.id || uuid();
   const now = new Date().toISOString();

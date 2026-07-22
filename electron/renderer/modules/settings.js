@@ -318,9 +318,8 @@ window.__pageHandlers['settings'] = async () => { await initSettings(); initUpda
 function initExportBtn() {
   const btn = document.getElementById('btn-export-data');
   const result = document.getElementById('export-result');
-  if (!btn || btn._bound) return;
-  btn._bound = true;
-  btn.addEventListener('click', async () => {
+  if (!btn || !result) return;
+  btn.onclick = async () => {
     btn.disabled = true;
     result.textContent = '导出中...';
     try {
@@ -337,21 +336,20 @@ function initExportBtn() {
       result.style.color = 'var(--danger)';
     }
     btn.disabled = false;
-  });
+  };
 }
 
 // ── 一键清除联系人 ──────────────────────────────────────────────────────────
 function initClearContactsBtn() {
   const btn = document.getElementById('btn-clear-contacts');
-  if (!btn || btn._bound) return;
-  btn._bound = true;
-  btn.addEventListener('click', async () => {
+  if (!btn) return;
+  btn.onclick = async () => {
     const contacts = await window.electronAPI.getContacts();
     if (!contacts.length) { showToast('联系人列表已为空', 'info'); return; }
     if (!await showConfirm(`确定清除全部 ${contacts.length} 个联系人？此操作不可撤销。`)) return;
     await window.electronAPI.deleteAllContacts();
     showToast(`已清除 ${contacts.length} 个联系人`, 'ok');
-  });
+  };
 }
 
 // ── 检查更新 ──────────────────────────────────────────────────────────────
@@ -363,12 +361,11 @@ function initUpdateCheck() {
   const prog = document.getElementById('update-progress');
   const progFill = document.getElementById('update-progress-fill');
   const speed = document.getElementById('update-speed');
-  if (!btn || !result || btn._bound) return;
-  btn._bound = true;
+  if (!btn || !result) return;
 
   let pendingVersion = '';
 
-  btn.addEventListener('click', async () => {
+  btn.onclick = async () => {
     btn.disabled = true;
     result.innerHTML = `${lucide('loader-2',12,'spin')} 检查中...`;
     result.style.color = 'var(--text-secondary)';
@@ -390,9 +387,9 @@ function initUpdateCheck() {
       result.style.color = 'var(--danger)';
     }
     btn.disabled = false;
-  });
+  };
 
-  dlBtn.addEventListener('click', async () => {
+  const dlHandler = async () => {
     dlBtn.disabled = true;
     dlBtn.textContent = '下载中...';
     prog.style.display = '';
@@ -406,9 +403,10 @@ function initUpdateCheck() {
       dlBtn.style.display = 'none';
       prog.style.display = 'none';
     }
-  });
+  };
+  dlBtn.onclick = dlHandler;
 
-  // 监听更新事件
+  // 监听更新事件（preload 返回的是清理函数，但这里不需要）
   window.electronAPI.onUpdateAvailable((data) => {
     pendingVersion = data.version;
     result.innerHTML = `${lucide('bell',12)} 发现新版本 <strong>v${data.version}</strong>`;
@@ -418,7 +416,6 @@ function initUpdateCheck() {
     speed.textContent = '';
   });
 
-  // 监听下载进度（含速率）
   window.electronAPI.onUpdateProgress((data) => {
     progFill.style.width = data.percent + '%';
     const sizeInfo = data.total ? `${data.transferred}/${data.total} MB` : `${data.transferred} MB`;
@@ -427,11 +424,11 @@ function initUpdateCheck() {
     result.style.color = 'var(--accent)';
   });
 
-  restartBtn.addEventListener('click', async () => {
+  restartBtn.onclick = async () => {
     restartBtn.disabled = true;
     restartBtn.textContent = '重启中...';
     await window.electronAPI.installUpdate();
-  });
+  };
 
   window.electronAPI.onUpdateDownloaded((data) => {
     result.innerHTML = `${lucide('check-circle',12)} v${data.version} 已下载`;

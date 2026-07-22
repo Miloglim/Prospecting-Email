@@ -74,8 +74,15 @@ function listPipeline(filters = {}) {
             c.client_type, c.stage, c.tags, c._status,
             c._extra, c.last_sent_at,
             co.name as company_name, co.country as company_country, co.website as company_website,
-            (SELECT MAX(cn.created_at) FROM contact_notes cn WHERE cn.contact_id = c.id) as last_note_at
-     FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
+            ln.note_at as last_note_at,
+            ln.note_content as last_note_content
+     FROM contacts c
+     LEFT JOIN companies co ON co.id = c.company_id
+     LEFT JOIN (
+       SELECT contact_id, MAX(created_at) as note_at,
+         (SELECT content FROM contact_notes WHERE contact_id = cn.contact_id ORDER BY created_at DESC LIMIT 1) as note_content
+       FROM contact_notes cn GROUP BY contact_id
+     ) ln ON ln.contact_id = c.id
      WHERE ${where}
      ORDER BY c.last_sent_at DESC`
   ).all(...params).map(_normalizeRow);
@@ -128,17 +135,19 @@ function setStage(contactId, newKey) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
 
-  // 清除旧管线标签，写入新标签
+  // 清除旧管线标签（兼容中英文），写入新标签
   const oldTags = contact.tags || [];
-  const newTags = [...new Set([...oldTags.filter(t => !PIPELINE_KEYS.includes(t)), newKey])];
+  const allAliases = PIPELINE_STAGES.flatMap(s => [s.key, s.label, ...(Object.values(TAG).find(t => t.key === s.key)?.alias || [])]);
+  const newTags = [...new Set([...oldTags.filter(t => !allAliases.includes(t)), newKey])];
 
   contactsDb.update(contactId, { tags: newTags });
 
   try {
+    const tagLabel = (k) => (Object.values(TAG).find(t => t.key === k) || {}).label || k;
     interactionsDb.add({
       contact_id: contactId, company_id: contact.company_id || "",
       type: "stage_changed", direction: "internal",
-      subject: "阶段变更", snippet: `${oldTags.join(',') || '无'} → ${newKey}`,
+      subject: "阶段变更", snippet: `${oldTags.map(tagLabel).join('、') || '无'} → ${tagLabel(newKey)}`,
     });
   } catch (e) { Log.error("CRM", "写审计记录失败", e.stack); }
 
@@ -288,7 +297,7 @@ function getEmailBody(uid, accountId) {
 }
 
 // ── 邮件往来摘要（供 AI 上下文） ────────────────────────────────────────────
-function getEmailHistorySummary(contactId, limit = 5) {
+function getEmailHistorySummary(contactId, limit = 5, senderName = '') {
   if (!contactId) return '';
   const contact = contactsDb.getById(contactId);
   if (!contact) return '';
@@ -299,8 +308,9 @@ function getEmailHistorySummary(contactId, limit = 5) {
      ORDER BY date DESC LIMIT ?`
   ).all(contact.email, contactId, contactId, limit);
   if (!rows.length) return '';
+  const me = senderName || '我方';
   return rows.map(r =>
-    `[${r.type === 'reply' ? '客户来信' : r.type === 'bounce' ? '退信' : '我方发信'}]
+    `[${r.type === 'reply' ? '客户来信' : r.type === 'bounce' ? '退信' : me + '发信'}]
     ${r.date?.slice(0,10)||''} ${r.subject||'(无)'}`
   ).join('\n');
 }
@@ -310,17 +320,23 @@ function saveAiSummary(uid, accountId, summary, suggestion, brief) {
   _ensureEmailCache();
   const db = getDb();
   try {
+    // 先确保行存在（不覆盖已有邮件正文），再更新 AI 字段
+    db.prepare(`INSERT OR IGNORE INTO crm_email_cache (account_id, uid, subject, from_addr, from_name, date, body, cached_at)
+      VALUES (?, ?, '', '', '', '', '', ?)`)
+      .run(accountId || '', uid || '', new Date().toISOString());
     db.prepare("UPDATE crm_email_cache SET ai_summary = ?, ai_suggestion = ?, ai_brief = ? WHERE uid = ? AND account_id = ?")
       .run(summary || '', suggestion || '', brief || '', uid, accountId || '');
   } catch { /* 缓存写入失败不影响主流程 */ }
 }
 
 function getAiSummary(uid, accountId) {
-  _ensureEmailCache();
-  const db = getDb();
-  const row = db.prepare("SELECT ai_summary, ai_suggestion, ai_brief FROM crm_email_cache WHERE uid = ? AND account_id = ?")
-    .get(uid, accountId || '');
-  return row || { ai_summary: '', ai_suggestion: '', ai_brief: '' };
+  try {
+    _ensureEmailCache();
+    const db = getDb();
+    const row = db.prepare("SELECT ai_summary, ai_suggestion, ai_brief FROM crm_email_cache WHERE uid = ? AND account_id = ?")
+      .get(uid, accountId || '');
+    return row || { ai_summary: '', ai_suggestion: '', ai_brief: '' };
+  } catch { return { ai_summary: '', ai_suggestion: '', ai_brief: '' }; }
 }
 
 function clearAllAiCache() {

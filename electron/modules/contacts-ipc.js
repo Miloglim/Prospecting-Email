@@ -472,13 +472,39 @@ function register(ipcMain, deps) {
 
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);
-    // 联系人 _status 变更 → 反向同步收件箱邮件 type
-    if (contact._status !== undefined && existing) {
+    // 联系人 _status 变更 → 反向同步收件箱 + 记录到 interactions
+    if (existing) {
       const oldStatus = existing._status || '';
-      const newStatus = contact._status || '';
-      if (oldStatus !== newStatus) {
+      const newStatus = contact._status !== undefined ? contact._status || '' : oldStatus;
+      if (oldStatus !== newStatus && contact._status !== undefined) {
         try { require('./services/inbox-service').syncMailTypeByContactEmail(result?.email || email, newStatus); }
         catch (e) { Log.error('联系人', '反向同步收件箱失败', e.stack); }
+        try {
+          const statusLabel = { '': '未触达', replied: '有回复', autoreply: '自动回复', bounced: '退信', reached: '已触达', unlabeled: '未分类' };
+          require('./services/interactions-db').add({
+            contact_id: result.id, company_id: existing.company_id || '',
+            type: 'status_changed', direction: 'internal',
+            subject: '状态变更', snippet: `${statusLabel[oldStatus] || oldStatus || '未设置'} → ${statusLabel[newStatus] || newStatus}`,
+          });
+        } catch { /* 审计记录不影响主流程 */ }
+      }
+      // tags 变更记录
+      const oldTags = JSON.stringify(existing.tags || []);
+      const newTags = contact.tags !== undefined ? JSON.stringify(contact.tags) : oldTags;
+      if (oldTags !== newTags && contact.tags !== undefined) {
+        try {
+          const parseTags = (s) => { try { return JSON.parse(s); } catch { return []; } };
+          const oldArr = parseTags(oldTags); const newArr = parseTags(newTags);
+          const added = newArr.filter(t => !oldArr.includes(t));
+          const removed = oldArr.filter(t => !newArr.includes(t));
+          if (added.length || removed.length) {
+            require('./services/interactions-db').add({
+              contact_id: result.id, company_id: existing.company_id || '',
+              type: 'tags_changed', direction: 'internal',
+              subject: '标签变更', snippet: `${added.map(t => '+' + t).join(' ')} ${removed.map(t => '-' + t).join(' ')}`.trim(),
+            });
+          }
+        } catch { /* 审计记录不影响主流程 */ }
       }
     }
     _notify();

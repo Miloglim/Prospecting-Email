@@ -787,12 +787,12 @@ select option { font-size: 12px; }
 .ci-meta { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: 8px; }
 .ci-count { font-size: 9px; background: #e8eaf6; color: var(--primary); padding: 0 5px; border-radius: 8px; font-weight: 600; line-height:1.4; }
 
-.contacts-detail { flex: 1; overflow: auto; background: var(--card-bg); }
+.contacts-detail { flex: 1; display: flex; flex-direction: column; background: var(--card-bg); min-width: 0; }
 .contacts-detail .placeholder { border: none; margin: 0; height: 100%; display: flex; align-items: center; justify-content: center; }
-.contacts-detail-header { padding: 6px 14px; font-size: 13px; font-weight: 700; color: var(--primary); border-bottom: 1px solid var(--border); background: #fafbfc; }
-.contacts-detail-body { padding: 0; }
-.contacts-detail-body table { box-shadow: none; border-radius: 0; }
-.contacts-detail-body th { background: #fafbfc; padding: 5px 8px; font-size: 10px; letter-spacing:0; border-right:1px solid #e8eaed; }
+.contacts-detail-header { padding: 6px 14px; font-size: 13px; font-weight: 700; color: var(--primary); border-bottom: 1px solid var(--border); background: #fafbfc; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contacts-detail-body { flex: 1; overflow: auto; min-height: 0; }
+.contacts-detail-body table { box-shadow: none; border-radius: 0; min-width: 100%; }
+.contacts-detail-body th { background: #fafbfc; padding: 5px 8px; font-size: 10px; letter-spacing:0; border-right:1px solid #e8eaed; white-space: nowrap; }
 .contacts-detail-body td { padding: 4px 8px; font-size: 12px; line-height:1.4; border-right:1px solid #e8eaed; }
 .contacts-detail-body th:last-child, .contacts-detail-body td:last-child { border-right:none; }
 
@@ -1432,6 +1432,7 @@ select option { font-size: 12px; }
 .crm-detail-close-btn { background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 2px; border-radius: 4px; }
 .crm-detail-close-btn:hover { background: var(--bg); color: var(--text); }
 .crm-email-popup-body, .crm-email-popup-body * { user-select: text !important; -webkit-user-select: text !important; }
+.crm-email-popup-ai, .crm-email-popup-ai * { user-select: text !important; -webkit-user-select: text !important; }
 .crm-detail-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 8px; }
 .crm-tab { background: none; border: none; padding: 8px 12px; font-size: 11px; cursor: pointer; color: var(--text-secondary); border-bottom: 2px solid transparent; }
 .crm-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
