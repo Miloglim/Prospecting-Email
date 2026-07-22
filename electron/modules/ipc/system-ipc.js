@@ -116,7 +116,7 @@ function register(ipcMain, deps) {
   // ── 系统功能 ──
   const { app, shell } = require('electron');
   ipcMain.handle('app:minimizeToTray', async () => { deps.mainWindow?.hide(); return true; });
-  ipcMain.handle('app:openReports', async () => shell.openPath(path.join(APP_ROOT, 'reports')));
+  ipcMain.handle('app:openReports', async () => shell.openPath(path.join(APP_ROOT, 'send', 'reports')));
   ipcMain.handle('app:openSendFolder', async () => shell.openPath(path.join(APP_ROOT, 'send')));
   ipcMain.handle('app:openExternal', async (_e, url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
   ipcMain.handle('app:openLogFile', async () => shell.openPath(path.join(APP_ROOT, 'logs')));

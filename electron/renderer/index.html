@@ -229,21 +229,35 @@
           <div id="dash-feed-list" class="dash-feed-list">
             <div class="dash-followup-row"><span class="dash-followup-label">阶段</span><span class="dash-followup-val" id="dash-stage-dist">—</span></div>
             <div class="dash-followup-section">
-              <div class="dash-followup-label">待办</div>
+              <div class="dash-followup-label">待完善</div>
               <div id="dash-todo-box" class="dash-todo-box">—</div>
             </div>
           </div>
         </div>
       </div>
 
+      <!-- 今日待办 -->
+      <div class="dash-card" data-card-id="dash-wide">
+        <div class="dash-card-label">今日待办</div>
+        <div id="dash-wide-content" style="max-height:260px;overflow-y:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="dash-todo-table">
+            <thead><tr style="color:var(--text-secondary);text-align:left;border-bottom:1px solid var(--border)"><th style="padding:4px 8px">联系人</th><th style="padding:4px 8px">公司</th><th style="padding:4px 8px">阶段</th><th style="padding:4px 8px">最后跟进</th><th style="padding:4px 8px">下次跟进</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="dash-todo-summary" style="padding:6px 8px;font-size:11px;color:var(--text-secondary);border-top:1px solid var(--border)"></div>
+        </div>
+      </div>
+
+      </div><!-- #dash-canvas -->
+
       <!-- 快捷操作 -->
-      <div class="dash-actions" data-card-id="dash-actions" data-fixed="true">
+      <div class="dash-actions">
         <button class="secondary" data-nav="clients"><span data-icon="file-spreadsheet"></span> 导入客户</button>
         <button class="secondary" data-nav="email-send"><span data-icon="send"></span> 开始发送</button>
         <button class="secondary" id="dash-bounce-check" data-nav="inbox"><span data-icon="inbox"></span> 收件箱</button>
         <button class="secondary" id="dash-gen-report"><span data-icon="file-text"></span> 生成今日报告</button>
+        <button class="secondary" id="dash-open-reports"><span data-icon="folder-open"></span> 报告文件夹</button>
       </div>
-      </div><!-- #dash-canvas -->
     </section>
 
     <!-- 📋 导入客户 -->

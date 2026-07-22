@@ -379,7 +379,13 @@ async function _parseRaw(rawSource, uid, accountId) {
     return {
       uid, accountId,
       subject, from: fromAddr, fromName,
-      date: (parsed.date || new Date()).toISOString(),
+      // 使用上海时区 ISO 格式，与 send_log.time_beijing 对齐，确保报告按日期筛选准确
+      date: (() => {
+        const d = parsed.date || new Date();
+        const dp = d.toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
+        const tp = d.toLocaleTimeString("en-CA", { timeZone: "Asia/Shanghai", hour12: false });
+        return `${dp}T${tp}+08:00`;
+      })(),
       body,
       type,
       contactCompany: contact?.company || '',
@@ -863,9 +869,9 @@ function setMailType(index, newType) {
       } else if (newType === 'autoreply') {
         contactsDb.update(id, { _status: 'autoreply', is_bounced: false });
       } else if (newType === 'bounce') {
-        contactsDb.update(id, { is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
+        contactsDb.update(id, { _status: 'bounced', is_bounced: true, bounce_type: 'permanent', bounce_reason: m.subject || '', bounced_at: new Date().toISOString() });
       } else if (newType === 'other') {
-        contactsDb.update(id, { is_bounced: false });
+        contactsDb.update(id, { _status: '', is_bounced: false });
       }
     }
   }
@@ -874,7 +880,7 @@ function setMailType(index, newType) {
 
 // ponytail: 联系人 _status → 收件箱 type 反向同步
 // 当联系人的 _status 被手动修改时，同步更新所有匹配邮件的 type
-const STATUS_TO_TYPE = { 'replied': 'replied', 'autoreply': 'autoreply' };
+const STATUS_TO_TYPE = { 'replied': 'replied', 'autoreply': 'autoreply', 'bounced': 'bounce' };
 function syncMailTypeByContactEmail(email, newStatus) {
   const newType = STATUS_TO_TYPE[newStatus];
   if (!newType) return; // 只处理有回复/自动回复，其他状态不改变 inbox type

@@ -201,7 +201,7 @@ function createTray() {
 app.setAppUserModelId("com.milogin.prospecting-email");
 
 // ponytail: 开发模式设独立 name，避免单实例锁跟打包客户端冲突
-if (!__dirname.includes('.asar')) app.setName('prospecting-email-send-dev');
+if (!app.isPackaged) app.setName('prospecting-email-send-dev');
 
 // 单实例锁：防止重复启动
 const gotLock = app.requestSingleInstanceLock();

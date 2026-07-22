@@ -5,8 +5,8 @@ const https = require('https');
 const http = require('http');
 const { app } = require('electron');
 
-// 打包后路径判定
-const _IS_PACKAGED = typeof __dirname === 'string' && __dirname.includes('.asar');
+// 打包后路径判定（使用 Electron 标准 API，比 __dirname.includes('.asar') 更可靠）
+const _IS_PACKAGED = app.isPackaged;
 // 用户数据路径（跨版本持久）：C:\Users\<name>\AppData\Roaming\prospecting-email-send
 const APP_ROOT = _IS_PACKAGED
   ? app.getPath('userData')

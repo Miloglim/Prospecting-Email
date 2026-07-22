@@ -376,6 +376,16 @@ const CRM = {
   CHECK_REMINDERS: "crm:checkReminders",
   /** 联系人变更事件（main → renderer） */
   CHANGED: "crm:changed",
+  /** 获取联系人邮件往来列表 */
+  GET_CONTACT_EMAILS: "crm:getContactEmails",
+  /** 获取单封邮件正文 */
+  GET_EMAIL_BODY: "crm:getEmailBody",
+};
+
+// ── AI（ai）───────────────────────────────────────────────────────────────────
+const AI = {
+  /** 邮件 AI 总结 + 下一步建议 */
+  SUMMARIZE_EMAIL: "ai:summarizeEmail",
 };
 
 // ── 客户表（table）──────────────────────────────────────────────────────────
@@ -416,6 +426,7 @@ const IPC = {
   AUTO_SEND,
   COMPANY,
   CRM,
+  AI,
   LOG,
 };
 
@@ -639,5 +650,6 @@ module.exports = {
   AUTO_SEND,
   COMPANY,
   CRM,
+  AI,
   LOG,
 };

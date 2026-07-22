@@ -135,8 +135,7 @@ function renderContact(c, stageKey, label, color) {
     <div class="crm-contact-row" data-contact-id="${c.id}">
       <span class="crm-contact-name">${escapeHtml(name)}</span>
       <span class="crm-contact-co">${escapeHtml(c.company || '—')}</span>
-      <span class="crm-contact-ctry">${escapeHtml(c.country || '')}</span>
-      ${noteHtml}${nextHtml}
+      ${nextHtml}${noteHtml}
       <span class="crm-stage-badge" data-contact-id="${c.id}" data-stage="${stageKey}" style="background:${color}18;color:${color}">${label}</span>
     </div>`;
 }
@@ -218,29 +217,65 @@ async function openDetailPanel(contactId) {
       const tgt = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
       if (tgt) tgt.classList.add('active');
       if (tab.dataset.tab === 'emails' && !_emailsLoaded) {
-        const r = await window.electronAPI.crmGetContactEmails(contactId);
         _emailsLoaded = true;
+        const r = await window.electronAPI.crmGetContactEmails(contactId);
         if (r.ok && r.data.length) {
           tgt.innerHTML = r.data.map(m => `
-            <div class="crm-email-item">
-              <div style="display:flex;align-items:center;gap:8px">
-                <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':'var(--text-secondary)'}">${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
-                <span style="flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(m.subject||'(无主题)')}</span>
-                <span style="font-size:10px;color:var(--text-secondary);white-space:nowrap">${escapeHtml(fmtDT(m.date))}</span>
+            <div class="crm-email-item-wrapper">
+              <div class="crm-email-item" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}">
+                <div class="crm-email-meta">
+                  <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':'var(--text-secondary)'};flex-shrink:0">${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
+                  <span class="crm-email-subject">${escapeHtml(m.subject||'(无主题)')}</span>
+                  <span class="crm-email-date">${escapeHtml(fmtDT(m.date))}</span>
+                </div>
+                <div class="crm-email-from">${escapeHtml(m.from_name||m.from_addr||'')}</div>
               </div>
-              <div style="font-size:11px;color:var(--text-secondary);padding-left:20px">${escapeHtml(m.from_name||m.from_addr||'')}</div>
+              <div class="crm-email-ai" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}" style="display:none">
+                <div class="crm-email-ai-inner">
+                  <span class="crm-email-ai-icon">${lucide('sparkles',11)}</span>
+                  <span class="crm-email-ai-text"></span>
+                </div>
+              </div>
             </div>`).join('');
-          tgt.querySelectorAll('.crm-email-item').forEach((row, i) => {
-            row.addEventListener('click', () => {
-              const m = r.data[i];
-              const p = document.createElement('div');
-              p.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-              p.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary)">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6;user-select:text;-webkit-user-select:text">${m.body||'(无内容)'}</div></div>`;
-              document.body.appendChild(p);
-              p.addEventListener('click', ev => { if (ev.target === p) p.remove(); });
-              p.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => p.remove());
+          // 鼠标悬停展开 AI 总结
+          tgt.querySelectorAll('.crm-email-item-wrapper').forEach(wrapper => {
+            let _aiTimer = 0, _aiLoaded = false;
+            const item = wrapper.querySelector('.crm-email-item');
+            const aiCard = wrapper.querySelector('.crm-email-ai');
+            const aiText = aiCard.querySelector('.crm-email-ai-text');
+            const uid = aiCard.dataset.uid;
+            const accountId = aiCard.dataset.account;
+
+            wrapper.addEventListener('mouseenter', () => {
+              aiCard.style.display = 'block';
+              requestAnimationFrame(() => aiCard.classList.add('open'));
+              if (!_aiLoaded) {
+                aiText.innerHTML = lucide('loader',11,'spin');
+                _aiTimer = setTimeout(async () => {
+                  try {
+                    // 悬停只读缓存，不调 API；首次点击弹窗时才会真调用
+                    const s = await window.electronAPI.aiSummarizeEmail({ uid, accountId, preview: true });
+                    if (s.ok && (s.data.summaryBrief || s.data.summary)) {
+                      aiText.textContent = (s.data.summaryBrief || s.data.summary || '').replace(/[《》「」『』]/g, '');
+                    } else {
+                      aiText.textContent = '';
+                    }
+                  } catch { aiText.textContent = ''; }
+                  _aiLoaded = true;
+                }, 200);
+              }
+            });
+            wrapper.addEventListener('mouseleave', () => {
+              clearTimeout(_aiTimer);
+              aiCard.classList.remove('open');
+            });
+            // transitionend 后隐藏元素
+            aiCard.addEventListener('transitionend', () => {
+              if (!aiCard.classList.contains('open')) aiCard.style.display = 'none';
             });
           });
+          // ponytail: 邮件加载后重新绑定点击事件，因为 bindEmailClicks 在渲染前已执行
+          bindEmailClicks(tgt);
         } else {
           tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">' + (r.ok ? '暂无邮件往来' : '加载失败: ' + escapeHtml(r.error||'')) + '</div>';
         }
@@ -279,22 +314,20 @@ async function openDetailPanel(contactId) {
     });
   });
 
-  // 下次跟进日期变更即保存
-  const nextFollowupEl = panel.querySelector('#crm-next-followup');
-  if (nextFollowupEl) {
-    nextFollowupEl.addEventListener('change', async () => {
-      const val = nextFollowupEl.value;
-      const r2 = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
-      if (r2.ok) { scheduleReminder(contactId, val); showToast('已更新','ok'); }
-    });
-  }
+  // 下次跟进日期 → 保存按钮
+  panel.querySelector('#crm-followup-save')?.addEventListener('click', async () => {
+    const val = panel.querySelector('#crm-next-followup')?.value || '';
+    const r2 = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
+    if (r2.ok) { scheduleReminder(contactId, val); _updateCardTime(contactId, val); showToast('已更新','ok'); }
+  });
 
   // 清除跟进日期
   panel.querySelector('#crm-clear-followup')?.addEventListener('click', async () => {
+    const nextFollowupEl = panel.querySelector('#crm-next-followup');
     if (nextFollowupEl) nextFollowupEl.value = '';
     await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: '' } });
     scheduleReminder(contactId, '');
-    _renderFollowupStatus(panel);
+    _updateCardTime(contactId, '');
     panel.querySelector('#crm-clear-followup')?.remove();
     showToast('已清除', 'ok');
   });
@@ -341,16 +374,100 @@ async function openDetailPanel(contactId) {
       row.addEventListener('click', async () => {
         const uid = row.dataset.uid;
         const acct = row.dataset.account;
-        if (!uid || !acct) return;
+        if (!uid) return;
         const r = await window.electronAPI.crmGetEmailBody(uid, acct);
         if (!r.ok) { showToast('无法加载邮件','err'); return; }
         const m = r.data;
         const popup = document.createElement('div');
+        popup.className = 'crm-email-popup-overlay';
         popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-        popup.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6;user-select:text;-webkit-user-select:text">${m.body||'(无内容)'}</div></div>`;
+        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析<button class="crm-ai-retry-btn" id="crm-ai-retry" title="重新分析" style="display:none">${lucide('refresh-cw',12)}</button></div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
         document.body.appendChild(popup);
-        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+        // 安全渲染邮件正文：去危险标签/事件/伪协议，保留格式标签
+        const safeBody = (m.body || '(无内容)')
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+          .replace(/<object[\s\S]*?<\/object>/gi, '')
+          .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+          .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+          .replace(/\son\w+\s*=\s*\S+/gi, '')
+          .replace(/javascript\s*:/gi, 'blocked:');
+        popup.querySelector('.crm-email-popup-body').innerHTML = safeBody;
+        let _downX = 0, _downY = 0;
+        popup.addEventListener('mousedown', (ev) => { _downX = ev.clientX; _downY = ev.clientY; });
+        popup.addEventListener('click', (ev) => {
+          const moved = Math.abs(ev.clientX - _downX) > 3 || Math.abs(ev.clientY - _downY) > 3;
+          if (ev.target === popup && !moved) popup.remove();
+        });
         popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+
+        (async () => {
+          const aiContainer = popup.querySelector('#crm-email-popup-ai');
+          const aiContent = aiContainer.querySelector('.crm-email-popup-ai-content');
+          const retryBtn = aiContainer.querySelector('#crm-ai-retry');
+          if (typeof window.electronAPI?.aiSummarizeEmail !== 'function') {
+            aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">请重启应用以加载 AI 功能</span>';
+            return;
+          }
+
+          let _aiLoading = false;
+          const loadAi = async (retry) => {
+            if (_aiLoading) return;
+            _aiLoading = true;
+            aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + lucide('loader',12,'spin') + ' 分析中...</span>';
+            if (retryBtn) retryBtn.style.display = 'none';
+            try {
+              const s = await window.electronAPI.aiSummarizeEmail({
+                uid, accountId: acct || '',
+                subject: m.subject || '', body: m.body || '',
+                fromName: m.from_name || '',
+                contactId: _currentDetailId || '',
+                retry,
+              });
+              if (s.ok && (s.data.summary || s.data.suggestion || s.data.analysis)) {
+                const a = s.data;
+                const clean = (s) => (s||'').replace(/[《》「」『』]/g, '');
+                const insight = clean(a.analysis || a.summary || '');   // 【总结】
+                const reasoning = clean(a.strategy || a.suggestion || ''); // 【下一步建议】
+                const draft = clean(a.script || '');                      // 【AI回复】
+                aiContent.innerHTML = `
+                  <div class="crm-ai-insight">${escapeHtml(insight)}</div>
+                  ${reasoning ? '<div class="crm-ai-reasoning">' + escapeHtml(reasoning) + '</div>' : ''}
+                  ${draft ? `
+                  <div class="crm-ai-draft">
+                    <div class="crm-ai-draft-label">AI 回复</div>
+                    <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
+                    <button class="crm-ai-copy-btn" data-script="${escapeHtml(draft)}">${lucide('copy',12)} 复制话术</button>
+                  </div>` : ''}
+                  <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
+              } else {
+                const traceHtml = s._trace ? '<div style="margin-top:8px;font-size:10px;color:var(--text-secondary);border-top:1px solid var(--border);padding-top:6px">' + s._trace.map(t => escapeHtml(t)).join('<br>') + '</div>' : '';
+                aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + escapeHtml(s.error||'分析暂不可用') + '</span>' + traceHtml + '<button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>';
+              }
+            } catch (e) { aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">分析失败: ' + escapeHtml(e.message||'') + '</span><button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>'; }
+            if (retryBtn) retryBtn.style.display = '';
+            _aiLoading = false;
+          };
+
+          // 事件委托：容器统一处理按钮点击，不依赖单个 bind
+          aiContent.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            if (btn.classList.contains('crm-ai-copy-btn')) {
+              const txt = btn.dataset.script;
+              navigator.clipboard.writeText(txt).then(() => {
+                btn.innerHTML = lucide('check',12) + ' 已复制';
+                setTimeout(() => { btn.innerHTML = lucide('copy',12) + ' 复制话术'; }, 2000);
+              }).catch(() => showToast('复制失败', 'err'));
+            }
+            if (btn.classList.contains('crm-ai-retry-btn-inline')) {
+              loadAi(true);
+            }
+          });
+
+          if (retryBtn) retryBtn.addEventListener('click', () => loadAi(true));
+          await loadAi(false);
+        })();
       });
     });
   };
@@ -426,15 +543,12 @@ function followupTab(cid, reminder, notes, interactions) {
     </div>`).join('')
     : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
 
-  const isOd = isOverdue(na); const isSn = !isOd && isSoon(na);
-  const dotColor = na ? (isOd ? 'var(--danger)' : isSn ? '#ff9800' : 'var(--success)') : 'var(--text-secondary)';
-  const statusText = na ? (isOd ? '已逾期' : isSn ? '即将到期' : '正常') : '未设置';
   return `
     <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:10px">
       <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap">下次跟进</span>
-      <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;background:var(--card-bg);color:var(--text);font-family:inherit;outline:none">
+      <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="width:0;flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:5px;font-size:11px;background:var(--card-bg);color:var(--text);font-family:inherit;outline:none">
+      <button id="crm-followup-save" style="padding:3px 10px;border:1px solid var(--accent);border-radius:5px;font-size:11px;background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap;font-weight:600">保存</button>
       ${na ? `<button id="crm-clear-followup" title="清除跟进日期" style="padding:2px 4px;border:none;background:none;color:var(--text-secondary);cursor:pointer;font-size:14px;line-height:1;border-radius:3px;flex-shrink:0">${lucide('x',13)}</button>` : ''}
-      <span id="crm-followup-status" style="font-size:11px;white-space:nowrap;display:flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>${statusText}</span>
     </div>
     <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
     <textarea id="crm-record-content" rows="2" placeholder="记录内容..." style="width:100%;padding:6px;border:1px solid var(--border);border-radius:4px;font-size:12px"></textarea>
@@ -486,50 +600,39 @@ function fmtDate(i) { try { const d=new Date(i); return `${d.getMonth()+1}/${d.g
 function daysAgo(i) { try { const diff=Math.floor((Date.now()-new Date(i).getTime())/86400000); return diff<=0?'今天':diff===1?'1天前':`${diff}天前`; } catch { return ''; } }
 function daysUntil(i) { try { const diff=Math.floor((new Date(i).getTime()-Date.now())/86400000); return diff<=0?'今天':diff===1?'1天后':`${diff}天后`; } catch { return ''; } }
 function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return i||''; } }
-function isOverdue(i) { try { return new Date(i).getTime()<=Date.now(); } catch { return false; } }
-function isSoon(i) { try { return new Date(i).getTime()<=Date.now()+24*3600*1000; } catch { return false; } }
 
-// ponytail: 渲染跟进状态指示器（圆点 + 文本）
-function _renderFollowupStatus(panel) {
-  const statusEl = panel.querySelector('#crm-followup-status');
-  const input = panel.querySelector('#crm-next-followup');
-  if (!statusEl || !input) return;
-  const val = input.value;
-  const isOd = val ? isOverdue(val) : false;
-  const isSn = val ? (!isOd && isSoon(val)) : false;
-  const dotColor = val ? (isOd ? 'var(--danger)' : isSn ? '#ff9800' : 'var(--success)') : 'var(--text-secondary)';
-  const label = val ? (isOd ? '已逾期' : isSn ? '即将到期' : '正常') : '未设置';
-  statusEl.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>${label}`;
+// 精准更新单张卡片的跟进时间，不重建整个管道
+function _updateCardTime(contactId, nextAt) {
+  const row = document.querySelector(`.crm-contact-row[data-contact-id="${contactId}"]`);
+  if (!row) return;
+  const timeSpans = row.querySelectorAll('.crm-time');
+  // 更新下次跟进时间（第二个 span，或创建新的）
+  if (nextAt) {
+    const t = new Date(nextAt).getTime();
+    const overdue = t <= Date.now();
+    const soon = !overdue && t <= Date.now() + 24*3600*1000;
+    const cls = overdue ? 'overdue' : soon ? 'soon' : '';
+    const html = `<span class="crm-time ${cls}" title="下次跟进: ${fmtDT(nextAt)}">${overdue ? '⏰ 逾期'+daysAgo(nextAt).replace('今天','') : '⏰ '+daysUntil(nextAt)}</span>`;
+    if (timeSpans.length > 1) timeSpans[1].outerHTML = html;
+    else if (timeSpans.length === 1) timeSpans[0].insertAdjacentHTML('afterend', html);
+  } else {
+    if (timeSpans.length > 1) timeSpans[1].remove();
+  }
 }
 
 function rebindFollowupEvents(panel, contactId) {
-  const input = panel.querySelector('#crm-next-followup');
-  const statusEl = panel.querySelector('#crm-followup-status');
-  let savedVal = input?.value || '';
-
-  // 输入变更 → 状态区变为「保存」按钮
-  input?.addEventListener('input', () => {
-    if (input.value !== savedVal) {
-      statusEl.innerHTML = `<button id="crm-followup-save" style="padding:2px 8px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--bg);color:var(--text-secondary);cursor:pointer;white-space:nowrap">${lucide('save',11)} 保存</button>`;
-      statusEl.querySelector('#crm-followup-save')?.addEventListener('click', async () => {
-        const val = input.value;
-        await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
-        scheduleReminder(contactId, val);
-        savedVal = val;
-        _renderFollowupStatus(panel);
-        showToast('已更新', 'ok');
-      });
-    }
+  // 绑定保存按钮
+  panel.querySelector('#crm-followup-save')?.addEventListener('click', async () => {
+    const val = panel.querySelector('#crm-next-followup')?.value || '';
+    const r = await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: val } });
+    if (r.ok) { scheduleReminder(contactId, val); _updateCardTime(contactId, val); showToast('已更新','ok'); }
   });
 
   // 清除跟进日期
   panel.querySelector('#crm-clear-followup')?.addEventListener('click', async () => {
-    input.value = '';
-    savedVal = '';
     await window.electronAPI.crmUpdateExtra(contactId, { crmReminder: { nextFollowupAt: '' } });
     scheduleReminder(contactId, '');
-    _renderFollowupStatus(panel);
-    // 移除清除按钮
+    _updateCardTime(contactId, '');
     panel.querySelector('#crm-clear-followup')?.remove();
     showToast('已清除', 'ok');
   });
@@ -575,16 +678,100 @@ function rebindFollowupEvents(panel, contactId) {
       row.addEventListener('click', async () => {
         const uid = row.dataset.uid;
         const acct = row.dataset.account;
-        if (!uid || !acct) return;
+        if (!uid) return;
         const r = await window.electronAPI.crmGetEmailBody(uid, acct);
         if (!r.ok) { showToast('无法加载邮件','err'); return; }
         const m = r.data;
         const popup = document.createElement('div');
+        popup.className = 'crm-email-popup-overlay';
         popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-        popup.innerHTML = `<div style="background:var(--card-bg);border-radius:10px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.2)"><div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)"><div><div style="font-size:14px;font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="flex:1;overflow-y:auto;padding:16px;font-size:13px;line-height:1.6;user-select:text;-webkit-user-select:text">${m.body||'(无内容)'}</div></div>`;
+        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析<button class="crm-ai-retry-btn" id="crm-ai-retry" title="重新分析" style="display:none">${lucide('refresh-cw',12)}</button></div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
         document.body.appendChild(popup);
-        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+        // 安全渲染邮件正文：去危险标签/事件/伪协议，保留格式标签
+        const safeBody = (m.body || '(无内容)')
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+          .replace(/<object[\s\S]*?<\/object>/gi, '')
+          .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+          .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+          .replace(/\son\w+\s*=\s*\S+/gi, '')
+          .replace(/javascript\s*:/gi, 'blocked:');
+        popup.querySelector('.crm-email-popup-body').innerHTML = safeBody;
+        let _downX = 0, _downY = 0;
+        popup.addEventListener('mousedown', (ev) => { _downX = ev.clientX; _downY = ev.clientY; });
+        popup.addEventListener('click', (ev) => {
+          const moved = Math.abs(ev.clientX - _downX) > 3 || Math.abs(ev.clientY - _downY) > 3;
+          if (ev.target === popup && !moved) popup.remove();
+        });
         popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+
+        (async () => {
+          const aiContainer = popup.querySelector('#crm-email-popup-ai');
+          const aiContent = aiContainer.querySelector('.crm-email-popup-ai-content');
+          const retryBtn = aiContainer.querySelector('#crm-ai-retry');
+          if (typeof window.electronAPI?.aiSummarizeEmail !== 'function') {
+            aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">请重启应用以加载 AI 功能</span>';
+            return;
+          }
+
+          let _aiLoading = false;
+          const loadAi = async (retry) => {
+            if (_aiLoading) return;
+            _aiLoading = true;
+            aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + lucide('loader',12,'spin') + ' 分析中...</span>';
+            if (retryBtn) retryBtn.style.display = 'none';
+            try {
+              const s = await window.electronAPI.aiSummarizeEmail({
+                uid, accountId: acct || '',
+                subject: m.subject || '', body: m.body || '',
+                fromName: m.from_name || '',
+                contactId: _currentDetailId || '',
+                retry,
+              });
+              if (s.ok && (s.data.summary || s.data.suggestion || s.data.analysis)) {
+                const a = s.data;
+                const clean = (s) => (s||'').replace(/[《》「」『』]/g, '');
+                const insight = clean(a.analysis || a.summary || '');   // 【总结】
+                const reasoning = clean(a.strategy || a.suggestion || ''); // 【下一步建议】
+                const draft = clean(a.script || '');                      // 【AI回复】
+                aiContent.innerHTML = `
+                  <div class="crm-ai-insight">${escapeHtml(insight)}</div>
+                  ${reasoning ? '<div class="crm-ai-reasoning">' + escapeHtml(reasoning) + '</div>' : ''}
+                  ${draft ? `
+                  <div class="crm-ai-draft">
+                    <div class="crm-ai-draft-label">AI 回复</div>
+                    <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
+                    <button class="crm-ai-copy-btn" data-script="${escapeHtml(draft)}">${lucide('copy',12)} 复制话术</button>
+                  </div>` : ''}
+                  <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
+              } else {
+                const traceHtml = s._trace ? '<div style="margin-top:8px;font-size:10px;color:var(--text-secondary);border-top:1px solid var(--border);padding-top:6px">' + s._trace.map(t => escapeHtml(t)).join('<br>') + '</div>' : '';
+                aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + escapeHtml(s.error||'分析暂不可用') + '</span>' + traceHtml + '<button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>';
+              }
+            } catch (e) { aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">分析失败: ' + escapeHtml(e.message||'') + '</span><button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>'; }
+            if (retryBtn) retryBtn.style.display = '';
+            _aiLoading = false;
+          };
+
+          // 事件委托：容器统一处理按钮点击，不依赖单个 bind
+          aiContent.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            if (btn.classList.contains('crm-ai-copy-btn')) {
+              const txt = btn.dataset.script;
+              navigator.clipboard.writeText(txt).then(() => {
+                btn.innerHTML = lucide('check',12) + ' 已复制';
+                setTimeout(() => { btn.innerHTML = lucide('copy',12) + ' 复制话术'; }, 2000);
+              }).catch(() => showToast('复制失败', 'err'));
+            }
+            if (btn.classList.contains('crm-ai-retry-btn-inline')) {
+              loadAi(true);
+            }
+          });
+
+          if (retryBtn) retryBtn.addEventListener('click', () => loadAi(true));
+          await loadAi(false);
+        })();
       });
     });
   };

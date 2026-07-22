@@ -305,14 +305,14 @@ function register(ipcMain, deps) {
 
   ipcMain.handle('contacts:updateBounce', async (_e, email, bounceData) => {
     const existing = db.getByEmail(email);
-    if (existing) db.update(existing.id, { is_bounced: true, bounce_type: bounceData.type || 'unknown', bounce_reason: bounceData.reason || '', bounced_at: new Date().toISOString() });
+    if (existing) db.update(existing.id, { _status: 'bounced', is_bounced: true, bounce_type: bounceData.type || 'unknown', bounce_reason: bounceData.reason || '', bounced_at: new Date().toISOString() });
     if (existing) _notify();
     return { ok: true };
   });
 
   ipcMain.handle('contacts:clearBounce', async (_e, email) => {
     const existing = db.getByEmail(email);
-    if (existing) db.update(existing.id, { is_bounced: false, bounce_type: '', bounce_reason: '', bounced_at: '' });
+    if (existing) db.update(existing.id, { _status: '', is_bounced: false, bounce_type: '', bounce_reason: '', bounced_at: '' });
     if (existing) _notify();
     return { ok: true };
   });

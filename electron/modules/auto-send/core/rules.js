@@ -17,7 +17,7 @@ const DEFAULT_RULES = {
 // ── 常量 ─────────────────────────────────────────────────────────────────────
 
 /** 禁止自动发送的 _status 值（中英文） */
-const SKIP_STATUSES = new Set(['reached','replied','autoreply']);
+const SKIP_STATUSES = new Set(['reached','replied','autoreply','bounced']);
 
 /** 禁止自动发送的 tags 值 */
 const SKIP_TAGS = new Set(['reached']);

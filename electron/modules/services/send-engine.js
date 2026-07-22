@@ -234,6 +234,7 @@ async function _sendOne(ctx, email, log, deps) {
     if (!log.daily_counts) log.daily_counts = {};
     log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
     log.daily_count = (log.daily_count || 0) + toList.length; // ponytail: 同步总量，兼容 send:status 读取
+    if (!log.first_send_at) log.first_send_at = Date.now();
     _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
     // 记录互动
     try {
@@ -266,6 +267,7 @@ async function _sendOne(ctx, email, log, deps) {
         if (!log.daily_counts) log.daily_counts = {};
         log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
         log.daily_count = (log.daily_count || 0) + toList.length;
+        if (!log.first_send_at) log.first_send_at = Date.now();
         _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
         Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 重试成功 | ${accountId}`);
         return { ok: true, n: toList.length };
@@ -373,13 +375,14 @@ async function runSendBatch(deps, sendProgress) {
   const ctx = _buildContext(config);
   const acctMgr = require('./account-manager');
 
-  let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: {}, last_date: '' };
+  let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: {}, first_send_at: 0 };
   if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志 */ } }
-  if ((log.last_date_beijing || log.last_date) !== beijingToday()) {
+  // 24小时窗口重置：从首次发送起超24h后清零
+  if (!log.first_send_at) log.first_send_at = 0;
+  if (log.first_send_at > 0 && (Date.now() - log.first_send_at) > 24 * 3600 * 1000) {
     log.daily_count = 0;
     log.daily_counts = {};
-    log._accountStates = {};
-    log.last_date_beijing = beijingToday();
+    log.first_send_at = 0;
   }
   if (!log.daily_counts) log.daily_counts = {};
   if (!log._accountStates) log._accountStates = {};
@@ -603,6 +606,7 @@ function scheduleAutoBounceCheck(mainWindow, tray) {
         const contact = contactsDb.getByEmail(key);
         if (contact) {
           contactsDb.update(contact.id, {
+            _status: 'bounced',
             is_bounced: true,
             bounce_type: b.type || 'unknown',
             bounce_reason: b.reason || '',

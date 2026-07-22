@@ -3,10 +3,14 @@
 
 const path = require("path");
 const fs = require("fs");
+const { Log } = require("../core/logger");
 const crmService = require("../services/crm-service");
 const { IPC } = require("../core/contract");
 
 function register(ipcMain, deps) {
+
+  // 启动时清理旧格式 AI 缓存（没有 ai_brief 列的历史数据）
+  try { const n = crmService.clearAllAiCache(); if (n > 0) Log.info("AI", "清理旧缓存 " + n + " 条"); } catch { /* 降级 */ }
 
   // ── CRM 管道 ──────────────────────────────────────────────────────────
 
@@ -67,6 +71,132 @@ function register(ipcMain, deps) {
       const result = crmService.getEmailBody(uid, accountId);
       return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
     } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ── AI 邮件总结 ──────────────────────────────────────────────────────────
+
+  ipcMain.handle(IPC.AI.SUMMARIZE_EMAIL, async (_e, { uid, accountId, subject, body, fromName, contactId, preview, retry }) => {
+    const trace = []; const addTrace = (s) => { trace.push(s); Log.info("AI邮件总结", s); };
+    try {
+      addTrace("① uid=" + (uid||'?') + " preview=" + !!preview + " retry=" + !!retry + " cid=" + (contactId||'?'));
+
+      if (!retry) {
+        const cached = crmService.getAiSummary(uid, accountId);
+        if (cached.ai_summary) {
+          const brief = cached.ai_brief || cached.ai_summary || '';
+          addTrace("② 缓存命中"); return { ok: true, data: { summary: cached.ai_summary, summaryBrief: brief, suggestion: cached.ai_suggestion, cached: true }, _trace: trace };
+        }
+        addTrace("② 缓存未命中");
+      } else { addTrace("② retry → 跳过缓存"); }
+
+      if (preview) { addTrace("③ preview → 空返回"); return { ok: true, data: { summary: '', suggestion: '', cached: false }, _trace: trace }; }
+
+      const { APP_ROOT } = require("../config");
+      const cfgPath = path.join(APP_ROOT, "send", "config.json");
+      addTrace("③ cfg=" + cfgPath);
+      let apiKey = "";
+      try { if (fs.existsSync(cfgPath)) { const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8")); apiKey = cfg?.translate?.deepseek?.apiKey || ""; } } catch (e) { addTrace("③ err:" + e.message); }
+      if (!apiKey) { addTrace("④ 无Key"); return { ok: false, error: "请先配置 DeepSeek API Key", _trace: trace }; }
+      addTrace("④ Key=..." + apiKey.slice(-4));
+
+      // ── CRM 上下文 ──
+      const stageMap = { reaching: '触达中', quoting: '报价中', trial: '试单', cooperating: '合作中', lost: '已流失' };
+      let stageLabel = '', historyText = '', prefsText = '';
+      if (contactId) {
+        try {
+          const detail = crmService.getDetail(contactId);
+          if (detail.ok) {
+            const c = detail.data.contact;
+            stageLabel = stageMap[c.stage] || stageMap[c.opp_stage] || c.stage || '';
+            const prefs = c._extra?.crmPreferences || {};
+            const parts = [];
+            if (c.company) parts.push(c.company);
+            if (c.country) parts.push(c.country);
+            if (prefs.preferredRoutes) parts.push('航线:' + prefs.preferredRoutes);
+            if (prefs.cargoTypes?.length) parts.push('货:' + prefs.cargoTypes.join('/'));
+            prefsText = parts.join(' | ');
+          }
+        } catch { /* 降级 */ }
+        try { historyText = crmService.getEmailHistorySummary(contactId, 5); } catch { /* 降级 */ }
+        addTrace("⑤ ctx stage=" + (stageLabel||'?') + " hist=" + historyText.length + " prefs=" + (prefsText||'?'));
+      }
+
+      const promptBody = (body || subject || '').slice(0, 15000);
+      addTrace("⑥ body=" + promptBody.length + "字");
+
+      const prompt = `你是顶级货代销冠，坐在同事旁边递纸条。不要像AI写报告。
+
+【铁律】
+- 开头给结论，不铺垫
+- 有明确倾向——"做X，别做Y"
+- 话术给原文，可复制发送
+- 像人说话，不像机器
+${stageLabel ? '- 当前阶段：' + stageLabel : ''}
+
+${prefsText ? '客户画像：' + prefsText : ''}
+${historyText ? '最近往来：\n' + historyText : ''}
+
+客户邮件${fromName ? '（' + fromName + '）' : ''}：
+---
+${promptBody}
+---
+
+回复格式（不用markdown）：
+【摘要】15字以内一句话概括
+【总结】客户意图、决策链、真实诉求
+【下一步建议】具体打法和心理博弈策略
+【AI回复】直接可用的回复文案`;
+
+      addTrace("⑦ API prompt=" + prompt.length + "字");
+      const resp = await new Promise((resolve, reject) => {
+        const https = require("https");
+        const req = https.request({
+          hostname: "api.deepseek.com", path: "/v1/chat/completions", method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+          timeout: 25000,
+        }, (res) => { let d = ""; res.on("data", c => d += c); res.on("end", () => {
+          addTrace("⑧ HTTP" + res.statusCode + " len=" + d.length);
+          try { resolve(JSON.parse(d)); } catch (e) { addTrace("⑧ JSON失败"); reject(new Error("JSON解析失败")); }
+        }); });
+        req.on("error", (e) => { addTrace("⑧ net:" + e.message); reject(e); });
+        req.on("timeout", () => { addTrace("⑧ timeout"); req.destroy(); reject(new Error("请求超时")); });
+        req.end(JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: prompt }], temperature: 0.4, max_tokens: 600 }));
+      });
+
+      const text = resp?.choices?.[0]?.message?.content || "";
+      addTrace("⑨ resp=" + text.length + "字 preview=" + text.slice(0,80));
+      if (!text) { addTrace("⑨ 空"); return { ok: false, error: "DeepSeek 返回空内容", _trace: trace }; }
+
+      const extract = (label) => {
+        for (const p of ['【' + label + '】', label + '：', label + ':']) {
+          const idx = text.indexOf(p);
+          if (idx < 0) continue;
+          let r = text.slice(idx + p.length);
+          const next = r.search(/【(?:摘要|总结|下一步建议|AI回复)】/);
+          if (next > 0) r = r.slice(0, next);
+          return r.trim();
+        }
+        return '';
+      };
+      const clean = (s) => s.replace(/[《》「」『』]/g, '').replace(/[""]/g, '"').replace(/['']/g, "'").trim();
+      const brief = clean(extract('摘要')) || '';
+      const analysis = clean(extract('总结'));
+      const strategy = clean(extract('下一步建议'));
+      const script = clean(extract('AI回复'));
+      const summary = analysis || clean(text.split('\n').filter(Boolean)[0] || '');
+      const suggestion = strategy || '';
+      const summaryBrief = brief || (summary || '').split(/[。.！!？?]/)[0] || summary;
+      addTrace("⑩ 解析OK brief=" + summaryBrief);
+
+      crmService.saveAiSummary(uid, accountId, summary, suggestion, summaryBrief);
+      addTrace("⑪ 缓存完成");
+
+      return { ok: true, data: { summary, summaryBrief, suggestion, analysis, strategy, script, cached: false }, _trace: trace };
+    } catch (e) {
+      addTrace("💥 " + (e.message || ''));
+      Log.error("AI邮件总结", "异常", e.stack || e);
+      return { ok: false, error: e.message, _trace: trace };
+    }
   });
 
   // ── 今日报告 ──────────────────────────────────────────────────────────

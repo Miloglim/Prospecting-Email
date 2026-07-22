@@ -1,5 +1,8 @@
 /* ── 仪表盘编辑模式 ────────────────────────────────────────── */
 
+/* 基础：画布填满可用空间 */
+#dash-canvas { flex: 1; min-height: 0; }
+
 /* 编辑模式容器 */
 #page-dashboard.dash-editing #dash-canvas {
   position: relative;

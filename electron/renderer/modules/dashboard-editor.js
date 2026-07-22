@@ -23,6 +23,7 @@ const DEFAULT_LAYOUT = {
     'dash-window':     { x:660, y:220, w:335, h:80  },
     'dash-feed':       { x:0,   y:305, w:655, h:135 },
     'stat-new':        { x:660, y:305, w:335, h:135 },
+    'dash-wide':       { x:0,   y:445, w:995, h:80 },
   }
 };
 
@@ -93,7 +94,7 @@ function applyLayout(layout) {
   canvas.style.display = 'block';
   canvas.style.position = 'relative';
   const maxY = Math.max(...Object.values(layout.cards).map(c => c.y + c.h), 0);
-  canvas.style.minHeight = (maxY + 60 + layout.gap) + 'px';
+  canvas.style.minHeight = (maxY + layout.gap) + 'px';
 
   // 放置卡片
   Object.entries(layout.cards).forEach(([id, c]) => {

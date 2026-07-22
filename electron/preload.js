@@ -148,6 +148,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   crmGetEmailBody: (uid, accountId) => ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
   crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
 
+  // AI
+  aiSummarizeEmail: (params) => ipcRenderer.invoke("ai:summarizeEmail", params),
+
   // 今日报告
   generateReport: () => ipcRenderer.invoke("report:generate"),
   openPath: (filePath) => ipcRenderer.invoke("shell:openPath", filePath),

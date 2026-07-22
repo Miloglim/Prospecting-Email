@@ -745,7 +745,7 @@ async function addToQueue() {
     // 上下文相关：已发送（历史 + contacts.json）
     const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
     const activeMembers = sendable.filter(m => !alreadySent.includes(m));
-    const bouncedMembers = members.filter(m => m.bounced && m.bounceType !== 'temporary');
+    const bouncedMembers = members.filter(m => m._status === 'bounced');
     if (!activeMembers.length && !bouncedMembers.length) {
       const stage = S.sendHistory[name]?.stage;
       if ((!stage || stage === 'cold') && !S._justReactivated.has(name)) needReset.push({ name, count: members.length });

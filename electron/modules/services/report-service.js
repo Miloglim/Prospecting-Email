@@ -36,7 +36,7 @@ async function generate(aiFn) {
   ).all(today + "%");
   const inboxMap = {};
   for (const r of inboxToday) inboxMap[r.type] = r.n;
-  const newMails = (inboxMap.reply || 0) + (inboxMap["auto-reply"] || 0) + (inboxMap.bounce || 0) + (inboxMap.other || 0);
+  const newMails = (inboxMap.reply || 0) + (inboxMap["auto-reply"] || 0) + (inboxMap.other || 0); // 不含 bounce，退信不算"新邮件"
   const replies = inboxMap.reply || 0;
   const autoreplies = inboxMap["auto-reply"] || 0;
   const bounces = inboxMap.bounce || 0;
@@ -60,7 +60,7 @@ async function generate(aiFn) {
   let reachedCount = 0;
   try {
     const r = db.prepare(
-      "SELECT COUNT(*) as n FROM contacts WHERE _status = 'reached' OR tags LIKE '%reached%'"
+      "SELECT COUNT(*) as n FROM contacts WHERE _status = 'reached' OR tags LIKE '%\"reached\"%'"
     ).get();
     reachedCount = r?.n || 0;
   } catch { /* 降级 */ }

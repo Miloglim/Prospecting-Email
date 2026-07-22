@@ -68,7 +68,6 @@ const KNOWN_FIELDS = [
   { key: 'linkedin', label: 'LinkedIn' },
   { key: 'phone', label: '电话' },
   { key: 'assignee', label: '跟进人' },
-  { key: 'contactPerson', label: '对接人' },
   { key: 'stage', label: '阶段' },
   { key: 'clientType', label: '类型' },
 ];
@@ -542,7 +541,6 @@ const DETAIL_COLS = [
   { key: 'stage', label: '阶段', always: false },
   { key: '_status', label: '状态', always: true },
   { key: '_tags', label: '标签', always: false },
-  { key: 'contact_person', label: '对接人', always: false },
   { key: 'assignee', label: '跟进人', always: false },
   { key: '_followup', label: '备注', always: false },
   { key: '_actions', label: '操作', always: true },
@@ -686,7 +684,7 @@ export function renderContactDetail(company) {
   // ── 构建列头和数据单元格 ──────────────────────────────────────────
   const STAGE_LABEL = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
   const TYPE_LABEL = { agent:'代理', direct:'直客', unlabeled:'通用' };
-  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复' };
+  const STATUS_LABEL = { '':'未触达', reached:'已触达', replied:'有回复', autoreply:'自动回复', bounced:'退信' };
 
   const _th = (col, isExtra) => {
     const style = isExtra ? 'color:#999;font-weight:400' : '';
@@ -714,7 +712,7 @@ export function renderContactDetail(company) {
       case '_status': {
         const v = m._status || '';
         const label = STATUS_LABEL[v] || '未触达';
-        const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817' };
+        const DOT = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817', bounced:'#e5484d' };
         const dot = DOT[v] || 'var(--text-secondary)';
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
@@ -723,7 +721,6 @@ export function renderContactDetail(company) {
         const ts = (m.tags || []).map(t => TAG_LABEL[t] || t);
         return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts.length ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts.join(','))}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
       }
-      case 'contact_person': return `<td data-field="contact_person" class="editable">${escapeHtml(m.contact_person || '')}</td>`;
       case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
       case '_followup': {
         // ponytail: 管线入口 — tags CRM标签 或 _status 为 replied/autoreply
@@ -754,7 +751,7 @@ export function renderContactDetail(company) {
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
     </div>
-    <div class="contacts-detail-body" style="overflow-x:auto">
+    <div class="contacts-detail-body">
       <table style="white-space:nowrap">
         <thead><tr>${visibleCols.map(c => _th(c, false)).join('')}${extraCols.map(c => _th(c, true)).join('')}</tr></thead>
         <tbody>
@@ -836,6 +833,7 @@ export function renderContactDetail(company) {
       if (headerEl && members) headerEl.textContent = `${company} · ${members.length} 位联系人 ${clientTypeTag(ctype)}`;
       const sidebarEl = document.querySelector(`.contact-item[data-company="${escapeHtml(company)}"] .ci-count`);
       if (sidebarEl && members) sidebarEl.textContent = members.length;
+      CS.syncContactsUI();
       // 如果公司无联系人，移除侧边栏项
       if (members && !members.length) {
         S.contactsGroupMap.delete(company);
@@ -882,7 +880,7 @@ export function renderContactDetail(company) {
   if (delBouncedBtn) {
     delBouncedBtn.addEventListener('click', async () => {
       const allMembers = S.contactsGroupMap.get(company) || [];
-      const bounced = allMembers.filter(m => m.bounced);
+      const bounced = allMembers.filter(m => m._status === 'bounced');
       if (!bounced.length) { showToast('该公司无退信联系人', 'warn'); return; }
       let ok = (S._deleteSkipUntil || 0) > Date.now();
       if (!ok) {
@@ -1001,7 +999,7 @@ export function renderContactDetail(company) {
     country: ['Brazil','Mexico','Colombia','Chile','Peru','Argentina','Ecuador','Portugal','Spain','United States','China'],
     client_type: ['agent','direct','unlabeled'],
     stage: ['cold','f1','f2','f3','f4'],
-    _status: ['', 'reached','replied','autoreply'],
+    _status: ['', 'reached','replied','autoreply','bounced'],
   };
 
   const INPUT_STYLE = 'min-width:140px;padding:5px 8px;border:2px solid var(--primary);border-radius:6px;font-size:12px;background:var(--card-bg);color:var(--text);outline:none;box-shadow:0 0 0 3px rgba(26,26,26,.08)';
@@ -1040,7 +1038,7 @@ export function renderContactDetail(company) {
         if (selType === 'stage') {
           td.textContent = labels[val] || val;
         } else if (selType === '_status') {
-          const dotColors = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817' };
+          const dotColors = { reached:'#3b82f6', replied:'#22a644', autoreply:'#e6a817', bounced:'#e5484d' };
           const dot = dotColors[val] || 'var(--text-secondary)';
           td.innerHTML = `<span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${labels[val] || val}</span>`;
         } else {
@@ -1351,7 +1349,6 @@ function showContactEditor(contact) {
           <div class="ec-field"><label>领英</label><input id="ec-linkedin" value="${escapeHtml(contact.linkedin || '')}"></div>
         </div>
         <div class="ec-panel" data-panel="tracking">
-          <div class="ec-field"><label>对接人</label><input id="ec-contact-person" value="${escapeHtml(contact.contact_person || '')}" placeholder="对方公司的联系人"></div>
           <div class="ec-field"><label>跟进人</label><input id="ec-assignee" value="${escapeHtml(contact.assignee || '')}" placeholder="我方跟进人员"></div>
         </div>
         <div class="ec-panel" data-panel="status">
@@ -1390,7 +1387,6 @@ function showContactEditor(contact) {
         linkedin: document.getElementById('ec-linkedin')?.value?.trim() || '',
         clientType: document.getElementById('ec-client-type')?.value || 'unlabeled',
         stage: document.getElementById('ec-stage')?.value || 'cold',
-        contact_person: document.getElementById('ec-contact-person')?.value?.trim() || '',
         assignee: document.getElementById('ec-assignee')?.value?.trim() || '',
         followup_note: document.getElementById('ec-followup')?.value?.trim() || '',
         tags: contact.tags,

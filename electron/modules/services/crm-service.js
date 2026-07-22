@@ -8,12 +8,17 @@ const { Log } = require("../core/logger");
 
 // ── CRM 邮件本地缓存（独立于 inbox，永久保留）────────────────────────────
 function _ensureEmailCache() {
-  getDb().exec(`CREATE TABLE IF NOT EXISTS crm_email_cache (
+  const db = getDb();
+  db.exec(`CREATE TABLE IF NOT EXISTS crm_email_cache (
     account_id TEXT NOT NULL, uid TEXT NOT NULL,
     subject TEXT, from_addr TEXT, from_name TEXT, date TEXT, body TEXT,
     cached_at TEXT NOT NULL,
     PRIMARY KEY (account_id, uid)
   )`);
+  // ponytail: 增量加列，兼容旧表（SQLite 不支持 IF NOT EXISTS for ALTER TABLE，靠 try-catch 消化重复加列错误）
+  try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_summary TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
+  try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_suggestion TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
+  try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_brief TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
 }
 
 // ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
@@ -247,7 +252,7 @@ function getContactEmails(contactId) {
   if (!contact) return { ok: false, error: "联系人不存在" };
   const db = getDb();
   const rows = db.prepare(
-    `SELECT uid, subject, from_addr, from_name, date, body, type FROM inbox
+    `SELECT uid, account_id, subject, from_addr, from_name, date, body, type FROM inbox
      WHERE from_addr = ? OR contact_db_id = ? OR contact_id = ?
      ORDER BY date DESC LIMIT 50`
   ).all(contact.email, contactId, contactId);
@@ -282,4 +287,48 @@ function getEmailBody(uid, accountId) {
   return { ok: true, data: row };
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getContactEmails, getEmailBody, PIPELINE_STAGES, TAG };
+// ── 邮件往来摘要（供 AI 上下文） ────────────────────────────────────────────
+function getEmailHistorySummary(contactId, limit = 5) {
+  if (!contactId) return '';
+  const contact = contactsDb.getById(contactId);
+  if (!contact) return '';
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT subject, from_addr, from_name, date, type FROM inbox
+     WHERE from_addr = ? OR contact_db_id = ? OR contact_id = ?
+     ORDER BY date DESC LIMIT ?`
+  ).all(contact.email, contactId, contactId, limit);
+  if (!rows.length) return '';
+  return rows.map(r =>
+    `[${r.type === 'reply' ? '客户来信' : r.type === 'bounce' ? '退信' : '我方发信'}]
+    ${r.date?.slice(0,10)||''} ${r.subject||'(无)'}`
+  ).join('\n');
+}
+
+// ── AI 邮件总结缓存 ──────────────────────────────────────────────────────────
+function saveAiSummary(uid, accountId, summary, suggestion, brief) {
+  _ensureEmailCache();
+  const db = getDb();
+  try {
+    db.prepare("UPDATE crm_email_cache SET ai_summary = ?, ai_suggestion = ?, ai_brief = ? WHERE uid = ? AND account_id = ?")
+      .run(summary || '', suggestion || '', brief || '', uid, accountId || '');
+  } catch { /* 缓存写入失败不影响主流程 */ }
+}
+
+function getAiSummary(uid, accountId) {
+  _ensureEmailCache();
+  const db = getDb();
+  const row = db.prepare("SELECT ai_summary, ai_suggestion, ai_brief FROM crm_email_cache WHERE uid = ? AND account_id = ?")
+    .get(uid, accountId || '');
+  return row || { ai_summary: '', ai_suggestion: '', ai_brief: '' };
+}
+
+function clearAllAiCache() {
+  _ensureEmailCache();
+  const db = getDb();
+  // 只清 ai_brief 为空但有旧摘要的记录（旧格式迁移）
+  const r = db.prepare("UPDATE crm_email_cache SET ai_summary = '', ai_suggestion = '', ai_brief = '' WHERE ai_summary != '' AND ai_brief IS NULL").run();
+  return r.changes;
+}
+
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getContactEmails, getEmailBody, getEmailHistorySummary, saveAiSummary, getAiSummary, clearAllAiCache, PIPELINE_STAGES, TAG };

@@ -120,6 +120,12 @@ export async function loadDashboard(){
     const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;
     document.getElementById('dash-progress-fill').style.width=Math.min(pct,100)+'%';
     document.getElementById('dash-progress-text').textContent=s.sentToday>0?`${s.sentToday}/${s.dailyLimit}`:'等待发送';
+    // 下次重置倒计时 → 剩余限额卡片
+    const remEl=document.getElementById('stat-remaining');
+    if(remEl&&s.firstSendAt>0){const r=new Date(s.firstSendAt+24*3600*1000);remEl.title=`下次重置 ${r.getMonth()+1}/${r.getDate()} ${String(r.getHours()).padStart(2,'0')}:${String(r.getMinutes()).padStart(2,'0')}`;}
+    const remLabel=document.querySelector('[data-card-id="stat-remaining"] .stat-label');
+    if(remLabel&&s.firstSendAt>0){const r=new Date(s.firstSendAt+24*3600*1000);remLabel.textContent=`剩余限额 · 重置 ${r.getMonth()+1}/${r.getDate()} ${String(r.getHours()).padStart(2,'0')}:${String(r.getMinutes()).padStart(2,'0')}`;}
+    else if(remLabel){remLabel.textContent='剩余限额';}
   }catch(e){document.getElementById('stat-sent').textContent='--'}
 
   // 账号状态
@@ -185,7 +191,37 @@ export async function loadDashboard(){
     }else{
       document.getElementById('dash-stage-dist').textContent='加载失败';
     }
-    // 待办详情（逐条记录，含缺失字段明细）
+    // 今日待办表格
+    const STAGES_LABEL={reaching:'触达中',quoting:'报价中',trial:'试单',cooperating:'合作中',lost:'已流失'};
+    const todoTbody=document.querySelector('#dash-todo-table tbody');
+    const todoSum=document.getElementById('dash-todo-summary');
+    if(todoTbody&&allPipelineContacts.length){
+      const sorted=[...allPipelineContacts].sort((a,b)=>{
+        const na=a._extra?.crmReminder?.nextFollowupAt||'';
+        const nb=b._extra?.crmReminder?.nextFollowupAt||'';
+        if(na&&!nb)return -1;if(!na&&nb)return 1;
+        if(na&&nb)return new Date(na)-new Date(nb);
+        return (b.last_note_at||'')>(a.last_note_at||'')?1:-1;
+      });
+      const STAGE_COLORS={reaching:'#ff9800',quoting:'#2196f3',trial:'#8e24aa',cooperating:'#4caf50',lost:'#b0b0b0'};
+      const rows=sorted.slice(0,15);
+      todoTbody.innerHTML=rows.map(c=>{
+        const st=contactStageMap[c.id]||'触达中';
+        const stColor=STAGE_COLORS[Object.keys(STAGE_COLORS).find(k=>STAGES_LABEL[k]===st)]||'#999';
+        function ago(d){if(!d)return'—';const diff=Math.floor((Date.now()-new Date(d).getTime())/86400000);return diff<=0?'今天':diff===1?'1天前':`${diff}天前`;}
+        function until(d){if(!d)return'—';const diff=Math.floor((new Date(d).getTime()-Date.now())/86400000);return diff<=0?'今天':diff===1?'1天后':`${diff}天后`;}
+        const nextAt=c._extra?.crmReminder?.nextFollowupAt;
+        let nextTd='—';
+        if(nextAt){const t=new Date(nextAt).getTime();const od=t<=Date.now();nextTd=`<span style="color:${od?'var(--danger)':'var(--text-secondary)'}">${od?'⏰ 逾期'+ago(nextAt).replace('今天',''):'⏰ '+until(nextAt)}</span>`;}
+        return`<tr style="border-bottom:1px solid var(--border-light,#f5f5f5);cursor:pointer" data-cid="${c.id}" onclick="if(window.__crmOpenDetail)window.__crmOpenDetail('${c.id}')"><td style="padding:4px 8px">${escapeHtml([c.firstName,c.lastName].filter(Boolean).join(' ')||c.email||'—')}</td><td style="padding:4px 8px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.company||'—')}</td><td style="padding:4px 8px"><span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;background:${stColor}18;color:${stColor}">${st}</span></td><td style="padding:4px 8px;color:var(--text-secondary)">📝 ${ago(c.last_note_at)}</td><td style="padding:4px 8px">${nextTd}</td></tr>`;
+      }).join('');
+      const stageCounts={};allPipelineContacts.forEach(c=>{const st=contactStageMap[c.id]||'触达中';stageCounts[st]=(stageCounts[st]||0)+1;});
+      todoSum.textContent=`共 ${allPipelineContacts.length} 人 · ${Object.entries(stageCounts).map(([k,v])=>`${k} ${v}`).join(' · ')}`;
+    }else if(todoTbody){
+      todoTbody.innerHTML='<tr><td colspan="5" style="padding:12px;color:var(--text-secondary);text-align:center">暂无跟进客户</td></tr>';
+      todoSum.textContent='';
+    }
+    // 待完善（保留原样式功能）
     try{
       const PREF_LABELS={preferredRoutes:'偏好路线',cargoTypes:'货物类型',decisionRole:'决策角色',priceSensitivity:'价格敏感度',preferredPorts:'偏好港口',annualVolume:'年货量'};
       const PREFS_KEYS=Object.keys(PREF_LABELS);
@@ -300,6 +336,9 @@ document.getElementById('dash-gen-report')?.addEventListener('click',async funct
   }catch(e){alert('生成失败: '+e.message)}
   finally{btn.disabled=false;btn.textContent='生成今日报告';}
 });
+document.getElementById('dash-open-reports')?.addEventListener('click', () => {
+  window.electronAPI.openReportsFolder();
+});
 export function initNavigation(){const n=document.querySelectorAll('.nav-item');const s=document.querySelectorAll('.nav-sub');const p=document.querySelectorAll('.page');document.querySelector('.nav-parent')?.addEventListener('click',function(e){e.stopPropagation();this.classList.toggle('open');s.forEach(s=>s.classList.toggle('show'))});[...n,...s].forEach(i=>{if(i.classList.contains('nav-parent'))return;i.addEventListener('click',()=>{n.forEach(n=>n.classList.remove('active'));s.forEach(s=>s.classList.remove('active'));i.classList.add('active');if(i.classList.contains('nav-sub'))document.querySelector('.nav-parent')?.classList.add('active');p.forEach(p=>p.classList.remove('active'));const id=i.dataset.page;document.getElementById(`page-${id}`)?.classList.add('active');window.__pageHandlers[id]?.()})})}
 export function findById(a,i){return a?.find(x=>x.id===i)}
 export function truncate(s,l){return s?.length>l?s.slice(0,l)+'...':s}
@@ -322,15 +361,15 @@ export function groupByCompany(data){const g={};for(const c of data){const k=c.c
 // 统一入口：所有入队路径（手动/背调/月度报告/自动发送）必须经过此判定
 
 /** 禁止发送的 _status 值（中英文） */
-const SKIP_STATUSES = new Set(['reached','replied','autoreply']);
+const SKIP_STATUSES = new Set(['reached','replied','autoreply','bounced']);
 
 /** 禁止发送的 tags 值 */
 const SKIP_TAGS = new Set(['reached']);
 
 /** 跳过原因 → 中文展示标签 */
 const SKIP_LABEL = {
-  noEmail: '无邮箱', bounced: '已退信',
-  'status:reached': '已触达', 'status:replied': '有回复', 'status:autoreply': '自动回复',
+  noEmail: '无邮箱',
+  'status:reached': '已触达', 'status:replied': '有回复', 'status:autoreply': '自动回复', 'status:bounced': '退信',
   'tags:reached': '标签:已触达',
 };
 
@@ -342,8 +381,8 @@ const SKIP_LABEL = {
 export function isContactSendable(c) {
   if (!c.email || !c.email.includes('@') || c.email.endsWith('@no.email'))
     return { ok: false, reason: 'noEmail' };
-  if (c.bounced && c.bounceType !== 'temporary')
-    return { ok: false, reason: 'bounced' };
+  if (c._status === 'bounced')
+    return { ok: false, reason: 'status:bounced' };
   if (c._status && SKIP_STATUSES.has(c._status))
     return { ok: false, reason: 'status:' + c._status };
   if ((c.tags || []).some(t => SKIP_TAGS.has(t))) {

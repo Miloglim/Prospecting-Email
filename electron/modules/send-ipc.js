@@ -55,9 +55,9 @@ function register(ipcMain, deps) {
   });
 
   ipcMain.handle('send:status', async () => {
-    const lp = path.join(APP_ROOT, 'send', 'send-log.json'); let dc = 0, ld = '';
-    if (fs.existsSync(lp)) { const l = JSON.parse(fs.readFileSync(lp, 'utf-8')); dc = l.daily_count || 0; ld = l.last_date_beijing || l.last_date || ''; }
-    return { queueLength: deps.sendQueue.length, isPaused: deps.isPaused, dailyCount: dc, lastDate: ld };
+    const lp = path.join(APP_ROOT, 'send', 'send-log.json'); let dc = 0, ld = '', fsAt = 0;
+    if (fs.existsSync(lp)) { const l = JSON.parse(fs.readFileSync(lp, 'utf-8')); dc = l.daily_count || 0; ld = l.last_date_beijing || l.last_date || ''; fsAt = l.first_send_at || 0; }
+    return { queueLength: deps.sendQueue.length, isPaused: deps.isPaused, dailyCount: dc, lastDate: ld, firstSendAt: fsAt };
   });
 
   ipcMain.handle('send:saveState', async (_e, data) => {
