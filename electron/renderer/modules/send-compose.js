@@ -132,7 +132,7 @@ function showSendContextMenu(companyName, x, y) {
   if (!ctxMenu) return;
   const members = S.sendCompanies[companyName] || [];
   const ctype = members[0]?.clientType || 'unlabeled';
-  const stage = members[0]?.stage || members[0]?._stage || 'cold';
+  const stage = S.sendHistory[companyName]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
   const lang = countryToLang(members[0]?.country || '');
   const card = S.selectedCards[companyName];
   const isUserTpl = card?._templateSource === 'user';
@@ -420,14 +420,22 @@ export function renderCompanyList(filter) {
       '</div>';
     }).join('');
   } else {
-    // 活跃视图：按阶段分组（兼容 DB 中残留的中文/大写 stage 值）
+    // 活跃视图：按联系人个体阶段分组（同公司可出现在多个阶段）
     const STAGE_NORM = { '冷开发':'cold', 'F1':'f1', 'F2':'f2', 'F3':'f3', 'F4':'f4' };
     const stageGroups = {};
     visible.forEach(([name, members]) => {
-      const raw = members[0]?.stage || members[0]?._stage || 'cold';
-      const stage = STAGE_NORM[raw] || (typeof raw === 'string' ? raw.toLowerCase() : 'cold');
-      if (!stageGroups[stage]) stageGroups[stage] = [];
-      stageGroups[stage].push([name, members]);
+      // 按每个联系人的个体阶段拆分
+      const byStage = {};
+      members.forEach(c => {
+        const raw = c.stage || c._stage || 'cold';
+        const st = STAGE_NORM[raw] || (typeof raw === 'string' ? raw.toLowerCase() : 'cold');
+        if (!byStage[st]) byStage[st] = [];
+        byStage[st].push(c);
+      });
+      Object.entries(byStage).forEach(([st, stageMembers]) => {
+        if (!stageGroups[st]) stageGroups[st] = [];
+        stageGroups[st].push([name, stageMembers]);
+      });
     });
     let html = '';
     for (const stage of S.STAGES) {
@@ -642,7 +650,7 @@ export async function renderSelectedCards() {
     const members = S.sendCompanies[name] || [];
     const ctype = members[0]?.clientType || 'unlabeled';
     const hist = S.sendHistory[name];
-    const stage = members[0]?.stage || members[0]?._stage || 'cold';
+    const stage = S.sendHistory[name]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
     const lang = countryToLang(members[0]?.country || '');
     const usedSentences = hist?.usedSentences || [];
     // ponytail: 每次加入队列时重新读取全局模板模式，不保留旧选择
@@ -841,7 +849,7 @@ async function addToQueue() {
       if (!await showConfirm(`<div style="line-height:1.8"><b>${escapeHtml(name)}</b> 有 <span style="color:#e5484d">${invalid.length}</span> 个邮箱格式异常：<br><br>${invalidList}<br>仅发送 <b>${valid.length}</b> 个有效邮箱，是否继续？</div>`)) continue;
     }
     const lang = card.lang;
-    const stage = members[0]?.stage || members[0]?._stage || 'cold';
+    const stage = S.sendHistory[name]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
 
     const useUserTpl = card._templateSource === 'user' && card._userTemplate;
     let baseSubject, body;

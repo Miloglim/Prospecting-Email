@@ -342,9 +342,7 @@ const AUTO_SEND = {
 const DISCOVER = {
   /** 搜索潜在客户 */
   SEARCH: "discover:search",
-  /** @deprecated 已由 COMPANY_DETAIL 替代，无 handler */
-  LOOKUP: "discover:lookup",
-  /** 查询公司详细信息（替代 LOOKUP） */
+  /** 查询公司详细信息 */
   COMPANY_DETAIL: "discover:companyDetail",
   /** 获取搜索配置列表 */
   PROFILES: "discover:profiles",
@@ -594,13 +592,9 @@ const IPC = {
  * ─── 客户开发（DISCOVER）─────────────────────────────────────────────────────
  *
  * DISCOVER_SEARCH (params: DiscoverSearchParams) → IpcResponse<DiscoverResult[]>
- * DISCOVER_LOOKUP (params: DiscoverLookupParams) → IpcResponse<DiscoverDetail>
  *
  * @typedef {{ query: string, country?: string, industry?: string, limit?: number }} DiscoverSearchParams
- * @typedef {{ website?: string, company?: string, country?: string }} DiscoverLookupParams
  * @typedef {{ company: string, website?: string, email?: string, country?: string }} DiscoverResult
- * @typedef {{ company: string, website: string, description?: string, contacts?: object[],
- *             socialLinks?: object }} DiscoverDetail
  */
 
 /**

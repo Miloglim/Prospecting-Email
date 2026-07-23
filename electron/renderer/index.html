@@ -191,7 +191,7 @@
       <!-- 核心数据 -->
       <div class="stats-grid">
         <div class="stat-card" data-card-id="stat-sent"><div class="stat-value" id="stat-sent">...</div><div class="stat-label">今日已发</div></div>
-        <div class="stat-card" data-card-id="stat-remaining"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label">剩余限额</div></div>
+        <div class="stat-card" data-card-id="stat-remaining"><div class="stat-value" id="stat-remaining">...</div><div class="stat-label" id="stat-remaining-label">剩余限额</div></div>
         <div class="stat-card" data-card-id="stat-queue"><div class="stat-value" id="stat-queue">0</div><div class="stat-label">队列待处理</div></div>
         <div class="stat-card" data-card-id="stat-smtp"><div class="stat-value" id="stat-smtp">检查中</div><div class="stat-label">账号状态</div></div>
       </div>
@@ -199,7 +199,7 @@
       <!-- 进度 + 副指标 -->
       <div class="dash-row">
         <div class="dash-card dash-progress" data-card-id="dash-progress">
-          <div class="dash-card-label">发送进度</div>
+          <div class="dash-card-label">发送进度 <span id="stat-countdown" style="font-size:10px;color:var(--text-secondary);font-weight:400;margin-left:6px"></span></div>
           <div class="dash-progress-bar"><div class="dash-progress-fill" id="dash-progress-fill"></div></div>
           <div class="dash-progress-text" id="dash-progress-text">等待发送</div>
         </div>
@@ -661,6 +661,10 @@
         <button id="inbox-refresh" style="min-width:90px"><span data-icon="refresh-cw"></span> 刷新</button>
         <button id="inbox-clear" class="secondary" style="font-size:12px;padding:4px 10px">清除记录</button>
         <span id="inbox-count" style="font-size:12px;color:var(--text-secondary)"></span>
+        <div class="inbox-search-wrap" style="margin-left:auto">
+          <input id="inbox-search" class="inbox-search-input" type="text" placeholder="搜索…" autocomplete="off">
+          <button id="inbox-search-clear" class="inbox-search-clear" title="清除" style="display:none"><span data-icon="x"></span></button>
+        </div>
       </div>
       <div class="inbox-container">
         <div class="inbox-left">
@@ -960,6 +964,12 @@
     .inbox-toolbar select { padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:12px; }
     .inbox-container { display:flex; gap:0; flex:1; min-height:0; overflow:hidden; }
     .inbox-filter-bar { display:flex; flex-direction:column; border-bottom:1px solid var(--border); flex-shrink:0; }
+    .inbox-search-wrap { position:relative; display:flex; align-items:center; }
+    .inbox-search-input { width:275px; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--text); font-size:11px; outline:none; padding:2px 22px 2px 8px; transition:border-color .15s; }
+    .inbox-search-input:focus { border-color:var(--primary); }
+    .inbox-search-input::placeholder { color:var(--text-secondary); opacity:.5; }
+    .inbox-search-clear { position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; padding:0; opacity:.35; transition:opacity .15s; display:flex; align-items:center; }
+    .inbox-search-clear:hover { opacity:.7; }
     .inbox-filter-row { display:flex; gap:0; }
     .inbox-filter-btn { flex:1; padding:8px 4px; border:none; border-radius:0; background:transparent; color:var(--text-secondary); font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; transition:color .15s,box-shadow .15s; }
     .inbox-filter-btn:hover { color:var(--text); }

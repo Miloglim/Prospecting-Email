@@ -19,6 +19,7 @@ function _ensureEmailCache() {
   try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_summary TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
   try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_suggestion TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
   try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_brief TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
+  try { db.exec("ALTER TABLE crm_email_cache ADD COLUMN ai_script TEXT DEFAULT ''"); } catch { /* 列已存在 */ }
 }
 
 // ── 统一标签映射：DB 存英文 key，界面显示中文 label ──────────────────────
@@ -316,7 +317,7 @@ function getEmailHistorySummary(contactId, limit = 5, senderName = '') {
 }
 
 // ── AI 邮件总结缓存 ──────────────────────────────────────────────────────────
-function saveAiSummary(uid, accountId, summary, suggestion, brief) {
+function saveAiSummary(uid, accountId, summary, suggestion, brief, script) {
   _ensureEmailCache();
   const db = getDb();
   try {
@@ -324,8 +325,8 @@ function saveAiSummary(uid, accountId, summary, suggestion, brief) {
     db.prepare(`INSERT OR IGNORE INTO crm_email_cache (account_id, uid, subject, from_addr, from_name, date, body, cached_at)
       VALUES (?, ?, '', '', '', '', '', ?)`)
       .run(accountId || '', uid || '', new Date().toISOString());
-    db.prepare("UPDATE crm_email_cache SET ai_summary = ?, ai_suggestion = ?, ai_brief = ? WHERE uid = ? AND account_id = ?")
-      .run(summary || '', suggestion || '', brief || '', uid, accountId || '');
+    db.prepare("UPDATE crm_email_cache SET ai_summary = ?, ai_suggestion = ?, ai_brief = ?, ai_script = ? WHERE uid = ? AND account_id = ?")
+      .run(summary || '', suggestion || '', brief || '', script || '', uid, accountId || '');
   } catch { /* 缓存写入失败不影响主流程 */ }
 }
 
@@ -333,10 +334,10 @@ function getAiSummary(uid, accountId) {
   try {
     _ensureEmailCache();
     const db = getDb();
-    const row = db.prepare("SELECT ai_summary, ai_suggestion, ai_brief FROM crm_email_cache WHERE uid = ? AND account_id = ?")
+    const row = db.prepare("SELECT ai_summary, ai_suggestion, ai_brief, ai_script FROM crm_email_cache WHERE uid = ? AND account_id = ?")
       .get(uid, accountId || '');
-    return row || { ai_summary: '', ai_suggestion: '', ai_brief: '' };
-  } catch { return { ai_summary: '', ai_suggestion: '', ai_brief: '' }; }
+    return row || { ai_summary: '', ai_suggestion: '', ai_brief: '', ai_script: '' };
+  } catch { return { ai_summary: '', ai_suggestion: '', ai_brief: '', ai_script: '' }; }
 }
 
 function clearAllAiCache() {

@@ -380,6 +380,13 @@ async function runSendBatch(deps, sendProgress) {
   // 24小时窗口重置：从首次发送起超24h后清零
   if (!log.first_send_at) log.first_send_at = 0;
   if (log.first_send_at > 0 && (Date.now() - log.first_send_at) > 24 * 3600 * 1000) {
+    // 先保存今日报告，再重置计数器
+    try {
+      const reportService = require("./report-service");
+      const result = await reportService.generate(null);
+      reportService.saveToDb(result.data);
+      Log.info("发信", "每日报告已自动保存");
+    } catch (e) { Log.warn("发信", "自动保存报告失败", e.message); }
     log.daily_count = 0;
     log.daily_counts = {};
     log.first_send_at = 0;

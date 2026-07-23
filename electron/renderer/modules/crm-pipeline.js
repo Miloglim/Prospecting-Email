@@ -247,6 +247,36 @@ function bindInfoEdits(panel, contact) {
         return;
       }
 
+      // inline-double：双字段编辑（如 姓+名）
+      if (type === 'inline-double') {
+        const val1 = row.dataset.val1 || '';
+        const val2 = row.dataset.val2 || '';
+        const input1 = document.createElement('input');
+        input1.value = val1; input1.placeholder = '名';
+        input1.style.cssText = 'width:48%;padding:2px 4px;border:1px solid var(--primary);border-radius:3px;font-size:12px;background:var(--bg);color:var(--text);outline:none';
+        const input2 = document.createElement('input');
+        input2.value = val2; input2.placeholder = '姓';
+        input2.style.cssText = 'width:48%;padding:2px 4px;border:1px solid var(--primary);border-radius:3px;font-size:12px;background:var(--bg);color:var(--text);outline:none;margin-left:4%';
+        span.textContent = ''; span.appendChild(input1); span.appendChild(input2); input1.focus(); input1.select();
+        const saveDouble = async () => {
+          if (!input1.parentNode) return;
+          const newVal1 = input1.value.trim(); const newVal2 = input2.value.trim();
+          input1.remove(); input2.remove();
+          if (newVal1 === val1 && newVal2 === val2) { span.textContent = escapeHtml((val1+' '+val2).trim()||'—'); return; }
+          span.textContent = escapeHtml((newVal1+' '+newVal2).trim()||'—');
+          await window.electronAPI.upsertContact({ id: cid, email: contact.email, firstName: newVal1, lastName: newVal2, contactName: (newVal1+' '+newVal2).trim() });
+          contact.firstName = newVal1; contact.lastName = newVal2; contact.contactName = (newVal1+' '+newVal2).trim();
+          const infoEl = panel.querySelector('[data-content="info"]');
+          if (infoEl) { infoEl.innerHTML = infoTab(contact); bindInfoEdits(panel, contact); }
+          refreshPipeline();
+        };
+        input1.addEventListener('blur', () => { input2.focus(); input2.select(); });
+        input2.addEventListener('blur', saveDouble);
+        input1.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input2.focus(); input2.select(); } if (e.key === 'Escape') { input1.value = val1; input2.value = val2; input2.blur(); } });
+        input2.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input2.blur(); } if (e.key === 'Escape') { input1.value = val1; input2.value = val2; input2.blur(); } });
+        return;
+      }
+
       const input = document.createElement('input');
       input.value = val === '—' ? '' : val;
       input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--primary);border-radius:3px;font-size:12px;background:var(--bg);color:var(--text);outline:none';
@@ -269,7 +299,6 @@ function bindInfoEdits(panel, contact) {
 
 async function openDetailPanel(contactId) {
   _currentDetailId = contactId;
-  _currentTab = 'info'; // 每次打开面板重置 tab，避免邮件往来假性加载中
   const panel = document.getElementById('crm-detail-panel');
   if (!panel) return;
   panel.style.display = 'flex';
@@ -283,7 +312,7 @@ async function openDetailPanel(contactId) {
   const reminder = contact._extra?.crmReminder || {};
 
   panel.innerHTML = `
-    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}<button id="crm-find-contact" class="crm-find-btn" title="在联系人中查找">${lucide('search',13)}</button></span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
+    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}<button id="crm-find-contact" class="crm-find-btn" title="在联系人中查找">${lucide('users',13)}</button><button id="crm-find-inbox" class="crm-find-btn" title="在收件箱中搜索公司">${lucide('search',13)}</button></span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
     <div class="crm-detail-tabs">
       <button class="crm-tab${_currentTab==='info'?' active':''}" data-tab="info">基本信息</button>
       <button class="crm-tab${_currentTab==='prefs'?' active':''}" data-tab="prefs">偏好设置</button>
@@ -378,6 +407,17 @@ async function openDetailPanel(contactId) {
     document.querySelector('.nav-item[data-page="contacts"]')?.click();
     setTimeout(() => {
       const si = document.getElementById('contacts-search');
+      if (si) { si.value = q; si.dispatchEvent(new Event('input', { bubbles: true })); }
+    }, 200);
+  });
+
+  // 在收件箱中搜索公司 → 跳转收件箱并填入公司名
+  document.getElementById('crm-find-inbox')?.addEventListener('click', () => {
+    const q = contact.company || contact.company_name || '';
+    if (!q) { showToast('该联系人无关联公司', 'warn'); return; }
+    document.querySelector('.nav-item[data-page="inbox"]')?.click();
+    setTimeout(() => {
+      const si = document.getElementById('inbox-search');
       if (si) { si.value = q; si.dispatchEvent(new Event('input', { bubbles: true })); }
     }, 200);
   });
@@ -481,7 +521,7 @@ async function openDetailPanel(contactId) {
         const popup = document.createElement('div');
         popup.className = 'crm-email-popup-overlay';
         popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析<button class="crm-ai-retry-btn" id="crm-ai-retry" title="重新分析" style="display:none">${lucide('refresh-cw',12)}</button></div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
+        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析</div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
         document.body.appendChild(popup);
         // 安全渲染邮件正文：去危险标签/事件/伪协议，保留格式标签
         const safeBody = (m.body || '(无内容)')
@@ -504,7 +544,6 @@ async function openDetailPanel(contactId) {
         (async () => {
           const aiContainer = popup.querySelector('#crm-email-popup-ai');
           const aiContent = aiContainer.querySelector('.crm-email-popup-ai-content');
-          const retryBtn = aiContainer.querySelector('#crm-ai-retry');
           if (typeof window.electronAPI?.aiSummarizeEmail !== 'function') {
             aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">请重启应用以加载 AI 功能</span>';
             return;
@@ -515,7 +554,6 @@ async function openDetailPanel(contactId) {
             if (_aiLoading) return;
             _aiLoading = true;
             aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + lucide('loader',12,'spin') + ' 分析中...</span>';
-            if (retryBtn) retryBtn.style.display = 'none';
             try {
               const s = await window.electronAPI.aiSummarizeEmail({
                 uid, accountId: acct || '',
@@ -545,7 +583,6 @@ async function openDetailPanel(contactId) {
                 aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + escapeHtml(s.error||'分析暂不可用') + '</span>' + traceHtml + '<button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>';
               }
             } catch (e) { aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">分析失败: ' + escapeHtml(e.message||'') + '</span><button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>'; }
-            if (retryBtn) retryBtn.style.display = '';
             _aiLoading = false;
           };
 
@@ -565,7 +602,6 @@ async function openDetailPanel(contactId) {
             }
           });
 
-          if (retryBtn) retryBtn.addEventListener('click', () => loadAi(true));
           await loadAi(false);
         })();
       });
@@ -636,7 +672,7 @@ function infoTab(c) {
     } else {
       display = escapeHtml(r.val||'—');
     }
-    return `<div class="crm-field-row crm-info-edit" data-field="${r.field}" data-type="${r.type}" data-val="${escapeHtml(r.val||'')}" data-opts="${escapeHtml(JSON.stringify(r.opts||[]))}" data-labels="${escapeHtml(JSON.stringify(r.labels||{}))}" data-dot="${escapeHtml(JSON.stringify(r.dot||{}))}"><label>${r.label}</label><span>${display}</span></div>`;
+    return `<div class="crm-field-row crm-info-edit" data-field="${r.field}" data-type="${r.type}" data-val="${escapeHtml(r.val||'')}" data-opts="${escapeHtml(JSON.stringify(r.opts||[]))}" data-labels="${escapeHtml(JSON.stringify(r.labels||{}))}" data-dot="${escapeHtml(JSON.stringify(r.dot||{}))}"${r.field2 ? ` data-field2="${escapeHtml(r.field2)}"` : ''}${r.val1 !== undefined ? ` data-val1="${escapeHtml(r.val1||'')}"` : ''}${r.val2 !== undefined ? ` data-val2="${escapeHtml(r.val2||'')}"` : ''}><label>${r.label}</label><span>${display}</span></div>`;
   }).join('');
 }
 
@@ -832,7 +868,7 @@ function rebindFollowupEvents(panel, contactId) {
         const popup = document.createElement('div');
         popup.className = 'crm-email-popup-overlay';
         popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
-        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析<button class="crm-ai-retry-btn" id="crm-ai-retry" title="重新分析" style="display:none">${lucide('refresh-cw',12)}</button></div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
+        popup.innerHTML = `<div class="crm-email-popup-card"><div class="crm-email-popup-header"><div><div class="crm-email-popup-subject">${escapeHtml(m.subject||'(无主题)')}</div><div class="crm-email-popup-from">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div class="crm-email-popup-body-wrap"><div class="crm-email-popup-body"></div><div class="crm-email-popup-ai" id="crm-email-popup-ai"><div class="crm-email-popup-ai-header">${lucide('sparkles',14)} AI 分析</div><div class="crm-email-popup-ai-content"><span style="color:var(--text-secondary);font-size:12px">${lucide('loader',12,'spin')} 分析中...</span></div></div></div></div>`;
         document.body.appendChild(popup);
         // 安全渲染邮件正文：去危险标签/事件/伪协议，保留格式标签
         const safeBody = (m.body || '(无内容)')
@@ -855,7 +891,6 @@ function rebindFollowupEvents(panel, contactId) {
         (async () => {
           const aiContainer = popup.querySelector('#crm-email-popup-ai');
           const aiContent = aiContainer.querySelector('.crm-email-popup-ai-content');
-          const retryBtn = aiContainer.querySelector('#crm-ai-retry');
           if (typeof window.electronAPI?.aiSummarizeEmail !== 'function') {
             aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">请重启应用以加载 AI 功能</span>';
             return;
@@ -866,7 +901,6 @@ function rebindFollowupEvents(panel, contactId) {
             if (_aiLoading) return;
             _aiLoading = true;
             aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + lucide('loader',12,'spin') + ' 分析中...</span>';
-            if (retryBtn) retryBtn.style.display = 'none';
             try {
               const s = await window.electronAPI.aiSummarizeEmail({
                 uid, accountId: acct || '',
@@ -896,7 +930,6 @@ function rebindFollowupEvents(panel, contactId) {
                 aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">' + escapeHtml(s.error||'分析暂不可用') + '</span>' + traceHtml + '<button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>';
               }
             } catch (e) { aiContent.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">分析失败: ' + escapeHtml(e.message||'') + '</span><button class="crm-ai-retry-btn-inline" style="margin-top:8px">' + lucide('refresh-cw',12) + ' 重试</button>'; }
-            if (retryBtn) retryBtn.style.display = '';
             _aiLoading = false;
           };
 
@@ -916,7 +949,6 @@ function rebindFollowupEvents(panel, contactId) {
             }
           });
 
-          if (retryBtn) retryBtn.addEventListener('click', () => loadAi(true));
           await loadAi(false);
         })();
       });

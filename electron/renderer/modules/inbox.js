@@ -15,6 +15,7 @@ let _selectedIdx = -1;
 let _selectedSet = new Set();
 let _lastClickIdx = -1;
 let _filter = 'all';
+let _searchQuery = '';
 let _loading = false;
 let _failedAccounts = [];
 let _accountStats = [];
@@ -99,9 +100,18 @@ function _bindInboxDelegates() {
     const idx = parseInt(item.dataset.idx);
     const mkey = item.dataset.mkey;
     // 筛选后的可见索引列表（用于 Shift 范围选择）
-    const filtered = _filter === 'all' ? _mails :
+    let filtered = _filter === 'all' ? _mails :
       _filter === 'important' ? _mails.filter(m => m.important) :
       _mails.filter(m => m.type === _filter);
+    if (_searchQuery) {
+      const q = _searchQuery.toLowerCase();
+      filtered = filtered.filter(m =>
+        (m.subject || '').toLowerCase().includes(q) ||
+        (m.from || '').toLowerCase().includes(q) ||
+        (m.fromName || '').toLowerCase().includes(q) ||
+        (m.contactCompany || '').toLowerCase().includes(q)
+      );
+    }
     const visibleIndices = filtered.map(m => _mails.indexOf(m));
     if (e.shiftKey && _lastClickIdx >= 0) {
       // Shift+单击：选中从锚点到当前的范围
@@ -333,9 +343,19 @@ function renderInbox() {
   if (!listEl) return;
 
   // 筛选
-  const filtered = _filter === 'all' ? _mails :
+  let filtered = _filter === 'all' ? _mails :
     _filter === 'important' ? _mails.filter(m => m.important) :
     _mails.filter(m => m.type === _filter);
+  // 搜索过滤（主题 + 发件人 + 公司）
+  if (_searchQuery) {
+    const q = _searchQuery.toLowerCase();
+    filtered = filtered.filter(m =>
+      (m.subject || '').toLowerCase().includes(q) ||
+      (m.from || '').toLowerCase().includes(q) ||
+      (m.fromName || '').toLowerCase().includes(q) ||
+      (m.contactCompany || '').toLowerCase().includes(q)
+    );
+  }
   // ponytail: 按时间倒序
   filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
@@ -425,7 +445,9 @@ function renderInbox() {
 
   // 空列表提示
   if (!_loading && !filtered.length) {
-    listEl.innerHTML = '<div class="inbox-loading">暂无邮件，点击刷新拉取</div>';
+    listEl.innerHTML = _searchQuery
+      ? '<div class="inbox-loading">无匹配邮件</div>'
+      : '<div class="inbox-loading">暂无邮件，点击刷新拉取</div>';
   }
   // 退信抽屉：有已匹配退信则平滑下拉显示删除按钮
   const drawer = document.getElementById('inbox-bounce-drawer');
@@ -655,6 +677,22 @@ document.getElementById('inbox-filter')?.addEventListener('click', (e) => {
   _selectedSet = new Set();
   _lastClickIdx = -1;
   renderInbox();
+});
+
+// ── 搜索 ────────────────────────────────────────────────────────────────
+const searchInput = document.getElementById('inbox-search');
+const searchClear = document.getElementById('inbox-search-clear');
+searchInput?.addEventListener('input', () => {
+  _searchQuery = searchInput.value.trim();
+  searchClear.style.display = _searchQuery ? '' : 'none';
+  renderInbox();
+});
+searchClear?.addEventListener('click', () => {
+  searchInput.value = '';
+  _searchQuery = '';
+  searchClear.style.display = 'none';
+  renderInbox();
+  searchInput.focus();
 });
 
 // ── 退信批量删除按钮回调（动态绑定，由 renderInbox 挂载）──────────────────

@@ -10,7 +10,7 @@ const CONTACT_SELECT = `
   c.phone, c.linkedin, c.contact_name,
   c.client_type, c.category, c.stage, c._status, c.last_sent_at, c.last_sent_acct,
   c.is_bounced, c.bounce_type, c.bounce_reason, c.bounced_at,
-  c.tags, c.opp_stage, c._suspicious, c.followup_note, c._extra,
+  c.tags, c.opp_stage, c.assignee, c._suspicious, c.followup_note, c._extra,
   c.created_at, c.updated_at,
   co.name as company_name, co.country as company_country,
   co.website as company_website

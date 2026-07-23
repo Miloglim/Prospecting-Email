@@ -84,7 +84,7 @@ function register(ipcMain, deps) {
         const cached = crmService.getAiSummary(uid, accountId);
         if (cached.ai_summary) {
           const brief = cached.ai_brief || cached.ai_summary || '';
-          addTrace("② 缓存命中"); return { ok: true, data: { summary: cached.ai_summary, summaryBrief: brief, suggestion: cached.ai_suggestion, cached: true }, _trace: trace };
+          addTrace("② 缓存命中"); return { ok: true, data: { summary: cached.ai_summary, summaryBrief: brief, suggestion: cached.ai_suggestion, script: cached.ai_script || '', cached: true }, _trace: trace };
         }
         addTrace("② 缓存未命中");
       } else { addTrace("② retry → 跳过缓存"); }
@@ -190,7 +190,7 @@ ${promptBody}
       const summaryBrief = brief || (summary || '').split(/[。.！!？?]/)[0] || summary;
       addTrace("⑩ 解析OK brief=" + summaryBrief);
 
-      crmService.saveAiSummary(uid, accountId, summary, suggestion, summaryBrief);
+      crmService.saveAiSummary(uid, accountId, summary, suggestion, summaryBrief, script);
       addTrace("⑪ 缓存完成");
 
       return { ok: true, data: { summary, summaryBrief, suggestion, analysis, strategy, script, cached: false }, _trace: trace };

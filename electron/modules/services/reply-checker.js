@@ -28,11 +28,16 @@ function _getProxyAgent() {
 
 // ── 自动回复关键词 ────────────────────────────────────────────────────────
 const AUTO_REPLY_KW = [
-  'out of office','auto-reply','automatic reply','automated response',
-  'vacation','ausente','fuera de oficina','fora do escritório',
-  '自动回复','休假',
-  'automatische antwort','respuesta automática','resposta automática',
-  'réponse automatique','automatisch antwoord','risposta automatica',
+  'out of office','out of the office','auto-reply','auto reply','automatic reply','automated response',
+  'vacation','ausente','ausência','fuera de oficina','fora do escritório',
+  '休假','自动回复','自動返信',
+  'automatische antwort','abwesend','urlaub',
+  'respuesta automática','resposta automática',
+  'réponse automatique','en vacances','automatisch antwoord','risposta automatica','assenza','fuori sede',
+  '자동 응답','부재중','автоответ','вне офиса','отпуск',
+  'otomatik yanıt','ofis dışında','رد تلقائي','خارج المكتب',
+  'trả lời tự động','vắng mặt','ไม่อยู่ที่ทำงาน','ตอบกลับอัตโนมัติ',
+  'balasan otomatis','di luar kantor',
 ];
 
 // ── 退信关键词（收件箱中误入的退信通知）───────────────────────────────────
@@ -119,9 +124,10 @@ async function _aiAsk(prompt, maxTokens) {
 // 关键词快速匹配
 function _classifyByKeyword(subject) {
   const s = (subject || '').toLowerCase();
-  if (_effIndicators.some(kw => s.startsWith(kw))) return 'replied';
-  if (_effBounceKws.some(kw => s.includes(kw))) return 'bounce';
+  // 先查自动回复（避免 Re: Out of Office 被误判为回复）
   if (_effAutoReplyKws.some(kw => s.includes(kw))) return 'autoreply';
+  if (_effBounceKws.some(kw => s.includes(kw))) return 'bounce';
+  if (_effIndicators.some(kw => s.startsWith(kw))) return 'replied';
   return '';
 }
 

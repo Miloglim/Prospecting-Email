@@ -8,10 +8,11 @@ const STORAGE_KEY = 'dashboard-layout';
 const RESIZE_HANDLES = ['nw','n','ne','e','se','s','sw','w'];
 const LAYOUT_VERSION = 5;
 
-// 预设布局：x, y, w, h 均为像素值（基于 ~1000px 宽容器）
+// 预设布局：x, y, w, h 均为像素值（基于 ~1000×530px 容器）
 const W = 998;
+const H = 530;
 const DEFAULT_LAYOUT = {
-  version: LAYOUT_VERSION, refWidth: W, gap: GAP,
+  version: LAYOUT_VERSION, refWidth: W, refHeight: H, gap: GAP,
   cards: {
     'stat-sent':       { x:0,   y:0,   w:235, h:135 },
     'stat-remaining':  { x:240, y:0,   w:235, h:135 },
@@ -45,10 +46,30 @@ export function getLayout() {
 
 function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(_layout)); }
 
+let _resizeObserver = null;
+let _resizeTimer = 0;
+
 export function syncCards() {
   if (_editing) return;
   _layout = getLayout() || scaleLayout(DEFAULT_LAYOUT);
   applyLayout(_layout);
+
+  // ponytail: 窗口大小变化时自动重新缩放卡片布局（防抖200ms）
+  if (!_resizeObserver) {
+    const canvas = document.getElementById('dash-canvas');
+    if (!canvas) return;
+    _resizeObserver = new ResizeObserver(() => {
+      clearTimeout(_resizeTimer);
+      _resizeTimer = setTimeout(() => {
+        if (_editing) return;
+        // 从保存的布局或默认布局重新缩放（保持用户自定义比例）
+        const base = getLayout() || DEFAULT_LAYOUT;
+        _layout = scaleLayout(base);
+        applyLayout(_layout);
+      }, 200);
+    });
+    _resizeObserver.observe(canvas);
+  }
 }
 
 // ── 布局缩放：参考宽度 960px → 当前容器宽度 ─────────────────────────────
@@ -56,7 +77,11 @@ export function syncCards() {
 function scaleLayout(layout) {
   const canvas = document.getElementById('dash-canvas');
   const cw = canvas ? canvas.clientWidth : 960;
-  const scale = cw / (layout.refWidth || W);
+  const ch = canvas ? canvas.clientHeight : 600;
+  // 取宽高最小缩放比，防止窄/矮窗口下卡片溢出
+  const scaleW = cw / (layout.refWidth || W);
+  const scaleH = ch / (layout.refHeight || H);
+  const scale = Math.min(scaleW, scaleH);
   const cards = {};
   for (const [id, c] of Object.entries(layout.cards)) {
     cards[id] = {
@@ -66,7 +91,7 @@ function scaleLayout(layout) {
       h:  Math.round(c.h  * scale),
     };
   }
-  return { version: LAYOUT_VERSION, refWidth: cw, gap: layout.gap, cards };
+  return { version: LAYOUT_VERSION, refWidth: cw, refHeight: ch, gap: layout.gap, cards };
 }
 
 // ── 应用布局（正常模式）────────────────────────────────────────────────────
@@ -172,7 +197,7 @@ function exitEdit(saveFlag = true) {
         w: card.offsetWidth, h: card.offsetHeight,
       };
     });
-    _layout = { version: LAYOUT_VERSION, refWidth: canvas.clientWidth, gap: GAP, cards: resolveOverlaps(newCards) };
+    _layout = { version: LAYOUT_VERSION, refWidth: canvas.clientWidth, refHeight: canvas.clientHeight, gap: GAP, cards: resolveOverlaps(newCards) };
     save();
   }
 

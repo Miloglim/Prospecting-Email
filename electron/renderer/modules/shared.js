@@ -120,12 +120,23 @@ export async function loadDashboard(){
     const pct=s.dailyLimit>0?Math.round(s.sentToday/s.dailyLimit*100):0;
     document.getElementById('dash-progress-fill').style.width=Math.min(pct,100)+'%';
     document.getElementById('dash-progress-text').textContent=s.sentToday>0?`${s.sentToday}/${s.dailyLimit}`:'等待发送';
-    // 下次重置倒计时 → 剩余限额卡片
+    // 下次重置倒计时 → 发送进度卡片（实时刷新）
     const remEl=document.getElementById('stat-remaining');
-    if(remEl&&s.firstSendAt>0){const r=new Date(s.firstSendAt+24*3600*1000);remEl.title=`下次重置 ${r.getMonth()+1}/${r.getDate()} ${String(r.getHours()).padStart(2,'0')}:${String(r.getMinutes()).padStart(2,'0')}`;}
-    const remLabel=document.querySelector('[data-card-id="stat-remaining"] .stat-label');
-    if(remLabel&&s.firstSendAt>0){const r=new Date(s.firstSendAt+24*3600*1000);remLabel.textContent=`剩余限额 · 重置 ${r.getMonth()+1}/${r.getDate()} ${String(r.getHours()).padStart(2,'0')}:${String(r.getMinutes()).padStart(2,'0')}`;}
-    else if(remLabel){remLabel.textContent='剩余限额';}
+    const remLabel=document.getElementById('stat-remaining-label');
+    const cdEl=document.getElementById('stat-countdown');
+    if(window._dashCdTimer){clearInterval(window._dashCdTimer);window._dashCdTimer=null;}
+    if(s.firstSendAt>0){
+      const resetTime=s.firstSendAt+24*3600*1000;
+      function fmtCD(ms){if(ms<=0)return'重置中…';const h=Math.floor(ms/3600000);const m=Math.floor((ms%3600000)/60000);const s=Math.floor((ms%60000)/1000);return h>0?`${h}h${m}m 后重置`:`${m}m${s}s 后重置`;}
+      const updateCD=()=>{if(cdEl)cdEl.textContent=fmtCD(resetTime-Date.now());};
+      updateCD();
+      window._dashCdTimer=setInterval(updateCD,1000);
+      if(remEl)remEl.title=`下次重置 ${new Date(resetTime).getMonth()+1}/${new Date(resetTime).getDate()} ${String(new Date(resetTime).getHours()).padStart(2,'0')}:${String(new Date(resetTime).getMinutes()).padStart(2,'0')}`;
+      if(remLabel)remLabel.textContent='剩余限额';
+    }else{
+      if(cdEl)cdEl.textContent=s.dailyLimit>0?'今日未发':'未配置';
+      if(remLabel)remLabel.textContent='剩余限额';
+    }
   }catch(e){document.getElementById('stat-sent').textContent='--'}
 
   // 账号状态
@@ -197,11 +208,11 @@ export async function loadDashboard(){
     const todoSum=document.getElementById('dash-todo-summary');
     if(todoTbody&&allPipelineContacts.length){
       const sorted=[...allPipelineContacts].sort((a,b)=>{
-        const na=a._extra?.crmReminder?.nextFollowupAt||'';
-        const nb=b._extra?.crmReminder?.nextFollowupAt||'';
-        if(na&&!nb)return -1;if(!na&&nb)return 1;
-        if(na&&nb)return new Date(na)-new Date(nb);
-        return (b.last_note_at||'')>(a.last_note_at||'')?1:-1;
+        // 按最后跟进日期从旧到新排列（无日期排最前）
+        const da=a.last_note_at||'';
+        const db=b.last_note_at||'';
+        if(!da&&!db)return 0;if(!da)return -1;if(!db)return 1;
+        return new Date(da)-new Date(db);
       });
       const STAGE_COLORS={reaching:'#ff9800',quoting:'#2196f3',trial:'#8e24aa',cooperating:'#4caf50',lost:'#b0b0b0'};
       const rows=sorted.slice(0,15);
@@ -212,8 +223,8 @@ export async function loadDashboard(){
         function until(d){if(!d)return'—';const diff=Math.floor((new Date(d).getTime()-Date.now())/86400000);return diff<=0?'今天':diff===1?'1天后':`${diff}天后`;}
         const nextAt=c._extra?.crmReminder?.nextFollowupAt;
         let nextTd='—';
-        if(nextAt){const t=new Date(nextAt).getTime();const od=t<=Date.now();nextTd=`<span style="color:${od?'var(--danger)':'var(--text-secondary)'}">${od?'⏰ 逾期'+ago(nextAt).replace('今天',''):'⏰ '+until(nextAt)}</span>`;}
-        return`<tr style="border-bottom:1px solid var(--border-light,#f5f5f5);cursor:pointer" data-cid="${c.id}" onclick="if(window.__crmOpenDetail)window.__crmOpenDetail('${c.id}')"><td style="padding:4px 8px">${escapeHtml([c.firstName,c.lastName].filter(Boolean).join(' ')||c.email||'—')}</td><td style="padding:4px 8px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.company||'—')}</td><td style="padding:4px 8px"><span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;background:${stColor}18;color:${stColor}">${st}</span></td><td style="padding:4px 8px;color:var(--text-secondary)">📝 ${ago(c.last_note_at)}</td><td style="padding:4px 8px">${nextTd}</td></tr>`;
+        if(nextAt){const t=new Date(nextAt).getTime();const od=t<=Date.now();nextTd=`<span style="color:${od?'var(--danger)':'var(--text-secondary)'}">${lucide('calendar-clock',11)} ${od?'逾期'+ago(nextAt).replace('今天',''):until(nextAt)}</span>`;}
+        return`<tr style="border-bottom:1px solid var(--border-light,#f5f5f5);cursor:pointer" data-cid="${c.id}" onclick="if(window.__crmOpenDetail)window.__crmOpenDetail('${c.id}')"><td style="padding:4px 8px">${escapeHtml([c.firstName,c.lastName].filter(Boolean).join(' ')||c.email||'—')}</td><td style="padding:4px 8px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.company||'—')}</td><td style="padding:4px 8px"><span style="display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;background:${stColor}18;color:${stColor}">${st}</span></td><td style="padding:4px 8px;color:var(--text-secondary)">${lucide('sticky-note',11)} ${ago(c.last_note_at)}</td><td style="padding:4px 8px">${nextTd}</td></tr>`;
       }).join('');
       const stageCounts={};allPipelineContacts.forEach(c=>{const st=contactStageMap[c.id]||'触达中';stageCounts[st]=(stageCounts[st]||0)+1;});
       todoSum.textContent=`共 ${allPipelineContacts.length} 人 · ${Object.entries(stageCounts).map(([k,v])=>`${k} ${v}`).join(' · ')}`;
@@ -227,20 +238,7 @@ export async function loadDashboard(){
       const PREFS_KEYS=Object.keys(PREF_LABELS);
       const items=[]; // { type:'overdue'|'due'|'missing', name, company, detail }
       const now=Date.now();
-      // 1) CRM 跟进提醒
-      const rm=await window.electronAPI.crmCheckReminders();
-      if(rm.ok&&rm.data){
-        for(const r of(rm.data.overdue||[])){
-          const days=Math.ceil((now-new Date(r._extra?.crmReminder?.nextFollowupAt).getTime())/(86400000))||1;
-          const name=(r.first_name||'')+' '+(r.last_name||'');
-          items.push({type:'overdue',name:name.trim()||r.email,company:r.company_name||'',detail:`跟进逾期${days}天`});
-        }
-        for(const r of(rm.data.due||[])){
-          const name=(r.first_name||'')+' '+(r.last_name||'');
-          items.push({type:'due',name:name.trim()||r.email,company:r.company_name||'',detail:'今日跟进'});
-        }
-      }
-      // 2) 字段完整性：逐人列出缺失的偏好字段
+      // 字段完整性：逐人列出缺失的偏好字段
       for(const c of allPipelineContacts){
         let extra={};
         try{extra=typeof c._extra==='string'?JSON.parse(c._extra):(c._extra||{});}catch{}
@@ -250,62 +248,23 @@ export async function loadDashboard(){
         const name=(c.first_name||'')+' '+(c.last_name||'');
         items.push({type:'missing',name:name.trim()||c.email,company:c.company_name||c.company||'',detail:`缺${missing.map(k=>PREF_LABELS[k]).join('/')}`,contactId:c.id});
       }
-      // 3) 待办助手：显式跟进日期 + 自动计算（last_sent_at + 阶段间隔）
-      const STAGE_INTERVAL={cold:3,f1:4,f2:5,f3:6};
-      const seenIds=new Set(items.map(i=>i.contactId).filter(Boolean));
-      for(const c of allPipelineContacts){
-        if(seenIds.has(c.id)) continue;
-        let extra={};
-        try{extra=typeof c._extra==='string'?JSON.parse(c._extra):(c._extra||{});}catch{}
-        let dueTime=0,autoLabel='';
-        // 优先显式日期，否则自动计算
-        const na=extra.crmReminder?.nextFollowupAt;
-        if(na){dueTime=new Date(na).getTime();}
-        else if(c.last_sent_at&&c.stage&&c.stage!=='f4'){
-          const interval=STAGE_INTERVAL[c.stage]||3;
-          dueTime=new Date(c.last_sent_at).getTime()+interval*86400000;
-          autoLabel='(自动)';
-        }
-        if(!dueTime||isNaN(dueTime)) continue;
-        // 日历日比较：对齐到午夜，避免"明天设的日期今晚就变今日"
-        const nowDay=new Date(now).setHours(0,0,0,0);
-        const dueDay=new Date(dueTime).setHours(0,0,0,0);
-        const dayDiff=Math.round((dueDay-nowDay)/86400000);
-        const name=(c.first_name||'')+' '+(c.last_name||'');
-        const label=name.trim()||c.email;
-        const company=c.company_name||c.company||'';
-        if(dayDiff<=-1){
-          items.push({type:'overdue',name:label,company,detail:`逾期${Math.abs(dayDiff)}天${autoLabel}`,contactId:c.id});
-        }else if(dayDiff<=0){
-          items.push({type:'due',name:label,company,detail:`今日跟进${autoLabel}`,contactId:c.id});
-        }else{
-          items.push({type:'upcoming',name:label,company,detail:`还有${dayDiff}天${autoLabel}`,contactId:c.id});
-        }
-      }
-      // 排序：逾期 → 今日到期 → 即将 → 缺失
-      items.sort((a,b)=>{const o={overdue:0,due:1,upcoming:2,missing:3};return o[a.type]-o[b.type]||a.name.localeCompare(b.name);});
+      // 按名字排序
+      items.sort((a,b)=>a.name.localeCompare(b.name));
       // 渲染
       const box=document.getElementById('dash-todo-box');
       if(!items.length){
-        box.innerHTML='<span style="color:var(--success);font-size:11px">✓ 无待办</span>';
+        box.innerHTML='<span style="color:var(--success);font-size:11px">✓ 全部完善</span>';
       }else{
-        const TYPE_COLOR={overdue:'var(--danger)',due:'#e65100',upcoming:'var(--success)',missing:'var(--text-secondary)'};
-        const TYPE_DOT={overdue:'var(--danger)',due:'#ff9800',upcoming:'#22a644',missing:'#9e9e9e'};
         box.innerHTML=items.map(i=>{
           const label=i.company?`${i.name}(${i.company})`:i.name;
-          const cid=i.contactId?` data-contact-id="${escapeHtml(i.contactId)}"`:'';
-          const cls=i.contactId?' class="dash-todo-item dash-todo-clickable"':'class="dash-todo-item"';
-          return `<div${cls}${cid}><span class="dash-todo-dot" style="background:${TYPE_DOT[i.type]}"></span><span style="color:${TYPE_COLOR[i.type]}">${escapeHtml(label)}</span> <span style="color:var(--text-secondary)">${escapeHtml(i.detail)}</span></div>`;
+          return `<div class="dash-todo-item dash-todo-clickable" data-contact-id="${escapeHtml(i.contactId)}"><span class="dash-todo-dot" style="background:#9e9e9e"></span><span style="color:var(--text-secondary)">${escapeHtml(label)}</span> <span style="color:var(--text-secondary)">${escapeHtml(i.detail)}</span></div>`;
         }).join('');
-        // 点击字段缺失条目 → 跳转 CRM 联系人详情
         box.querySelectorAll('.dash-todo-clickable').forEach(el=>{
           el.addEventListener('click',()=>{
             const cid=el.dataset.contactId;
             if(!cid) return;
-            // 导航到 CRM 页面
             const nav=document.querySelector('[data-page="crm"]');
             if(nav) nav.click();
-            // 等页面渲染后打开详情
             setTimeout(()=>{if(window.__crmOpenDetail) window.__crmOpenDetail(cid);},400);
           });
         });

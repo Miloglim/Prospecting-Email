@@ -10,6 +10,7 @@ const { splitName: _splitName, normalizeCountry: _normalizeCountry } = require('
 function register(ipcMain, deps) {
   const contactsPath = path.join(APP_ROOT, 'data', 'contacts.json'); // 保留兼容旧引用
   const db = require('./services/contacts-db');
+  const { getDb } = require('./services/db');
 
   // 通知渲染进程联系人数据已变更
   function _notify() {
@@ -470,6 +471,14 @@ function register(ipcMain, deps) {
       delete contact.client_type;
     }
 
+    // 预处理 company/country：这两个字段在 companies 表，不在 contacts 表
+    if (existing && contact.company !== undefined && contact.company !== existing.company_name) {
+      contact.company_id = db.ensureCompany(contact.company, { country: contact.country || existing.company_country || '' });
+    }
+    if (existing && contact.country !== undefined && contact.country !== existing.company_country) {
+      try { getDb().prepare("UPDATE companies SET country = ? WHERE id = ?").run(contact.country || '', existing.company_id); }
+      catch { /* 公司表更新失败不影响主流程 */ }
+    }
     // ponytail: 直接调 db.upsert，由 SQLite 处理去重和字段映射
     const result = db.upsert(contact);
     // 联系人 _status 变更 → 反向同步收件箱 + 记录到 interactions

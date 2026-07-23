@@ -1208,8 +1208,10 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
         tags: [],
         addedAt: new Date().toISOString(),
       };
-      await window.electronAPI.importContacts([contact]);
-      CS.syncContactsUI();
+      await window.electronAPI.upsertContact(contact);
+      // ponytail: upsertContact 内部已发 contacts:changed 通知，只做轻量刷新
+      await CS.refreshContacts();
+      renderContactsList();
       showToast(`已添加 ${company}`, 'ok');
     },
   });
