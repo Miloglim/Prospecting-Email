@@ -159,6 +159,46 @@ function buildContent(bodyText, sigText, sigHtml) {
   return { textBody, html, hasSig };
 }
 
+// ── 当日发送计数（从 SQLite 实时查询，替代 JSON 中的 daily_count/daily_counts）──
+function _getTodayCounts(testMode) {
+  try {
+    const db = require('./db').getDb();
+    const today = beijingToday();
+    const rows = db.prepare(
+      "SELECT account_id, COUNT(*) as cnt FROM send_log WHERE time_beijing LIKE ? AND test_mode = ? GROUP BY account_id"
+    ).all(today + '%', testMode ? 1 : 0);
+    const byAccount = {};
+    let total = 0;
+    for (const r of rows) {
+      byAccount[r.account_id || ''] = r.cnt;
+      total += r.cnt;
+    }
+    return { total, byAccount };
+  } catch { return { total: 0, byAccount: {} }; }
+}
+
+// ── 发送成功记录（消除 _sendOne 中成功/重试分支的重复代码）─────────────────
+// ponytail: 两处调用（首次发送 + 连接重试），参数用对象包装避免 10 个位置参数
+function _recordSuccess(ctx, params, log, deps, logLabel) {
+  const { toList, email, subject, bodyText, sharedBodyId, messageId, accountId } = params;
+  for (const r of toList) {
+    const lr = _logRecord(ctx, r, email.company, subject, bodyText, sharedBodyId, messageId, 'sent', null, accountId, email);
+    log.sent.push(lr);
+    try { require('./send-log-db').add(lr); } catch { /* 降级 */ }
+  }
+  if (!log.first_send_at) log.first_send_at = Date.now();
+  _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
+  // 记录互动
+  try {
+    const contactsDb = require('./contacts-db');
+    for (const r of toList) {
+      const contact = contactsDb.getByEmail(r);
+      if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (bodyText || '').slice(0, 200) });
+    }
+  } catch { /* 互动记录不影响发送 */ }
+  Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | ${logLabel} | ${accountId}`);
+}
+
 // ── 日志记录 ──────────────────────────────────────────────────────────────
 function _logRecord(ctx, to, company, subject, bodyText, bodyId, msgId, status, err, accountId, emailMeta) {
   const rec = {
@@ -215,26 +255,7 @@ async function _sendOne(ctx, email, log, deps) {
     const info = ctx.dryRun
       ? { messageId: '<dry-run-' + Date.now().toString(36) + '@milogin>', dryRun: true }
       : await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-    for (const r of toList) {
-      // ponytail: 只存模板正文（不含签名），签名由显示层从 signature.html 加载
-      const lr = _logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email);
-      log.sent.push(lr);
-      try { require('./send-log-db').add(lr); } catch { /* 降级 */ }
-    }
-    if (!log.daily_counts) log.daily_counts = {};
-    log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
-    log.daily_count = (log.daily_count || 0) + toList.length; // ponytail: 同步总量，兼容 send:status 读取
-    if (!log.first_send_at) log.first_send_at = Date.now();
-    _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
-    // 记录互动
-    try {
-      const contactsDb = require('./contacts-db');
-      for (const r of toList) {
-        const contact = contactsDb.getByEmail(r);
-        if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (email.body || '').slice(0, 200) });
-      }
-    } catch { /* 互动记录不影响发送 */ }
-    Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 成功 | ${accountId}`);
+    _recordSuccess(ctx, { toList, email, subject, bodyText: email.body || textBody, sharedBodyId, messageId: info.messageId, accountId }, log, deps, '成功');
     return { ok: true, n: toList.length };
   } catch (err) {
     const em = err.message || '';
@@ -251,15 +272,7 @@ async function _sendOne(ctx, email, log, deps) {
         const info = ctx.dryRun
           ? { messageId: '<dry-run-retry-' + Date.now().toString(36) + '@milogin>', dryRun: true }
           : await deps.currentTransporter.sendMail({ from: fromAddr, to: aTo, ...(aBcc.length ? { bcc: aBcc.join(', ') } : {}), subject, text: textBody, html });
-        for (const r of toList) {
-          log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, info.messageId, 'sent', null, accountId, email));
-        }
-        if (!log.daily_counts) log.daily_counts = {};
-        log.daily_counts[accountId] = (log.daily_counts[accountId] || 0) + toList.length;
-        log.daily_count = (log.daily_count || 0) + toList.length;
-        if (!log.first_send_at) log.first_send_at = Date.now();
-        _tagContacts(toList, accountId, deps.currentAccount?.label || deps.currentAccount?.smtp?.user || '');
-        Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 重试成功 | ${accountId}`);
+        _recordSuccess(ctx, { toList, email, subject, bodyText: email.body || textBody, sharedBodyId, messageId: info.messageId, accountId }, log, deps, '重试成功');
         return { ok: true, n: toList.length };
       } catch (retryErr) { err = retryErr; }
     }
@@ -269,7 +282,7 @@ async function _sendOne(ctx, email, log, deps) {
       return { ok: false, n: 0, fused: true };
     }
     for (const r of toList) { log.sent.push(_logRecord(ctx, r, email.company, subject, email.body || textBody, sharedBodyId, '', 'failed', finalErr, accountId, email)); }
-    Log.error('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 失败: ${finalErr}`, '');
+    Log.error('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | 失败: ${finalErr}`, err.stack);
     return { ok: false, n: 0 };
   }
 }
@@ -351,9 +364,9 @@ async function runSendBatch(deps, sendProgress) {
   const ctx = _buildContext(config);
   const acctMgr = require('./account-manager');
 
-  let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: {}, first_send_at: 0 };
+  let log = { sent: [], _accountStates: {}, first_send_at: 0 };
   if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志 */ } }
-  // 24小时窗口重置：从首次发送起超24h后清零
+  // 24小时窗口重置：从首次发送起超24h后重置计数器
   if (!log.first_send_at) log.first_send_at = 0;
   if (log.first_send_at > 0 && (Date.now() - log.first_send_at) > 24 * 3600 * 1000) {
     // 先保存今日报告，再重置计数器
@@ -363,11 +376,8 @@ async function runSendBatch(deps, sendProgress) {
       reportService.saveToDb(result.data);
       Log.info("发信", "每日报告已自动保存");
     } catch (e) { Log.warn("发信", "自动保存报告失败", e.message); }
-    log.daily_count = 0;
-    log.daily_counts = {};
     log.first_send_at = 0;
   }
-  if (!log.daily_counts) log.daily_counts = {};
   if (!log._accountStates) log._accountStates = {};
 
   deps.currentSendAbort = false;
@@ -383,7 +393,8 @@ async function runSendBatch(deps, sendProgress) {
   }
 
   const totalLimit = ctx.maxPerDay;
-  const totalDailyCount = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || log.daily_count || 0;
+
+  // ponytail: 从 SQLite 实时查询当日发送量，不再依赖 JSON 中的 daily_count
 
   // ponytail: 加载联系人→账号映射，供交错排列推算每组归属账号（从 SQLite 读取）
   let contactAccountMap = {};
@@ -474,9 +485,9 @@ async function runSendBatch(deps, sendProgress) {
     if (deps.currentSendAbort) { sendProgress({ type: 'cancelled' }); break; }
     if (deps.isPaused) { sendProgress({ type: 'paused' }); break; }
 
-    // 全局上限检查
+    // 全局上限检查（从 SQLite 实时查询当日发送量）
     if (!ctx.testMode) {
-      const currentTotal = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || 0;
+      const { total: currentTotal } = _getTodayCounts(false);
       if (currentTotal >= totalLimit) { sendProgress({ type: 'limit', message: `已达每日上限 ${totalLimit}` }); break; }
     }
 
@@ -489,7 +500,8 @@ async function runSendBatch(deps, sendProgress) {
     if (!email.recipients?.length && !email.to) continue;
 
     // 轮询选择下一个可用账号（交错排列已保证账号分散，此处纯轮询）
-    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates);
+    const { byAccount: dailyCounts } = _getTodayCounts(ctx.testMode);
+    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, dailyCounts, log._accountStates);
     if (!picked.account) {
       const reason = picked.reason || '无可用账号';
       Log.warn("发信", "停止: " + reason);
@@ -539,7 +551,6 @@ async function runSendBatch(deps, sendProgress) {
       failed += result.n;
       if (!ctx.testMode) acctMgr.recordFailure(account.id, log._accountStates, false);
     }
-    // ponytail: SQLite 已持久化，不再写 JSON
     sendProgress(result.skipped
       ? { type: 'skipped', id: email.id }
       : result.ok
@@ -570,6 +581,15 @@ async function runSendBatch(deps, sendProgress) {
   } catch (e) { Log.error("发信", "循环异常", e.stack); }
   finally {
     for (const t of transporterCache.values()) { try { await t.close(); } catch { /* 关闭失败不影响后续 */ } }
+  }
+  // ponytail: 持久化 _accountStates 到 JSON，供 inbox/account-ipc/smtp:checkStatus 等模块读取最新熔断状态
+  if (!ctx.testMode) {
+    try {
+      const existing = fs.existsSync(ctx.logPath) ? JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')) : {};
+      existing._accountStates = log._accountStates;
+      existing.first_send_at = log.first_send_at;
+      fs.writeFileSync(ctx.logPath, JSON.stringify(existing, null, 2));
+    } catch { /* 状态写入失败不影响 */ }
   }
   Log.info("发信", "完成: 成功" + sent + "封, 失败" + failed + "封");
   if (!deps.isPaused && !deps.currentSendAbort) sendProgress({ type: 'complete', total: queueLen, sent, failed, _testMode: ctx.testMode || undefined });
@@ -621,7 +641,7 @@ function cleanup() {
 
 module.exports = {
   runSendBatch, _sendOne, _loadConfig, _buildContext, buildContent, _logRecord,
-  loadBodies, saveBody,
+  loadBodies, saveBody, _getTodayCounts,
   cancellableSleep, pauseDelay, resumeDelay, _clearDelay,
   scheduleAutoBounceCheck, cleanup,
 };
