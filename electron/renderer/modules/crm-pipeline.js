@@ -180,7 +180,13 @@ function showStagePicker(anchor, contactId, cur) {
     d.addEventListener('click', async () => {
       const ns = d.dataset.s; p.remove();
       if (ns === cur) return;
-      const r = await window.electronAPI.crmSetStage(contactId, ns);
+      // ponytail: 统一用 upsertContact 更新 tags，保留非管线标签
+      const pipeKeys = ['reaching','quoting','trial','cooperating','lost'];
+      const allContacts = _pipelineData.columns.flatMap(c => c.contacts);
+      const ct = allContacts.find(c => c.id === contactId);
+      const oldTags = ct?.tags || [];
+      const newTags = [...oldTags.filter(t => !pipeKeys.includes(t)), ns];
+      const r = await window.electronAPI.upsertContact({ id: contactId, tags: newTags });
       showToast(r.ok ? `已移至「${ns}」` : r.error || '失败', r.ok ? 'ok' : 'err');
       if (r.ok) refreshPipeline();
     });
@@ -228,8 +234,10 @@ function bindInfoEdits(panel, contact) {
             popup.remove();
             if (o === val) return;
             if (field === 'stageTag') {
-              await window.electronAPI.crmSetStage(cid, o);
-              contact.tags = [o];
+              const pipeKeys = ['reaching','quoting','trial','cooperating','lost'];
+              const newTags = [...(contact.tags||[]).filter(t => !pipeKeys.includes(t)), o];
+              await window.electronAPI.upsertContact({ id: cid, email: contact.email, tags: newTags });
+              contact.tags = newTags;
             } else {
               const payload = { id: cid, email: contact.email, [field]: o };
               await window.electronAPI.upsertContact(payload);
@@ -279,12 +287,15 @@ function bindInfoEdits(panel, contact) {
 
       const input = document.createElement('input');
       input.value = val === '—' ? '' : val;
+      if (!input.value) input.placeholder = '未设置';
       input.style.cssText = 'width:100%;padding:2px 4px;border:1px solid var(--primary);border-radius:3px;font-size:12px;background:var(--bg);color:var(--text);outline:none';
       span.textContent = ''; span.appendChild(input); input.focus(); input.select();
       const save = async () => {
         if (!input.parentNode) return;
         const newVal = input.value.trim(); input.remove();
-        if (newVal === val || (newVal === '' && val === '—')) { span.textContent = escapeHtml(val||'—'); return; }
+        // 未修改或清空后还原 → 不写DB
+        if (!newVal && val === '—') { span.textContent = '—'; return; }
+        if (newVal === val) { span.textContent = escapeHtml(val||'—'); return; }
         span.textContent = escapeHtml(newVal||'—');
         await window.electronAPI.upsertContact({ id: cid, email: contact.email, [field]: newVal });
         contact[field] = newVal;
@@ -307,7 +318,7 @@ async function openDetailPanel(contactId) {
   const r = await window.electronAPI.crmGetDetail(contactId);
   if (!r.ok) { panel.innerHTML = `<div class="crm-detail-error">${escapeHtml(r.error)}</div>`; return; }
 
-  const { contact, notes, interactions } = r.data;
+  const { contact, notes, interactions, indirectMails } = r.data;
   const prefs = contact._extra?.crmPreferences || {};
   const reminder = contact._extra?.crmReminder || {};
 
@@ -322,8 +333,8 @@ async function openDetailPanel(contactId) {
     <div class="crm-detail-body">
       <div class="crm-tab-content${_currentTab==='info'?' active':''}" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content${_currentTab==='prefs'?' active':''}" data-content="prefs">${prefsTab(contactId,prefs)}</div>
-      <div class="crm-tab-content${_currentTab==='followup'?' active':''}" data-content="followup">${followupTab(contactId, reminder, notes, interactions)}</div>
-      <div class="crm-tab-content${_currentTab==='emails'?' active':''}" data-content="emails"><div class="crm-detail-loading" style="padding:20px">${lucide('loader',14,'spin')} 加载中...</div></div>
+      <div class="crm-tab-content${_currentTab==='followup'?' active':''}" data-content="followup">${followupTab(contactId, reminder, notes, interactions, indirectMails)}</div>
+      <div class="crm-tab-content${_currentTab==='emails'?' active':''}" data-content="emails"></div>
     </div>`;
 
   let _emailsLoaded = false;
@@ -343,7 +354,7 @@ async function openDetailPanel(contactId) {
             <div class="crm-email-item-wrapper">
               <div class="crm-email-item" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}">
                 <div class="crm-email-meta">
-                  <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':'var(--text-secondary)'};flex-shrink:0">${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
+                  <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':m._indirect?'#ff9800':'var(--text-secondary)'};flex-shrink:0"${m._indirect?' title="关联匹配"':''}>${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
                   <span class="crm-email-subject">${escapeHtml(m.subject||'(无主题)')}</span>
                   <span class="crm-email-date">${escapeHtml(fmtDT(m.date))}</span>
                 </div>
@@ -364,25 +375,24 @@ async function openDetailPanel(contactId) {
             const uid = aiCard.dataset.uid;
             const accountId = aiCard.dataset.account;
 
-            const loadHoverSummary = () => {
-              aiText.textContent = '';
-              _aiTimer = setTimeout(async () => {
-                try {
-                  const s = await window.electronAPI.aiSummarizeEmail({ uid, accountId, preview: true });
-                  if (s.ok && (s.data.summaryBrief || s.data.summary)) {
-                    aiText.textContent = (s.data.summaryBrief || s.data.summary || '').replace(/[《》「」『』]/g, '');
-                  }
-                } catch { /* 静默降级 */ }
-              }, 200);
+            const loadHoverSummary = async () => {
+              _aiTimer = 1;
+              try {
+                const s = await window.electronAPI.aiSummarizeEmail({ uid, accountId, preview: true });
+                if (_aiTimer !== 1) return; // 已移出，丢弃
+                if (s.ok && (s.data.summaryBrief || s.data.summary)) {
+                  aiText.textContent = (s.data.summaryBrief || s.data.summary || '').replace(/[《》「」『』]/g, '');
+                }
+              } catch { /* 静默降级 */ }
             };
 
             wrapper.addEventListener('mouseenter', () => {
               aiCard.style.display = 'block';
               requestAnimationFrame(() => aiCard.classList.add('open'));
-              loadHoverSummary();
+              if (!aiText.textContent) loadHoverSummary();
             });
             wrapper.addEventListener('mouseleave', () => {
-              clearTimeout(_aiTimer);
+              _aiTimer = 0; // 标记取消，防止异步返回后写入
               aiCard.classList.remove('open');
             });
             // transitionend 后隐藏元素
@@ -398,6 +408,12 @@ async function openDetailPanel(contactId) {
       }
     });
   });
+
+  // 如果上次在邮件往来 tab 且未加载 → 自动触发加载（避免假性加载）
+  if (_currentTab === 'emails') {
+    const emailsTab = panel.querySelector('.crm-tab[data-tab="emails"]');
+    if (emailsTab) emailsTab.click();
+  }
 
   document.getElementById('crm-detail-close')?.addEventListener('click', closeDetailPanel);
 
@@ -473,7 +489,7 @@ async function openDetailPanel(contactId) {
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
-        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions, d.data.indirectMails);
         rebindFollowupEvents(panel, contactId);
       }
       // 异步刷新管道卡片（静默，不关面板）
@@ -496,7 +512,7 @@ async function openDetailPanel(contactId) {
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
-        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions, d.data.indirectMails);
         rebindFollowupEvents(panel, contactId);
       }
       refreshPipeline();
@@ -507,7 +523,30 @@ async function openDetailPanel(contactId) {
     });
   });
 
-  // 邮件详情弹窗（绑定到邮件往来 tab）
+  // 邮件类型的跟进记录 → 点击查看正文
+  panel.querySelectorAll('.crm-followup-mail').forEach(row => {
+    if (row._mailBound) return; row._mailBound = true;
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => {
+      const uid = row.dataset.uid;
+      const acct = row.dataset.account;
+      if (!uid) return;
+      (async () => {
+        const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+        if (!r.ok) { showToast('无法加载邮件', 'err'); return; }
+        const m = r.data;
+        const popup = document.createElement('div');
+        popup.className = 'crm-email-popup-overlay';
+        popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+        popup.innerHTML = `<div class="crm-email-popup-card" style="max-width:700px;width:90%;max-height:85vh;background:var(--card-bg);border-radius:12px;overflow:hidden;display:flex;flex-direction:column"><div class="crm-email-popup-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="padding:16px 20px;overflow-y:auto;flex:1;font-size:13px;line-height:1.7">${(m.body||'(无内容)').replace(/<script[\s\S]*?<\/script>/gi,'').replace(/<iframe[\s\S]*?<\/iframe>/gi,'').replace(/\son\w+\s*=\s*"[^"]*"/gi,'').replace(/javascript\s*:/gi,'blocked:')}</div></div>`;
+        document.body.appendChild(popup);
+        popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+      })();
+    });
+  });
+
+  // 邮件往来 tab 的绑定
   const bindEmailClicks = (container) => {
     container.querySelectorAll('.crm-email-item').forEach(row => {
       if (row._emailBound) return; row._emailBound = true;
@@ -651,15 +690,23 @@ function infoTab(c) {
   const pipeLabels = { reaching: '触达中', quoting: '报价中', trial: '试单', cooperating: '合作中', lost: '已流失' };
   const stageTag = (c.tags||[]).find(t => pipeLabels[t]) || '';
   const stageDisplay = pipeLabels[stageTag] || stageTag || '—';
+  const ctLabel = { agent:'代理', direct:'直客', unlabeled:'未标签' };
+  const stageLabel = { cold:'冷开发', f1:'F1', f2:'F2', f3:'F3', f4:'F4' };
+  const STAGE_NORM = { '冷开发':'cold', 'F1':'f1', 'F2':'f2', 'F3':'f3', 'F4':'f4' };
+  const sendStage = STAGE_NORM[c.stage] || (typeof c.stage === 'string' ? c.stage.toLowerCase() : '') || '';
   const rows = [
     { label: '姓名', field: 'firstName', val: [c.firstName,c.lastName].filter(Boolean).join(' ')||'—', type: 'inline-double', field2: 'lastName', val1: c.firstName||'', val2: c.lastName||'' },
     { label: '邮箱', field: 'email', val: c.email||'—', type: 'inline' },
     { label: '公司', field: 'company', val: c.company||'—', type: 'inline' },
     { label: '国家', field: 'country', val: c.country||'—', type: 'select', opts: ['','巴西','墨西哥','哥伦比亚','智利','秘鲁','阿根廷','厄瓜多尔','美国','中国','西班牙','葡萄牙'] },
-    { label: '状态', field: '_status', val: st, type: 'select', opts: ['','replied','reached','autoreply','bounced'], labels: statusLabel, dot: statusDot },
-    { label: '阶段', field: 'stageTag', val: stageTag, type: 'select', opts: ['','reaching','quoting','trial','cooperating','lost'], labels: pipeLabels },
     { label: '职位', field: 'title', val: c.title||'—', type: 'inline' },
+    { label: '电话', field: 'phone', val: c.phone||'—', type: 'inline' },
+    { label: '领英', field: 'linkedin', val: c.linkedin||'—', type: 'inline' },
+    { label: '客户类型', field: 'clientType', val: c.clientType||'unlabeled', type: 'select', opts: ['agent','direct','unlabeled'], labels: ctLabel },
     { label: '跟进人', field: 'assignee', val: c.assignee||'—', type: 'inline' },
+    { label: '状态', field: '_status', val: st, type: 'select', opts: ['','replied','reached','autoreply','bounced'], labels: statusLabel, dot: statusDot },
+    { label: '发送阶段', field: 'stage', val: sendStage || '—', type: 'select', opts: ['cold','f1','f2','f3','f4'], labels: stageLabel },
+    { label: '管线阶段', field: 'stageTag', val: stageTag, type: 'select', opts: ['','reaching','quoting','trial','cooperating','lost'], labels: pipeLabels },
   ];
   return rows.map(r => {
     let display;
@@ -672,7 +719,8 @@ function infoTab(c) {
     } else {
       display = escapeHtml(r.val||'—');
     }
-    return `<div class="crm-field-row crm-info-edit" data-field="${r.field}" data-type="${r.type}" data-val="${escapeHtml(r.val||'')}" data-opts="${escapeHtml(JSON.stringify(r.opts||[]))}" data-labels="${escapeHtml(JSON.stringify(r.labels||{}))}" data-dot="${escapeHtml(JSON.stringify(r.dot||{}))}"${r.field2 ? ` data-field2="${escapeHtml(r.field2)}"` : ''}${r.val1 !== undefined ? ` data-val1="${escapeHtml(r.val1||'')}"` : ''}${r.val2 !== undefined ? ` data-val2="${escapeHtml(r.val2||'')}"` : ''}><label>${r.label}</label><span>${display}</span></div>`;
+    const cls = r.type === 'readonly' ? 'crm-field-row' : 'crm-field-row crm-info-edit';
+    return `<div class="${cls}" data-field="${r.field}" data-type="${r.type}" data-val="${escapeHtml(r.val||'')}" data-opts="${escapeHtml(JSON.stringify(r.opts||[]))}" data-labels="${escapeHtml(JSON.stringify(r.labels||{}))}" data-dot="${escapeHtml(JSON.stringify(r.dot||{}))}"${r.field2 ? ` data-field2="${escapeHtml(r.field2)}"` : ''}${r.val1 !== undefined ? ` data-val1="${escapeHtml(r.val1||'')}"` : ''}${r.val2 !== undefined ? ` data-val2="${escapeHtml(r.val2||'')}"` : ''}><label>${r.label}</label><span>${display}</span></div>`;
   }).join('');
 }
 
@@ -688,36 +736,53 @@ function prefsTab(cid, prefs) {
     <div class="crm-field-row crm-field-row-memo"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" placeholder="自由备注..." style="width:100%;flex:1;resize:none;font-size:13px;line-height:1.5">${escapeHtml(prefs.memo||'')}</textarea></div>`;
 }
 
-function followupTab(cid, reminder, notes, interactions) {
+function followupTab(cid, reminder, notes, interactions, indirectMails) {
   const na = reminder.nextFollowupAt || '';
-  // 合并备注 + 状态变更记录，按时间混排
-  const noteItems = (notes||[]).map(n => ({ id: n.id, time:n.created_at, type:'note', content:n.content }));
-  const changeItems = (interactions||[])
-    .filter(i => i.type === 'stage_changed' || i.type === 'tags_changed' || i.type === 'status_changed')
-    .map(i => ({
-      id: i.id, time: i.created_at, type: 'change',
-      icon: i.type === 'stage_changed' ? 'arrow-right-circle' : 'tag',
-      content: i.snippet || i.type
-    }));
-  const allItems = [...noteItems, ...changeItems]
+  // ── 时间线配色 ──────────────────────────────────────────────────────
+  const LINE = {
+    received:       { color: '#22a644', icon: 'mail',                label: '收信' },
+    'received-indirect': { color: '#ff9800', icon: 'share-2',       label: '关联' },
+    note:           { color: '#9e9e9e', icon: 'sticky-note',         label: '备注' },
+    stage_changed:  { color: '#2196f3', icon: 'arrow-right-circle',  label: '阶段' },
+    tags_changed:   { color: '#8e24aa', icon: 'tag',                 label: '标签' },
+    status_changed: { color: '#22a644', icon: 'refresh-cw',          label: '状态' },
+  };
+  // 合并备注 + 互动记录（含邮件收发），按时间混排
+  const noteItems = (notes||[]).map(n => ({ id: n.id, time:n.created_at, itype:'note', content:n.content }));
+  const interactionItems = (interactions||[]).map(i => ({
+    id: i.id, time: i.created_at,
+    itype: i.type || 'noted',
+    content: i.snippet || i.subject || i.type || '',
+    email_uid: i.email_uid, email_account: i.email_account,
+  }));
+  // 间接匹配邮件：inbox 里 matched_contacts 命中但未直接绑定的邮件 → 当收信显示
+  const indirectItems = (indirectMails||[]).map(m => ({
+    id: 'im-' + (m.uid||''), time: m.date,
+    itype: 'received-indirect',
+    content: m.subject || '',
+    email_uid: m.uid, email_account: m.account_id,
+  }));
+  const allItems = [...noteItems, ...interactionItems, ...indirectItems]
     .sort((a,b) => new Date(b.time)-new Date(a.time)).slice(0,50);
 
   const notesHtml = allItems.length ? allItems.map(i => {
-    if (i.type === 'change') {
-      return `<div class="crm-followup-item">
-        <div class="crm-followup-time">${lucide(i.icon||'refresh-cw',11)} ${fmtDT(i.time)}</div>
-        <div class="crm-note-content" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(i.content||'')}</div>
-      </div>`;
-    }
-    return `<div class="crm-followup-item" data-note-id="${i.id||''}">
-      <div class="crm-followup-time">
-        ${lucide('sticky-note',11)} ${fmtDT(i.time)}
-        <span class="crm-note-actions">
+    const cfg = LINE[i.itype] || { color: '#9e9e9e', icon: 'file-text', label: '' };
+    const isNote = i.itype === 'note';
+    const isMail = i.itype === 'received' || i.itype === 'received-indirect';
+    const mailAttr = isMail && i.email_uid ? ` data-uid="${escapeHtml(i.email_uid)}" data-account="${escapeHtml(i.email_account||'')}" class="crm-followup-item crm-followup-mail"` : '';
+    const noteAttr = isNote ? ` data-note-id="${i.id||''}"` : '';
+    const labelTag = cfg.label ? `<span style="font-size:10px;color:${cfg.color};font-weight:600">${cfg.label}</span>` : '';
+    const subjectLine = '';
+    const contentLine = (!isMail && i.content) ? `<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;padding-left:16px">${escapeHtml(i.content)}</div>` : '';
+    return `<div class="crm-followup-item"${noteAttr}${mailAttr} style="border-left:3px solid ${cfg.color};padding:4px 0 4px 10px">
+      <div class="crm-followup-time" style="display:flex;align-items:center;gap:4px">
+        ${labelTag}<span style="font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap">${fmtDT(i.time)}</span>${subjectLine}
+        ${isNote ? `<span class="crm-note-actions" style="flex-shrink:0;margin-left:auto">
           <span class="crm-note-edit" data-note-id="${i.id}" title="编辑">${lucide('pencil',11)}</span>
           <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash',11)}</span>
-        </span>
+        </span>` : ''}
       </div>
-      <div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all">${escapeHtml(i.content||'')}</div>
+      ${contentLine}
     </div>`;
   }).join('')
     : '<div style="color:var(--text-secondary);padding:8px 0;font-size:12px">暂无</div>';
@@ -726,7 +791,7 @@ function followupTab(cid, reminder, notes, interactions) {
     <div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--bg);border-radius:6px;margin-bottom:10px">
       <span style="font-size:11px;color:var(--text-secondary);white-space:nowrap">下次跟进</span>
       <input type="datetime-local" id="crm-next-followup" value="${escapeHtml(na)}" style="width:0;flex:1;min-width:0;padding:4px 6px;border:1px solid var(--border);border-radius:5px;font-size:11px;background:var(--card-bg);color:var(--text);font-family:inherit;outline:none">
-      <button id="crm-followup-save" style="padding:3px 10px;border:1px solid var(--accent);border-radius:5px;font-size:11px;background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap;font-weight:600">保存</button>
+      <button id="crm-followup-save" style="padding:3px 10px;border:1px solid var(--text);border-radius:5px;font-size:11px;background:var(--text);color:#fff;cursor:pointer;white-space:nowrap;font-weight:600">保存</button>
       ${na ? `<button id="crm-clear-followup" title="清除跟进日期" style="padding:2px 4px;border:none;background:none;color:var(--text-secondary);cursor:pointer;font-size:14px;line-height:1;border-radius:3px;flex-shrink:0">${lucide('x',13)}</button>` : ''}
     </div>
     <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px">添加记录</div>
@@ -827,7 +892,7 @@ function rebindFollowupEvents(panel, contactId) {
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
-        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions, d.data.indirectMails);
         rebindFollowupEvents(panel, contactId);
       }
     }
@@ -843,7 +908,7 @@ function rebindFollowupEvents(panel, contactId) {
       const d = await window.electronAPI.crmGetDetail(contactId);
       if (d.ok) {
         const fl = panel.querySelector('[data-content="followup"]');
-        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions);
+        if (fl) fl.innerHTML = followupTab(contactId, d.data.contact._extra?.crmReminder || {}, d.data.notes, d.data.interactions, d.data.indirectMails);
         rebindFollowupEvents(panel, contactId);
       }
       refreshPipeline();
@@ -854,7 +919,30 @@ function rebindFollowupEvents(panel, contactId) {
     });
   });
 
-  // 邮件详情弹窗（绑定到邮件往来 tab）
+  // 邮件类型的跟进记录 → 点击查看正文
+  panel.querySelectorAll('.crm-followup-mail').forEach(row => {
+    if (row._mailBound) return; row._mailBound = true;
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => {
+      const uid = row.dataset.uid;
+      const acct = row.dataset.account;
+      if (!uid) return;
+      (async () => {
+        const r = await window.electronAPI.crmGetEmailBody(uid, acct);
+        if (!r.ok) { showToast('无法加载邮件', 'err'); return; }
+        const m = r.data;
+        const popup = document.createElement('div');
+        popup.className = 'crm-email-popup-overlay';
+        popup.style.cssText = 'position:fixed;z-index:9999;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center';
+        popup.innerHTML = `<div class="crm-email-popup-card" style="max-width:700px;width:90%;max-height:85vh;background:var(--card-bg);border-radius:12px;overflow:hidden;display:flex;flex-direction:column"><div class="crm-email-popup-header" style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-weight:600">${escapeHtml(m.subject||'(无主题)')}</div><div style="font-size:12px;color:var(--text-secondary);margin-top:4px">${escapeHtml(m.from_name||'')} &lt;${escapeHtml(m.from_addr||'')}&gt; · ${escapeHtml(m.date||'')}</div></div><button class="crm-detail-close-btn">${lucide('x',16)}</button></div><div style="padding:16px 20px;overflow-y:auto;flex:1;font-size:13px;line-height:1.7">${(m.body||'(无内容)').replace(/<script[\s\S]*?<\/script>/gi,'').replace(/<iframe[\s\S]*?<\/iframe>/gi,'').replace(/\son\w+\s*=\s*"[^"]*"/gi,'').replace(/javascript\s*:/gi,'blocked:')}</div></div>`;
+        document.body.appendChild(popup);
+        popup.querySelector('.crm-detail-close-btn')?.addEventListener('click', () => popup.remove());
+        popup.addEventListener('click', (ev) => { if (ev.target === popup) popup.remove(); });
+      })();
+    });
+  });
+
+  // 邮件往来 tab 的绑定
   const bindEmailClicks = (container) => {
     container.querySelectorAll('.crm-email-item').forEach(row => {
       if (row._emailBound) return; row._emailBound = true;

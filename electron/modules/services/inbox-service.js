@@ -458,10 +458,8 @@ function _imapFetch(cfg) {
             resolve(rawSources);
           });
           fetch.once("end", () => {
-            if (maxUid > lastUid) {
-              cursor[cursorKey] = String(maxUid);
-              _writeCursor(cursor);
-            }
+            // ponytail: 游标暂存，在 _fetchInbox 写入 inbox 成功后才落盘
+            if (maxUid > lastUid) cursorUpdates.push({ key: cursorKey, uid: String(maxUid) });
             imap.end();
             resolve(rawSources);
           });
@@ -659,12 +657,11 @@ async function _pop3Fetch(cfg, sinceDays) {
       } catch { retrFail++; continue; }
     }
     T.retr = Date.now() - t0; T.retrOk = retrOk; T.retrFail = retrFail;
-    // ⑧ 保存游标
+    // ⑧ 游标信息随结果返回，在 _fetchInbox 写入成功后统一保存
     const maxSeq = Math.max(...ids);
     if (uidMap[maxSeq]) newCursorUid = uidMap[maxSeq];
     if (newCursorUid && newCursorUid !== lastUid) {
-      cursor[cfg.user] = newCursorUid;
-      _writeCursor(cursor);
+      cursorUpdates.push({ key: cfg.user, uid: newCursorUid });
     }
     T.total = Date.now() - t0;
     rawSources._diag = { step: 'DONE', ...T };
@@ -724,6 +721,7 @@ async function _fetchInbox(configPath) {
   const failedAccounts = [];
   const skippedAccounts = [];
   const accountStats = []; // 诊断：每个账号的拉取详情
+  const cursorUpdates = []; // 待保存的游标（写入 inbox 成功后再存）
   const results = await Promise.all(activeAccounts.map(async ({ acc, cfg }) => {
     const protocol = _isPop3(cfg) ? 'POP3' : 'IMAP';
     Log.info('[收件箱]', `拉取 ${acc.label || cfg.user} (${cfg.host}:${cfg.port}) [${protocol}]...`);
@@ -775,7 +773,15 @@ async function _fetchInbox(configPath) {
 
   // ponytail: 直接返回内存数据，避免写完又读
   const result = newMails.length ? [...newMails, ...existing].slice(-500) : existing;
-  if (newMails.length) _writeCache(result);
+  if (newMails.length) {
+    _writeCache(result);
+    // 写入成功后才保存游标，防止中途崩溃导致游标跳过
+    if (cursorUpdates.length) {
+      const cursor = _readCursor();
+      for (const cu of cursorUpdates) cursor[cu.key] = cu.uid;
+      _writeCursor(cursor);
+    }
+  }
   result._failedAccounts = failedAccounts.length ? failedAccounts : undefined;
   result._skippedAccounts = skippedAccounts.length ? skippedAccounts : undefined;
   result._accountStats = accountStats.length ? accountStats : undefined;

@@ -55,6 +55,11 @@ export async function initInbox() {
   // 委托事件：在 #inbox-list 上绑一次，避免 renderInbox 重建时累加
   _bindInboxDelegates();
   renderInbox();
+  // ponytail: 切页后恢复搜索框（防御性，DOM 隐藏/显示可能丢失 input value）
+  if (_searchQuery && searchInput) {
+    searchInput.value = _searchQuery;
+    if (searchClear) searchClear.style.display = '';
+  }
 }
 
 export async function doFetchInbox() {

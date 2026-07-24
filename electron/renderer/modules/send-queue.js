@@ -19,9 +19,7 @@ function _rollbackSendingStatus(e) {
 }
 
 export function saveQueue() {
-  const json = JSON.stringify(S.queue);
-  localStorage.setItem('emailQueue', json);
-  // 异步写文件，不阻塞 UI
+  // ponytail: 只写磁盘文件，localStorage 仅做冷启动兜底（loadQueue 时）
   window.electronAPI.saveQueue(S.queue).catch(() => {});
 }
 
@@ -902,8 +900,7 @@ export function doQueueClearDone() {
     (e._recipientStatus && e._recipientStatus.some(r => r.status === 'pending')));
   saveQueue(); renderQueue(); clearQueueDelayUI(); resetQueueTimer();
   const pb = document.getElementById('queue-progress'); pb.style.width = '0%'; pb.classList.remove('active');
-  document.getElementById('stat-queue').textContent = S.queue.reduce((sum, e) =>
-    sum + (e._recipientStatus ? e._recipientStatus.filter(r => r.status === 'pending').length : (e.status === 'pending' ? 1 : 0)), 0);
+  document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
 }
 export async function doQueueClearPending() {
   if (S.sendInProgress) return await showAlert('发送进行中，请先暂停');

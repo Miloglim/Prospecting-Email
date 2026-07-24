@@ -191,10 +191,28 @@ function getDetail(contactId) {
   if (!contact) return { ok: false, error: "联系人不存在" };
 
   const db = getDb();
-  const notes = db.prepare("SELECT id, content, created_at, updated_at FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC").all(contactId);
-  const interactions = interactionsDb.list({ contact_id: contactId, limit: 100 });
+  let notes;
+  try { notes = db.prepare("SELECT id, content, created_at, updated_at FROM contact_notes WHERE contact_id = ? ORDER BY created_at DESC").all(contactId); }
+  catch (e) { return { ok: false, error: "notes查询: " + e.message }; }
 
-  return { ok: true, data: { contact, notes, interactions } };
+  let interactions;
+  try { interactions = interactionsDb.list({ contact_id: contactId, limit: 100 }); }
+  catch (e) { return { ok: false, error: "interactions查询: " + e.message }; }
+
+  // 间接匹配邮件：matched_contacts 中包含该联系人邮箱但未直接绑定
+  let indirectMails = [];
+  if (contact.email) {
+    try {
+      indirectMails = db.prepare(
+        `SELECT uid, account_id, subject, from_addr, from_name, date, type FROM inbox
+         WHERE contact_db_id != ? AND contact_id != ? AND lower(from_addr) != ?
+           AND matched_contacts IS NOT NULL AND instr(matched_contacts, ?) > 0
+         ORDER BY date DESC LIMIT 30`
+      ).all(contactId, contactId, (contact.email || '').toLowerCase(), '"email":"' + (contact.email || '').toLowerCase() + '"');
+    } catch (e) { return { ok: false, error: "indirectMails查询: " + e.message }; }
+  }
+
+  return { ok: true, data: { contact, notes, interactions, indirectMails } };
 }
 
 // ── 跟进备注 ──────────────────────────────────────────────────────────────────
@@ -203,15 +221,10 @@ function saveNote(contactId, content) {
   if (!content || !content.trim()) return { ok: false, error: "内容不能为空" };
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
-
-  const { randomUUID: uuid } = require("crypto");
-  const db = getDb();
-  const id = uuid();
-  const now = new Date().toISOString();
-  db.prepare("INSERT INTO contact_notes (id, contact_id, content, created_at, updated_at) VALUES (?,?,?,?,?)").run(id, contactId, content.trim(), now, now);
-
-  Log.info("CRM", "跟进备注已保存", { contactId, noteId: id });
-  return { ok: true, data: { id, contact_id: contactId, content: content.trim(), created_at: now, updated_at: now } };
+  // ponytail: 统一走 contactsDb.addNote
+  const note = contactsDb.addNote(contactId, content.trim());
+  Log.info("CRM", "跟进备注已保存", { contactId, noteId: note?.id });
+  return { ok: true, data: note };
 }
 
 // ── 到期提醒检查 ──────────────────────────────────────────────────────────────
@@ -261,11 +274,18 @@ function getContactEmails(contactId) {
   const contact = contactsDb.getById(contactId);
   if (!contact) return { ok: false, error: "联系人不存在" };
   const db = getDb();
-  const rows = db.prepare(
-    `SELECT uid, account_id, subject, from_addr, from_name, date, body, type FROM inbox
-     WHERE from_addr = ? OR contact_db_id = ? OR contact_id = ?
-     ORDER BY date DESC LIMIT 50`
-  ).all(contact.email, contactId, contactId);
+  let rows;
+  try {
+    const searchEmail = '"email":"' + (contact.email || '').toLowerCase() + '"';
+    rows = db.prepare(
+      `SELECT uid, account_id, subject, from_addr, from_name, date, body, type,
+        CASE WHEN lower(from_addr) = ? OR contact_db_id = ? OR contact_id = ? THEN 0 ELSE 1 END as _indirect
+       FROM inbox
+       WHERE lower(from_addr) = ? OR contact_db_id = ? OR contact_id = ?
+          OR (matched_contacts IS NOT NULL AND instr(matched_contacts, ?) > 0)
+       ORDER BY date DESC LIMIT 50`
+    ).all((contact.email || '').toLowerCase(), contactId, contactId, (contact.email || '').toLowerCase(), contactId, contactId, searchEmail);
+  } catch (e) { return { ok: false, error: "getContactEmails: " + e.message }; }
   return { ok: true, data: rows };
 }
 

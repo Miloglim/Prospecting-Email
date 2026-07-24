@@ -289,7 +289,7 @@ export async function generateMonthlyReports() {
   }
 
   saveQueue();
-  document.getElementById('stat-queue').textContent = S.queue.length;
+  document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
   // 构建跳过摘要
   let skipHtml = '';
   if (allSkipped.size) {
