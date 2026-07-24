@@ -615,8 +615,7 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
   }
   let anomalyCount = 0;
   for (const c of S.contactsData) {
-    const ct = c.clientType || 'unlabeled';
-    if (ct === 'no_email' || ct === 'invalid_email' || ct === 'no_company') anomalyCount++;
+    if (c._suspicious === 1 || (c.email && (c.email.endsWith('@no.email') || c.email.endsWith('@placeholder.local') || (c.email && !S.EMAIL_RE.test(c.email))))) anomalyCount++;
   }
   const labelMap = {
     all: `全部 ${totalCompanies}`,

@@ -794,6 +794,14 @@ async function addToQueue() {
     }
   }
 
+  // 预计算队列中已有的邮箱（避免 O(n×m) 循环）
+  const queuedEmails = new Set();
+  for (const q of S.queue) {
+    if (q.status === 'pending' || q.status === 'sending') {
+      for (const r of (q.recipients || [])) queuedEmails.add(r.toLowerCase().trim());
+    }
+  }
+
   // 统一收集本次被跳过的联系人（用于最终 alert 展示）
   const allSkipped = new Map();
 
@@ -809,12 +817,6 @@ async function addToQueue() {
     }
 
     const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
-    const queuedEmails = new Set();
-    S.queue.forEach(q => {
-      if (q.status === 'pending' || q.status === 'sending') {
-        (q.recipients || []).forEach(r => queuedEmails.add(r.toLowerCase().trim()));
-      }
-    });
     // 上下文过滤：已发送 + 已在队列
     const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
     const alreadyQueued = sendable.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));

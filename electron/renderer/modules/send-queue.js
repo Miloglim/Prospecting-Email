@@ -179,7 +179,8 @@ export async function renderQueue() {
           return `<span style="font-size:10px;padding:0 5px;border-radius:8px;background:${color}18;color:${color};white-space:nowrap">${label}</span>`;
         }).join(' ')
       : '';
-    const tagsArr = [tt, ctry, langTag, `<span>${count}人</span>`, tplSourceTag, contactTagBadges].filter(Boolean);
+    const acctTag = e._sentBy ? `<span style="font-size:10px;color:var(--primary);white-space:nowrap">${lucide('at-sign',10)} ${escapeHtml(e._sentBy)}</span>` : '';
+    const tagsArr = [acctTag, tt, ctry, langTag, `<span>${count}人</span>`, tplSourceTag, contactTagBadges].filter(Boolean);
     const tagsHtml = tagsArr.length ? `<div class="qc-tags">${tagsArr.join(' · ')}</div>` : '';
     const retryBtn = e.status === 'failed'
       ? `<button class="qc-retry" data-id="${e.id}">${lucide('refresh-cw',12)} 重发</button>`
@@ -432,7 +433,11 @@ export async function startSend() {
   S.unsubscribeProgress = await window.electronAPI.onSendProgress(async (data) => {
     if (data.type === 'sent') {
       // 记录当前发送账号
-      if (data.accountLabel) S._currentAccountLabel = data.accountLabel;
+      if (data.accountLabel) {
+        S._currentAccountLabel = data.accountLabel;
+        const item = S.queue.find(e => e.id === data.id);
+        if (item) item._sentBy = data.accountLabel;
+      }
       const item = S.queue.find(e => e.id === data.id);
       if (item) {
         if (!item._recipientStatus) {
@@ -455,6 +460,11 @@ export async function startSend() {
           item._recipientStatus.forEach(r => { if (r.status !== 'sent' && r.status !== 'failed') r.status = 'sent'; });
         }
         item.status = 'sent';
+      }
+    } else if (data.type === 'fused') {
+      if (data.accountLabel) {
+        const item = S.queue.find(e => e.id === data.id);
+        if (item) item._sentBy = data.accountLabel;
       }
     } else if (data.type === 'failed') {
       const item = S.queue.find(e => e.id === data.id);
