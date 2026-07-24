@@ -4,20 +4,17 @@
 const path = require("path");
 const fs = require("fs");
 const { APP_ROOT } = require("../config");
+const { beijingToday } = require("../utils");
 
 function getStats(deps) {
   let sentToday = 0, totalSent = 0, totalFailed = 0, dailyLimit = 500, firstSendAt = 0;
+  // 从 SQLite 读取今日已发（send-engine 已迁移到 SQLite，JSON 文件不再更新）
   try {
-    const lp = path.join(APP_ROOT, "send", "send-log.json");
-    if (fs.existsSync(lp)) {
-      const log = JSON.parse(fs.readFileSync(lp, "utf-8"));
-      const fsAt = log.first_send_at || 0;
-      // 24h窗口内才统计今日发送，过期则归零
-      if (fsAt > 0 && (Date.now() - fsAt) <= 24 * 3600 * 1000) {
-        sentToday = log.daily_count || 0;
-        firstSendAt = fsAt;
-      }
-    }
+    const db = require("./db").getDb();
+    const today = beijingToday();
+    const row = db.prepare("SELECT COUNT(*) as n, MIN(time) as first_time FROM send_log WHERE status = 'sent' AND time_beijing LIKE ?").get(today + '%');
+    sentToday = row?.n || 0;
+    if (row?.first_time) firstSendAt = new Date(row.first_time).getTime();
   } catch { /* 降级 */ }
   try {
     const sendLog = require("./send-log-db");

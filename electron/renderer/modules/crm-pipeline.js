@@ -671,6 +671,32 @@ async function openDetailPanel(contactId) {
       ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); } });
     });
   });
+
+  // 高亮并滚动到对应联系人卡片（从联系人页跳转过来时定位）
+  const _activeRow = document.querySelector(`.crm-contact-row[data-contact-id="${contactId}"]`);
+  if (_activeRow) {
+    const _stageBody = _activeRow.closest('.crm-stage-body');
+    if (_stageBody && _stageBody.style.display === 'none') {
+      const _head = _stageBody.previousElementSibling;
+      if (_head) {
+        _stageBody.style.display = 'block';
+        _head.classList.add('open');
+        const _arrow = _head.querySelector('.crm-stage-arrow');
+        if (_arrow) _arrow.innerHTML = lucide('chevron-down', 14);
+        const _sk = _head.dataset.stage;
+        if (_sk) {
+          try {
+            const _ss = JSON.parse(localStorage.getItem('crm-stage-state') || '{}');
+            _ss[_sk] = true;
+            localStorage.setItem('crm-stage-state', JSON.stringify(_ss));
+          } catch { /* 静默 */ }
+        }
+      }
+    }
+    document.querySelectorAll('.crm-contact-row').forEach(r => r.classList.remove('active'));
+    _activeRow.classList.add('active');
+    _activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
 }
 
 function closeDetailPanel() {
@@ -741,6 +767,8 @@ function followupTab(cid, reminder, notes, interactions, indirectMails) {
   // ── 时间线配色 ──────────────────────────────────────────────────────
   const LINE = {
     received:       { color: '#22a644', icon: 'mail',                label: '收信' },
+    sent:           { color: '#5c6bc0', icon: 'send',                label: '发信' },
+    bounced:        { color: '#d93025', icon: 'alert-circle',        label: '退信' },
     'received-indirect': { color: '#ff9800', icon: 'share-2',       label: '关联' },
     note:           { color: '#9e9e9e', icon: 'sticky-note',         label: '备注' },
     stage_changed:  { color: '#2196f3', icon: 'arrow-right-circle',  label: '阶段' },
@@ -768,15 +796,15 @@ function followupTab(cid, reminder, notes, interactions, indirectMails) {
   const notesHtml = allItems.length ? allItems.map(i => {
     const cfg = LINE[i.itype] || { color: '#9e9e9e', icon: 'file-text', label: '' };
     const isNote = i.itype === 'note';
-    const isMail = i.itype === 'received' || i.itype === 'received-indirect';
+    const isMail = i.itype === 'received' || i.itype === 'received-indirect' || i.itype === 'sent' || i.itype === 'bounced';
     const mailAttr = isMail && i.email_uid ? ` data-uid="${escapeHtml(i.email_uid)}" data-account="${escapeHtml(i.email_account||'')}" class="crm-followup-item crm-followup-mail"` : '';
     const noteAttr = isNote ? ` data-note-id="${i.id||''}"` : '';
-    const labelTag = cfg.label ? `<span style="font-size:10px;color:${cfg.color};font-weight:600">${cfg.label}</span>` : '';
+    const labelTag = cfg.label ? `<span style="font-size:12px;color:${cfg.color};font-weight:600;display:inline-block;min-width:3em">${cfg.label}</span>` : '';
     const subjectLine = '';
-    const contentLine = (!isMail && i.content) ? `<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;padding-left:16px">${escapeHtml(i.content)}</div>` : '';
+    const contentLine = (!isMail && i.content) ? `<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;padding-left:calc(3em + 4px)">${escapeHtml(i.content)}</div>` : '';
     return `<div class="crm-followup-item"${noteAttr}${mailAttr} style="border-left:3px solid ${cfg.color};padding:4px 0 4px 10px">
       <div class="crm-followup-time" style="display:flex;align-items:center;gap:4px">
-        ${labelTag}<span style="font-size:11px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap">${fmtDT(i.time)}</span>${subjectLine}
+        ${labelTag}<span style="font-size:12px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap">${fmtDT(i.time)}</span>${subjectLine}
         ${isNote ? `<span class="crm-note-actions" style="flex-shrink:0;margin-left:auto">
           <span class="crm-note-edit" data-note-id="${i.id}" title="编辑">${lucide('pencil',11)}</span>
           <span class="crm-note-del" data-note-id="${i.id}" title="删除">${lucide('trash',11)}</span>
@@ -841,8 +869,8 @@ async function checkReminders() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 function fmtDate(i) { try { const d=new Date(i); return `${d.getMonth()+1}/${d.getDate()}`; } catch { return ''; } }
-function daysAgo(i) { try { const diff=Math.floor((Date.now()-new Date(i).getTime())/86400000); return diff<=0?'今天':diff===1?'1天前':`${diff}天前`; } catch { return ''; } }
-function daysUntil(i) { try { const diff=Math.floor((new Date(i).getTime()-Date.now())/86400000); return diff<=0?'今天':diff===1?'1天后':`${diff}天后`; } catch { return ''; } }
+function daysAgo(i) { try { const d=new Date(i),n=new Date(); const dd=new Date(d.getFullYear(),d.getMonth(),d.getDate()); const nd=new Date(n.getFullYear(),n.getMonth(),n.getDate()); const diff=Math.floor((nd-dd)/86400000); return diff<=0?'今天':diff===1?'1天前':`${diff}天前`; } catch { return ''; } }
+function daysUntil(i) { try { const d=new Date(i),n=new Date(); const dd=new Date(d.getFullYear(),d.getMonth(),d.getDate()); const nd=new Date(n.getFullYear(),n.getMonth(),n.getDate()); const diff=Math.floor((dd-nd)/86400000); return diff<=0?'今天':diff===1?'1天后':`${diff}天后`; } catch { return ''; } }
 function fmtDT(i) { try { const d=new Date(i); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; } catch { return i||''; } }
 
 // 精准更新单张卡片的跟进时间，不重建整个管道

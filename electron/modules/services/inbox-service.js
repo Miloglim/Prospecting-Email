@@ -32,7 +32,8 @@ function _logInboxInteractions(newMails) {
         if (c) contactId = c.id;
       }
       if (!contactId) continue;
-      const itype = m.type === 'bounce' ? 'bounced' : m.type === 'replied' ? 'received' : m.type === 'autoreply' ? 'received' : 'noted';
+      const itype = m.type === 'bounce' ? 'bounced' : m.type === 'replied' ? 'received' : m.type === 'autoreply' ? 'received' : null;
+      if (!itype) continue; // ponytail: 普通邮件不写时间线，只记录退信/回复/自动回复
       interactionsDb.add({
         contact_id: contactId,
         company_id: m.contactId || '',
@@ -922,7 +923,7 @@ function deleteMail(index) {
     try { const { getDb } = require('./db'); getDb().prepare('DELETE FROM inbox WHERE account_id=? AND uid=?').run(m.accountId, m.uid); } catch { /* 降级 */ }
   }
   mails.splice(index, 1);
-  _writeCache(mails);
+  // ponytail: _writeCache 不调用 — 上面的 SQL DELETE 已持久化单行删除，全表重写是 O(n) 浪费
 }
 
 function removeMatchedContact(mailIndex, email) {

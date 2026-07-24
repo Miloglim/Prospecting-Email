@@ -1451,7 +1451,7 @@ input[type="datetime-local"] { font-family: inherit; color-scheme: dark; }
 /* 跟进记录 */
 .crm-followup-top { margin-bottom: 4px; }
 .crm-record-form { padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); }
-.crm-followup-list { margin-top: 4px; }
+.crm-followup-list { margin-top: 4px; max-height: 280px; overflow-y: auto; }
 .crm-email-list { margin-top: 4px; }
 .crm-email-item-wrapper { margin-bottom: 4px; }
 .crm-email-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: border-color .15s, box-shadow .15s; background: var(--card-bg); }

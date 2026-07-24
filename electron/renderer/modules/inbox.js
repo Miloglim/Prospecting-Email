@@ -515,11 +515,29 @@ async function renderDetail() {
       }
       const matched = allMatched.filter(c => c.matched !== false);
       const unmatched = allMatched.filter(c => c.matched === false);
-      if (!allMatched.length) return '<div class="inbox-matched muted"><span>未提取到邮箱</span><span class="drawer-arrow">▾</span></div>';
-      const detailHtml = [];
-      if (matched.length) detailHtml.push(`<div>${matched.map(c => `<span class="inbox-match-item"><a class="inbox-match-link" href="#" data-email="${escapeHtml(c.email)}">${escapeHtml(c.email)}</a> → <b>${escapeHtml(c.company)}</b><span class="inbox-match-x" data-email="${escapeHtml(c.email)}" data-contactid="${escapeHtml(c.contactId || '')}" data-matched="1" title="删除该联系人"><svg width="8" height="8" viewBox="0 0 10 10" style="display:block"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.5"/></svg></span></span>`).join(' · ')}</div>`);
-      if (unmatched.length) detailHtml.push(`<div style="color:var(--text-secondary);margin-top:4px">未匹配: ${unmatched.map(c => escapeHtml(c.email)).join(' · ')}</div>`);
-      return `<div class="inbox-matched"><span>已匹配 ${matched.length} 人 · 未匹配 ${unmatched.length} 个邮箱</span><span class="drawer-arrow">▾</span><div class="inbox-matched-detail" style="max-height:200px">${detailHtml.join('')}</div></div>`;
+      if (!allMatched.length) return '<div style="color:var(--text-secondary);font-size:11px;padding:6px 10px">未提取到邮箱</div>';
+      const rows = [];
+      if (matched.length) {
+        rows.push(`<div style="font-size:10px;color:var(--text-secondary);padding:4px 10px 2px;text-transform:uppercase;letter-spacing:.5px">已匹配 ${matched.length} 人</div>`);
+        for (const c of matched) {
+          rows.push(`<div style="display:flex;align-items:center;gap:4px;padding:3px 10px;font-size:11px;border-bottom:1px solid var(--border-light, #f0f0f0);flex-wrap:wrap">
+            <a class="inbox-match-link" href="#" data-email="${escapeHtml(c.email)}" style="color:var(--text-secondary);text-decoration:none;font-size:11px" title="点击在联系人中查找">${escapeHtml(c.email)}</a>
+            <span style="flex-shrink:0;color:var(--text-muted)">→</span>
+            <b style="font-size:11px">${escapeHtml(c.company)}</b>
+            <span class="inbox-match-x" data-email="${escapeHtml(c.email)}" data-contactid="${escapeHtml(c.contactId || '')}" data-matched="1" title="删除匹配" style="cursor:pointer;color:var(--text-secondary);flex-shrink:0;margin-left:auto;padding:2px;border-radius:3px" onmouseenter="this.style.background='var(--border)'" onmouseleave="this.style.background='transparent'">${lucide('x', 11)}</span>
+          </div>`);
+        }
+      }
+      if (unmatched.length) {
+        const company = m.contactCompany || '';
+        rows.push(`<div style="font-size:10px;color:var(--text-secondary);padding:6px 10px 2px;text-transform:uppercase;letter-spacing:.5px">未匹配 ${unmatched.length} 个邮箱</div>`);
+        rows.push(`<div style="padding:2px 10px 6px;font-size:11px;color:var(--text-secondary);line-height:1.6">${unmatched.map(c => {
+          const e = escapeHtml(c.email);
+          const co = escapeHtml(company);
+          return `<span style="display:inline-flex;align-items:center;gap:1px;background:var(--bg);padding:1px 2px 1px 6px;border-radius:3px;margin:1px 4px 1px 0;font-size:10px;cursor:default" onmouseenter="this.querySelector('.add-btn').style.opacity='1'" onmouseleave="this.querySelector('.add-btn').style.opacity='0'">${e}<span class="add-btn" data-email="${e}" data-company="${co}" title="添加为联系人" style="opacity:0;transition:opacity .15s;cursor:pointer;padding:0 2px;color:var(--text-secondary);font-weight:600;font-size:12px;line-height:1" onclick="event.stopPropagation();document.querySelector('.nav-item[data-page=&quot;contacts&quot;]')?.click();setTimeout(()=>{window.__openAddContact?.(this.dataset.email,this.dataset.company||'')},200)">+</span></span>`;
+        }).join('')}</div>`);
+      }
+      return `<div style="border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:6px">${rows.join('')}</div>`;
     })()}
     <div class="inbox-detail-body-wrap"><iframe class="inbox-detail-body" sandbox="allow-scripts" scrolling="no"></iframe></div>
     <div class="inbox-detail-actions">

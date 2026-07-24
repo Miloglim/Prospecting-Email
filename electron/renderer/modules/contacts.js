@@ -729,9 +729,7 @@ export function renderContactDetail(company) {
           'reaching','触达中','quoting','报价中',
           'trial','试单','cooperating','合作中','lost','已流失'
         ]);
-        const statusReplied = m._status === 'replied';
-        const statusAutoreply = m._status === 'autoreply';
-        const inPipeline = statusReplied || statusAutoreply || (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
+        const inPipeline = m._status === 'replied' || (m.tags || []).some(t => PIPELINE_ENTRY_TAGS.has(t));
         if (inPipeline) {
           return `<td><span class="followup-btn followup-pipeline" data-id="${m.id}" data-pipeline="1" style="font-size:11px;cursor:pointer;color:var(--text);font-weight:600">备注</span></td>`;
         }
@@ -1155,8 +1153,9 @@ document.getElementById('contacts-search')?.addEventListener('input', async (e) 
 });
 
 // 「添加客户」→ 弹出录入框
-document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
-  const preselectedCompany = escapeHtml(S.selectedContactCompany || '');
+function showAddContactDialog(email = '', company = '') {
+  const preselectedCompany = escapeHtml(company || S.selectedContactCompany || '');
+  const preselectedEmail = escapeHtml(email);
   showModal({
     title: '添加联系人',
     closeOnOverlay: false,
@@ -1171,7 +1170,7 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
       </style>
       <div class="ac-form">
         <div class="ac-field"><label>公司名</label><input id="ac-company" placeholder="必填" value="${preselectedCompany}"></div>
-        <div class="ac-field"><label>邮箱</label><input id="ac-email" placeholder="必填"></div>
+        <div class="ac-field"><label>邮箱</label><input id="ac-email" placeholder="必填" value="${preselectedEmail}"></div>
         <div class="ac-row">
           <div class="ac-field"><label>名</label><input id="ac-firstname" placeholder="如 Julio"></div>
           <div class="ac-field"><label>姓</label><input id="ac-lastname" placeholder="如 Gallegos"></div>
@@ -1215,7 +1214,9 @@ document.getElementById('contacts-add-btn')?.addEventListener('click', () => {
       showToast(`已添加 ${company}`, 'ok');
     },
   });
-});
+}
+document.getElementById('contacts-add-btn')?.addEventListener('click', () => showAddContactDialog());
+window.__openAddContact = showAddContactDialog;
 // ── AI 分类按钮 ──────────────────────────────────────────────────────────
 document.getElementById('contacts-ai-classify-btn')?.addEventListener('click', async () => {
   const btn = document.getElementById('contacts-ai-classify-btn');
@@ -1303,6 +1304,8 @@ document.addEventListener('mousedown', (e) => {
 
 window.__pageHandlers['contacts'] = loadContacts;
 window.__pageHandlers['clients'] = renderClientsTable;
+// 暴露给外部调用（如收件箱未匹配邮箱 → 快速添加联系人）
+window.__openAddContact = showAddContactDialog;
 
 function showContactEditor(contact) {
   showModal({

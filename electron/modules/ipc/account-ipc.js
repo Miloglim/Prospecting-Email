@@ -38,17 +38,14 @@ function register(ipcMain) {
   ipcMain.handle('account:list', async () => {
     const cfg = _readConfig();
     const accounts = cfg.smtpAccounts || [];
-    // 合并今日已发计数
-    const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
-    let dailyCounts = {};
+    // 从 SQLite 读取今日各账号已发计数
+    const dailyCounts = {};
     try {
-      if (fs.existsSync(logPath)) {
-        const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-        if ((log.last_date_beijing || '') === beijingToday()) {
-          dailyCounts = log.daily_counts || {};
-        }
-      }
-    } catch { /* 非关键 I/O 失败不影响主流程 */ }
+      const db = require('../services/db').getDb();
+      const today = beijingToday();
+      const rows = db.prepare("SELECT account_id, SUM(count) as n FROM send_log WHERE status = 'sent' AND time_beijing LIKE ? GROUP BY account_id").all(today + '%');
+      for (const r of rows) { if (r.account_id) dailyCounts[r.account_id] = r.n; }
+    } catch { /* 降级 */ }
     return { ok: true, data: accounts.map(a => ({ ...a, todaySent: dailyCounts[a.id] || 0 })) };
   });
 
@@ -137,14 +134,18 @@ function register(ipcMain) {
 
   // ── 发送状态 ──
   ipcMain.handle('account:status', async () => {
-    const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
+    // 从 SQLite 读取今日各账号已发计数
     let dailyCounts = {}, accountStates = {};
     try {
+      const db = require('../services/db').getDb();
+      const today = beijingToday();
+      const rows = db.prepare("SELECT account_id, SUM(count) as n FROM send_log WHERE status = 'sent' AND time_beijing LIKE ? GROUP BY account_id").all(today + '%');
+      for (const r of rows) { if (r.account_id) dailyCounts[r.account_id] = r.n; }
+    } catch { /* 降级 */ }
+    try {
+      const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
       if (fs.existsSync(logPath)) {
         const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-        const today = beijingToday();
-        const logDate = log.last_date_beijing || '';
-        dailyCounts = (logDate === today) ? (log.daily_counts || {}) : {};
         accountStates = log._accountStates || {};
       }
     } catch { /* 日志不存在或损坏 */ }
