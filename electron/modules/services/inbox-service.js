@@ -839,19 +839,33 @@ function listInbox() {
   let changed = false;
   for (const m of mails) {
     const senderKey = (m.from || '').toLowerCase().trim();
-    const senderMatch = !!(senderKey && idx[senderKey]);
+    const senderContact = senderKey ? idx[senderKey] : null;
+    const senderMatch = !!senderContact;
     if (!senderMatch && m.contactCompany) {
       m.contactCompany = '';
       m.contactId = '';
       m.contactDbId = '';
       changed = true;
     }
-    // ponytail: 不自动重设 contactCompany — 匹配仅在拉取新邮件时发生
-    // 已由 removeMatchedContact 清理的匹配不应被 listInbox 复活
+    // ponytail: 发件人新匹配时自动回填 company，解决从收件箱创建联系人后"关联"不更新
+    if (senderMatch && !m.contactCompany) {
+      m.contactCompany = senderContact.company || '';
+      m.contactId = senderContact.id || '';
+      m.contactDbId = senderContact.id || '';
+      changed = true;
+    }
     if (m.matchedContacts) {
       for (const c of m.matchedContacts) {
         const was = c.matched;
-        c.matched = !!idx[(c.email || '').toLowerCase().trim()];
+        const contact = idx[(c.email || '').toLowerCase().trim()];
+        c.matched = !!contact;
+        // ponytail: 联系人从 unmatched→matched 时回填 company 信息，解决箭头不显示公司名
+        if (c.matched && contact) {
+          c.company = contact.company || c.company || '';
+          c.companyId = contact.companyId || c.companyId || '';
+          c.contactId = contact.id || c.contactId || '';
+          c.contactName = contact.contactName || c.contactName || '';
+        }
         if (was !== c.matched) changed = true;
       }
     }

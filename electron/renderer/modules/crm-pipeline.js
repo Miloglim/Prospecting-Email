@@ -329,12 +329,14 @@ async function openDetailPanel(contactId) {
       <button class="crm-tab${_currentTab==='prefs'?' active':''}" data-tab="prefs">偏好设置</button>
       <button class="crm-tab${_currentTab==='followup'?' active':''}" data-tab="followup">跟进记录</button>
       <button class="crm-tab${_currentTab==='emails'?' active':''}" data-tab="emails">邮件往来</button>
+      <button class="crm-tab${_currentTab==='relations'?' active':''}" data-tab="relations">关系网络</button>
     </div>
     <div class="crm-detail-body">
       <div class="crm-tab-content${_currentTab==='info'?' active':''}" data-content="info">${infoTab(contact)}</div>
       <div class="crm-tab-content${_currentTab==='prefs'?' active':''}" data-content="prefs">${prefsTab(contactId,prefs)}</div>
       <div class="crm-tab-content${_currentTab==='followup'?' active':''}" data-content="followup">${followupTab(contactId, reminder, notes, interactions, indirectMails)}</div>
       <div class="crm-tab-content${_currentTab==='emails'?' active':''}" data-content="emails"></div>
+      <div class="crm-tab-content${_currentTab==='relations'?' active':''}" data-content="relations">${relationsTab()}</div>
     </div>`;
 
   let _emailsLoaded = false;
@@ -346,6 +348,10 @@ async function openDetailPanel(contactId) {
       tab.classList.add('active');
       const tgt = panel.querySelector(`[data-content="${tab.dataset.tab}"]`);
       if (tgt) tgt.classList.add('active');
+      if (tab.dataset.tab === 'relations') {
+        const contactId = _currentDetailId;
+        if (contactId) initRelationsGraph(contactId);
+      }
       if (tab.dataset.tab === 'emails' && !_emailsLoaded) {
         _emailsLoaded = true;
         const r = await window.electronAPI.crmGetContactEmails(contactId);
@@ -699,7 +705,244 @@ async function openDetailPanel(contactId) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 关系网络 (D3 Force-Directed Graph)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const R_NODE_MIN = 8, R_NODE_MAX = 20;
+const R_LABEL_CHARS = 8;
+const R_ACTIVE_STROKE = 3;
+const R_EDGE_CO = '#d0d0d0', R_EDGE_CO_W = 2;
+const R_EDGE_EM = '#5c6bc0', R_EDGE_EM_W = 1, R_EDGE_EM_D = '4,3';
+const R_EDGE_CU = '#e6a817', R_EDGE_CU_W = 1.5, R_EDGE_CU_D = '6,3';
+const R_FORCE_STR = -300, R_COLLIDE = 30;
+const R_STOP_MS = 5000;
+const R_ZOOM_MIN = 0.3, R_ZOOM_MAX = 3;
+const R_TIP_SHOW = 240, R_TIP_HIDE = 150;
+const R_STAGE = { reaching:'#ff9800', quoting:'#2196f3', trial:'#8e24aa', cooperating:'#4caf50', lost:'#b0b0b0' };
+
+let _sim = null;
+let _resOb = null;
+let _relCache = null;
+
+function relationsTab() {
+  return `<div class="crm-rel-wrap" id="crm-rel-wrap">
+    <div class="crm-rel-legend">
+      <span><span style="display:inline-block;width:16px;border-top:2px solid ${R_EDGE_CO}"></span> 同公司</span>
+      <span><span style="display:inline-block;width:16px;border-top:1px dashed ${R_EDGE_EM}"></span> 邮件关联</span>
+      <span><span style="display:inline-block;width:16px;border-top:1.5px dashed ${R_EDGE_CU}"></span> 自定义</span>
+    </div>
+    <svg class="crm-rel-svg" id="crm-rel-svg"></svg>
+    <div class="crm-rel-hint" id="crm-rel-hint">右键节点添加/删除关系</div>
+  </div>`;
+}
+
+async function initRelationsGraph(contactId) {
+  const wrap = document.getElementById('crm-rel-wrap');
+  const svg = document.getElementById('crm-rel-svg');
+  if (!wrap || !svg) return;
+
+  if (_relCache && _relCache.contactId === contactId) {
+    const r = _relCache;
+    renderSimulation(svg, wrap, r.nodes, r.edges);
+    return;
+  }
+
+  try {
+    const r = await window.electronAPI.crmGetRelations(contactId);
+    if (!r.ok) {
+      wrap.innerHTML = `<div style="padding:20px;color:var(--danger);text-align:center">加载失败: ${escapeHtml(r.error)}</div>`;
+      return;
+    }
+    _relCache = { contactId, nodes: r.data.nodes, edges: r.data.edges };
+
+    if (r.data.nodes.length <= 1) {
+      wrap.innerHTML = '<div style="padding:20px;color:var(--text-secondary);text-align:center">该公司暂无其他联系人</div>';
+      return;
+    }
+
+    renderSimulation(svg, wrap, r.data.nodes, r.data.edges);
+    if (r.data.truncated) {
+      const hint = document.getElementById('crm-rel-hint');
+      if (hint) hint.textContent = '右键节点添加/删除关系 · 仅展示前80个联系人';
+    }
+  } catch (e) {
+    Log.error("CRM关系网络", "初始化关系图失败", e.stack);
+    wrap.innerHTML = '<div style="padding:20px;color:var(--danger);text-align:center">加载失败</div>';
+  }
+}
+
+function renderSimulation(svgEl, wrapEl, nodes, edges) {
+  if (_sim) { _sim.stop(); _sim = null; }
+  if (_resOb) { _resOb.disconnect(); _resOb = null; }
+
+  const box = wrapEl.getBoundingClientRect();
+  const w = box.width || 400, h = box.height || 400;
+  const cx = w / 2, cy = h / 2;
+
+  // Load D3 via require (Electron renderer CJS-compatible)
+  try {
+    const { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } = require('d3-force');
+    const { select } = require('d3-selection');
+    const { drag: d3Drag } = require('d3-drag');
+    const { zoom: d3Zoom } = require('d3-zoom');
+
+    svgEl.innerHTML = '';
+    const g = select(svgEl).append('g');
+
+    const zoomB = d3Zoom().scaleExtent([R_ZOOM_MIN, R_ZOOM_MAX])
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform);
+        g.selectAll('.node-label').style('display', event.transform.k < 0.5 ? 'none' : '');
+      });
+    select(svgEl).call(zoomB);
+
+    const simEdges = edges.map(e => ({ ...e }));
+    const simNodes = nodes.map(n => ({ ...n }));
+    const maxInt = Math.max(1, ...nodes.map(n => n.interactionCount || 0));
+    const rScale = d3.scaleLinear().domain([0, maxInt]).range([R_NODE_MIN, R_NODE_MAX]);
+
+    const sim = forceSimulation(simNodes)
+      .force('link', forceLink(simEdges).id(d => d.id).distance(d => d.type === 'custom' ? 120 : d.type === 'email' ? 100 : 80))
+      .force('charge', forceManyBody().strength(R_FORCE_STR))
+      .force('center', forceCenter(cx, cy))
+      .force('collide', forceCollide(R_COLLIDE));
+
+    // Edges
+    const link = g.append('g').selectAll('line').data(simEdges).join('line')
+      .attr('stroke', d => d.type === 'custom' ? (d.color || R_EDGE_CU) : d.type === 'email' ? R_EDGE_EM : R_EDGE_CO)
+      .attr('stroke-width', d => d.type === 'custom' ? R_EDGE_CU_W : d.type === 'email' ? R_EDGE_EM_W : R_EDGE_CO_W)
+      .attr('stroke-dasharray', d => d.type === 'custom' ? R_EDGE_CU_D : d.type === 'email' ? R_EDGE_EM_D : '')
+      .attr('opacity', d => d.type === 'email' ? 0.3 : 1);
+
+    // Edge labels (custom only)
+    g.append('g').selectAll('text').data(simEdges.filter(e => e.type === 'custom')).join('text')
+      .text(d => d.label).attr('font-size', '9px').attr('fill', d => d.color || R_EDGE_CU)
+      .attr('text-anchor', 'middle').attr('dy', '-4');
+
+    // Nodes
+    const node = g.append('g').selectAll('g').data(simNodes).join('g')
+      .call(d3Drag().filter(event => !event.ctrlKey && event.button === 0)
+        .on('start', (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+        .on('end', (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+    node.append('circle')
+      .attr('r', d => rScale(d.interactionCount || 0))
+      .attr('fill', d => R_STAGE[d.stage] || '#999')
+      .attr('stroke', d => d.isPrimary ? '#fff' : 'none')
+      .attr('stroke-width', d => d.isPrimary ? R_ACTIVE_STROKE : 0);
+
+    node.append('text').text(d => (d.name || '').slice(0, R_LABEL_CHARS))
+      .attr('font-size', '10px').attr('text-anchor', 'middle').attr('dy', d => rScale(d.interactionCount || 0) + 14)
+      .attr('fill', 'var(--text)').attr('class', 'node-label');
+
+    node.on('click', (_event, d) => {
+      if (d.id === _currentDetailId) return;
+      openDetailPanel(d.id);
+    });
+
+    function showRelCtx(event, nodeData, allNodes) {
+      document.getElementById('ctx-menu')?.remove();
+      const menu = document.createElement('div');
+      menu.id = 'ctx-menu';
+      menu.style.cssText = 'position:fixed;z-index:9999;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:140px;font-size:12px';
+
+      const others = allNodes.filter(n => n.id !== nodeData.id).slice(0, 15);
+      const options = others.map(n => `<div style="padding:4px 14px;cursor:pointer" data-action="add-rel" data-to="${escapeHtml(n.id)}">${escapeHtml(n.name)}</div>`).join('');
+
+      menu.innerHTML = `
+        <div style="padding:4px 14px;color:var(--text-secondary);font-size:10px">添加关联</div>
+        <div style="max-height:200px;overflow-y:auto">${options}</div>
+        <div style="border-top:1px solid var(--border);margin:4px 0"></div>
+        <div style="padding:4px 14px;cursor:pointer" data-action="view">查看详情</div>
+      `;
+      const mh = 200;
+      menu.style.left = event.clientX + 'px';
+      menu.style.top = (event.clientY + mh > window.innerHeight ? event.clientY - mh : event.clientY) + 'px';
+
+      menu.querySelectorAll('[data-action="add-rel"]').forEach(el => {
+        el.addEventListener('click', async () => {
+          const toId = el.dataset.to;
+          const label = prompt('关系标签（如"决策人""对接窗口"）', '');
+          if (!label) { menu.remove(); return; }
+          const r = await window.electronAPI.crmSaveRelation(nodeData.id, toId, label);
+          if (r.ok) { showToast('关系已添加', 'ok'); _relCache = null; initRelationsGraph(_currentDetailId); }
+          else { showToast(r.error || '保存失败', 'err'); }
+          menu.remove();
+        });
+      });
+      menu.querySelector('[data-action="view"]').addEventListener('click', () => {
+        openDetailPanel(nodeData.id); menu.remove();
+      });
+
+      document.body.appendChild(menu);
+      const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
+    }
+
+    node.on('contextmenu', (event, d) => showRelCtx(event, d, simNodes));
+
+    let _tipTimer;
+    node.on('mouseenter', (event, d) => {
+      clearTimeout(_tipTimer);
+      _tipTimer = setTimeout(() => {
+        let tip = document.getElementById('crm-node-tip');
+        if (!tip) { tip = document.createElement('div'); tip.id = 'crm-node-tip'; tip.className = 'crm-node-tip'; document.body.appendChild(tip); }
+        tip.innerHTML = `<div class="tt-name">${escapeHtml(d.name)}</div><div class="tt-meta">${escapeHtml(d.title||'')} · ${escapeHtml(d.stage||'未分类')}</div>`;
+        tip.style.display = 'block';
+        const tr = svgEl.getBoundingClientRect();
+        tip.style.left = (tr.left + event.offsetX + 12) + 'px';
+        tip.style.top = (tr.top + event.offsetY - 40) + 'px';
+        link.attr('opacity', e => (e.source.id === d.id || e.target.id === d.id) ? 1 : 0.1);
+      }, R_TIP_SHOW);
+    });
+    node.on('mouseleave', () => {
+      clearTimeout(_tipTimer);
+      const tip = document.getElementById('crm-node-tip');
+      if (tip) setTimeout(() => { if (tip) tip.style.display = 'none'; }, R_TIP_HIDE);
+      link.attr('opacity', d => d.type === 'email' ? 0.3 : 1);
+    });
+
+    sim.on('tick', () => {
+      if (_currentTab !== 'relations') return;
+      link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+    _sim = sim;
+
+    setTimeout(() => {
+      if (_sim === sim && sim.alpha() > 0.05) {
+        sim.stop();
+        Log.warn("CRM关系网络", "力导向布局超时未收敛");
+      }
+    }, R_STOP_MS);
+
+    _resOb = new ResizeObserver(() => {
+      clearTimeout(wrapEl._rd);
+      wrapEl._rd = setTimeout(() => {
+        if (_sim && _currentTab === 'relations') {
+          const b = wrapEl.getBoundingClientRect();
+          sim.force('center', forceCenter(b.width/2, b.height/2));
+          sim.alpha(Math.min(sim.alpha(), 0.3)).restart();
+        }
+      }, 300);
+    });
+    _resOb.observe(wrapEl);
+
+  } catch (e) {
+    Log.error("CRM关系网络", "D3 模块加载失败", e.stack);
+    wrapEl.innerHTML = '<div style="padding:20px;color:var(--danger);text-align:center">图表组件加载失败，请重启应用</div>';
+  }
+}
+
 function closeDetailPanel() {
+  if (_sim) { _sim.stop(); _sim = null; }
+  if (_resOb) { _resOb.disconnect(); _resOb = null; }
+  const relSvg = document.getElementById('crm-rel-svg');
+  if (relSvg) relSvg.innerHTML = '';
+  _relCache = null;
   _currentDetailId = null;
   const p = document.getElementById('crm-detail-panel');
   if (p) p.style.display = 'none';

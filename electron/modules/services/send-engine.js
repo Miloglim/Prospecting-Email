@@ -32,15 +32,18 @@ function _tagContacts(emails, accountId, accountLabel) {
 
 // ── 正文存储（供 _logRecord 使用）─────────────────────────────────────────
 const bodiesPath = path.join(APP_ROOT, 'data', 'send-bodies.json');
+let _bodiesCache = null; // ponytail: 内存缓存，避免每次 saveBody 读盘
 
 function loadBodies() {
-  try { if (fs.existsSync(bodiesPath)) return JSON.parse(fs.readFileSync(bodiesPath, 'utf-8')); } catch { /* 正文缓存损坏 → 返回空对象，正文仍可实时构建 */ }
-  return {};
+  if (_bodiesCache) return _bodiesCache;
+  try { if (fs.existsSync(bodiesPath)) _bodiesCache = JSON.parse(fs.readFileSync(bodiesPath, 'utf-8')); } catch { /* 正文缓存损坏 → 返回空对象，正文仍可实时构建 */ }
+  return _bodiesCache || (_bodiesCache = {});
 }
 
 function saveBody(text) {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const bodies = loadBodies(); bodies[id] = (text || '').slice(0, 2000);
+  const bodies = loadBodies(); // 走缓存，不读盘
+  bodies[id] = (text || '').slice(0, 2000);
   const keys = Object.keys(bodies);
   if (keys.length > 5000) { keys.sort((a, b) => parseInt(a, 36) - parseInt(b, 36)); keys.slice(0, keys.length - 5000).forEach(k => delete bodies[k]); }
   const d = path.dirname(bodiesPath); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -174,7 +177,7 @@ function _getTodayCounts(testMode) {
       total += r.cnt;
     }
     return { total, byAccount };
-  } catch { return { total: 0, byAccount: {} }; }
+  } catch (e) { Log.warn('发信', '当日计数查询失败', e.message); return { total: 0, byAccount: {} }; }
 }
 
 // ── 发送成功记录（消除 _sendOne 中成功/重试分支的重复代码）─────────────────
@@ -366,6 +369,9 @@ async function runSendBatch(deps, sendProgress) {
 
   let log = { sent: [], _accountStates: {}, first_send_at: 0 };
   if (fs.existsSync(ctx.logPath)) { try { log = JSON.parse(fs.readFileSync(ctx.logPath, 'utf-8')); } catch { /* 文件损坏时降级为空日志 */ } }
+  // ponytail: 防御 — JSON 可能缺少旧字段（如 sent），确保是数组
+  if (!Array.isArray(log.sent)) log.sent = [];
+  if (!log._accountStates) log._accountStates = {};
   // 24小时窗口重置：从首次发送起超24h后重置计数器
   if (!log.first_send_at) log.first_send_at = 0;
   if (log.first_send_at > 0 && (Date.now() - log.first_send_at) > 24 * 3600 * 1000) {

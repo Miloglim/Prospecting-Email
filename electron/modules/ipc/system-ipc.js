@@ -15,7 +15,22 @@ let _statsCacheTime = 0;
 function register(ipcMain, deps) {
   // ── 队列持久化 ──
   const qfp = path.join(APP_ROOT, 'data', 'email-queue.json');
-  ipcMain.handle('queue:save', async (_e, data) => { const d = path.dirname(qfp); if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(qfp, JSON.stringify(data, null, 2)); return { ok: true }; });
+  let _qTimer = null;
+  let _qPending = null;
+  ipcMain.handle('queue:save', async (_e, data) => {
+    _qPending = data;
+    if (_qTimer) return { ok: true }; // ponytail: 500ms 内重复调用合并为一次写盘
+    _qTimer = setTimeout(() => {
+      _qTimer = null;
+      try {
+        const d = path.dirname(qfp);
+        if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(qfp, JSON.stringify(_qPending, null, 2));
+        _qPending = null;
+      } catch { /* 非关键 I/O 失败不影响主流程 */ }
+    }, 500);
+    return { ok: true };
+  });
   ipcMain.handle('queue:load', async () => { try { if (fs.existsSync(qfp)) return { ok: true, data: JSON.parse(fs.readFileSync(qfp, 'utf-8')) }; } catch { /* 非关键 I/O 失败不影响主流程 */ } return { ok: false, data: [] }; });
 
   // ── 仪表盘统计 ──
