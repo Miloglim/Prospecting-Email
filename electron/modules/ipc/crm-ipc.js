@@ -73,6 +73,22 @@ function register(ipcMain, deps) {
     } catch (e) { return { ok: false, error: e.message }; }
   });
 
+  // ── 关系网络 ──
+  ipcMain.handle('crm:getRelations', async (_e, contactId) => {
+    if (!contactId || typeof contactId !== 'string') return { ok: false, error: "缺少 contactId" };
+    return crmService.getRelations(contactId);
+  });
+  ipcMain.handle('crm:saveRelation', async (_e, { fromId, toId, label }) => {
+    if (!fromId || typeof fromId !== 'string') return { ok: false, error: "缺少 fromId" };
+    if (!toId || typeof toId !== 'string') return { ok: false, error: "缺少 toId" };
+    return crmService.saveRelation(fromId, toId, label);
+  });
+  ipcMain.handle('crm:deleteRelation', async (_e, { fromId, toId, label }) => {
+    if (!fromId || typeof fromId !== 'string') return { ok: false, error: "缺少 fromId" };
+    if (!toId || typeof toId !== 'string') return { ok: false, error: "缺少 toId" };
+    return crmService.deleteRelation(fromId, toId, label);
+  });
+
   // ── AI 邮件总结 ──────────────────────────────────────────────────────────
 
   ipcMain.handle(IPC.AI.SUMMARIZE_EMAIL, async (_e, { uid, accountId, subject, body, fromName, contactId, preview, retry }) => {
