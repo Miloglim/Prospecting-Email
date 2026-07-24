@@ -234,9 +234,29 @@ function removeTag(contactId, tag) {
 
 function remove(id) {
   const db = getDb();
+  // 删除前捕获 company_id，供级联清理使用
+  let contactCompanyId = null;
+  try { const c = getById(id); if (c) contactCompanyId = c.company_id; } catch { /* getById 失败时跳过级联 */ }
   // ponytail: 级联清理 opportunities（contacts 有 ON DELETE CASCADE 但 opportunities 没有）
   db.prepare("DELETE FROM opportunities WHERE contact_id = ?").run(id);
   db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
+  // Cascade: clean relations pointing to deleted contact
+  try {
+    if (contactCompanyId) {
+      const rows = db.prepare("SELECT id, _extra FROM contacts WHERE company_id = ? AND id != ?").all(contactCompanyId, id);
+      for (const row of rows) {
+        if (!row._extra) continue;
+        let extra;
+        try { extra = typeof row._extra === 'string' ? JSON.parse(row._extra) : row._extra; } catch { continue; }
+        if (!extra.relations) continue;
+        const before = extra.relations.length;
+        extra.relations = extra.relations.filter(r => r.targetId !== id);
+        if (extra.relations.length !== before) {
+          db.prepare("UPDATE contacts SET _extra = ? WHERE id = ?").run(JSON.stringify(extra), row.id);
+        }
+      }
+    }
+  } catch (e) { Log.error("DB", "级联清理关系失败", e.stack); }
 }
 
 function removeMany(ids) {
