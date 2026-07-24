@@ -368,4 +368,173 @@ function clearAllAiCache() {
   return r.changes;
 }
 
-module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getContactEmails, getEmailBody, getEmailHistorySummary, saveAiSummary, getAiSummary, clearAllAiCache, PIPELINE_STAGES, TAG };
+// ── 联系人关系网络 ──────────────────────────────────────────────────────────
+
+function getRelations(contactId) {
+  if (!contactId) return { ok: false, error: "参数缺失" };
+  const contact = contactsDb.getById(contactId);
+  if (!contact) return { ok: false, error: "联系人不存在" };
+
+  const db = getDb();
+  const companyId = contact.company_id;
+
+  // 1. 查询同公司联系人
+  let rows;
+  try {
+    if (companyId) {
+      rows = db.prepare(
+        `SELECT id, first_name, last_name, title, email, opp_stage, _extra
+         FROM contacts WHERE company_id = ? LIMIT 80`
+      ).all(companyId);
+    } else {
+      rows = db.prepare(
+        `SELECT id, first_name, last_name, title, email, opp_stage, _extra
+         FROM contacts WHERE id = ? LIMIT 1`
+      ).all(contactId);
+    }
+  } catch (e) {
+    Log.error("CRM关系网络", "查询同公司联系人失败", e.stack);
+    return { ok: false, error: "查询同公司联系人失败" };
+  }
+
+  const nodeIds = new Set(rows.map(r => r.id));
+
+  // 2. 构建节点数组
+  const nodes = rows.map(r => {
+    let interactionCount = 0;
+    try {
+      const interactions = interactionsDb.list({ contact_id: r.id, limit: 1000 });
+      interactionCount = interactions.length;
+    } catch (e) {
+      Log.error("CRM关系网络", "查询互动次数失败", e.stack);
+    }
+
+    return {
+      id: r.id,
+      name: [r.first_name, r.last_name].filter(Boolean).join(" ") || r.email || "",
+      title: r.title || "",
+      email: r.email || "",
+      stage: r.opp_stage || "",
+      interactionCount,
+      isPrimary: r.id === contactId,
+    };
+  });
+
+  // 3. 构建边
+  const edges = [];
+
+  // 3a. 公司边：同公司所有联系人两两连接
+  if (companyId && rows.length > 1) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        edges.push({ source: nodes[i].id, target: nodes[j].id, type: "company" });
+      }
+    }
+  }
+
+  // 3b. 邮件边：从 inbox.matched_contacts 推导
+  if (companyId && rows.length > 1) {
+    try {
+      const idList = rows.map(r => r.id);
+      const placeholders = idList.map(() => "?").join(",");
+      const inboxRows = db.prepare(
+        `SELECT matched_contacts FROM inbox
+         WHERE matched_contacts IS NOT NULL AND matched_contacts != ''
+           AND contact_db_id IN (${placeholders})
+         LIMIT 200`
+      ).all(...idList);
+
+      const emailMap = new Map(); // email_lower → contact_id
+      for (const r of rows) {
+        if (r.email) emailMap.set(r.email.toLowerCase(), r.id);
+      }
+
+      const emailPairs = new Set();
+      for (const inboxRow of inboxRows) {
+        try {
+          const mc = JSON.parse(inboxRow.matched_contacts || "[]");
+          const items = Array.isArray(mc) ? mc : [mc];
+          const matchedIds = [];
+          for (const item of items) {
+            const e = (item.email || "").toLowerCase();
+            const cid = emailMap.get(e);
+            if (cid) matchedIds.push(cid);
+          }
+          for (let i = 0; i < matchedIds.length; i++) {
+            for (let j = i + 1; j < matchedIds.length; j++) {
+              const key = [matchedIds[i], matchedIds[j]].sort().join("::");
+              if (!emailPairs.has(key)) {
+                emailPairs.add(key);
+                edges.push({ source: matchedIds[i], target: matchedIds[j], type: "email" });
+              }
+            }
+          }
+        } catch { /* matched_contacts 解析失败，跳过该行 */ }
+      }
+    } catch (e) {
+      Log.error("CRM关系网络", "构建邮件关系边失败", e.stack);
+    }
+  }
+
+  // 3c. 自定义边：从 _extra.relations
+  for (const r of rows) {
+    let extra = {};
+    try { extra = JSON.parse(r._extra || "{}"); } catch { /* 使用空对象 */ }
+    const relations = extra.relations;
+    if (Array.isArray(relations)) {
+      for (const rel of relations) {
+        const targetId = rel.targetId || rel.target;
+        if (targetId && nodeIds.has(targetId)) {
+          edges.push({ source: r.id, target: targetId, type: rel.type || "custom", label: rel.label || "" });
+        }
+      }
+    }
+  }
+
+  // 4. 过滤孤儿边（source 或 target 不在 nodeIds 中）
+  const validEdges = edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+  return { ok: true, data: { nodes, edges: validEdges, truncated: rows.length >= 80 } };
+}
+
+function saveRelation(fromId, toId, label) {
+  try {
+    if (!fromId || !toId) return { ok: false, error: "缺少联系人 ID" };
+    if (fromId === toId) return { ok: false, error: "不能添加与自己的关系" };
+    if (!label || !label.trim()) return { ok: false, error: "关系标签不能为空" };
+    const contact = contactsDb.getById(fromId);
+    if (!contact) return { ok: false, error: "联系人不存在" };
+    let extra = {};
+    try { extra = typeof contact._extra === 'string' ? JSON.parse(contact._extra) : (contact._extra || {}); } catch { extra = {}; }
+    if (!extra.relations) extra.relations = [];
+    if (extra.relations.length >= 200) return { ok: false, error: "关系数量已达上限（200条）" };
+    const exists = extra.relations.find(r => r.target === toId && r.label === label);
+    if (exists) return { ok: true, data: { id: contact.id } };
+    extra.relations.push({ target: toId, label: label.trim(), category: "", color: "", createdAt: new Date().toISOString() });
+    contactsDb.update(fromId, { _extra: extra });
+    Log.info("CRM关系网络", "添加关系: " + fromId + " -> " + toId + " [" + label + "]");
+    return { ok: true, data: { id: contact.id } };
+  } catch (e) {
+    Log.error("CRM关系网络", "保存关系失败", e.stack);
+    return { ok: false, error: e.message };
+  }
+}
+
+function deleteRelation(fromId, toId, label) {
+  try {
+    const contact = contactsDb.getById(fromId);
+    if (!contact) return { ok: false, error: "联系人不存在" };
+    let extra = {};
+    try { extra = typeof contact._extra === 'string' ? JSON.parse(contact._extra) : (contact._extra || {}); } catch { extra = {}; }
+    if (!extra.relations) return { ok: true, data: { id: contact.id } };
+    extra.relations = extra.relations.filter(r => !(r.target === toId && r.label === label));
+    contactsDb.update(fromId, { _extra: extra });
+    Log.info("CRM关系网络", "删除关系: " + fromId + " -> " + toId + " [" + label + "]");
+    return { ok: true, data: { id: contact.id } };
+  } catch (e) {
+    Log.error("CRM关系网络", "删除关系失败", e.stack);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { listPipeline, setStage, updateExtra, getDetail, saveNote, checkReminders, getContactEmails, getEmailBody, getEmailHistorySummary, saveAiSummary, getAiSummary, clearAllAiCache, getRelations, saveRelation, deleteRelation, PIPELINE_STAGES, TAG };
