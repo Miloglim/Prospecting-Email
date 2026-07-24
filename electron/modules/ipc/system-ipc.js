@@ -120,6 +120,9 @@ function register(ipcMain, deps) {
   ipcMain.handle('app:openSendFolder', async () => shell.openPath(path.join(APP_ROOT, 'send')));
   ipcMain.handle('app:openExternal', async (_e, url) => { if (/^https?:/.test(url)) shell.openExternal(url); });
   ipcMain.handle('app:openLogFile', async () => shell.openPath(path.join(APP_ROOT, 'logs')));
+  ipcMain.handle('app:rendererLog', async (_e, { msg, stack }) => {
+    try { Log.error('渲染层', msg, stack || ''); } catch { /* 降级 */ }
+  });
 
   // ── 签名 ──
   const sigStore = require('../services/signature-store');

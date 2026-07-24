@@ -116,22 +116,8 @@ function recordFailure(accountId, states, isRateLimit) {
 
 // ── 轮询选号 ─────────────────────────────────────────────────────────────────
 // 跳过 inactive、跳过超限、跳过熔断中。全不可用返回 { account: null, reason }
-function pickNextAccount(accounts, lastIdx, dailyCounts, states, preferredId) {
+function pickNextAccount(accounts, lastIdx, dailyCounts, states) {
   if (!accounts || !accounts.length) return { account: null, idx: -1, reason: '无可用账号' };
-
-  // ponytail: 优先复用联系人上次的发送账号（跟进邮件同发件人，进箱率更高）
-  if (preferredId) {
-    const prefIdx = accounts.findIndex(a => a.id === preferredId);
-    if (prefIdx >= 0) {
-      const acc = accounts[prefIdx];
-      if (acc.active && !isFused(acc.id, states)) {
-        const limit = acc.dailyLimit || 500;
-        const count = (dailyCounts && dailyCounts[acc.id]) || 0;
-        if (count < limit) return { account: acc, idx: prefIdx };
-      }
-    }
-    // 降级：原账号不可用，走轮询
-  }
 
   const startIdx = lastIdx < 0 ? 0 : lastIdx;
   let skippedFused = 0;

@@ -276,7 +276,7 @@ document.getElementById('cfg-general-auto-launch')?.addEventListener('change', a
   } catch { /* 渲染层降级：操作失败不影响 UI */ }
 })();
 
-window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); initClearContactsBtn(); };
+window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); initClearContactsBtn(); initOpenLogBtn(); };
 
 // ── 数据导出 ──────────────────────────────────────────────────────────────
 function initExportBtn() {
@@ -314,6 +314,12 @@ function initClearContactsBtn() {
     await window.electronAPI.deleteAllContacts();
     showToast(`已清除 ${contacts.length} 个联系人`, 'ok');
   };
+}
+
+// ── 打开日志 ──────────────────────────────────────────────────────────────
+function initOpenLogBtn() {
+  const btn = document.getElementById('btn-open-log');
+  if (btn) btn.onclick = () => window.electronAPI.openLogFile();
 }
 
 // ── 检查更新 ──────────────────────────────────────────────────────────────

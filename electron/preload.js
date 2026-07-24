@@ -224,6 +224,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openSendFolder: () => ipcRenderer.invoke("app:openSendFolder"),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   openLogFile: () => ipcRenderer.invoke("app:openLogFile"),
+  rendererLog: (msg, stack) => ipcRenderer.invoke("app:rendererLog", { msg, stack }),
 
   // 网络
   checkNetwork: () => ipcRenderer.invoke("network:check"),
@@ -258,24 +259,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   testAccount: (account) => ipcRenderer.invoke("account:test", account),
   getAccountStatus: () => ipcRenderer.invoke("account:status"),
 
-  // 自动发送
-  autoStart: () => ipcRenderer.invoke("auto:start"),
-  autoStop: () => ipcRenderer.invoke("auto:stop"),
-  autoStatus: () => ipcRenderer.invoke("auto:status"),
-  autoUpdateRules: (rules) => ipcRenderer.invoke("auto:updateRules", rules),
-  autoForecast: () => ipcRenderer.invoke("auto:forecast"),
-  autoPlan: () => ipcRenderer.invoke("auto:plan"),
-  autoDecisionLog: (n) => ipcRenderer.invoke("auto:decisionLog", n),
-  onAutoProgress: (callback) => {
-    const handler = (_event, data) => callback(data);
-    ipcRenderer.on("auto:progress", handler);
-    return () => ipcRenderer.removeListener("auto:progress", handler);
-  },
-  onAutoStatus: (callback) => {
-    const handler = (_event, data) => callback(data);
-    ipcRenderer.on("auto:status", handler);
-    return () => ipcRenderer.removeListener("auto:status", handler);
-  },
 
   // 数据导出
   exportData: () => ipcRenderer.invoke("data:export"),

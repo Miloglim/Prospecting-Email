@@ -215,7 +215,7 @@ export async function loadDashboard(){
         return new Date(da)-new Date(db);
       });
       const STAGE_COLORS={reaching:'#ff9800',quoting:'#2196f3',trial:'#8e24aa',cooperating:'#4caf50',lost:'#b0b0b0'};
-      const rows=sorted.slice(0,15);
+      const rows=sorted;
       todoTbody.innerHTML=rows.map(c=>{
         const st=contactStageMap[c.id]||'触达中';
         const stColor=STAGE_COLORS[Object.keys(STAGE_COLORS).find(k=>STAGES_LABEL[k]===st)]||'#999';

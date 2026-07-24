@@ -385,7 +385,7 @@ async function runSendBatch(deps, sendProgress) {
   const totalLimit = ctx.maxPerDay;
   const totalDailyCount = Object.values(log.daily_counts || {}).reduce((sum, v) => sum + v, 0) || log.daily_count || 0;
 
-  // ponytail: 加载联系人账号标签，供 pickNextAccount 复用原账号（从 SQLite 读取）
+  // ponytail: 加载联系人→账号映射，供交错排列推算每组归属账号（从 SQLite 读取）
   let contactAccountMap = {};
   try {
     const contactsDb = require('./contacts-db');
@@ -488,11 +488,8 @@ async function runSendBatch(deps, sendProgress) {
     const email = deps.sendQueue[i];
     if (!email.recipients?.length && !email.to) continue;
 
-    // 轮询选择下一个可用账号（含熔断检测）
-    // 取第一个收件人的历史账号作为优先项
-    const firstRcpt = (email.recipients?.[0] || (email.to || '').split(',')[0] || '').toLowerCase().trim();
-    const prefId = contactAccountMap[firstRcpt] || '';
-    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates, prefId);
+    // 轮询选择下一个可用账号（交错排列已保证账号分散，此处纯轮询）
+    const picked = acctMgr.pickNextAccount(ctx.accounts, lastAccountIdx, log.daily_counts, log._accountStates);
     if (!picked.account) {
       const reason = picked.reason || '无可用账号';
       Log.warn("发信", "停止: " + reason);

@@ -612,10 +612,6 @@
       <p class="placeholder" id="queue-empty">队列为空 — 从「邮件发送」勾选公司加入队列</p>
     </section>
 
-    <!-- 🤖 自动发送 -->
-    <section id="page-auto-send" class="page">
-    </section>
-
     <!-- 📋 发送总览 -->
     <section id="page-history" class="page">
       <h2><span data-icon="file-text"></span> 发送总览 <span id="history-count" style="font-size:14px;color:var(--text-secondary);font-weight:400"></span></h2>
@@ -873,6 +869,16 @@
             <div class="form-row"><label>测试公司</label><input type="text" id="cfg-test-company" placeholder="用于测试邮件的公司名"></div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-test-enabled"> 启用测试模式（跳过发送时段限制）</label></div>
             <div class="form-row"><label class="checkbox-label"><input type="checkbox" id="cfg-dry-run"> 发信阻隔（流程完整但不实际发送，独立于测试模式）</label></div>
+          </div>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-card-header">
+            <h3><span data-icon="folder"></span> 日志</h3>
+          </div>
+          <div class="setting-card-body">
+            <p style="font-size:12px;color:var(--text-secondary);margin:8px 0">查看运行日志文件，排查问题时发给开发者。</p>
+            <button id="btn-open-log" style="font-size:12px;padding:6px 16px">打开日志文件夹</button>
           </div>
         </div>
 

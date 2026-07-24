@@ -11,7 +11,6 @@ import './modules/send-history.js';
 import './modules/settings.js';
 import './modules/inbox.js';
 import './modules/crm-pipeline.js';
-// import { initAutoSend, teardownAutoSend } from './modules/auto-send.js';
 import { initQueue } from './modules/send-queue.js';
 
 document.getElementById('tb-minimize')?.addEventListener('click', () => window.electronAPI.windowMinimize());
@@ -396,3 +395,19 @@ async function saveGeneralConfig() {
   cfg.general.autoLaunch = autoLaunch;
   try { await window.electronAPI.saveConfig(cfg); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
+
+// ── 全局错误捕获 → 写入日志文件 ──────────────────────────────────────────
+const _errCount = { n: 0, lastTime: 0 };
+function _logError(msg, source) {
+  const now = Date.now();
+  _errCount.n++;
+  if (now - _errCount.lastTime < 5000 && _errCount.n > 10) return; // 防止错误风暴
+  _errCount.lastTime = now;
+  window.electronAPI.rendererLog(`${source}: ${msg}`, (msg || '').slice(0, 2000)).catch(() => {});
+}
+window.addEventListener('error', (e) => {
+  _logError(e.message || String(e.error || ''), `全局错误(${e.filename}:${e.lineno})`);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  _logError(e.reason?.message || e.reason?.stack || String(e.reason || ''), '未捕获Promise');
+});

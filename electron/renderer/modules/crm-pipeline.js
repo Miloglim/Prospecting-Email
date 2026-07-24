@@ -135,7 +135,7 @@ function renderContact(c, stageKey, label, color) {
   if (c.last_note_at) {
     const snippet = (c.last_note_content || '').slice(0, 15);
     const label = snippet ? `${daysAgo(c.last_note_at)} - ${snippet}` : daysAgo(c.last_note_at);
-    noteHtml = `<span class="crm-time" title="最后跟进: ${fmtDT(c.last_note_at)}">${lucide('sticky-note',11)} ${escapeHtml(label)}</span>`;
+    noteHtml = `<span class="crm-time" title="最后跟进: ${fmtDT(c.last_note_at)}">${escapeHtml(label)}</span>`;
   } else {
     noteHtml = '<span class="crm-time" style="color:var(--text-secondary)">—</span>';
   }
@@ -801,7 +801,7 @@ function followupTab(cid, reminder, notes, interactions, indirectMails) {
     const noteAttr = isNote ? ` data-note-id="${i.id||''}"` : '';
     const labelTag = cfg.label ? `<span style="font-size:12px;color:${cfg.color};font-weight:600;display:inline-block;min-width:3em">${cfg.label}</span>` : '';
     const subjectLine = '';
-    const contentLine = (!isMail && i.content) ? `<div style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;padding-left:calc(3em + 4px)">${escapeHtml(i.content)}</div>` : '';
+    const contentLine = (!isMail && i.content) ? `<div class="crm-note-content" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;padding-left:calc(3em + 4px)">${escapeHtml(i.content)}</div>` : '';
     return `<div class="crm-followup-item"${noteAttr}${mailAttr} style="border-left:3px solid ${cfg.color};padding:4px 0 4px 10px">
       <div class="crm-followup-time" style="display:flex;align-items:center;gap:4px">
         ${labelTag}<span style="font-size:12px;color:var(--text-secondary);flex-shrink:0;white-space:nowrap">${fmtDT(i.time)}</span>${subjectLine}

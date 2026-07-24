@@ -318,26 +318,6 @@ const COMPANY = {
   UPDATE: "companies:update",
 };
 
-// ── 自动发送（auto-send）─────────────────────────────────────────────────────
-const AUTO_SEND = {
-  /** 启动调度器 */
-  START: "auto:start",
-  /** 停止调度器 */
-  STOP: "auto:stop",
-  /** 获取调度器状态 */
-  STATUS: "auto:status",
-  /** 更新阶段规则 */
-  UPDATE_RULES: "auto:updateRules",
-  /** 获取今明两日预计 */
-  FORECAST: "auto:forecast",
-  /** 获取当前详细发送计划 */
-  PLAN: "auto:plan",
-  /** 获取决策日志 */
-  DECISION_LOG: "auto:decisionLog",
-  /** 自动发送进度事件（main → renderer） */
-  PROGRESS: "auto:progress",
-};
-
 // ── 客户开发（discover）──────────────────────────────────────────────────────
 const DISCOVER = {
   /** 搜索潜在客户 */
@@ -421,7 +401,6 @@ const IPC = {
   REPLY,
   DISCOVER,
   TABLE,
-  AUTO_SEND,
   COMPANY,
   CRM,
   AI,
@@ -641,7 +620,6 @@ module.exports = {
   REPLY,
   DISCOVER,
   TABLE,
-  AUTO_SEND,
   COMPANY,
   CRM,
   AI,
