@@ -723,8 +723,7 @@ async function addToQueue() {
   const selected = getSelectedCompanies();
   if (!selected.length) return await showAlert('请先勾选左侧公司');
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  const sendMode = config.schedule?.mode || 'multi';
-  const GROUP_SIZE = sendMode === 'batch' ? (config.schedule?.batch_size || 10) : (config.schedule?.group_size || 20);
+  const GROUP_SIZE = config.schedule?.batch_size || 10;
   let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, skippedDupEmail = 0, reactivatedCount = 0;
   const _dupEmails = [];
 

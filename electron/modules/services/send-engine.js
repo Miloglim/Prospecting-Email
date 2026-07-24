@@ -83,7 +83,6 @@ function _buildContext(config) {
   const nodemailer = require('nodemailer');
   const sigStore = require('./signature-store');
   const testMode = !!(config.test?.enabled && config.test?.email);
-  const isBatch = (config.schedule?.mode || 'multi') === 'batch';
   const sc = config.schedule || {};
   const accounts = config._accounts || [];
 
@@ -101,7 +100,7 @@ function _buildContext(config) {
   }
 
   const ctx = {
-    config, testMode, dryRun, isBatch, nodemailer, accounts,
+    config, testMode, dryRun, nodemailer, accounts,
     logPath: path.join(APP_ROOT, 'send', testMode ? 'send-log-test.json' : 'send-log.json'),
     sigHtml: globalSigHtml,
     sigText: globalSigText,
@@ -109,19 +108,10 @@ function _buildContext(config) {
     maxPerDay: accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0),
     startH: sc.start_hour_beijing ?? 19,
     endH: sc.end_hour_beijing ?? 3,
-    SINGLE: sc.single_recip_threshold ?? 2,
-    // 封间延迟：批处理模式无封间延迟（BCC 批量），仅模拟人工模式使用
-    perMin: isBatch ? 0 : (sc.min_delay_seconds || 30) * 1000,
-    perMax: isBatch ? 0 : (sc.max_delay_seconds || 90) * 1000,
-    // 公司切换延迟（仅模拟人工模式；批处理模式由组间间隔控制节奏）
-    cdMin: isBatch ? 0 : (sc.company_delay_min_seconds ?? 300) * 1000,
-    cdMax: isBatch ? 0 : (sc.company_delay_max_seconds ?? 900) * 1000,
-    SD_MIN: (sc.single_recip_delay_min_seconds ?? 60) * 1000,
-    SD_MAX: (sc.single_recip_delay_max_seconds ?? 180) * 1000,
-    // 批处理参数：组间间隔（每发一组后暂停），非"每N封停一次"
+    // 组间暂停：每发一组后暂停
     groupIntervalMin: (sc.batch_pause_min_seconds ?? 150) * 1000,
     groupIntervalMax: (sc.batch_pause_max_seconds ?? 210) * 1000,
-    // ponytail: 小公司累计阈值 — 不足一组时连发，满 batchSize 人才暂停
+    // 小公司累计阈值 — 不足一组时连发，满 batchSize 人才暂停
     batchSize: sc.batch_size || 10,
   };
   return ctx;
@@ -286,26 +276,12 @@ async function _sendOne(ctx, email, log, deps) {
 
 // ── 预估 ──────────────────────────────────────────────────────────────────
 function _computeEstimate(ctx, pendingItems) {
-  const companies = new Set(pendingItems.map(e => e.company).filter(Boolean));
-  let totalSec = 0;
-  if (ctx.isBatch) {
-    // 匀速速发：每组之间组间间隔 + 公司切换延迟
-    const giAvg = Math.round((ctx.groupIntervalMin + ctx.groupIntervalMax) / 2000);
-    totalSec = Math.max(0, pendingItems.length - 1) * giAvg;
-    const cdAvg = Math.round((ctx.cdMin + ctx.cdMax) / 2000);
-    totalSec += Math.max(0, companies.size - 1) * cdAvg;
-  } else {
-    // 模拟人工：封间延迟 + 公司切换延迟
-    const perDelayAvg = Math.round((ctx.perMin + ctx.perMax) / 2000);
-    const cdAvg = Math.round((ctx.cdMin + ctx.cdMax) / 2000);
-    totalSec = pendingItems.length * perDelayAvg + Math.max(0, companies.size - 1) * cdAvg;
-  }
+  const giAvg = Math.round((ctx.groupIntervalMin + ctx.groupIntervalMax) / 2000);
+  const totalSec = Math.max(0, pendingItems.length - 1) * giAvg;
   return {
     type: 'estimate', total: pendingItems.length,
-    avgDelay: ctx.isBatch ? Math.round((ctx.groupIntervalMin + ctx.groupIntervalMax) / 2000) : Math.round((ctx.perMin + ctx.perMax) / 2000),
-    companyDelayMin: Math.round(ctx.cdMin / 1000), companyDelayMax: Math.round(ctx.cdMax / 1000),
+    avgDelay: giAvg,
     estMin: Math.floor(totalSec / 60), estSec: totalSec % 60,
-    _mode: ctx.isBatch ? 'batch' : 'multi',
   };
 }
 
@@ -430,6 +406,30 @@ async function runSendBatch(deps, sendProgress) {
   const activeCount = ctx.accounts.filter(a => a.active !== false).length;
   Log.info("发信", "开始: " + est.total + "封, " + activeCount + "/" + accountCount + "个账号, 预计" + est.estMin + "分" + est.estSec + "秒" + (ctx.dryRun ? " [DRY RUN]" : "") + (ctx.testMode ? " [测试]" : ""));
 
+  // 交错排列：按发信账号分组交替，避免同一账号连续发送触发限流
+  const done = deps.sendQueue.filter(e => e.status !== 'pending');
+  const pending = deps.sendQueue.filter(e => e.status === 'pending');
+  if (pending.length > 1) {
+    // ponytail: 用 contactAccountMap 推算每组优先使用的账号
+    const _buckets = {};
+    for (const e of pending) {
+      const recipients = e.recipients || (e.to ? e.to.split(/,\s*/) : []);
+      const firstEmail = (recipients[0] || '').toLowerCase().trim();
+      const aid = contactAccountMap[firstEmail] || '_';
+      if (!_buckets[aid]) _buckets[aid] = [];
+      _buckets[aid].push(e);
+    }
+    const _arr = Object.values(_buckets);
+    const interleaved = [];
+    let _more = true;
+    while (_more) {
+      _more = false;
+      for (const b of _arr) if (b.length) { interleaved.push(b.shift()); _more = true; }
+    }
+    deps.sendQueue.length = 0;
+    deps.sendQueue.push(...done, ...interleaved);
+  }
+
   let sent = 0, failed = 0;
   let lastAccountIdx = -1;
   // 速率熔断：5 秒内累计发送 >= batchSize×2 人 → 强制暂停（给正常连发留余量）
@@ -503,19 +503,6 @@ async function runSendBatch(deps, sendProgress) {
     deps.currentAccount = account;
     deps.currentTransporter = getTransporter(account);
 
-    // 公司切换延迟（两模式通用）
-    if (i > 0 && email.company !== deps.sendQueue[i - 1]?.company) {
-      const dm = Math.floor(Math.random() * (ctx.cdMax - ctx.cdMin + 1)) + ctx.cdMin;
-      Log.info("发信", "切换公司: " + email.company + ", 暂停" + Math.round(dm/1000) + "s");
-      sendProgress({ type: 'delay', seconds: Math.round(dm/1000), company: email.company });
-      if (!await cancellableSleep(dm, deps)) break;
-    }
-
-    // 封间延迟（仅模拟人工模式）
-    if (!ctx.isBatch && (i > 0 || totalDailyCount > 0 || sent > 0)) {
-      if (!await cancellableSleep(Math.floor(Math.random() * (ctx.perMax - ctx.perMin + 1)) + ctx.perMin, deps)) break;
-    }
-
     // 发送
     const result = await _sendOne(ctx, email, log, deps);
 
@@ -565,8 +552,8 @@ async function runSendBatch(deps, sendProgress) {
           : { type: 'failed', id: email.id, to: (email.recipients || [email.to]).join(','), error: '' }
     );
 
-    // 组间间隔（仅批处理（匀速速发）模式，小公司累计满 batchSize 人才暂停）
-    if (ctx.isBatch && i < queueLen - 1) {
+    // 组间间隔（小公司累计满 batchSize 人才暂停）
+    if (i < queueLen - 1) {
       batchAccum += result.n || 0;
       if (batchAccum < ctx.batchSize) {
         Log.info("发信", `小公司连发: 累计${batchAccum}/${ctx.batchSize}人, 跳过组间间隔`);

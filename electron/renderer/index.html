@@ -801,7 +801,6 @@
           <div class="setting-card-body">
             <!-- 模板引擎 -->
             <div class="sub-section-label">模板引擎</div>
-            <div class="form-row"><label>发送模式</label><select id="cfg-schedule-mode"><option value="multi">模拟人工</option><option value="batch">匀速速发</option></select></div>
             <div class="form-row"><label>模板模式</label><select id="cfg-template-mode"><option value="adaptive">自适应</option><option value="general">用户模板</option></select></div>
             <div class="form-row"><label>组间轮换</label><span class="input-range"><input type="number" id="cfg-schedule-template-rotate" placeholder="3"><span class="input-suffix">组/换</span></span><span class="input-hint">同一公司内模板定组轮换，0=不轮换</span></div>
 
@@ -811,18 +810,9 @@
               <div><label class="checkbox-label"><input type="checkbox" id="cfg-schedule-time-toggle"> 限时发送</label></div>
             </div>
 
-            <!-- 模拟人工 -->
-            <div id="cfg-multi-fields">
-              <div class="sub-section-label">模拟人工参数</div>
-              <div class="form-row"><label>封间延迟</label><span class="input-range"><input type="number" id="cfg-schedule-min-delay" placeholder="30"><span class="input-sep">~</span><input type="number" id="cfg-schedule-max-delay" placeholder="90"><span class="input-suffix">秒</span></span></div>
-              <div class="form-row"><label>公司切换</label><span class="input-range"><input type="number" id="cfg-schedule-company-delay-min" placeholder="300"><span class="input-sep">~</span><input type="number" id="cfg-schedule-company-delay-max" placeholder="900"><span class="input-suffix">秒</span></span></div>
-              <div class="form-row"><label>单人快发</label><span class="input-range"><input type="number" id="cfg-schedule-single-min" placeholder="60"><span class="input-sep">~</span><input type="number" id="cfg-schedule-single-max" placeholder="180"><span class="input-suffix">秒</span></span><span class="input-hint">≤2人</span></div>
-              <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" id="cfg-schedule-group-size" placeholder="20"><span class="input-suffix">人/组</span></span></div>
-            </div>
-
             <!-- 匀速速发 -->
-            <div id="cfg-batch-fields" style="display:none">
-              <div class="sub-section-label">匀速速发参数</div>
+            <div id="cfg-batch-fields">
+              <div class="sub-section-label">发送参数</div>
               <div class="form-row"><label>每组人数</label><span class="input-range"><input type="number" id="cfg-schedule-batch-size" placeholder="10"><span class="input-suffix">人/组</span></span></div>
               <div class="form-row"><label>组间暂停</label><span class="input-range"><input type="number" id="cfg-schedule-batch-pause-min" placeholder="150"><span class="input-sep">~</span><input type="number" id="cfg-schedule-batch-pause-max" placeholder="210"><span class="input-suffix">秒</span></span><span id="cfg-batch-pause-minutes" class="input-hint"></span></div>
             </div>

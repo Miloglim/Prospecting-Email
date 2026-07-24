@@ -294,6 +294,47 @@ function _writeCursor(data) {
   } catch { /* 静默 */ }
 }
 
+// ── 退信熔断：检测到频率限制退信 → 熔断对应发信账号 ──────────────────────
+const RATE_LIMIT_BOUNCE_KEYWORDS = [
+  '外发频率超过',
+  '发信频率',
+  '频率超过',
+  'frequency limit',
+  'too many emails',
+  'sending rate',
+  'exceeded the rate',
+  'rate limit',
+];
+function _checkRateLimitBounces(newMails) {
+  try {
+    const bounceMails = newMails.filter(m => m.type === 'bounce');
+    if (!bounceMails.length) return;
+    const body = (m) => ((m.body || '') + (m.subject || '')).toLowerCase();
+    const hitMails = bounceMails.filter(m => RATE_LIMIT_BOUNCE_KEYWORDS.some(k => body(m).includes(k)));
+    if (!hitMails.length) return;
+    const acctMgr = require('./account-manager');
+    const fs = require('fs');
+    const path = require('path');
+    const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
+    let states = {};
+    try { if (fs.existsSync(logPath)) { const log = JSON.parse(fs.readFileSync(logPath, 'utf-8')); states = log._accountStates || {}; } } catch { /* 降级 */ }
+    for (const m of hitMails) {
+      const aid = m.accountId;
+      if (!aid) continue;
+      acctMgr.recordFailure(aid, states, true); // isRateLimit=true → 直接满阈值熔断
+      Log.warn('[收件箱]', `退信频率熔断: ${aid} — ${m.subject || ''}` + ` (${m.from || ''})`);
+    }
+    try {
+      const d = path.dirname(logPath);
+      if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+      let log = { sent: [], daily_count: 0, daily_counts: {}, _accountStates: states, first_send_at: 0 };
+      try { if (fs.existsSync(logPath)) log = { ...log, ...JSON.parse(fs.readFileSync(logPath, 'utf-8')) }; } catch { /* 降级 */ }
+      log._accountStates = states;
+      fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
+    } catch { /* 持久化失败不影响主流程 */ }
+  } catch { /* 熔断检测不影响收件箱拉取 */ }
+}
+
 // ── 收件箱分类 → 联系人 _status / is_bounced ───────────────────────────
 // ponytail: replied/autoreply/bounced 已从 tags 迁移到 _status，不再写 tags
 function _syncTagsToContacts(newMails) {
@@ -770,6 +811,7 @@ async function _fetchInbox(configPath) {
     const { bounceContacts } = _syncTagsToContacts(newMails);
     if (bounceContacts > 0) _incrementBounceCount(bounceContacts);
     _logInboxInteractions(newMails);
+    _checkRateLimitBounces(newMails);
   }
 
   // ponytail: 直接返回内存数据，避免写完又读

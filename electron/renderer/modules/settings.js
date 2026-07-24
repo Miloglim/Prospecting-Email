@@ -131,35 +131,9 @@ export async function initSettings() {
   toggleTimeWindow();
   checkCrossDay();
   updateBatchPauseMinutes();
-  // 模式下拉：加载 + 切换
-  const modeEl = document.getElementById('cfg-schedule-mode');
-  if (modeEl) {
-    modeEl.value = config?.schedule?.mode || 'batch';
-    modeEl.addEventListener('change', toggleScheduleMode);
-    toggleScheduleMode();
-  }
   validateRequired();
   updateScheduleEstimate();
 }
-
-export function toggleScheduleMode() {
-  const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
-  const multiFields = document.getElementById('cfg-multi-fields');
-  const batchFields = document.getElementById('cfg-batch-fields');
-  if (multiFields) multiFields.style.display = mode === 'multi' ? '' : 'none';
-  if (batchFields) batchFields.style.display = mode === 'batch' ? '' : 'none';
-  updateScheduleEstimate();
-  // 自动保存模式，防止重启丢失
-  saveModeOnly(mode).catch(() => {});
-}
-
-async function saveModeOnly(mode) {
-  const config = await window.electronAPI.loadConfig() || {};
-  if (!config.schedule) config.schedule = {};
-  config.schedule.mode = mode;
-  await window.electronAPI.saveConfig(config);
-}
-
 
 
 // 自动保存设置
@@ -269,22 +243,12 @@ export async function updateScheduleEstimate() {
   if (max <= 0) { el.innerHTML = ''; return; }
   const mode = document.getElementById('cfg-schedule-mode')?.value || 'batch';
 
-  let totalSec;
-  if (mode === 'batch') {
-    const batchSize = getNumOr('cfg-schedule-batch-size', 10);
-    const pauseMin = getNumOr('cfg-schedule-batch-pause-min', 150);
-    const pauseMax = getNumOr('cfg-schedule-batch-pause-max', 210);
-    const avgPause = (pauseMin + pauseMax) / 2;
-    const batches = Math.ceil(max / batchSize);
-    totalSec = Math.round((batches - 1) * avgPause);
-  } else {
-    const avgItemDelay = (getNumOr('cfg-schedule-min-delay', 10) + getNumOr('cfg-schedule-max-delay', 15)) / 2;
-    const singleMin = getNumOr('cfg-schedule-single-min', 60);
-    const singleMax = getNumOr('cfg-schedule-single-max', 180);
-    const avgSingleDelay = (singleMin + singleMax) / 2;
-    const companies = Math.ceil(max / 2);
-    totalSec = Math.round(max * avgItemDelay + (companies - 1) * avgSingleDelay);
-  }
+  const batchSize = getNumOr('cfg-schedule-batch-size', 10);
+  const pauseMin = getNumOr('cfg-schedule-batch-pause-min', 150);
+  const pauseMax = getNumOr('cfg-schedule-batch-pause-max', 210);
+  const avgPause = (pauseMin + pauseMax) / 2;
+  const batches = Math.ceil(max / batchSize);
+  const totalSec = Math.round((batches - 1) * avgPause);
 
   if (totalSec <= 0) { el.innerHTML = ''; return; }
   const h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60);
@@ -293,9 +257,9 @@ export async function updateScheduleEstimate() {
   const perHour = totalSec > 0 ? Math.round(max / (totalSec / 3600)) : 0;
   el.innerHTML = `剩余 ${max} 封 ≈ <strong>${timeStr}</strong> · 约 <strong>${perMin} 封/分</strong> - <strong>${perHour} 封/时</strong>`;
 }
-['cfg-schedule-mode','cfg-schedule-min-delay','cfg-schedule-max-delay','cfg-schedule-company-delay-min','cfg-schedule-company-delay-max','cfg-schedule-group-size','cfg-schedule-single-min','cfg-schedule-single-max','cfg-schedule-batch-size','cfg-schedule-batch-pause-min','cfg-schedule-batch-pause-max'].forEach(id => {
+['cfg-schedule-batch-size','cfg-schedule-batch-pause-min','cfg-schedule-batch-pause-max'].forEach(id => {
   const el = document.getElementById(id);
-  if (el) el.addEventListener(id === 'cfg-schedule-mode' ? 'change' : 'input', updateScheduleEstimate);
+  if (el) el.addEventListener('input', updateScheduleEstimate);
 });
 
 // 开机自启：额外调用系统级设置

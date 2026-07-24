@@ -394,7 +394,5 @@ async function saveGeneralConfig() {
   if (!cfg.general) cfg.general = {};
   cfg.general.closeAction = closeAction;
   cfg.general.autoLaunch = autoLaunch;
-  cfg.schedule = cfg.schedule || {};
-  cfg.schedule.mode = 'batch';
   try { await window.electronAPI.saveConfig(cfg); } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
