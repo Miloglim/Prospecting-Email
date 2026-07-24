@@ -52,10 +52,10 @@ Milogin's Outreacher. — 货代行业一站式客户开发工具
 - **精简代码块 (No Code Dumping)**: 严禁无故吐出大段或完整的代码墙。在终端交互时，只需展示改动的【核心重要函数】或核心逻辑差异片段（Diff）。一次对话深度修改的文件严格限制在 1-2 个，严禁一次性联动超过 5 个文件。
 
 ## 8. 错误复盘与进化机制 (Self-Evolution Mechanism)
-- **已知陷阱实时同步**: 项目根目录下的 `README.md` 中有一张【已知陷阱 (Known Pitfalls)】表格(没有就自己加)。你编写的任何新代码，绝对不允许重蹈表格中记录的覆辙（如 `confirm` 冻结、路径混淆、秒后缀缺失等）。
+- **已知陷阱实时同步**: 本文件末尾有一张【已知陷阱 (Known Pitfalls)】表格。你编写的任何新代码，绝对不允许重蹈表格中记录的覆辙（如 `confirm` 冻结、路径混淆、秒后缀缺失等）。
 - **动态进化铁律 (Post-Mortem Rule)**: 
   - 只要由于你的疏忽（如语法错误、漏掉类型提示、拼写错误）导致代码运行失败或报错，你在修复完 Bug 后，必须执行进化动作。
-  - **进化动作**：你必须主动编辑 `README.md`，将这次犯错的原因、教训以及预防手段，以结构化的一行追加到【已知陷阱】表格中。
+  - **进化动作**：你必须主动编辑本文件末尾的【已知陷阱】表格，将这次犯错的原因、教训以及预防手段，以结构化的一行追加进去。
 - **用户偏好记忆**: 如果用户连续两次纠正你同一个习惯（例如不希望用某种组件、或者偏好某种变量命名），你必须立刻将此偏好固化到本文件的“特定偏好”小节中，实现永久记忆。
 
 ## 9. AI 交付前自检清单（必须全部勾选才能交付）
@@ -72,3 +72,23 @@ Milogin's Outreacher. — 货代行业一站式客户开发工具
 - **AI 自主决策边界**: 
   - **允许自主执行的场景**：修复 ESLint/Prettier 自动可修复的格式问题（如缩进、分号）；补充缺失的 JSDoc 类型注释；将 `console.log` 替换为 `Log.xxx`（仅限已存在的上下文）。
   - **触发熔断、必须先请示的场景**：试图引入新的第三方 npm 依赖；修改 `contract.js` 中的 IPC 通道常量；任何涉及 `.env` 环境变量的新增、修改或删除。
+
+---
+
+## 附录：已知陷阱 (Known Pitfalls)
+
+> ⚠️ **CC 进化铁律**：CC（Claude Code）凡是执行报错、引发架构违规、或者被用户纠正错误时，必须在修复后，将教训**强制物理追加**到下表中！
+
+| 犯错场景与时间 | 被抓到的教训（用中文大白话） | 后续如何绝对避免（物理拦截方案） |
+| :--- | :--- | :--- |
+| `showConfirm` 弹窗调用 | 在非 async 回调里盲目 `await` 会导致渲染进程彻底冻结。 | 改动后必须运行 `node --check` 验证语法，禁止越权。 |
+| 路径常量配置 | `process.resourcesPath` 在开发模式下指向错误路径。 | 统一从 `require('./modules/config').APP_ROOT` 获取根路径。 |
+| 配置键时间值命名 | 混用 `batch_pause_min` 和 `min_delay_seconds` 导致时间单位错乱。 | 所有涉及秒的时间配置键，必须强制以 `_seconds` 后缀结尾。 |
+| **CC 写代码前不读 API 签名** | `deleteContact(id)` 写成 `deleteContact(email)`、preload API 名格式不符合现有模式、`getContacts()` 返回 `{ok,data}` 但直接当数组用。 | 每次写 IPC 调用前，必须先用 Grep 查目标函数的实际签名和已有调用点的参数格式。 |
+| **新增模块目录未打包** | `electron/modules/auto-send/` 新增后，`npm run pack` 打出来的 asar 里缺少文件，因为 `electron-builder` 的 `files` 白名单没加 `tools/**`。 | 新增目录后，必须在 `package.json` 的 `build.files` 里确认是否覆盖；打包后用 `npx asar list xxx.asar \| findstr 新目录` 验证。 |
+| **主进程→渲染进程数据格式不一致** | `webContents.send('inbox:nextFetch', rawNumber)` 发了裸数字，渲染层读 `data?.nextFetchAt` 取到 undefined。 | IPC 事件推送统一用 `{ key: value }` 对象格式，禁止发裸值。两边字段名对齐后用 Grep 双向校验。 |
+| **模块加载顺序导致静默崩溃** | `require('./modules/auto-send/ipc')` 放在 `setupIPC()` 里，如果依赖链里任何模块报错，`require` 直接抛异常，Electron 窗口都没创建就崩了。 | 非核心模块的 `require` 必须包 `try-catch`，失败时 `Log.error` 但不阻塞启动。 |
+| **Edit 工具匹配失败无告警** | Prettier 格式化后双引号、行尾空格变了，Edit 的 `old_string` 匹配不上，工具静默返回 error 但 CC 没检查就继续。 | Edit 调用后必须检查返回值，失败时立即 Read 目标文件确认实际内容，必要时用 Bash/Python 做替换。 |
+| **Windows CRLF 导致字符串匹配失败** | `electron/preload.js` 使用 `\r\n` 行尾，Edit 工具用 `\n` 的 `old_string` 永远匹配不上。 | 跨平台文件编辑优先用 `sed` 或 Python；Edit 失败后先用 `cat -A` 检查不可见字符。 |
+| **写完代码不实际运行** | 只跑 `node --check` 语法检查，不实际启动 app 验证功能。语法正确 ≠ 逻辑正确。 | 核心功能改动后，必须在 `npm run dev` 里实际触发一次目标功能，确认无报错再交付。 |
+| **gitignore 忽略目录漏了占位文件（2026-07-11）** | 想忽略 `data/` 整个目录但保留 `.gitkeep`，写成 `data/` 会让 git 根本不进目录，`!data/.gitkeep` 例外失效，`git add data/.gitkeep` 直接报 ignored 错。 | 要忽略目录内容却保留占位文件时，用 `data/*` + `!data/.gitkeep`，绝不用 `data/`。 |
