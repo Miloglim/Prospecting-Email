@@ -147,6 +147,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   crmGetContactEmails: (contactId) => ipcRenderer.invoke("crm:getContactEmails", contactId),
   crmGetEmailBody: (uid, accountId) => ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
   crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
+  crmGetRelations: (contactId) => ipcRenderer.invoke("crm:getRelations", contactId),
+  crmSaveRelation: (fromId, toId, label) => ipcRenderer.invoke("crm:saveRelation", { fromId, toId, label }),
+  crmDeleteRelation: (fromId, toId, label) => ipcRenderer.invoke("crm:deleteRelation", { fromId, toId, label }),
 
   // AI
   aiSummarizeEmail: (params) => ipcRenderer.invoke("ai:summarizeEmail", params),

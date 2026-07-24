@@ -358,6 +358,12 @@ const CRM = {
   GET_CONTACT_EMAILS: "crm:getContactEmails",
   /** 获取单封邮件正文 */
   GET_EMAIL_BODY: "crm:getEmailBody",
+  /** 获取联系人关系网络数据 */
+  GET_RELATIONS: "crm:getRelations",
+  /** 保存自定义关系标签 */
+  SAVE_RELATION: "crm:saveRelation",
+  /** 删除自定义关系 */
+  DELETE_RELATION: "crm:deleteRelation",
 };
 
 // ── AI（ai）───────────────────────────────────────────────────────────────────
