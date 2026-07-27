@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany,TAG_OPTS } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany,TAG_OPTS,invalidateDashboard } from './shared.js';
 
 // ===== 客户表导入 ====================================================
 const dropZone = document.getElementById('drop-zone');
@@ -220,8 +220,13 @@ window.electronAPI?.onContactsCleared?.((_) => {
 
 // ===== 联系人 ========================================================
 
+let _contactsLoaded = false;
+
 export async function loadContacts() {
-  await CS.syncContactsUI();
+  if (!_contactsLoaded) {
+    await CS.syncContactsUI();
+    _contactsLoaded = true;
+  }
   // 诊断：打印分类统计
   const diag = { agent: 0, direct: 0, unlabeled: 0, no_email: 0, invalid_email: 0, noField: 0 };
   const seen = new Set();
@@ -1298,7 +1303,10 @@ async function showFollowupEditor(contact) {
 
 // 统一刷新入口：主进程 IPC 事件 + 渲染进程内部事件都走同一条路
 async function _onContactsSync() {
+  _contactsLoaded = false; // 数据已变，下次切到此页重新加载
+  invalidateDashboard();
   if (document.getElementById('page-contacts')?.classList.contains('active')) {
+    _contactsLoaded = true; // 立即刷新后重新标记为已加载
     await CS.refreshContacts();
     await CS.refreshContactsSendHistory();
     renderContactsList();

@@ -290,10 +290,14 @@ export function debounceHistorySearch() {
   }, 300);
 }
 
+let _historyLoaded = false;
+
 export async function initHistoryPage() {
+  if (_historyLoaded) return;
   S._historyDatePage = 0;
   S._historyOpenDates = {};
-  renderHistoryTable();
+  await renderHistoryTable();
+  _historyLoaded = true;
 
   if (!document.querySelector('#history-filter-group')._bound) {
     document.querySelector('#history-filter-group')._bound = true;
@@ -334,6 +338,7 @@ document.getElementById('page-settings')?.addEventListener('click', async (e) =>
 
 // 热刷新：发送完成时自动更新总览
 window.electronAPI.onHistoryChanged(() => {
+  _historyLoaded = false;
   if (document.getElementById('page-history')?.classList.contains('active')) {
     initHistoryPage();
   }

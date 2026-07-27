@@ -89,7 +89,8 @@ function setupIPC() {
   _sendCleanup = require("./modules/send-ipc").cleanup;
   require("./modules/ipc/table-import-ipc").register(ipcMain);
 
-  // 无边框窗口控制
+  // ── 邮件编写（compose）─────────────────────────────────────────────────────────
+  require("./modules/ipc/compose-ipc").register(ipcMain, deps);
   ipcMain.on("window:minimize", () => deps.mainWindow?.minimize());
   ipcMain.on("window:maximize", () => {
     if (deps.mainWindow?.isMaximized()) deps.mainWindow.unmaximize();

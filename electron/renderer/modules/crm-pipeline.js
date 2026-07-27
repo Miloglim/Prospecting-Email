@@ -18,6 +18,8 @@ let _currentDetailId = null;
 let _currentTab = 'info';
 let _reminderTimers = {};
 
+let _pipelineLoaded = false;
+
 export async function initCrmPipeline() {
   await refreshPipeline();
   // 暴露给仪表盘待办点击跳转
@@ -31,7 +33,7 @@ export async function initCrmPipeline() {
   const si = document.getElementById('crm-search');
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
 
-  window.electronAPI.onCrmChanged(() => refreshPipeline());
+  window.electronAPI.onCrmChanged(() => { _pipelineLoaded = false; refreshPipeline(); });
   // 切回 CRM 页面时自动刷新，捕捉 inbox 自动收件带来的状态变化
   window.__pageHandlers['crm'] = () => refreshPipeline();
   setInterval(() => checkReminders(), 5 * 60 * 1000);
@@ -43,6 +45,8 @@ async function refreshPipeline() {
   if (!el) return;
 
   const search = document.getElementById('crm-search')?.value?.trim() || '';
+  // 有搜索词时不走缓存
+  if (!search && _pipelineLoaded) return;
 
   const r = await window.electronAPI.crmListPipeline({ search });
   if (!r.ok) { el.innerHTML = `<div class="crm-empty">${escapeHtml(r.error)}</div>`; return; }
@@ -97,6 +101,7 @@ async function refreshPipeline() {
     const row = el.querySelector(`.crm-contact-row[data-contact-id="${_currentDetailId}"]`);
     if (row) row.classList.add('active'); else closeDetailPanel();
   }
+  _pipelineLoaded = true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -344,7 +349,7 @@ async function openDetailPanel(contactId) {
   const reminder = contact._extra?.crmReminder || {};
 
   panel.innerHTML = `
-    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}<button id="crm-find-contact" class="crm-find-btn" title="在联系人中查找">${lucide('users',13)}</button><button id="crm-find-inbox" class="crm-find-btn" title="在收件箱中搜索公司">${lucide('search',13)}</button></span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
+    <div class="crm-detail-header"><span class="crm-detail-name">${escapeHtml([contact.firstName,contact.lastName].filter(Boolean).join(' ')||contact.email)}<button id="crm-find-contact" class="crm-find-btn" title="在联系人中查找">${lucide('users',13)}</button><button id="crm-find-inbox" class="crm-find-btn" title="在收件箱中搜索公司">${lucide('search',13)}</button><button id="crm-compose-btn" class="crm-find-btn" title="写邮件">${lucide('mail',13)}</button></span><button id="crm-detail-close" class="crm-detail-close-btn">${lucide('x',16)}</button></div>
     <div class="crm-detail-tabs">
       <button class="crm-tab${_currentTab==='info'?' active':''}" data-tab="info">基本信息</button>
       <button class="crm-tab${_currentTab==='prefs'?' active':''}" data-tab="prefs">偏好设置</button>
@@ -376,16 +381,33 @@ async function openDetailPanel(contactId) {
       if (tab.dataset.tab === 'emails' && !_emailsLoaded) {
         _emailsLoaded = true;
         const r = await window.electronAPI.crmGetContactEmails(contactId);
-        if (r.ok && r.data.length) {
+        // 合并 send_log 发出记录
+        let sendLogs = [];
+        if (contact.email) {
+          try {
+            const sr = await window.electronAPI.getThreadHistory(contact.email);
+            if (sr.ok) sendLogs = (sr.data || []).map(s => ({
+              uid: s.messageId || ('sent-' + s.time),
+              account_id: s._accountId || '',
+              subject: s.subject || '',
+              date: s.time || '',
+              from_name: '', from_addr: s.to || '',
+              type: 'sent', body: '', _isSent: true,
+            }));
+          } catch { /* 降级 */ }
+        }
+        const allMails = [...(r.ok ? (r.data || []) : []), ...sendLogs];
+        allMails.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        if (allMails.length) {
           tgt.innerHTML = r.data.map(m => `
             <div class="crm-email-item-wrapper">
               <div class="crm-email-item" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}">
                 <div class="crm-email-meta">
-                  <span style="font-size:11px;color:${m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':m._indirect?'#ff9800':'var(--text-secondary)'};flex-shrink:0"${m._indirect?' title="关联匹配"':''}>${lucide(m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
+                  <span style="font-size:11px;color:${m.type==='sent'?'var(--primary)':m.type==='reply'?'#22a644':m.type==='bounce'?'#d93025':m._indirect?'#ff9800':'var(--text-secondary)'};flex-shrink:0"${m._indirect?' title="关联匹配"':''}>${lucide(m.type==='sent'?'send':m.type==='reply'?'mail':m.type==='bounce'?'alert-circle':'send',12)}</span>
                   <span class="crm-email-subject">${escapeHtml(m.subject||'(无主题)')}</span>
-                  <span class="crm-email-date">${escapeHtml(fmtDT(m.date))}</span>
+                  <span class="crm-email-date">${escapeHtml(fmtDT(m.date))}${m._isSent?' [sent]':''}</span>
                 </div>
-                <div class="crm-email-from">${escapeHtml(m.from_name||m.from_addr||'')}</div>
+                <div class="crm-email-from">${escapeHtml(m._isSent?'To: '+(m.from_addr||''):m.from_name||m.from_addr||'')}</div>
               </div>
               <div class="crm-email-ai" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}" style="display:none">
                 <div class="crm-email-ai-inner">
@@ -430,7 +452,7 @@ async function openDetailPanel(contactId) {
           // ponytail: 邮件加载后重新绑定点击事件，因为 bindEmailClicks 在渲染前已执行
           bindEmailClicks(tgt);
         } else {
-          tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">' + (r.ok ? '暂无邮件往来' : '加载失败: ' + escapeHtml(r.error||'')) + '</div>';
+          tgt.innerHTML = '<div style="color:var(--text-secondary);padding:12px;font-size:12px">No email history</div>';
         }
       }
     });
@@ -468,6 +490,17 @@ async function openDetailPanel(contactId) {
       const si = document.getElementById('inbox-search');
       if (si) { si.value = q; si.dispatchEvent(new Event('input', { bubbles: true })); }
     }, 200);
+  });
+
+  // 写邮件 → 打开 compose 子窗口，预填收件人 + 标记对接邮箱
+  document.getElementById('crm-compose-btn')?.addEventListener('click', () => {
+    const toEmail = contact.email || '';
+    if (!toEmail) { showToast('该联系人无邮箱', 'warn'); return; }
+    window.electronAPI.openCompose({
+      to: toEmail,
+      linkedAccount: contact.last_sent_acct || contact._sentBy || contact._sentAccount || '',
+      contactEmail: toEmail,
+    });
   });
 
   bindInfoEdits(panel, contact);

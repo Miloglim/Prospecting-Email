@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag } from './shared.js';
+import { lucide,showAlert,showConfirm,escapeHtml,truncate,formatDate,daysSince,statusLabel,findById,initIcons,showModal,clientTypeTag,invalidateDashboard } from './shared.js';
 import { randomPick, assembleEmail } from './templates.js';
 
 // ===== 发送队列 =======================================================
@@ -558,6 +558,7 @@ export async function startSend() {
       const pb2 = document.getElementById('queue-progress');
       if (pb2) pb2.classList.remove('active');
     } else if (data.type === 'complete') {
+      invalidateDashboard();
       S._sendPaused = false;
       localStorage.removeItem('_delay');
       freezeAndSaveTimer('var(--text-secondary)');

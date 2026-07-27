@@ -408,7 +408,7 @@ export function renderCompanyList(filter) {
       var hist = S.sendHistory[name];
       var vipClass = members.length >= 5 ? ' ci-vip' : '';
       var startedStr = hist?.startedAt ? formatDate(hist.startedAt) : '';
-      var daysStr = hist?.startedAt ? '<span style="font-size:10px;color:var(--accent);font-weight:600;margin-left:2px">' + daysSince(hist.startedAt) + '</span>' : '';
+      var daysStr = hist?.lastSent ? '<span style="font-size:10px;color:var(--accent);font-weight:600;margin-left:2px">' + daysSince(hist.lastSent) + '</span>' : '';
       var archivedStr = hist?.archivedAt ? formatDate(hist.archivedAt) : '';
       var subParts = [tagHtml, ctry, startedStr, archivedStr].filter(Boolean);
       return '<div class="send-company-item archived" data-company="' + escapeHtml(name) + '" style="opacity:.7">' +
@@ -683,7 +683,7 @@ export async function renderSelectedCards() {
         : `<span>📋 ${typeLabelMap[card.type] || '自适应'}</span>`;
       const hist2 = S.sendHistory[name];
       const startedStr = hist2?.startedAt ? `<span>${formatDate(hist2.startedAt)}</span>` : '';
-      const daysStr2 = hist2?.startedAt ? `<span style="color:var(--accent);font-weight:600">${daysSince(hist2.startedAt)}</span>` : '';
+      const daysStr2 = hist2?.lastSent ? `<span style="color:var(--accent);font-weight:600">${daysSince(hist2.lastSent)}</span>` : '';
       const tags = [
         typeTag,
         ctry ? `<span>${ctry}</span>` : '',

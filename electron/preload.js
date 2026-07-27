@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteAllContacts: () => ipcRenderer.invoke("contacts:deleteAll"),
   deleteCompany: (company) =>
     ipcRenderer.invoke("contacts:deleteCompany", company),
-  updateCompany: (id, data) => ipcRenderer.invoke('companies:update', id, data),
+  updateCompany: (id, data) => ipcRenderer.invoke("companies:update", id, data),
   updateCompanyCountry: (company, newCountry) =>
     ipcRenderer.invoke("contacts:updateCountry", company, newCountry),
   searchContacts: (query) => ipcRenderer.invoke("contacts:search", query),
@@ -58,8 +58,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getFollowups: (contactId) =>
     ipcRenderer.invoke("contacts:getFollowups", contactId),
   listNotes: (contactId) => ipcRenderer.invoke("contacts:listNotes", contactId),
-  addNote: (contactId, content) => ipcRenderer.invoke("contacts:addNote", contactId, content),
-  updateNote: (noteId, content) => ipcRenderer.invoke("contacts:updateNote", noteId, content),
+  addNote: (contactId, content) =>
+    ipcRenderer.invoke("contacts:addNote", contactId, content),
+  updateNote: (noteId, content) =>
+    ipcRenderer.invoke("contacts:updateNote", noteId, content),
   deleteNote: (noteId) => ipcRenderer.invoke("contacts:deleteNote", noteId),
 
   // 模板
@@ -92,7 +94,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 签名（accountId 可选：不传=全局，传了=账号专属）
   loadSignature: (accountId) => ipcRenderer.invoke("signature:load", accountId),
-  saveSignature: (html, accountId) => ipcRenderer.invoke("signature:save", html, accountId),
+  saveSignature: (html, accountId) =>
+    ipcRenderer.invoke("signature:save", html, accountId),
 
   // 队列持久化
   saveQueue: (data) => ipcRenderer.invoke("queue:save", data),
@@ -112,7 +115,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   deleteInboxMail: (index) => ipcRenderer.invoke("inbox:delete", index),
   removeInboxMatchedContact: (index, email) =>
     ipcRenderer.invoke("inbox:removeMatchedContact", index, email),
-  removeInboxMatchedContactsBatch: (items) => ipcRenderer.invoke("inbox:removeMatchedContactsBatch", items),
+  removeInboxMatchedContactsBatch: (items) =>
+    ipcRenderer.invoke("inbox:removeMatchedContactsBatch", items),
   getBounceCount: () => ipcRenderer.invoke("inbox:getBounceCount"),
   toggleInboxImportant: (index, key) =>
     ipcRenderer.invoke("inbox:toggleImportant", index, key),
@@ -140,16 +144,28 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // CRM 客户跟进
   crmListPipeline: (filters) => ipcRenderer.invoke("crm:listPipeline", filters),
-  crmSetStage: (contactId, newStage) => ipcRenderer.invoke("crm:setStage", contactId, newStage),
-  crmUpdateExtra: (contactId, patch) => ipcRenderer.invoke("crm:updateExtra", contactId, patch),
+  crmSetStage: (contactId, newStage) =>
+    ipcRenderer.invoke("crm:setStage", contactId, newStage),
+  crmUpdateExtra: (contactId, patch) =>
+    ipcRenderer.invoke("crm:updateExtra", contactId, patch),
   crmGetDetail: (contactId) => ipcRenderer.invoke("crm:getDetail", contactId),
-  crmSaveNote: (contactId, content) => ipcRenderer.invoke("crm:saveNote", contactId, content),
-  crmGetContactEmails: (contactId) => ipcRenderer.invoke("crm:getContactEmails", contactId),
-  crmGetEmailBody: (uid, accountId) => ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
+  crmSaveNote: (contactId, content) =>
+    ipcRenderer.invoke("crm:saveNote", contactId, content),
+  crmGetContactEmails: (contactId) =>
+    ipcRenderer.invoke("crm:getContactEmails", contactId),
+  crmGetEmailBody: (uid, accountId) =>
+    ipcRenderer.invoke("crm:getEmailBody", uid, accountId),
   crmCheckReminders: () => ipcRenderer.invoke("crm:checkReminders"),
-  crmGetRelations: (contactId) => ipcRenderer.invoke("crm:getRelations", contactId),
-  crmSaveRelation: (fromId, toId, label) => ipcRenderer.invoke("crm:saveRelation", { fromId, toId, label }),
-  crmDeleteRelation: (fromId, toId, label) => ipcRenderer.invoke("crm:deleteRelation", { fromId, toId, label }),
+  crmGetRelations: (contactId) =>
+    ipcRenderer.invoke("crm:getRelations", contactId),
+  crmSaveRelation: (fromId, toId, label) =>
+    ipcRenderer.invoke("crm:saveRelation", { fromId, toId, label }),
+  crmDeleteRelation: (fromId, toId, label) =>
+    ipcRenderer.invoke("crm:deleteRelation", { fromId, toId, label }),
+
+  // 邮件编写
+  openCompose: (initData) => ipcRenderer.invoke("compose:open", initData),
+  getThreadHistory: (email) => ipcRenderer.invoke("compose:getThread", email),
 
   // AI
   aiSummarizeEmail: (params) => ipcRenderer.invoke("ai:summarizeEmail", params),
@@ -227,7 +243,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openSendFolder: () => ipcRenderer.invoke("app:openSendFolder"),
   openExternal: (url) => ipcRenderer.invoke("app:openExternal", url),
   openLogFile: () => ipcRenderer.invoke("app:openLogFile"),
-  rendererLog: (msg, stack) => ipcRenderer.invoke("app:rendererLog", { msg, stack }),
+  rendererLog: (msg, stack) =>
+    ipcRenderer.invoke("app:rendererLog", { msg, stack }),
 
   // 网络
   checkNetwork: () => ipcRenderer.invoke("network:check"),
@@ -235,13 +252,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 客户开发（通过 IPC 代理，安全）
   discoverProfiles: () => ipcRenderer.invoke("discover:profiles"),
-  discoverGetProfile: (profileId) => ipcRenderer.invoke("discover:getProfile", profileId),
-  discoverSaveProfile: (profileId, data) => ipcRenderer.invoke("discover:saveProfile", profileId, data),
-  discoverDeleteProfile: (profileId) => ipcRenderer.invoke("discover:deleteProfile", profileId),
+  discoverGetProfile: (profileId) =>
+    ipcRenderer.invoke("discover:getProfile", profileId),
+  discoverSaveProfile: (profileId, data) =>
+    ipcRenderer.invoke("discover:saveProfile", profileId, data),
+  discoverDeleteProfile: (profileId) =>
+    ipcRenderer.invoke("discover:deleteProfile", profileId),
   discoverProviders: () => ipcRenderer.invoke("discover:providers"),
-  discoverSearch: (profileId) => ipcRenderer.invoke("discover:search", profileId),
-  discoverCompanyDetail: (domain) => ipcRenderer.invoke("discover:companyDetail", domain),
-  discoverReveal: (profileId, maxCredits, domainFilter) => ipcRenderer.invoke("discover:reveal", profileId, maxCredits, domainFilter),
+  discoverSearch: (profileId) =>
+    ipcRenderer.invoke("discover:search", profileId),
+  discoverCompanyDetail: (domain) =>
+    ipcRenderer.invoke("discover:companyDetail", domain),
+  discoverReveal: (profileId, maxCredits, domainFilter) =>
+    ipcRenderer.invoke("discover:reveal", profileId, maxCredits, domainFilter),
 
   // 设置
   loadConfig: () => ipcRenderer.invoke("config:load"),
@@ -262,10 +285,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   testAccount: (account) => ipcRenderer.invoke("account:test", account),
   getAccountStatus: () => ipcRenderer.invoke("account:status"),
 
-
   // 数据导出
   exportData: () => ipcRenderer.invoke("data:export"),
 
   // 渲染进程日志 → 主进程统一写文件
-  log: (level, ctx, msg, data) => ipcRenderer.invoke("log:write", { level, ctx, msg, data }),
+  log: (level, ctx, msg, data) =>
+    ipcRenderer.invoke("log:write", { level, ctx, msg, data }),
 });

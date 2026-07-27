@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>写邮件 — Milogin's Prospector</title>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --card-bg: #ffffff;
+    --primary: #1a1a1a;
+    --primary-light: #424242;
+    --text: #1a1a1a;
+    --text-secondary: #6b6b6b;
+    --border: #e0e0e0;
+    --danger: #e5484d;
+    --radius: 8px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px; color: var(--text); background: var(--bg);
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    -webkit-app-region: no-drag;
+  }
+  /* 标题栏 — 极简：右侧按钮，无标题 */
+  #title-bar {
+    display: flex; align-items: center; justify-content: flex-end; height: 30px;
+    padding: 0 8px; flex-shrink: 0; gap: 2px;
+    -webkit-app-region: drag;
+  }
+  #title-bar button {
+    -webkit-app-region: no-drag;
+    width: 30px; height: 30px; border: none; background: none;
+    cursor: pointer; border-radius: 5px; display: flex; align-items: center; justify-content: center;
+    color: #bbb;
+  }
+  #title-bar button:hover { background: var(--border); color: var(--text); }
+  /* 主体 */
+  #main { flex:1; display:flex; flex-direction:column; padding:0 16px; overflow-y:auto; }
+  /* 字段行 */
+  .field-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .field-row:focus-within { border-color: var(--primary); }
+  .field-label {
+    width: 48px; flex-shrink: 0; font-size: 11px; color: var(--text);
+    text-align: right; font-weight: 600;
+  }
+  .field-input {
+    flex:1; border:none; outline:none; background:transparent; font-size:13px;
+    color: var(--text); padding: 3px 0; font-weight: 500;
+  }
+  .field-input::placeholder { color: #ccc; font-weight: 400; }
+  /* 发件人下拉 — 自定义组件 */
+  #from-wrap { flex:1; position:relative; display:flex; align-items:center; cursor:pointer; user-select:none; }
+  #from-display {
+    flex:1; display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500;
+    padding: 3px 18px 3px 0; min-width:0;
+  }
+  #from-display .dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  #from-display .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #from-wrap::after {
+    content: ''; position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #bbb;
+    pointer-events: none; transition: transform .2s;
+  }
+  #from-wrap.open::after { transform: translateY(-50%) rotate(180deg); }
+  /* 下拉列表 */
+  #from-drop {
+    position:absolute; top:100%; left:0; right:0; z-index:100;
+    background:var(--card-bg); border:1px solid var(--border); border-radius:6px;
+    box-shadow:0 6px 20px rgba(0,0,0,.08); overflow:hidden;
+    opacity:0; transform:translateY(-4px); pointer-events:none;
+    transition: opacity .15s, transform .15s;
+  }
+  #from-drop.open { opacity:1; transform:translateY(0); pointer-events:auto; }
+  #from-drop .item {
+    display:flex; align-items:center; gap:8px; padding:8px 12px;
+    font-size:12px; cursor:pointer; transition: background .1s;
+  }
+  #from-drop .item:hover { background:var(--bg); }
+  #from-drop .item.active { background:var(--bg); font-weight:600; }
+  #from-drop .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  #from-drop .info { flex:1; min-width:0; }
+  #from-drop .email { color:var(--text-secondary); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* 收件人 chip */
+  .chip-row { display:flex; flex-wrap:wrap; gap:3px; align-items:center; flex:1; padding:3px 0; }
+  .chip {
+    display:inline-flex; align-items:center; gap:3px;
+    background: var(--primary); color: #fff; font-size:11px;
+    padding: 2px 7px; border-radius: 10px;
+  }
+  .chip .rm { cursor:pointer; opacity:0.6; font-size:12px; }
+  .chip .rm:hover { opacity:1; }
+  /* Cc/Bcc 折叠 */
+  .cc-toggle { font-size:11px; color: var(--text-secondary); cursor:pointer; margin-left:8px; white-space:nowrap; user-select:none; }
+  .cc-toggle:hover { color: var(--primary); }
+  .cc-row { display:none; }
+  .cc-row.open { display:flex; }
+  /* 格式栏 */
+  #toolbar {
+    display:flex; align-items:center; gap:2px; padding:3px 0;
+    border-bottom: 1px solid var(--border); flex-shrink:0;
+  }
+  #toolbar button {
+    width:26px; height:22px; border:none; background:none;
+    cursor:pointer; border-radius:3px; display:flex; align-items:center; justify-content:center;
+    color: var(--text-secondary); font-size:13px;
+  }
+  #toolbar button:hover { background: var(--border); color: var(--text); }
+  #toolbar button.active { background: var(--primary); color: #fff; }
+  #toolbar .t-sep { width:1px; height:14px; background:var(--border); margin:0 4px; }
+  /* 正文 */
+  #body-editor {
+    flex:1; padding:14px 0; outline:none; font-size:14px; line-height:1.75;
+    color: var(--text); min-height: 200px; overflow-y:auto;
+  }
+  #body-editor:empty::before {
+    content: "输入邮件正文..."; color: #ccc;
+  }
+  #body-editor p { margin:0 0 8px 0; }
+  #body-editor a { color: var(--primary); text-decoration: underline; }
+  /* 附件 */
+  #attachments { padding:4px 0; border-top:1px solid var(--border); display:none; }
+  #attachments.has { display:block; }
+  .att-item {
+    display:inline-flex; align-items:center; gap:4px;
+    background: var(--bg); border:1px solid var(--border);
+    padding:3px 8px; border-radius:12px; font-size:11px; margin:2px;
+  }
+  .att-item .rm { cursor:pointer; color:var(--danger); }
+  /* 底栏 */
+  #footer {
+    display:flex; align-items:center; justify-content:flex-start; gap:8px;
+    padding:10px 0; border-top:1px solid var(--border); flex-shrink:0;
+  }
+  #btn-send {
+    padding:5px 16px; border:none; border-radius:5px; cursor:pointer;
+    background: var(--primary); color:#fff; font-size:12px; font-weight:500;
+    transition: opacity .2s;
+  }
+  #btn-send:hover { opacity:0.85; }
+  #btn-send:disabled { opacity:0.4; cursor:default; }
+  .btn-sec {
+    padding:5px 12px; border:1px solid var(--border); border-radius:5px;
+    cursor:pointer; background: transparent; color: var(--text-secondary); font-size:12px;
+    transition: all .15s;
+  }
+  .btn-sec:hover { background: var(--bg); color: var(--text); border-color: #bbb; }
+  /* Toast */
+  #toast {
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    padding:8px 20px; border-radius:6px; font-size:12px; z-index:9999;
+    pointer-events:none; opacity:0; transition:opacity .2s;
+  }
+  #toast.ok { background:#d4edda; color:#155724; }
+  #toast.err { background:#f8d7da; color:#721c24; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+
+<!-- 标题栏 -->
+<div id="title-bar">
+  <button id="btn-max" title="最大化"></button>
+  <button id="btn-close" title="关闭"></button>
+</div>
+
+<!-- 主体 -->
+<div id="main">
+  <!-- 发件人 -->
+  <div class="field-row">
+    <span class="field-label">发件人</span>
+    <span id="from-wrap">
+      <span id="from-display"><span class="dot"></span><span class="label"></span></span>
+      <span id="from-drop"></span>
+    </span>
+  </div>
+  <!-- 收件人 -->
+  <div class="field-row">
+    <span class="field-label">收件人</span>
+    <div class="chip-row" id="to-chips"></div>
+    <input class="field-input" id="to-input" placeholder="输入邮箱, 逗号分隔" style="flex:1;min-width:120px">
+    <span class="cc-toggle" id="toggle-cc">抄送/密送</span>
+  </div>
+  <!-- 抄送 -->
+  <div class="field-row cc-row" id="cc-row">
+    <span class="field-label">抄送</span>
+    <input class="field-input" id="cc-input" placeholder="逗号分隔多个地址">
+  </div>
+  <!-- 密送 -->
+  <div class="field-row cc-row" id="bcc-row">
+    <span class="field-label">密送</span>
+    <input class="field-input" id="bcc-input" placeholder="逗号分隔多个地址">
+  </div>
+  <!-- 主题 -->
+  <div class="field-row">
+    <span class="field-label">主题</span>
+    <input class="field-input" id="subject-input" placeholder="邮件主题">
+  </div>
+  <!-- 格式栏 -->
+  <div id="toolbar">
+    <button id="tb-bold" title="加粗 (Ctrl+B)"><b>B</b></button>
+    <button id="tb-italic" title="斜体 (Ctrl+I)"><i>I</i></button>
+    <button id="tb-underline" title="下划线 (Ctrl+U)"><u>U</u></button>
+    <span class="t-sep"></span>
+    <button id="tb-ul" title="无序列表">≡</button>
+    <button id="tb-ol" title="有序列表">≡</button>
+    <span class="t-sep"></span>
+    <button id="tb-link" title="插入链接">🔗</button>
+  </div>
+  <!-- 正文 -->
+  <div id="body-editor" contenteditable="true"></div>
+  <!-- 附件 -->
+  <div id="attachments"></div>
+  <!-- 底栏 -->
+  <div id="footer">
+    <div class="left">
+      <button id="btn-send">发送</button>
+      <button class="btn-sec" id="btn-draft">存草稿</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script src="icons.js"></script>
+<script src="modules/compose.js"></script>
+</body>
+</html>

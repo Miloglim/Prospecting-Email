@@ -1,6 +1,6 @@
 // ===== 收件箱 ==========================================================
 const S = window.S;
-import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared.js';
+import { lucide, escapeHtml, showToast, showConfirm, formatDate, invalidateDashboard } from './shared.js';
 
 const TAG_OPTIONS = [
   { val: '触达中', label: '触达中', color: '#ff9800' },
@@ -34,15 +34,20 @@ let _initialLoadDone = false;
 const TYPE_LABELS = { bounce: '退信', replied: '回复', autoreply: '自动回复', other: '其他' };
 const TYPE_DOT = { bounce: '#e5484d', replied: '#22a644', autoreply: '#e6a817', other: '#8b8b8b' };
 
+let _inboxLoaded = false;
+
 export async function initInbox() {
   // 进入收件箱 → 消红点
   const dot = document.getElementById('inbox-nav-dot');
   if (dot) dot.classList.remove('show');
-  _mails = [];
-  _selectedIdx = -1;
-  _selectedSet = new Set();
-  const list = await window.electronAPI.listInbox();
-  if (list.ok) _mails = list.data || [];
+  if (!_inboxLoaded) {
+    _mails = [];
+    _selectedIdx = -1;
+    _selectedSet = new Set();
+    const list = await window.electronAPI.listInbox();
+    if (list.ok) _mails = list.data || [];
+    _inboxLoaded = true;
+  }
   // 首次加载：所有存量邮件标为已读
   if (!_initialLoadDone) {
     _mails.forEach(m => {
@@ -73,6 +78,8 @@ export async function doFetchInbox() {
   _loading = false;
   if (result.ok) {
     _mails = result.data || [];
+    _inboxLoaded = true;
+    invalidateDashboard();
     _failedAccounts = result.failedAccounts || [];
     _accountStats = result.accountStats || [];
     const skipped = result.skippedAccounts || [];

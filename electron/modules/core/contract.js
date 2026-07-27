@@ -366,6 +366,22 @@ const CRM = {
   DELETE_RELATION: "crm:deleteRelation",
 };
 
+// ── 邮件编写（compose）────────────────────────────────────────────────────────
+const COMPOSE = {
+  /** 打开写邮件子窗口 */
+  OPEN: "compose:open",
+  /** 发送邮件 */
+  SEND: "compose:send",
+  /** 获取可用发信账号列表 */
+  GET_ACCOUNTS: "compose:getAccounts",
+  /** 获取联系人发送历史 */
+  GET_THREAD: "compose:getThread",
+  /** 关闭写邮件窗口 */
+  CLOSE: "compose:close",
+  /** 初始化数据传入子窗口（main → renderer） */
+  INIT: "compose:init",
+};
+
 // ── AI（ai）───────────────────────────────────────────────────────────────────
 const AI = {
   /** 邮件 AI 总结 + 下一步建议 */
@@ -408,6 +424,7 @@ const IPC = {
   DISCOVER,
   TABLE,
   COMPANY,
+  COMPOSE,
   CRM,
   AI,
   LOG,
@@ -627,6 +644,7 @@ module.exports = {
   DISCOVER,
   TABLE,
   COMPANY,
+  COMPOSE,
   CRM,
   AI,
   LOG,
