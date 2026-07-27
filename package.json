@@ -1,6 +1,6 @@
 {
   "name": "prospecting-email-send",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "货代行业一站式客户开发桌面工具 — 找客户、背调、开发信、批量发送、追踪回复",
   "main": "electron/main.js",
   "type": "commonjs",
