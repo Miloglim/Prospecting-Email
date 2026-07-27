@@ -39,6 +39,8 @@ function _advanceCompany(name, newStage, reason) {
     const cn = c.company_name || c.company || '';
     if (cn === name) {
       contactsDb.setStage(c.id, newStage, reason);
+      // 清除当前阶段发送标记，允许下一阶段重新加入队列
+      contactsDb.update(c.id, { last_sent_at: '', last_sent_acct: '' });
       updated++;
     }
   }

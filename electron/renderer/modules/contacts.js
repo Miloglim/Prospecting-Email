@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany,TAG_OPTS } from './shared.js';
 
 // ===== 客户表导入 ====================================================
 const dropZone = document.getElementById('drop-zone');
@@ -609,7 +609,8 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
     }
     totalCompanies = seen.size;
   }
-  const tagCounts = { reached: 0 };
+  const tagKeys = TAG_OPTS.filter(t => t.key).map(t => t.key);
+  const tagCounts = Object.fromEntries(tagKeys.map(k => [k, 0]));
   for (const c of S.contactsData) {
     for (const t of (c.tags || [])) { if (tagCounts[t] !== undefined) tagCounts[t]++; }
   }
@@ -617,19 +618,42 @@ function _updateFilterTabs(totalCompanies, clientCounts) {
   for (const c of S.contactsData) {
     if (c._suspicious === 1 || (c.email && (c.email.endsWith('@no.email') || c.email.endsWith('@placeholder.local') || (c.email && !S.EMAIL_RE.test(c.email))))) anomalyCount++;
   }
+  // 动态插入标签筛选按钮（首次）
+  if (!filterBar._tagsInited) {
+    filterBar._tagsInited = true;
+    const anomalyTab = filterBar.querySelector('[data-filter="anomaly"]');
+    TAG_OPTS.filter(t => t.key).reverse().forEach(t => {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'cf-tab';
+      btn.dataset.filter = 'tag:' + t.key;
+      btn.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${t.color};margin-right:4px;flex-shrink:0"></span>${t.label}`;
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#contacts-filter .cf-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        S.contactsFilter = btn.dataset.filter;
+        S.contactsPage = 1;
+        S.contactsSelectedCompanies = [];
+        _updateFilterTabs();
+        renderContactsList();
+      });
+      anomalyTab.after(btn);
+    });
+  }
   const labelMap = {
     all: `全部 ${totalCompanies}`,
     agent: `代理 ${clientCounts.agent || 0}`,
     direct: `直客 ${clientCounts.direct || 0}`,
     unlabeled: `未标签 ${clientCounts.unlabeled || 0}`,
     anomaly: `⚠️ 异常 ${anomalyCount}`,
-    'tag:reached': `已触达 ${tagCounts.reached||0}`,
     has_phone: `有电话 ${S.contactsData.filter(c => c.phone && c.phone.trim()).length}`,
     archived: `已归档 ${Object.values(S.contactsSendHistory).filter(h => h?.stage === 'archived').length}`,
   };
-  tabs.forEach(tab => {
+  TAG_OPTS.filter(t => t.key).forEach(t => {
+    labelMap['tag:' + t.key] = `${t.label} ${tagCounts[t.key]||0}`;
+  });
+  document.querySelectorAll('#contacts-filter .cf-tab').forEach(tab => {
     const f = tab.dataset.filter;
-    tab.innerHTML = labelMap[f] || f;
+    if (labelMap[f] !== undefined) tab.innerHTML = labelMap[f];
   });
 }
 
@@ -716,15 +740,19 @@ export function renderContactDetail(company) {
         return `<td data-field="_status" data-select="_status" data-labels="${escapeHtml(JSON.stringify(STATUS_LABEL))}" class="editable"><span style="font-size:11px;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>${label}</span></td>`;
       }
       case '_tags': {
-        const TAG_LABEL = { reaching:'触达中', quoting:'报价中', trial:'试单', cooperating:'合作中', lost:'已流失', reached:'已触达' };
-        const ts = (m.tags || []).map(t => TAG_LABEL[t] || t);
-        return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts.length ? `<span style="background:#e3f2fd;color:#1565c0;padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(ts.join(','))}</span>` : '<span style="color:#ccc">—</span>'}</td>`;
+        const tagLabel = Object.fromEntries(TAG_OPTS.filter(t => t.key).map(t => [t.key, t.label]));
+        const tagColor = Object.fromEntries(TAG_OPTS.filter(t => t.key).map(t => [t.key, t.color]));
+        const ts = (m.tags || []).map(t => {
+          const label = tagLabel[t] || t;
+          const color = tagColor[t] || '#666';
+          return `<span style="background:${color}18;color:${color};padding:1px 5px;border-radius:6px;font-size:9px">${escapeHtml(label)}</span>`;
+        });
+        return `<td class="tag-cell" data-contact-id="${m.id}" data-tags="${escapeHtml(JSON.stringify(m.tags || []))}" style="font-size:10px;max-width:100px;overflow:hidden;text-overflow:ellipsis;cursor:pointer">${ts.length ? ts.join(' ') : '<span style="color:#ccc">—</span>'}</td>`;
       }
       case 'assignee': return `<td data-field="assignee" class="editable">${escapeHtml(m.assignee||'')}</td>`;
       case '_followup': {
         // ponytail: 管线入口 — tags CRM标签 或 _status 为 replied/autoreply
         const PIPELINE_ENTRY_TAGS = new Set([
-          'reached','已触达',
           'reaching','触达中','quoting','报价中',
           'trial','试单','cooperating','合作中','lost','已流失'
         ]);
@@ -939,17 +967,11 @@ export function renderContactDetail(company) {
       popup.style.left = rect.left + 'px';
       popup.style.top = (rect.bottom + 4) + 'px';
 
-      const TAG_OPTIONS = [
-        { val: '触达中', label: '触达中', color: '#ff9800' },
-        { val: '报价中', label: '报价中', color: '#2196f3' },
-        { val: '试单',   label: '试单',   color: '#8e24aa' },
-        { val: '合作中', label: '合作中', color: '#4caf50' },
-        { val: '已流失', label: '已流失', color: '#d93025' },
-      ];
 
-      const items = TAG_OPTIONS.map(t => {
-        const active = currentTags.includes(t.val);
-        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;color:${t.color};${active ? 'font-weight:600' : ''}" data-tag="${t.val}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${active ? ' ✓' : ''} ${t.label}</div>`;
+      const opts = TAG_OPTS.filter(t => t.key);
+      const items = opts.map(t => {
+        const active = currentTags.includes(t.key);
+        return `<div style="padding:5px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;${active ? 'font-weight:600' : ''}" data-tag="${t.key}" onmouseenter="this.style.background='var(--bg)'" onmouseleave="this.style.background='transparent'"><span style="width:7px;height:7px;border-radius:50%;background:${t.color};flex-shrink:0"></span>${t.label}</div>`;
       }).join('');
 
       popup.innerHTML = items +

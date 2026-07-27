@@ -725,7 +725,7 @@ async function addToQueue() {
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const GROUP_SIZE = config.schedule?.batch_size || 10;
   let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, skippedDupEmail = 0, reactivatedCount = 0;
-  const _dupEmails = [];
+  let _dupEmails = [];
 
   // 拉最新 contacts.json，确保 _sentBy 是最新的（内存快照可能过期）
   const freshContacts = await window.electronAPI.getContacts();

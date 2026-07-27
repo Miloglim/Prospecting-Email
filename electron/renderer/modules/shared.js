@@ -72,6 +72,18 @@ export function countryToLang(country) {
   return 'en';
 }
 export const lucide = window.lucide ? (n,s,c) => window.lucide(n,s,c) : () => '';
+
+// ── 标签选项（与 crm-service TAG 常量同步）──────────────────────────────────
+// key=数据库tags值, label=中文显示, color=圆点颜色
+export const TAG_OPTS = [
+  { key: 'reaching',    label: '触达中', color: '#ff9800' },
+  { key: 'quoting',     label: '报价中', color: '#2196f3' },
+  { key: 'trial',       label: '试单',   color: '#8e24aa' },
+  { key: 'cooperating', label: '合作中', color: '#4caf50' },
+  { key: 'lost',        label: '已流失', color: '#b0b0b0' },
+  { key: 'other',       label: '其他',   color: '#333333' },
+];
+
 window.__pageHandlers = {};
 export function showModal({title,message,type='info',buttons,onClose,closeOnOverlay=true}){return new Promise(r=>{const e=document.querySelector('.modal-overlay');if(e)e.remove();const o=document.createElement('div');o.className='modal-overlay';const b=(buttons||[{text:'确定',value:true,primary:true}]).map(b=>`<button class="${b.primary?'':'secondary'}" data-value="${b.value}">${b.text}</button>`).join('');o.innerHTML=`<div class="modal-card"><div class="modal-header m-${type}">${title}</div><div class="modal-body">${message}</div><div class="modal-footer">${b}</div></div>`;const close=async v=>{if(onClose){const keep=await onClose(v);if(keep===false)return}o.remove();r(v)};if(closeOnOverlay){o.addEventListener('click',e=>{if(e.target===o)close(null)})}o.addEventListener('keydown',e=>{if(e.key==='Escape')close(null)});o.querySelectorAll('button').forEach(b=>{b.addEventListener('click',()=>{let v=b.dataset.value;if(v==='true')v=true;else if(v==='false')v=false;close(v)})});const p=o.querySelector('button:not(.secondary)');if(p)setTimeout(()=>p.focus(),50);document.body.appendChild(o)})}
 export async function showAlert(m,t){return showModal({title:'提示',message:m,type:t||'info',buttons:[{text:'确定',value:true,primary:true}]})}

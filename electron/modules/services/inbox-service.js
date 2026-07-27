@@ -445,7 +445,7 @@ async function _parseRaw(rawSource, uid, accountId) {
 }
 
 // ── IMAP 拉取（UID 增量，游标自动推进）─────────────────────────────────────
-function _imapFetch(cfg) {
+function _imapFetch(cfg, cursorUpdates) {
   const Imap = require("imap");
   return new Promise((resolve) => {
     const imap = new Imap({
@@ -596,7 +596,7 @@ function _isPop3(cfg) {
 }
 
 // ── POP3 拉取（RETR 拿完整 raw → mailparser）─────────────────────────────────
-async function _pop3Fetch(cfg, sinceDays) {
+async function _pop3Fetch(cfg, sinceDays, cursorUpdates) {
   const rawSources = [];
   let sock;
   const T = {}; // 探针：各步骤耗时(ms) + 状态
@@ -770,9 +770,9 @@ async function _fetchInbox(configPath) {
     try {
       let rawSources = [];
       if (!_isPop3(cfg)) {
-        rawSources = await _imapFetch(cfg);
+        rawSources = await _imapFetch(cfg, cursorUpdates);
       } else {
-        rawSources = await _pop3Fetch(cfg, 2);
+        rawSources = await _pop3Fetch(cfg, 2, cursorUpdates);
       }
       Log.info('[收件箱]', `${acc.label || cfg.user} 收到 ${rawSources.length} 封原始邮件，解析中...`);
       const mails = [];

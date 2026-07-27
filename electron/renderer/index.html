@@ -301,7 +301,7 @@
         <span class="cf-sep">|</span>
         <button type="button" class="cf-tab" data-filter="anomaly" style="color:#e65100">⚠️ 异常</button>
         <span class="cf-sep">|</span>
-        <button type="button" class="cf-tab" data-filter="tag:reached">已触达</button>
+        <!-- 标签筛选由 JS 动态生成 (TAG_OPTS) -->
         <span class="cf-sep">|</span>
         <button type="button" class="cf-tab" data-filter="has_phone"><span data-icon="phone"></span> 有电话</button>
         <span class="cf-sep">|</span>
@@ -1106,6 +1106,7 @@
     .as-log-decision { flex-shrink:0; color:var(--primary); }
     .as-log-reason { flex:1; overflow:hidden; text-overflow:ellipsis; color:var(--text-secondary); min-width:0; }
   </style>
+  <script src="./vendor/d3.min.js"></script>
   <script type="module" src="app-v2.js"></script>
 </body>
 </html>
