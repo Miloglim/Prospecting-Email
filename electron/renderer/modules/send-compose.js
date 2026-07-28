@@ -181,8 +181,8 @@ function renderPreview() {
       const lang = countryToLang(e.country);
       const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
       const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
-      const lastSent = S.contactsSendHistory?.[e.company]?.lastSent
-        ? formatDate(S.contactsSendHistory[e.company].lastSent) : '';
+      const lastSent = S.sendHistory?.[e.company]?.lastSent
+        ? formatDate(S.sendHistory[e.company].lastSent) : '';
       return `<div class="pg-company">
         <span class="pg-cname">${escapeHtml(e.company)}</span>
         <span class="pg-cemail">${escapeHtml(e.country||'')} · ${langLabel} · ${tplLabel}</span>
