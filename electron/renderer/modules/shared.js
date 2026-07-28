@@ -122,7 +122,7 @@ export async function loadDashboard(){
       document.getElementById('dash-reply-label').textContent=`回复邮件 · 今日${rc.today} 累计${rc.total} · 触达率 ${globalRate}% · 今日 ${todayRate}%`;
       // 今日新增线索
       const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'})).toISOString().slice(0,10);
-      const todayNew=contactsAll.filter(c=>(c.addedAt||'').slice(0,10)===today);
+      const todayNew=contactsAll.filter(c=>(c.created_at||'').slice(0,10)===today);
       const newCompanies=new Set(todayNew.map(c=>c.company).filter(Boolean)).size;
       document.getElementById('stat-new').textContent=todayNew.length?`${todayNew.length}人 / ${newCompanies}家`:'—';
     }catch(e){document.getElementById('dash-reply-rate').textContent='—';document.getElementById('stat-new').textContent='—';}
