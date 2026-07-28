@@ -81,12 +81,16 @@ function getStageData() {
   if (!cl) return {};
   function entries(key) {
     const raw = cl.sending?.[key] || cl[key] || [];
+    const isSideSection = key === 'reached' || key === 'autoreply';
     return raw.map(e => ({
       company: e.company || '',
       members: (e.members || e.contacts || []).filter(c => {
-        const ok = c.ok !== false && !c.sent && c.email && !c.email.endsWith('@no.email');
-        return ok;
+        if (isSideSection) return c.email && !c.email.endsWith('@no.email');
+        return c.ok !== false && !c.sent && c.email && !c.email.endsWith('@no.email');
       }),
+      sendableCount: e.sendableCount || 0,
+      sentCount: e.sentCount || 0,
+      contactCount: e.contactCount || 0,
     })).filter(e => e.members.length > 0);
   }
   const data = {};
@@ -103,7 +107,8 @@ function renderStageCards() {
   container.innerHTML = STAGES.map(s => {
     const entries = data[s.key] || [];
     if (!entries.length) return '';
-    const people = entries.reduce((sum, e) => sum + e.members.length, 0);
+    const isSide = s.key === 'reached' || s.key === 'autoreply';
+    const people = entries.reduce((sum, e) => sum + (isSide ? e.contactCount : e.members.length), 0);
     const used = _addedStages.includes(s.key);
     const disabled = s.disabled || used;
     return `<div class="stage-card${disabled ? ' disabled' : ''}${used ? ' used' : ''}" draggable="${disabled ? 'false' : 'true'}" data-stage="${s.key}">

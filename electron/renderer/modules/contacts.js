@@ -1,6 +1,6 @@
 const S = window.S;
 import CS from './company-state.js';
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany,TAG_OPTS,invalidateDashboard } from './shared.js';
+import { lucide,showAlert,showConfirm,showToast,escapeHtml,formatDate,daysSince,initIcons,findById,ratingStars,renderMarkdown,renderPagination,pollBackcheckStatus,showModal,clientTypeTag,groupByCompany,TAG_OPTS } from './shared.js';
 
 // ===== 客户表导入 ====================================================
 const dropZone = document.getElementById('drop-zone');
@@ -1333,7 +1333,6 @@ async function showFollowupEditor(contact) {
 // 统一刷新入口：主进程 IPC 事件 + 渲染进程内部事件都走同一条路
 async function _onContactsSync() {
   _contactsLoaded = false; // 数据已变，下次切到此页重新加载
-  invalidateDashboard();
   if (document.getElementById('page-contacts')?.classList.contains('active')) {
     _contactsLoaded = true; // 立即刷新后重新标记为已加载
     await CS.refreshContacts();

@@ -96,12 +96,8 @@ async function initVersion() {
   try { const v = await window.electronAPI.getAppVersion(); const el = document.getElementById('nav-version'); if (el) el.textContent = 'v' + v; _versionSet = true; } catch { /* 渲染层降级：操作失败不影响 UI */ }
 }
 
-let _dashboardLoaded = false;
-export function invalidateDashboard() { _dashboardLoaded = false; }
-
 export async function loadDashboard(){
   initVersion();
-  if (_dashboardLoaded) return;
   // 核心数据
   try{
     const s=await window.electronAPI.getDashboardStats();
@@ -287,7 +283,6 @@ export async function loadDashboard(){
       }
     }catch(e){document.getElementById('dash-todo-box').innerHTML='<span class="dash-todo-item">—</span>';}
   }catch(e){document.getElementById('dash-stage-dist').textContent='—';document.getElementById('dash-todo-list').innerHTML='<span class="dash-todo-item">—</span>';}
-  _dashboardLoaded = true;
 }
 
 // 快捷操作按钮

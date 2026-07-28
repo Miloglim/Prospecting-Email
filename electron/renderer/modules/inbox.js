@@ -1,6 +1,6 @@
 // ===== 收件箱 ==========================================================
 const S = window.S;
-import { lucide, escapeHtml, showToast, showConfirm, formatDate, invalidateDashboard } from './shared.js';
+import { lucide, escapeHtml, showToast, showConfirm, formatDate } from './shared.js';
 
 const TAG_OPTIONS = [
   { val: '触达中', label: '触达中', color: '#ff9800' },
@@ -79,7 +79,6 @@ export async function doFetchInbox() {
   if (result.ok) {
     _mails = result.data || [];
     _inboxLoaded = true;
-    invalidateDashboard();
     _failedAccounts = result.failedAccounts || [];
     _accountStats = result.accountStats || [];
     const skipped = result.skippedAccounts || [];

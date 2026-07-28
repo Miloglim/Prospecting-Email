@@ -995,7 +995,7 @@ select option { font-size: 12px; }
 /* 右侧预览 */
 .send-right {
   flex:1; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--card-bg); overflow-y: auto; display: flex; flex-direction: column;
+  background: var(--card-bg); overflow: hidden; display: flex; flex-direction: column;
   min-height: 0;
 }
 .send-right-head {
