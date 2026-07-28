@@ -520,10 +520,23 @@ async function renderDetail() {
       <div class="inbox-detail-field"><span>关联</span><span class="${m.contactCompany ? '' : 'muted'}">${m.contactCompany ? `<a class="inbox-link-company" href="#">${escapeHtml(m.contactCompany)}</a> <button class="inbox-btn-backcheck" data-company="${escapeHtml(m.contactCompany)}" style="font-size:10px;padding:1px 6px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text-secondary);cursor:pointer;margin-left:4px">背调</button>` : '未关联'}</span></div>
     </div>
     ${(() => {
+      // 实时校对：联系人库可能已更新，重新匹配
+      const contactIdx = {};
+      for (const c of (S.contactsData || [])) {
+        if (c.email) contactIdx[c.email.toLowerCase().trim()] = c;
+      }
       const allMatched = [];
       if (m.contactCompany) allMatched.push({ email: m.from, company: m.contactCompany, contactId: m.contactDbId, matched: true });
       for (const c of (m.matchedContacts || [])) {
-        if (c.company && c.company === m.contactCompany) continue; // 去重
+        if (c.company && c.company === m.contactCompany && c.email === m.from) continue;
+        // 之前没匹配但现在有了 → 更新状态
+        const fresh = contactIdx[(c.email || '').toLowerCase().trim()];
+        if (!c.matched && fresh) {
+          c.matched = true;
+          c.company = fresh.company || fresh.company_name || '';
+          c.contactId = fresh.id || '';
+          c.contactName = fresh.firstName || fresh.contactName || '';
+        }
         allMatched.push(c);
       }
       const matched = allMatched.filter(c => c.matched !== false);
