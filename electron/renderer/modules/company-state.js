@@ -325,26 +325,25 @@ function _classifyContacts() {
       });
     }
 
-    // ── 发送阶段（仅 normalContacts）──
-    if (!normalContacts.length) continue;
-
-    let companyStage = 'cold';
+    // ── 发送阶段：按每人自己的阶段分到不同组 ──
+    const stageGroups = { cold: [], f1: [], f2: [], f3: [], f4: [] };
     for (const c of normalContacts) {
-      if (order.indexOf(c.stage) > order.indexOf(companyStage)) companyStage = c.stage;
+      const sk = order.includes(c.stage) ? c.stage : 'cold';
+      stageGroups[sk].push(c);
     }
 
-    const stageKey = companyStage === 'cold' ? 'cold' :
-      companyStage === 'f1' ? 'f1' : companyStage === 'f2' ? 'f2' :
-      companyStage === 'f3' ? 'f3' : companyStage === 'f4' ? 'f4' : 'cold';
-
-    classified.sending[stageKey].push({
-      company,
-      stageLabel: companyStage,
-      contactCount: normalContacts.length,
-      sendableCount: normalContacts.filter(c => c.ok && !c.sent).length,
-      sentCount: normalContacts.filter(c => c.ok && c.sent).length,
-      contacts: normalContacts,
-    });
+    for (const sk of order) {
+      const sc = stageGroups[sk];
+      if (!sc.length) continue;
+      classified.sending[sk].push({
+        company,
+        stageLabel: sk,
+        contactCount: sc.length,
+        sendableCount: sc.filter(c => c.ok && !c.sent).length,
+        sentCount: sc.filter(c => c.ok && c.sent).length,
+        contacts: sc,
+      });
+    }
   }
 
   S.contactsClassified = classified;

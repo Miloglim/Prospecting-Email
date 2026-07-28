@@ -53,3 +53,7 @@ send/send-log.json.tmp
 .vscode/
 .idea/
 nul
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

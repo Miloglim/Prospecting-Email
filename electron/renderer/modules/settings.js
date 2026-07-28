@@ -276,7 +276,17 @@ document.getElementById('cfg-general-auto-launch')?.addEventListener('change', a
   } catch { /* 渲染层降级：操作失败不影响 UI */ }
 })();
 
-window.__pageHandlers['settings'] = async () => { await initSettings(); initUpdateCheck(); initExportBtn(); initClearContactsBtn(); initOpenLogBtn(); };
+let _settingsLoaded = false;
+window.__pageHandlers['settings'] = async () => {
+  if (!_settingsLoaded) {
+    await initSettings();
+    initUpdateCheck();
+    initExportBtn();
+    initClearContactsBtn();
+    initOpenLogBtn();
+    _settingsLoaded = true;
+  }
+};
 
 // ── 数据导出 ──────────────────────────────────────────────────────────────
 function initExportBtn() {

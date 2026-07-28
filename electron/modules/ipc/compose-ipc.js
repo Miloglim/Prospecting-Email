@@ -360,4 +360,8 @@ function register(mainIpc, deps) {
   });
 }
 
-module.exports = { register, createComposeWindow };
+function closeComposeWindow() {
+  if (composeWin && !composeWin.isDestroyed()) composeWin.close();
+}
+
+module.exports = { register, createComposeWindow, closeComposeWindow };

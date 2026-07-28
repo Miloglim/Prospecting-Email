@@ -407,7 +407,7 @@ async function openDetailPanel(contactId) {
                   <span class="crm-email-subject">${escapeHtml(m.subject||'(无主题)')}</span>
                   <span class="crm-email-date">${escapeHtml(fmtDT(m.date))}${m._isSent?' [sent]':''}</span>
                 </div>
-                <div class="crm-email-from">${escapeHtml(m._isSent?'To: '+(m.from_addr||''):m.from_name||m.from_addr||'')}</div>
+                <div class="crm-email-from">${escapeHtml(m._isSent?'To: '+(m.from_addr||''):m.from_name||m.from_addr||'')}${m._isSent && m._accountId ? ` <span style="font-size:10px;color:var(--primary);background:#e3f2fd;padding:0 4px;border-radius:3px">${escapeHtml(m._accountId)}</span>` : ''}</div>
               </div>
               <div class="crm-email-ai" data-uid="${escapeHtml(m.uid||'')}" data-account="${escapeHtml(m.account_id||'')}" style="display:none">
                 <div class="crm-email-ai-inner">
@@ -1155,6 +1155,7 @@ function infoTab(c) {
     { label: '姓名', field: 'firstName', val: [c.firstName,c.lastName].filter(Boolean).join(' ')||'—', type: 'inline-double', field2: 'lastName', val1: c.firstName||'', val2: c.lastName||'' },
     { label: '邮箱', field: 'email', val: c.email||'—', type: 'inline' },
     { label: '公司', field: 'company', val: c.company||'—', type: 'inline' },
+    { label: '发信账号', field: 'last_sent_acct', val: c.last_sent_acct||'—', type: 'readonly' },
     { label: '国家', field: 'country', val: c.country||'—', type: 'select', opts: ['','巴西','墨西哥','哥伦比亚','智利','秘鲁','阿根廷','厄瓜多尔','美国','中国','西班牙','葡萄牙'] },
     { label: '职位', field: 'title', val: c.title||'—', type: 'inline' },
     { label: '电话', field: 'phone', val: c.phone||'—', type: 'inline' },

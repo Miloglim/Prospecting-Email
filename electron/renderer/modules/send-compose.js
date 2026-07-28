@@ -1,6 +1,6 @@
-// ── 邮件发送 — 两栏拖拽 + 预览面板 ─────────────────────────────────────
+// ── 邮件发送 — 阶段卡片点击选中 ────────────────────────────────────────
 const S = window.S;
-import { lucide, showToast, escapeHtml, countryToLang } from './shared.js';
+import { lucide, showToast, escapeHtml, countryToLang, formatDate } from './shared.js';
 import { randomPick, assembleEmail, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 import CS from './company-state.js';
@@ -84,6 +84,9 @@ function getStageData() {
     const isSideSection = key === 'reached' || key === 'autoreply';
     return raw.map(e => ({
       company: e.company || '',
+      stageLabel: e.stageLabel || key,
+      clientType: (e.contacts || e.members || [])[0]?.clientType || 'unlabeled',
+      country: (e.contacts || e.members || [])[0]?.country || '',
       members: (e.members || e.contacts || []).filter(c => {
         if (isSideSection) return c.email && !c.email.endsWith('@no.email');
         return c.ok !== false && !c.sent && c.email && !c.email.endsWith('@no.email');
@@ -98,9 +101,10 @@ function getStageData() {
   return data;
 }
 
-// ── 左侧：阶段卡片 ────────────────────────────────────────────────────────
+// ── 阶段卡片（点击选中）──────────────────────────────────────────────────
 function renderStageCards() {
   const container = document.getElementById('send-stage-cards');
+  const summary = document.getElementById('send-summary');
   if (!container) return;
   const data = getStageData();
 
@@ -109,61 +113,57 @@ function renderStageCards() {
     if (!entries.length) return '';
     const isSide = s.key === 'reached' || s.key === 'autoreply';
     const people = entries.reduce((sum, e) => sum + (isSide ? e.contactCount : e.members.length), 0);
-    const used = _addedStages.includes(s.key);
-    const disabled = s.disabled || used;
-    return `<div class="stage-card${disabled ? ' disabled' : ''}${used ? ' used' : ''}" draggable="${disabled ? 'false' : 'true'}" data-stage="${s.key}">
+    const selected = _addedStages.includes(s.key);
+    const disabled = s.disabled;
+    return `<div class="stage-card${disabled ? ' disabled' : ''}${selected ? ' used' : ''}" data-stage="${s.key}">
       <span class="sc-dot" style="background:${s.color}"></span>
       <span class="sc-stage">${s.label}</span>
       <div class="sc-count">${entries.length}家 · ${people}人</div>
     </div>`;
   }).join('');
 
-  // 拖拽
-  container.querySelectorAll('.stage-card:not(.disabled):not(.used)').forEach(card => {
-    card.addEventListener('dragstart', e => {
-      e.dataTransfer.setData('text/plain', card.dataset.stage);
-      card.classList.add('dragging');
+  // 点击选中/取消
+  container.querySelectorAll('.stage-card:not(.disabled)').forEach(card => {
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', () => {
+      const key = card.dataset.stage;
+      if (_addedStages.includes(key)) {
+        _addedStages = _addedStages.filter(k => k !== key);
+      } else {
+        _addedStages.push(key);
+      }
+      renderView();
     });
-    card.addEventListener('dragend', () => card.classList.remove('dragging'));
   });
 
-  // Drop zone
-  const zone = document.getElementById('send-drop-zone');
-  if (!zone._bound) {
-    zone._bound = true;
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', e => {
-      e.preventDefault();
-      zone.classList.remove('drag-over');
-      const key = e.dataTransfer.getData('text/plain');
-      if (key && !_addedStages.includes(key)) {
-        _addedStages.push(key);
-        renderView();
-      }
-    });
+  // 底部汇总
+  if (summary) {
+    if (_addedStages.length) {
+      let totalPeople = 0;
+      _addedStages.forEach(key => {
+        const entries = data[key] || [];
+        totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
+      });
+      summary.textContent = `已选 ${_addedStages.length} 阶段 · ${totalPeople} 人`;
+    } else {
+      summary.textContent = '';
+    }
   }
 }
 
-// ── 右侧：预览面板 ────────────────────────────────────────────────────────
+// ── 右侧：预览面板（JS 驱动展开/折叠）──────────────────────────────────
 function renderPreview() {
   const list = document.getElementById('send-added-list');
   const head = document.getElementById('send-right-head');
-  const zone = document.getElementById('send-drop-zone');
-  const summary = document.getElementById('send-summary');
   if (!list) return;
 
   if (!_addedStages.length) {
     list.innerHTML = '';
-    zone.classList.remove('has-items');
-    if (head) head.style.display = 'none';
-    if (summary) summary.textContent = '';
+    if (head) head.textContent = '点击左侧阶段卡片选择';
     return;
   }
 
-  zone.classList.add('has-items');
   const data = getStageData();
-
   let totalCompanies = 0, totalPeople = 0;
   _addedStages.forEach(key => {
     const entries = data[key] || [];
@@ -171,28 +171,27 @@ function renderPreview() {
     totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
   });
 
-  // 顶部汇总
-  if (head) {
-    head.style.display = 'block';
-    head.textContent = `发送预览 · ${_addedStages.length}阶段 · ${totalCompanies}家 · ${totalPeople}人`;
-  }
-  if (summary) summary.textContent = `已选 ${_addedStages.length} 阶段 · ${totalPeople} 人`;
+  if (head) head.textContent = `发送预览 · ${_addedStages.length}阶段 · ${totalCompanies}家 · ${totalPeople}人`;
 
-  // 阶段组（可展开）
   list.innerHTML = _addedStages.map(key => {
     const s = STAGE_MAP[key] || {};
     const entries = data[key] || [];
     const people = entries.reduce((sum, e) => sum + e.members.length, 0);
     const cRows = entries.map(e => {
-      const emails = e.members.map(m => m.email).slice(0, 2).join(', ');
+      const lang = countryToLang(e.country);
+      const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
+      const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
+      const lastSent = S.contactsSendHistory?.[e.company]?.lastSent
+        ? formatDate(S.contactsSendHistory[e.company].lastSent) : '';
       return `<div class="pg-company">
         <span class="pg-cname">${escapeHtml(e.company)}</span>
-        <span class="pg-cemail">${escapeHtml(emails)}</span>
+        <span class="pg-cemail">${escapeHtml(e.country||'')} · ${langLabel} · ${tplLabel}</span>
+        ${lastSent ? `<span class="pg-ccount" style="color:var(--text-secondary)">${lastSent}</span>` : ''}
         <span class="pg-ccount">${e.members.length}人</span>
       </div>`;
     }).join('');
 
-    return `<div class="preview-group open" data-stage="${key}">
+    return `<div class="preview-group" data-stage="${key}">
       <div class="preview-group-head">
         <span class="pg-arrow">▶</span>
         <span class="pg-dot" style="background:${s.color||'#999'}"></span>
@@ -200,14 +199,22 @@ function renderPreview() {
         <span class="pg-count">${entries.length}家 · ${people}人</span>
         <span class="pg-remove" data-stage="${key}">✕</span>
       </div>
-      <div class="preview-group-body">${cRows || '<div style="font-size:11px;color:#ccc">无可发联系人</div>'}</div>
+      <div class="preview-group-body hidden">${cRows || '<div style="font-size:11px;color:#ccc">无可发联系人</div>'}</div>
     </div>`;
   }).join('');
 
-  // 展开/折叠
+  // JS 驱动展开/折叠
   list.querySelectorAll('.preview-group-head').forEach(h => {
     h.addEventListener('click', () => {
-      h.parentElement.classList.toggle('open');
+      const group = h.parentElement;
+      const body = group.querySelector('.preview-group-body');
+      if (body.classList.contains('hidden')) {
+        body.classList.remove('hidden');
+        group.classList.add('open');
+      } else {
+        body.classList.add('hidden');
+        group.classList.remove('open');
+      }
     });
   });
 
@@ -228,7 +235,7 @@ function clearAdded() {
 
 // ── 加入发送队列 ──────────────────────────────────────────────────────────
 async function addToQueue() {
-  if (!_addedStages.length) { showToast('请先拖入阶段卡片', 'warn'); return; }
+  if (!_addedStages.length) { showToast('请先点击选择阶段', 'warn'); return; }
 
   const data = getStageData();
   const config = await window.electronAPI.loadConfig().catch(() => ({}));

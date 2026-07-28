@@ -165,6 +165,8 @@ function createWindow() {
     if (closeAction === "tray" && deps.tray) {
       e.preventDefault();
       deps.mainWindow.hide();
+      // 关闭子窗口
+      try { require("./modules/ipc/compose-ipc").closeComposeWindow(); } catch { /* 子窗口可能不存在 */ }
     }
   });
 }

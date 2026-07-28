@@ -6,15 +6,31 @@ const fs = require("fs");
 const { APP_ROOT } = require("../config");
 const { beijingToday } = require("../utils");
 
-function getStats(deps) {
+async function getStats(deps) {
   let sentToday = 0, totalSent = 0, totalFailed = 0, dailyLimit = 500, firstSendAt = 0;
-  // 从 SQLite 读取今日已发（send-engine 已迁移到 SQLite，JSON 文件不再更新）
+  // 从 SQLite 读取今日已发
   try {
     const db = require("./db").getDb();
     const today = beijingToday();
     const row = db.prepare("SELECT COUNT(*) as n, MIN(time) as first_time FROM send_log WHERE status = 'sent' AND time_beijing LIKE ?").get(today + '%');
     sentToday = row?.n || 0;
     if (row?.first_time) firstSendAt = new Date(row.first_time).getTime();
+  } catch { /* 降级 */ }
+
+  // 24h 到期自动生成昨日报告（不依赖用户手动发信触发）
+  try {
+    const logPath = path.join(APP_ROOT, 'send', 'send-log.json');
+    if (fs.existsSync(logPath)) {
+      const log = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+      const firstAt = log.first_send_at || 0;
+      if (firstAt > 0 && (Date.now() - firstAt) > 24 * 3600 * 1000) {
+        const reportService = require("./report-service");
+        const result = await reportService.generate(null);
+        reportService.saveToDb(result.data);
+        log.first_send_at = 0;
+        fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
+      }
+    }
   } catch { /* 降级 */ }
   try {
     const sendLog = require("./send-log-db");

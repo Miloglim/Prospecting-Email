@@ -36,9 +36,9 @@ async function generate(aiFn) {
   ).all(today + "%");
   const inboxMap = {};
   for (const r of inboxToday) inboxMap[r.type] = r.n;
-  const newMails = (inboxMap.reply || 0) + (inboxMap["auto-reply"] || 0) + (inboxMap.other || 0); // 不含 bounce，退信不算"新邮件"
-  const replies = inboxMap.reply || 0;
-  const autoreplies = inboxMap["auto-reply"] || 0;
+  const newMails = (inboxMap.replied || 0) + (inboxMap.autoreply || 0) + (inboxMap.other || 0);
+  const replies = inboxMap.replied || 0;
+  const autoreplies = inboxMap.autoreply || 0;
   const bounces = inboxMap.bounce || 0;
   const replyRate = sentToday > 0 ? Math.round(replies / sentToday * 1000) / 10 : 0;
   const bounceRate = sentToday > 0 ? Math.round(bounces / sentToday * 1000) / 10 : 0;

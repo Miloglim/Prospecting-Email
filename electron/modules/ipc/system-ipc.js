@@ -36,7 +36,7 @@ function register(ipcMain, deps) {
   // ── 仪表盘统计 ──
   ipcMain.handle('dashboard:getStats', async () => {
     const dashboard = require('../services/dashboard-service');
-    return dashboard.getStats(deps);
+    return await dashboard.getStats(deps);
   });
 
   // 应用版本号

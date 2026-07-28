@@ -96,8 +96,8 @@ function renderFromSelect() {
   const display = $("#from-display");
   const drop = $("#from-drop");
 
-  // 默认选中第一个可用账号
-  _selectedAcct = _accounts.find(a => a.active && !a.fused) || _accounts[0];
+  // 默认选中第一个可用账号（仅在尚未确定时）
+  if (!_selectedAcct) _selectedAcct = _accounts.find(a => a.active && !a.fused) || _accounts[0];
 
   function refreshDisplay() {
     const a = _selectedAcct || _accounts[0];
@@ -150,14 +150,17 @@ function renderFromSelect() {
     wrap.classList.remove("open");
   }
 
-  wrap.addEventListener("click", (e) => {
-    e.stopPropagation();
-    drop.classList.contains("open") ? closeDrop() : openDrop();
-  });
-
-  document.addEventListener("click", (e) => {
-    if (!wrap.contains(e.target)) closeDrop();
-  });
+  // 防止重复绑定事件
+  if (!wrap._bound) {
+    wrap._bound = true;
+    wrap.addEventListener("click", (e) => {
+      e.stopPropagation();
+      drop.classList.contains("open") ? closeDrop() : openDrop();
+    });
+    document.addEventListener("click", (e) => {
+      if (!wrap.contains(e.target)) closeDrop();
+    });
+  }
 
   refreshDisplay();
   renderOptions();
