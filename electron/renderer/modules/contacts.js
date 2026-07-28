@@ -314,7 +314,7 @@ export function renderContactsList(filtered) {
       seenCompanies.add(key);
       counts[ct] = (counts[ct] || 0) + 1;
     }
-    if (ct === 'no_email' || ct === 'invalid_email' || ct === 'no_company') anomalyCount++;
+    if (ct === 'no_email' || ct === 'invalid_email') anomalyCount++;
   }
 
   // 更新筛选标签
@@ -541,7 +541,6 @@ const DETAIL_COLS = [
   { key: 'title', label: '职位', always: false },
   { key: 'phone', label: '电话', always: false },
   { key: 'linkedin', label: '领英', always: false },
-  { key: 'country', label: '国家', always: false },
   { key: 'client_type', label: '客户类型', always: false },
   { key: 'stage', label: '阶段', always: false },
   { key: '_status', label: '状态', always: true },
@@ -724,14 +723,26 @@ export function renderContactDetail(company) {
       case 'first_name': return `<td data-field="first_name" class="editable">${escapeHtml(m.firstName || m.first_name || '')}</td>`;
       case 'last_name': return `<td data-field="last_name" class="editable">${escapeHtml(m.lastName || m.last_name || '')}</td>`;
       case 'email': {
-        const isNoEmail = (m.email || '').endsWith('@no.email');
-        return `<td data-field="email" class="editable" data-value="${escapeHtml(m.email)}">${isNoEmail ? '<span style="background:#fff3e0;color:#e65100;font-size:10px;padding:1px 6px;border-radius:8px;cursor:text;display:inline-flex;align-items:center;gap:2px">'+lucide('mail',10)+' 无邮箱</span>' : escapeHtml(m.email)}</td>`;
+        const raw = m.email || '';
+        const isInvalid = !raw || raw.endsWith('@no.email') || raw.endsWith('@placeholder.local') || !S.EMAIL_RE.test(raw);
+        const isSuspicious = m._suspicious === 1;
+        if (isInvalid) {
+          const label = !raw ? '无邮箱' : raw.endsWith('@no.email') || raw.endsWith('@placeholder.local') ? '占位邮箱' : '格式异常';
+          return `<td data-field="email" class="editable" data-value="${escapeHtml(raw)}" style="background:#fff3e0;color:#e65100">${escapeHtml(raw || label)}</td>`;
+        }
+        if (isSuspicious) {
+          return `<td data-field="email" class="editable" data-value="${escapeHtml(raw)}" style="background:#fff3e0;color:#e65100"><span title="AI 标记为可疑数据">⚠ ${escapeHtml(raw)}</span><button class="btn-clear-suspicious" data-id="${m.id}" style="background:none;border:none;cursor:pointer;color:inherit;font-size:11px;margin-left:4px;opacity:.6" title="清除可疑标记">✕</button></td>`;
+        }
+        return `<td data-field="email" class="editable" data-value="${escapeHtml(raw)}">${escapeHtml(raw)}</td>`;
       }
       case 'title': return `<td data-field="title" class="editable">${escapeHtml(m.title || '')}</td>`;
       case 'phone': return `<td data-field="phone" class="editable">${escapeHtml(m.phone || '')}</td>`;
       case 'linkedin': return `<td data-field="linkedin" class="editable">${escapeHtml(m.linkedin || '')}</td>`;
-      case 'country': return `<td data-field="country" data-select="country" class="editable">${escapeHtml(m.country || m.company_country || '')}</td>`;
-      case 'client_type': return `<td data-field="client_type" data-select="client_type" data-labels="${escapeHtml(JSON.stringify(TYPE_LABEL))}" class="editable">${TYPE_LABEL[m.clientType||m.client_type]||'通用'}</td>`;
+      case 'client_type': {
+        // 客户类型为公司级属性，显示为只读（不逐人编辑）
+        const ct = ctype || 'unlabeled';
+        return `<td style="color:var(--text-secondary);font-size:12px">${TYPE_LABEL[ct]||'通用'}</td>`;
+      }
       case 'stage': {
         const st = m.stage || m._stage || 'cold';
         const company = m.company || m.company_name || '';
@@ -777,7 +788,7 @@ export function renderContactDetail(company) {
 
   detail.innerHTML = `
     <div class="contacts-detail-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)}</span>
+      <span>${escapeHtml(company)} · ${members.length} 位联系人 ${clientTypeTag(ctype)} · ${escapeHtml(members[0]?.country || members[0]?.company_country || '')}</span>
       <button id="btn-delete-company" class="btn-delete">${lucide('trash-2',14)}</button>
       <button id="btn-col-toggle" class="secondary" style="font-size:11px;padding:3px 8px;margin-left:auto" title="列设置">${lucide('columns',13)}</button>
     </div>
@@ -880,6 +891,24 @@ export function renderContactDetail(company) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       await window.electronAPI.clearBounce(btn.dataset.email);
+      CS.syncContactsUI();
+    });
+  });
+
+  // 清除可疑标记
+  detail.querySelectorAll('.btn-clear-suspicious').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const contact = members.find(m => m.id === btn.dataset.id);
+      if (!contact) return;
+      // 通过 upsertContact 更新 _suspicious
+      await window.electronAPI.upsertContact({ ...contact, _suspicious: 0 });
+      contact._suspicious = 0;
+      // 局部更新当前行 email 单元格
+      const raw = contact.email || '';
+      const td = btn.closest('td');
+      if (td) { td.style.background = ''; td.style.color = ''; td.innerHTML = escapeHtml(raw); }
+      // 刷新侧边和筛选栏
       CS.syncContactsUI();
     });
   });

@@ -10,7 +10,7 @@ let _accounts = [];
 let _selectedAcct = null;
 let _linkedAccount = ""; // 对接该联系人的发信邮箱
 let _contactEmail = ""; // 当前联系人邮箱（草稿 key）
-let _draftDirty = true; // 是否有未保存修改
+let _draftDirty = false; // 是否有未保存修改
 let _loadingDraft = false; // 加载草稿时忽略 input 事件
 
 // ── 工具函数 ──────────────────────────────────────────────────────────────

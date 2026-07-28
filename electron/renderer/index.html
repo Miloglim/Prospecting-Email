@@ -536,53 +536,35 @@
     <!-- 📧 邮件发送 -->
     <section id="page-email-send" class="page">
       <div class="send-layout">
-        <div class="send-side">
-          <div class="send-side-head">
-            <input type="text" id="send-search" placeholder="搜索公司...">
-            <div class="send-stage-tabs" style="display:flex;gap:4px;margin:4px 0">
-              <button class="send-stage-tab active" data-stage="active" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);background:var(--primary);color:#fff;cursor:pointer">活跃</button>
-              <button class="send-stage-tab" data-stage="archived" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--border);background:var(--bg);color:var(--text-secondary);cursor:pointer">已归档</button>
-            </div>
-            <div class="send-side-actions">
-              <button id="send-select-all" class="secondary btn-dot active" style="font-size:11px;padding:3px 8px">全选</button>
-              <button id="send-deselect-all" class="secondary btn-dot" style="font-size:11px;padding:3px 8px">取消</button>
-              <button id="send-fill-limit" class="secondary btn-dot" style="font-size:11px;padding:3px 8px">填充</button>
-              <select id="send-fill-stage" style="font-size:11px;padding:2px 4px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;width:70px">
-                <option value="">全部</option>
-                <option value="cold">冷开发</option>
-                <option value="f1">F1</option>
-                <option value="f2">F2</option>
-                <option value="f3">F3</option>
-                <option value="f4">F4</option>
-              </select>
-              <span id="send-selected-count" style="font-size:11px;color:var(--text-secondary)"></span>
-            </div>
+        <!-- 左侧：阶段卡片 + 操作 -->
+        <div class="send-left">
+          <div class="send-left-head">选择阶段</div>
+          <div id="send-stage-cards"></div>
+          <div class="send-left-actions" id="send-actions">
+            <span id="send-summary" class="send-summary"></span>
+            <button class="btn-sec" id="send-clear">清空</button>
+            <button class="tpl-toggle" id="send-tpl-mode" data-mode="adaptive">自适应</button>
+            <button class="send-btn-primary" id="send-add-queue">加入发送队列</button>
           </div>
-          <div class="send-side-list" id="send-company-list"></div>
-          <div class="send-ctx-menu" id="send-ctx-menu" style="display:none"></div>
         </div>
-        <div class="send-body">
-          <div class="send-top">
-            <button id="ws-add-queue" style="font-size:12px;padding:6px 12px"><span data-icon="send"></span> 加入队列</button> <select id="send-tpl-mode" style="width:80px;font-size:11px;padding:2px 6px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;margin-left:8px"><option value="adaptive">自适应</option><option value="general">用户模板</option></select>
-<span id="send-list-title" style="font-weight:600;font-size:13px;margin-left:8px">已选公司</span>
-          </div>
-          <p style="font-size:10px;color:var(--text-secondary);margin:2px 0 0 0">对公司卡片右键可指定发送模板</p>
-          <div class="send-company-cards" id="send-company-cards">
-            <p class="placeholder" id="send-cards-empty">← 勾选左侧公司</p>
-          </div>
+        <!-- 右侧：预览 -->
+        <div class="send-right" id="send-drop-zone">
+          <div class="send-right-head" id="send-right-head" style="display:none"></div>
+          <div class="send-drop-hint" id="send-drop-hint">拖拽阶段卡片到此处</div>
+          <div id="send-added-list"></div>
+        </div>
+      </div>
 
-          <!-- <span data-icon="bar-chart"></span> 月度报告（归档客户） -->
-          <div id="monthly-report-section" style="margin-top:16px;padding:12px;background:#f8f9fb;border-radius:8px;border:1px solid var(--border);display:none">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span style="font-weight:600;font-size:13px"><span data-icon="bar-chart"></span> 月度报告</span>
-              <span id="monthly-archived-count" style="font-size:11px;color:var(--text-secondary)"></span>
-            </div>
-            <textarea id="monthly-market-context" rows="3" style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit" placeholder="市场动态（可选）&#10;例如：曼萨尼约港等泊降至3-5天，南美西航线运价回落..."></textarea>
-            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
-              <button id="monthly-generate-btn" style="font-size:12px;padding:5px 14px"><span data-icon="mail"></span> 生成月度报告</button>
-            </div>
+      <!-- 月度报告（保留） -->
+      <div id="monthly-report-section" style="margin-top:16px;padding:12px;background:#f8f9fb;border-radius:8px;border:1px solid var(--border);display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-weight:600;font-size:13px">月度报告</span>
+            <span id="monthly-archived-count" style="font-size:11px;color:var(--text-secondary)"></span>
           </div>
-        </div>
+          <textarea id="monthly-market-context" rows="3" style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border);border-radius:4px;resize:vertical;font-family:inherit" placeholder="市场动态（可选）&#10;例如：曼萨尼约港等泊降至3-5天，南美西航线运价回落..."></textarea>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+            <button id="monthly-generate-btn" style="font-size:12px;padding:5px 14px">生成月度报告</button>
+          </div>
       </div>
     </section>
 
@@ -967,7 +949,7 @@
     .inbox-search-clear { position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; padding:0; opacity:.35; transition:opacity .15s; display:flex; align-items:center; }
     .inbox-search-clear:hover { opacity:.7; }
     .inbox-filter-row { display:flex; gap:0; }
-    .inbox-filter-btn { flex:1; padding:8px 4px; border:none; border-radius:0; background:transparent; color:var(--text-secondary); font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; transition:color .15s,box-shadow .15s; }
+    .inbox-filter-btn { flex:1; padding:8px 4px; border:none; border-radius:0; background:transparent; color:var(--text-secondary); font-size:11px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:3px; transition:color .15s,box-shadow .15s; white-space:nowrap; }
     .inbox-filter-btn:hover { color:var(--text); }
     .inbox-filter-btn.active { color:var(--text); font-weight:600; box-shadow:inset 0 -2px 0 var(--primary); }
     .inbox-filter-btn .filter-dot { font-size:8px; line-height:1; flex-shrink:0; }
@@ -977,7 +959,7 @@
     .inbox-bounce-drawer button { width:100%; padding:7px 0; border:none; border-radius:0; background:#e5484d; color:#fff; font-size:11px; font-weight:500; cursor:pointer; }
     .filter-badge { display:none; width:6px; height:6px; border-radius:50%; background:#e5484d; margin-left:2px; flex-shrink:0; }
     .filter-badge.show { display:inline-block; }
-    .inbox-left { width:40%; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); display:flex; flex-direction:column; user-select:none; }
+    .inbox-left { width:40%; min-width:360px; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); display:flex; flex-direction:column; user-select:none; }
     #inbox-list { flex:1; overflow-y:auto; min-height:0; }
     .inbox-right { width:60%; display:flex; flex-direction:column; background:var(--bg); overflow:hidden; border:1px solid var(--border); border-left:none; border-radius:8px; border-top-left-radius:0; border-bottom-left-radius:0; }
     .inbox-detail-body-wrap { flex:1; min-height:0; overflow-y:auto; padding:0 16px 12px; }

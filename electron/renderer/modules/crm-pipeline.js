@@ -498,7 +498,7 @@ async function openDetailPanel(contactId) {
     if (!toEmail) { showToast('该联系人无邮箱', 'warn'); return; }
     window.electronAPI.openCompose({
       to: toEmail,
-      linkedAccount: contact.last_sent_acct || contact._sentBy || contact._sentAccount || '',
+      linkedAccount: contact.last_sent_acct || '',
       contactEmail: toEmail,
     });
   });
@@ -679,7 +679,7 @@ async function openDetailPanel(contactId) {
                   <div class="crm-ai-draft">
                     <div class="crm-ai-draft-label">AI 回复</div>
                     <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
-                    <button class="crm-ai-copy-btn" data-script="${escapeHtml(draft)}">${lucide('copy',12)} 复制话术</button>
+                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}">${lucide('send',12)} 加入发信箱</button>
                   </div>` : ''}
                   <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
               } else {
@@ -694,12 +694,20 @@ async function openDetailPanel(contactId) {
           aiContent.addEventListener('click', (e) => {
             const btn = e.target.closest('button');
             if (!btn) return;
-            if (btn.classList.contains('crm-ai-copy-btn')) {
-              const txt = btn.dataset.script;
-              navigator.clipboard.writeText(txt).then(() => {
-                btn.innerHTML = lucide('check',12) + ' 已复制';
-                setTimeout(() => { btn.innerHTML = lucide('copy',12) + ' 复制话术'; }, 2000);
-              }).catch(() => showToast('复制失败', 'err'));
+            if (btn.classList.contains('crm-ai-compose-btn')) {
+              const to = btn.dataset.email;
+              const body = btn.dataset.script;
+              const name = btn.dataset.name;
+              const subject = btn.dataset.subject;
+              if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
+              window.electronAPI.openCompose({
+                to,
+                contactName: name || '',
+                subject: subject ? `Re: ${subject}` : '',
+                body,
+              });
+              btn.innerHTML = lucide('check',12) + ' 已打开';
+              setTimeout(() => { btn.innerHTML = lucide('send',12) + ' 加入发信箱'; }, 2000);
             }
             if (btn.classList.contains('crm-ai-retry-btn-inline')) {
               loadAi(true);
@@ -1461,7 +1469,7 @@ function rebindFollowupEvents(panel, contactId) {
                   <div class="crm-ai-draft">
                     <div class="crm-ai-draft-label">AI 回复</div>
                     <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
-                    <button class="crm-ai-copy-btn" data-script="${escapeHtml(draft)}">${lucide('copy',12)} 复制话术</button>
+                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}">${lucide('send',12)} 加入发信箱</button>
                   </div>` : ''}
                   <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
               } else {
@@ -1476,12 +1484,20 @@ function rebindFollowupEvents(panel, contactId) {
           aiContent.addEventListener('click', (e) => {
             const btn = e.target.closest('button');
             if (!btn) return;
-            if (btn.classList.contains('crm-ai-copy-btn')) {
-              const txt = btn.dataset.script;
-              navigator.clipboard.writeText(txt).then(() => {
-                btn.innerHTML = lucide('check',12) + ' 已复制';
-                setTimeout(() => { btn.innerHTML = lucide('copy',12) + ' 复制话术'; }, 2000);
-              }).catch(() => showToast('复制失败', 'err'));
+            if (btn.classList.contains('crm-ai-compose-btn')) {
+              const to = btn.dataset.email;
+              const body = btn.dataset.script;
+              const name = btn.dataset.name;
+              const subject = btn.dataset.subject;
+              if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
+              window.electronAPI.openCompose({
+                to,
+                contactName: name || '',
+                subject: subject ? `Re: ${subject}` : '',
+                body,
+              });
+              btn.innerHTML = lucide('check',12) + ' 已打开';
+              setTimeout(() => { btn.innerHTML = lucide('send',12) + ' 加入发信箱'; }, 2000);
             }
             if (btn.classList.contains('crm-ai-retry-btn-inline')) {
               loadAi(true);

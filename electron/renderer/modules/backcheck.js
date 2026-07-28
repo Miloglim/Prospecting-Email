@@ -22,6 +22,7 @@ export async function loadBackcheck() {
   // 从联系人列表加载
   await CS.refreshContacts();
   const status = await window.electronAPI.getBackcheckStatus();
+  S.sendBackcheckStatus = status;
 
   if (!S.contactsData.length) {
     container.innerHTML = '<p style="color:var(--text-secondary);padding:12px">暂无联系人 — 请先在「联系人」中导入客户</p>';
@@ -99,7 +100,7 @@ export async function loadBackcheck() {
     const toResearch = [];
     for (const cb of list) {
       const cname = cb.dataset.company;
-      const st = S.backcheckStatus[cname];
+      const st = S.sendBackcheckStatus[cname];
       if (st?.status === 'done' || st?.status === 'researching') continue;
       toResearch.push(cb);
     }

@@ -249,8 +249,14 @@ function _bindMenuActions(menu, m, idx) {
     }
     if (!allMatched.length) { showToast('无匹配联系人', 'warn'); return; }
     if (!await showConfirm(`确定删除选中的 ${allMatched.length} 个匹配联系人？`)) return;
-    const contacts = await window.electronAPI.getContacts();
-    const delIds = allMatched.map(c => c.id || (contacts.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
+    // 优先用已有 ID，缺失时再查联系人库（避免每次全量 getContacts）
+    let delIds = allMatched.map(c => c.id).filter(Boolean);
+    const missing = allMatched.filter(c => !c.id && c.email);
+    if (missing.length) {
+      const contacts = await window.electronAPI.getContacts();
+      const extraIds = missing.map(c => (contacts.find(x => (x.email||'').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
+      delIds = [...delIds, ...extraIds];
+    }
     if (delIds.length) await window.electronAPI.deleteContactsMany(delIds);
     await window.electronAPI.removeInboxMatchedContactsBatch(allMatched);
     // 更新内存中的匹配状态
@@ -740,8 +746,13 @@ async function _onDeleteBounced() {
   if (!allMatched.length) { showToast('退信中无已匹配联系人', 'warn'); return; }
   if (!await showConfirm(`确定删除退信中全部 ${allMatched.length} 个匹配联系人？`)) return;
 
-  const contacts = await window.electronAPI.getContacts();
-  const delIds = allMatched.map(c => c.id || (contacts.find(x => (x.email || '').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
+  let delIds = allMatched.map(c => c.id).filter(Boolean);
+  const missing = allMatched.filter(c => !c.id && c.email);
+  if (missing.length) {
+    const contacts = await window.electronAPI.getContacts();
+    const extraIds = missing.map(c => (contacts.find(x => (x.email || '').toLowerCase() === c.email.toLowerCase()) || {}).id || '').filter(Boolean);
+    delIds = [...delIds, ...extraIds];
+  }
   if (delIds.length) await window.electronAPI.deleteContactsMany(delIds);
 
   // 批量清除缓存匹配状态（一次 IO）

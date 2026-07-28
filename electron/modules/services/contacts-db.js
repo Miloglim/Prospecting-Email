@@ -29,9 +29,6 @@ function _row(r) {
   r.firstName = r.first_name || "";
   r.lastName = r.last_name || "";
   r.bounced = !!r.is_bounced;
-  r._sentBy = r.last_sent_acct || "";
-  r._sentAt = r.last_sent_at || "";
-  r._sentAccount = r.last_sent_acct || "";
   r.clientType = r.client_type || "unlabeled";
   r.bounceType = r.bounce_type || "";
   r.bounceReason = r.bounce_reason || "";
@@ -76,8 +73,13 @@ function getById(id) {
 function search(q) {
   const db = getDb();
   const ql = `%${(q || "").toLowerCase()}%`;
-  return db.prepare(`SELECT ${CONTACT_SELECT} FROM ${CONTACT_FROM} WHERE lower(c.email) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.contact_name) LIKE ? OR lower(co.name) LIKE ? LIMIT 200`)
-    .all(ql, ql, ql, ql, ql).map(_row);
+  // phone: 搜索词和电话列都只取数字，兼容 + / - / 空格等格式
+  const phoneDigits = (q || "").replace(/\D/g, "");
+  const phoneCond = phoneDigits ? " OR length(c.phone) > 0 AND replace(replace(replace(c.phone, '+', ''), '-', ''), ' ', '') LIKE ?" : "";
+  const params = [ql, ql, ql, ql, ql];
+  if (phoneDigits) params.push(`%${phoneDigits}%`);
+  return db.prepare(`SELECT ${CONTACT_SELECT} FROM ${CONTACT_FROM} WHERE lower(c.email) LIKE ? OR lower(c.first_name) LIKE ? OR lower(c.last_name) LIKE ? OR lower(c.contact_name) LIKE ? OR lower(co.name) LIKE ?${phoneCond} LIMIT 200`)
+    .all(...params).map(_row);
 }
 
 // ── 写入 ──────────────────────────────────────────────────────────────────────
@@ -118,8 +120,8 @@ function upsert(data) {
     data.title || "", data.phone || "", data.linkedin || "",
     data.contact_name || data.contactName || "",
     data.client_type || data.clientType || "unlabeled", data.category || "",
-    data.stage || "cold", data._status || "", data.last_sent_at || data._sentAt || "",
-    data.last_sent_acct || data._sentAccount || "",
+    data.stage || "cold", data._status || "", data.last_sent_at || "",
+    data.last_sent_acct || "",
     data.is_bounced || data.bounced ? 1 : 0,
     data.bounce_type || data.bounceType || "", data.bounce_reason || data.bounceReason || "",
     JSON.stringify(data.tags || []), data.assignee || "",
@@ -357,8 +359,8 @@ function migrateFromJson(contactsPath, sendLogPath) {
         c.contactName || c.contact_name || "",
         c.clientType || c.client_type || "unlabeled", c.category || "",
         stageMap[email] || c.stage || "cold",
-        c._sentAt || c.last_sent_at || "",
-        c._sentAccount || c._sentBy || c.last_sent_acct || "",
+        c.last_sent_at || "",
+        c.last_sent_acct || "",
         c.bounced || c.is_bounced ? 1 : 0,
         c.bounceType || c.bounce_type || "", c.bounceReason || c.bounce_reason || "",
         JSON.stringify(tags),

@@ -458,7 +458,8 @@ function register(ipcMain, deps) {
     if (contact.company) {
       const { company, _suspicious } = markSuspicious(contact.company);
       contact.company = company;
-      contact._suspicious = _suspicious;
+      // 只在未显式传 _suspicious 时才自动标记（用户手动清除不再被覆盖）
+      if (contact._suspicious === undefined) contact._suspicious = _suspicious;
     }
     // 邮箱格式有效 → 自动清除可疑标记（用户已修复）
     if (email && EMAIL_RE.test(email)) contact._suspicious = 0;
@@ -537,6 +538,21 @@ function register(ipcMain, deps) {
   ipcMain.handle('contacts:deleteNote', async (_e, noteId) => {
     db.deleteNote(noteId);
     return { ok: true };
+  });
+
+  // ── 自动回复联系人重置：stage → cold，清除发送标记 ──
+  ipcMain.handle('contacts:resetAutoreply', async (_e, emails) => {
+    if (!emails || !emails.length) return { ok: true, count: 0 };
+    let count = 0;
+    for (const email of emails) {
+      const c = db.getByEmail((email || '').toLowerCase().trim());
+      if (!c) continue;
+      db.setStage(c.id, 'cold', 'manual:autoreply');
+      db.update(c.id, { last_sent_at: '', last_sent_acct: '' });
+      count++;
+    }
+    if (count > 0) _notify();
+    return { ok: true, count };
   });
 
   // 暴露内部方法给其他模块使用

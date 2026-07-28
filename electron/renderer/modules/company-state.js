@@ -186,6 +186,7 @@ const CS = {
   async syncContactsUI() {
     await this.refreshContacts();
     await this.refreshContactsSendHistory();
+    _classifyContacts();
     document.dispatchEvent(new CustomEvent('contacts:sync'));
   },
 
@@ -233,5 +234,120 @@ const CS = {
     }
   },
 };
+
+// ── 联系人预分类 ──────────────────────────────────────────────────────────
+// 在 syncContactsUI() 中调用，产出 S.contactsClassified 供发送界面直接读取
+// 分类逻辑与 shared.js 的 isContactSendable 保持一致
+
+const SKIP_STATUSES = new Set(['reached', 'replied', 'autoreply', 'bounced']);
+const SKIP_TAGS = new Set(['reached']);
+
+function _isSendable(c) {
+  if (!c.email || !c.email.includes('@') || c.email.endsWith('@no.email')) return false;
+  if (c._status === 'bounced') return false;
+  if (SKIP_STATUSES.has(c._status)) return false;
+  if ((c.tags || []).some(t => SKIP_TAGS.has(t))) return false;
+  return true;
+}
+
+function _classifyContacts() {
+  const contacts = S.contactsData || [];
+  const classified = {
+    sending: { cold: [], f1: [], f2: [], f3: [], f4: [] },
+    autoreply: [],
+    reached: [],
+  };
+
+  // 按公司分组
+  const byCompany = {};
+  for (const c of contacts) {
+    const name = c.company || c.company_name || '';
+    if (!name) continue;
+    if (!byCompany[name]) byCompany[name] = [];
+    byCompany[name].push(c);
+  }
+
+  for (const [company, members] of Object.entries(byCompany)) {
+    // 拆分：autoreply 联系人独立处理，不参与阶段分类
+    const order = ['cold', 'f1', 'f2', 'f3', 'f4'];
+    const normalContacts = [];
+    const autoreplyContacts = [];
+    const reachedContacts = [];
+
+    for (const c of members) {
+      const st = c.stage || c._stage || 'cold';
+      const entry = {
+        email: c.email || '',
+        firstName: c.firstName || c.first_name || '',
+        lastName: c.lastName || c.last_name || '',
+        stage: st,
+        clientType: c.clientType || c.client_type || 'unlabeled',
+        country: c.country || c.company_country || '',
+        ok: c._status === 'autoreply'
+          ? !!(c.email && c.email.includes('@') && !c.email.endsWith('@no.email'))
+          : _isSendable(c),
+        sent: !!(c.last_sent_acct),
+        _status: c._status || '',
+        tags: c.tags || [],
+      };
+
+      if (c._status === 'autoreply') {
+        autoreplyContacts.push(entry);
+      } else {
+        normalContacts.push(entry);
+        if (c._status === 'reached' || c._status === 'replied' || (c.tags || []).includes('reached')) {
+          reachedContacts.push(entry);
+        }
+      }
+    }
+
+    // ── 自动回复区 ──
+    if (autoreplyContacts.length) {
+      classified.autoreply.push({
+        company,
+        stageLabel: 'autoreply',
+        contactCount: autoreplyContacts.length,
+        sendableCount: autoreplyContacts.filter(c => c.ok && !c.sent).length,
+        sentCount: autoreplyContacts.filter(c => c.ok && c.sent).length,
+        contacts: autoreplyContacts,
+      });
+    }
+
+    // ── 已触达区（不含 autoreply）──
+    if (reachedContacts.length) {
+      classified.reached.push({
+        company,
+        stageLabel: 'reached',
+        contactCount: reachedContacts.length,
+        sendableCount: 0,
+        sentCount: 0,
+        contacts: reachedContacts,
+      });
+    }
+
+    // ── 发送阶段（仅 normalContacts）──
+    if (!normalContacts.length) continue;
+
+    let companyStage = 'cold';
+    for (const c of normalContacts) {
+      if (order.indexOf(c.stage) > order.indexOf(companyStage)) companyStage = c.stage;
+    }
+
+    const stageKey = companyStage === 'cold' ? 'cold' :
+      companyStage === 'f1' ? 'f1' : companyStage === 'f2' ? 'f2' :
+      companyStage === 'f3' ? 'f3' : companyStage === 'f4' ? 'f4' : 'cold';
+
+    classified.sending[stageKey].push({
+      company,
+      stageLabel: companyStage,
+      contactCount: normalContacts.length,
+      sendableCount: normalContacts.filter(c => c.ok && !c.sent).length,
+      sentCount: normalContacts.filter(c => c.ok && c.sent).length,
+      contacts: normalContacts,
+    });
+  }
+
+  S.contactsClassified = classified;
+}
 
 export default CS;

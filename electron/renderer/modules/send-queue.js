@@ -6,6 +6,13 @@ import { randomPick, assembleEmail } from './templates.js';
 // ===== 发送队列 =======================================================
 
 // ponytail: 将 sending → 回退并重算队列项状态（暂停/限流/卡住/错误共用）
+function _fmtDelay(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
 function _rollbackSendingStatus(e) {
   if (e._recipientStatus) {
     e._recipientStatus.forEach(r => { if (r.status === 'sending') r.status = 'pending'; });
@@ -81,7 +88,7 @@ export async function initQueue() {
           el.style.color = '';
           el._delayRemaining = d.sec;
           const label = d.label ? ` → ${escapeHtml(d.label)}` : '';
-          el.textContent = `批量暂停${label}... ${Math.floor(d.sec/60)} 分 ${d.sec%60} 秒后继续`;
+          el.textContent = `批量暂停${label}... ${_fmtDelay(d.sec)}后继续`;
         }
       }
     }
@@ -179,7 +186,7 @@ export async function renderQueue() {
           return `<span style="font-size:10px;padding:0 5px;border-radius:8px;background:${color}18;color:${color};white-space:nowrap">${label}</span>`;
         }).join(' ')
       : '';
-    const acctTag = e._sentBy ? `<span style="font-size:10px;color:var(--primary);white-space:nowrap">${lucide('at-sign',10)} ${escapeHtml(e._sentBy)}</span>` : '';
+    const acctTag = e.last_sent_acct ? `<span style="font-size:10px;color:var(--primary);white-space:nowrap">${lucide('at-sign',10)} ${escapeHtml(e.last_sent_acct)}</span>` : '';
     const tagsArr = [acctTag, tt, ctry, langTag, `<span>${count}人</span>`, tplSourceTag, contactTagBadges].filter(Boolean);
     const tagsHtml = tagsArr.length ? `<div class="qc-tags">${tagsArr.join(' · ')}</div>` : '';
     const retryBtn = e.status === 'failed'
@@ -436,7 +443,7 @@ export async function startSend() {
       if (data.accountLabel) {
         S._currentAccountLabel = data.accountLabel;
         const item = S.queue.find(e => e.id === data.id);
-        if (item) item._sentBy = data.accountLabel;
+        if (item) item.last_sent_acct = data.accountLabel;
       }
       const item = S.queue.find(e => e.id === data.id);
       if (item) {
@@ -464,7 +471,7 @@ export async function startSend() {
     } else if (data.type === 'fused') {
       if (data.accountLabel) {
         const item = S.queue.find(e => e.id === data.id);
-        if (item) item._sentBy = data.accountLabel;
+        if (item) item.last_sent_acct = data.accountLabel;
       }
     } else if (data.type === 'failed') {
       const item = S.queue.find(e => e.id === data.id);
@@ -528,10 +535,8 @@ export async function startSend() {
             localStorage.removeItem('_delay');
             return;
           }
-          const m = Math.floor(el._delayRemaining / 60);
-          const s = el._delayRemaining % 60;
           const label = data.company ? ` → ${escapeHtml(data.company)}` : '';
-          el.textContent = `批量暂停${label}... ${m} 分 ${s} 秒后继续`;
+          el.textContent = `批量暂停${label}... ${_fmtDelay(el._delayRemaining)}后继续`;
           el._delayRemaining--;
           el._delayTimer = setTimeout(tick, 1000);
         };

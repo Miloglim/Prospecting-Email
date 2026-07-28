@@ -67,6 +67,8 @@ const CONTACTS = {
   SAVE_FOLLOWUP: "contacts:saveFollowup",
   /** 获取跟进备注列表 */
   GET_FOLLOWUPS: "contacts:getFollowups",
+  /** 重置自动回复联系人（stage→cold，清发送标记） */
+  RESET_AUTOREPLY: "contacts:resetAutoreply",
   /** 联系人变更事件（main → renderer） */
   CHANGED: "contacts:changed",
   /** 联系人已清空事件（main → renderer） */

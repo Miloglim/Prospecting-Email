@@ -37,9 +37,9 @@ function _advanceCompany(name, newStage, reason) {
   let updated = 0;
   for (const c of all) {
     const cn = c.company_name || c.company || '';
-    if (cn === name) {
+    // 只推进本轮实际发送的联系人（有 last_sent_at），bounced/新人不受影响
+    if (cn === name && c.last_sent_at && c._status !== 'autoreply') {
       contactsDb.setStage(c.id, newStage, reason);
-      // 清除当前阶段发送标记，允许下一阶段重新加入队列
       contactsDb.update(c.id, { last_sent_at: '', last_sent_acct: '' });
       updated++;
     }

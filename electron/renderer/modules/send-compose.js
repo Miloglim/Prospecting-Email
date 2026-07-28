@@ -1,266 +1,357 @@
+// ── 邮件发送 — 两栏拖拽 + 预览面板 ─────────────────────────────────────
 const S = window.S;
-import { lucide,showAlert,showConfirm,showToast,escapeHtml,truncate,formatDate,daysSince,initIcons,deepMerge,clientTypeTag,countryToLang,isContactSendable,filterSendableContacts,renderSkipDetail } from './shared.js';
-import { randomPick, assembleEmail, assembleMonthlyReport, generateMonthlyReports, matchUserTemplates } from './templates.js';
+import { lucide, showToast, escapeHtml, countryToLang } from './shared.js';
+import { randomPick, assembleEmail, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 import CS from './company-state.js';
 
-// ===== 邮件发送 ======================================================
+const STAGES = [
+  { key: 'cold', label: '冷开发', color: '#9e9e9e' },
+  { key: 'f1', label: 'F1', color: '#2196f3' },
+  { key: 'f2', label: 'F2', color: '#ff9800' },
+  { key: 'f3', label: 'F3', color: '#8e24aa' },
+  { key: 'f4', label: 'F4', color: '#4caf50' },
+  { key: 'reached', label: '已触达', color: '#9e9e9e', disabled: true },
+  { key: 'autoreply', label: '自动回复', color: '#e6a817' },
+];
 
+const STAGE_MAP = {};
+STAGES.forEach(s => STAGE_MAP[s.key] = s);
 
+let _addedStages = [];
+
+// ── 初始化 ────────────────────────────────────────────────────────────────
 export async function initEmailSend() {
   if (!S.templateLib) await CS.refreshTemplateLib();
-  // 模板模式选择 — 与设置页同步
-  const tplModeSel = document.getElementById('send-tpl-mode');
-  const cfgModeSel = document.getElementById('cfg-template-mode');
-  if (tplModeSel) {
+
+  const tplBtn = document.getElementById('send-tpl-mode');
+  if (tplBtn) {
     const config = await window.electronAPI.loadConfig().catch(() => ({}));
     const mode = config?.template?.mode || 'adaptive';
-    tplModeSel.value = mode;
-    tplModeSel.addEventListener('change', async () => {
+    tplBtn.dataset.mode = mode;
+    tplBtn.textContent = mode === 'general' ? '用户模板' : '自适应';
+    if (mode === 'general') tplBtn.classList.add('user');
+
+    tplBtn.addEventListener('click', async () => {
+      const cur = tplBtn.dataset.mode;
+      const next = cur === 'general' ? 'adaptive' : 'general';
+      tplBtn.dataset.mode = next;
+      tplBtn.textContent = next === 'general' ? '用户模板' : '自适应';
+      tplBtn.classList.toggle('user', next === 'general');
       const cfg = await window.electronAPI.loadConfig().catch(() => ({}));
       if (!cfg.template) cfg.template = {};
-      cfg.template.mode = tplModeSel.value;
+      cfg.template.mode = next;
       await window.electronAPI.saveConfig(cfg);
-      // 同步设置页
-      if (cfgModeSel) cfgModeSel.value = tplModeSel.value;
     });
-    // 设置页变化也同步过来
-    if (cfgModeSel) {
-      cfgModeSel.addEventListener('change', () => { tplModeSel.value = cfgModeSel.value; });
-    }
   }
-  document.getElementById('ws-add-queue')?.addEventListener('click', addToQueue);
-  document.getElementById('monthly-generate-btn')?.addEventListener('click', generateMonthlyReports);
-  // 搜索 & 选择工具
-  document.getElementById('send-search')?.addEventListener('input', (e) => {
-    renderCompanyList(e.target.value.toLowerCase());
-  });
-  document.getElementById('send-select-all')?.addEventListener('click', () => {
-    CS.clearSelection();
-    if (CS.getFilter() === 'archived') {
-      document.querySelectorAll('#send-company-list .send-company-item.archived').forEach(el => {
-        if (el.dataset.company) CS.select(el.dataset.company);
-      });
-    } else {
-      document.querySelectorAll('.sc-check').forEach(cb => {
-        cb.checked = true;
-        if (cb.dataset.company) CS.select(cb.dataset.company);
-      });
-    }
-    updateSelectedCount();
-  });
-  document.getElementById('send-deselect-all')?.addEventListener('click', () => {
-    CS.clearSelection();
-    document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
-    updateSelectedCount();
-  });
-  document.getElementById('send-fill-limit')?.addEventListener('click', async () => {
-    CS.clearSelection();
-    document.querySelectorAll('.sc-check').forEach(cb => { cb.checked = false; });
-    const stage = document.getElementById('send-fill-stage')?.value;
-    let limit = 500;
-    try { const stats = await window.electronAPI.getDashboardStats(); limit = stats.remaining || 500; } catch { /* 渲染层降级：操作失败不影响 UI */ }
-    let total = 0;
-    const allItems = document.querySelectorAll('#send-company-list .send-company-item:not(.archived)');
-    const sorted = [...allItems].sort((a, b) => {
-      const ca = (S.sendCompanies[a.dataset.company] || []).length;
-      const cb = (S.sendCompanies[b.dataset.company] || []).length;
-      return cb - ca;
-    });
-    for (const el of sorted) {
-      const name = el.dataset.company;
-      if (!name) continue;
-      if (stage && (S.sendHistory[name]?.stage || 'cold') !== stage) continue;
-      const count = (S.sendCompanies[name] || []).length;
-      if (total + count > limit && total > 0) continue;
-      CS.select(name);
-      const cb = el.querySelector('.sc-check');
-      if (cb) cb.checked = true;
-      total += count;
-    }
-    updateSelectedCount();
-    const stageLabel = stage ? ({ cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' }[stage] || stage) : '全部阶段';
-    showToast(`[${stageLabel}] 已填充 ${CS.getSelected().size} 家 · ${total} 人（剩余额度 ${limit}）`, 'ok');
-  });
-  // 阶段筛选标签
-  document.querySelectorAll('.send-stage-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.send-stage-tab').forEach(t => {
-        t.style.background = 'var(--bg)';
-        t.style.color = 'var(--text-secondary)';
-        t.classList.remove('active');
-      });
-      tab.classList.add('active');
-      tab.style.background = 'var(--primary)';
-      tab.style.color = '#fff';
-      CS.setFilterAndClear(tab.dataset.stage);
-      const stageSel = document.getElementById('send-fill-stage');
-      if (stageSel) stageSel.value = '';
-      renderCompanyList(document.getElementById('send-search')?.value || '');
-    });
-  });
-  // 阶段下拉同步筛选列表
-  document.getElementById('send-fill-stage')?.addEventListener('change', () => {
-    CS.setFilterAndClear(document.getElementById('send-fill-stage')?.value || 'active');
-    renderCompanyList(document.getElementById('send-search')?.value || '');
-    document.querySelectorAll('.send-stage-tab').forEach(t => {
-      t.style.background = 'var(--bg)';
-      t.style.color = 'var(--text-secondary)';
-      t.classList.remove('active');
-    });
-  });
-  await loadSendContacts();
-  // 预加载用户模板供右键菜单使用
+
   try { S._userTemplates = await window.electronAPI.listUserTemplates(); } catch { S._userTemplates = []; }
 
-  // 右键菜单：公司模板覆盖（右侧已选公司卡片）
-  const ctxMenu = document.getElementById('send-ctx-menu');
-  document.getElementById('send-company-cards')?.addEventListener('contextmenu', (e) => {
-    const card = e.target.closest('.sc-card');
-    if (!card || !card.dataset.company) return;
-    e.preventDefault();
-    const name = card.dataset.company;
-    showSendContextMenu(name, e.clientX, e.clientY);
-  });
-  document.addEventListener('click', (e) => {
-    if (ctxMenu && !ctxMenu.contains(e.target)) hideSendContextMenu();
-  });
+  await loadSendContacts();
+
+  document.getElementById('send-clear')?.addEventListener('click', clearAdded);
+  document.getElementById('send-add-queue')?.addEventListener('click', addToQueue);
 }
 
-function showSendContextMenu(companyName, x, y) {
-  const ctxMenu = document.getElementById('send-ctx-menu');
-  if (!ctxMenu) return;
-  const members = S.sendCompanies[companyName] || [];
-  const ctype = members[0]?.clientType || 'unlabeled';
-  const stage = S.sendHistory[companyName]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
-  const lang = countryToLang(members[0]?.country || '');
-  const card = S.selectedCards[companyName];
-  const isUserTpl = card?._templateSource === 'user';
-  const curTplName = isUserTpl ? card._userTemplate?.name : '预设模板';
-  const curTplId = isUserTpl ? card._userTemplate?.id : '';
-
-  const userTemplates = S._userTemplates || [];
-  const matched = matchUserTemplates(userTemplates, ctype, stage, lang);
-
-  let html = `<div class="ctx-current">当前：${escapeHtml(curTplName)}</div>`;
-  html += `<div class="ctx-item${!isUserTpl ? ' active' : ''}" data-action="auto-preset">自动匹配（预设模板）</div>`;
-  if (matched.length) {
-    html += `<div class="ctx-item${isUserTpl && !curTplId ? ' active' : ''}" data-action="auto-user">自动匹配（用户模板）</div>`;
+export async function loadSendContacts() {
+  await CS.refreshContacts();
+  await CS.refreshSendHistory();
+  const byName = {};
+  for (const c of S.contactsData) {
+    const name = c.company || c.company_name || '';
+    if (!name) continue;
+    if (!byName[name]) byName[name] = [];
+    byName[name].push(c);
   }
-  if (matched.length) {
-    html += '<div class="ctx-sep"></div>';
-    for (const tpl of matched) {
-      const active = isUserTpl && curTplId === tpl.id;
-      html += `<div class="ctx-item${active ? ' active' : ''}" data-action="pick" data-tpl-id="${escapeHtml(tpl.id)}">${escapeHtml(tpl.name || tpl.id)}</div>`;
-    }
+  S.sendCompanies = byName;
+  if (!S.contactsClassified) await CS.syncContactsUI();
+  renderView();
+}
+
+export function renderSendView() { renderView(); }
+
+function renderView() {
+  renderStageCards();
+  renderPreview();
+}
+
+// ── 从分类数据中提取阶段统计 ──────────────────────────────────────────────
+function getStageData() {
+  const cl = S.contactsClassified;
+  if (!cl) return {};
+  function entries(key) {
+    const raw = cl.sending?.[key] || cl[key] || [];
+    return raw.map(e => ({
+      company: e.company || '',
+      members: (e.members || e.contacts || []).filter(c => {
+        const ok = c.ok !== false && !c.sent && c.email && !c.email.endsWith('@no.email');
+        return ok;
+      }),
+    })).filter(e => e.members.length > 0);
+  }
+  const data = {};
+  for (const s of STAGES) data[s.key] = entries(s.key);
+  return data;
+}
+
+// ── 左侧：阶段卡片 ────────────────────────────────────────────────────────
+function renderStageCards() {
+  const container = document.getElementById('send-stage-cards');
+  if (!container) return;
+  const data = getStageData();
+
+  container.innerHTML = STAGES.map(s => {
+    const entries = data[s.key] || [];
+    if (!entries.length) return '';
+    const people = entries.reduce((sum, e) => sum + e.members.length, 0);
+    const used = _addedStages.includes(s.key);
+    const disabled = s.disabled || used;
+    return `<div class="stage-card${disabled ? ' disabled' : ''}${used ? ' used' : ''}" draggable="${disabled ? 'false' : 'true'}" data-stage="${s.key}">
+      <span class="sc-dot" style="background:${s.color}"></span>
+      <span class="sc-stage">${s.label}</span>
+      <div class="sc-count">${entries.length}家 · ${people}人</div>
+    </div>`;
+  }).join('');
+
+  // 拖拽
+  container.querySelectorAll('.stage-card:not(.disabled):not(.used)').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', card.dataset.stage);
+      card.classList.add('dragging');
+    });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+  });
+
+  // Drop zone
+  const zone = document.getElementById('send-drop-zone');
+  if (!zone._bound) {
+    zone._bound = true;
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+      const key = e.dataTransfer.getData('text/plain');
+      if (key && !_addedStages.includes(key)) {
+        _addedStages.push(key);
+        renderView();
+      }
+    });
+  }
+}
+
+// ── 右侧：预览面板 ────────────────────────────────────────────────────────
+function renderPreview() {
+  const list = document.getElementById('send-added-list');
+  const head = document.getElementById('send-right-head');
+  const zone = document.getElementById('send-drop-zone');
+  const summary = document.getElementById('send-summary');
+  if (!list) return;
+
+  if (!_addedStages.length) {
+    list.innerHTML = '';
+    zone.classList.remove('has-items');
+    if (head) head.style.display = 'none';
+    if (summary) summary.textContent = '';
+    return;
   }
 
-  ctxMenu.innerHTML = html;
-  // 确保菜单不超出视口
-  const maxX = window.innerWidth - 220;
-  const maxY = window.innerHeight - 200;
-  ctxMenu.style.left = Math.min(x, maxX) + 'px';
-  ctxMenu.style.top = Math.min(y, maxY) + 'px';
-  ctxMenu.style.display = 'block';
-  ctxMenu._companyName = companyName;
-  ctxMenu._ctype = ctype;
-  ctxMenu._stage = stage;
-  ctxMenu._lang = lang;
+  zone.classList.add('has-items');
+  const data = getStageData();
 
-  // 菜单项点击
-  ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const action = el.dataset.action;
-      const tplId = el.dataset.tplId;
-      applyTemplateOverride(ctxMenu._companyName, ctxMenu._ctype, ctxMenu._stage, ctxMenu._lang, action, tplId);
-      hideSendContextMenu();
+  let totalCompanies = 0, totalPeople = 0;
+  _addedStages.forEach(key => {
+    const entries = data[key] || [];
+    totalCompanies += entries.length;
+    totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
+  });
+
+  // 顶部汇总
+  if (head) {
+    head.style.display = 'block';
+    head.textContent = `发送预览 · ${_addedStages.length}阶段 · ${totalCompanies}家 · ${totalPeople}人`;
+  }
+  if (summary) summary.textContent = `已选 ${_addedStages.length} 阶段 · ${totalPeople} 人`;
+
+  // 阶段组（可展开）
+  list.innerHTML = _addedStages.map(key => {
+    const s = STAGE_MAP[key] || {};
+    const entries = data[key] || [];
+    const people = entries.reduce((sum, e) => sum + e.members.length, 0);
+    const cRows = entries.map(e => {
+      const emails = e.members.map(m => m.email).slice(0, 2).join(', ');
+      return `<div class="pg-company">
+        <span class="pg-cname">${escapeHtml(e.company)}</span>
+        <span class="pg-cemail">${escapeHtml(emails)}</span>
+        <span class="pg-ccount">${e.members.length}人</span>
+      </div>`;
+    }).join('');
+
+    return `<div class="preview-group open" data-stage="${key}">
+      <div class="preview-group-head">
+        <span class="pg-arrow">▶</span>
+        <span class="pg-dot" style="background:${s.color||'#999'}"></span>
+        <span class="pg-label">${s.label||key}</span>
+        <span class="pg-count">${entries.length}家 · ${people}人</span>
+        <span class="pg-remove" data-stage="${key}">✕</span>
+      </div>
+      <div class="preview-group-body">${cRows || '<div style="font-size:11px;color:#ccc">无可发联系人</div>'}</div>
+    </div>`;
+  }).join('');
+
+  // 展开/折叠
+  list.querySelectorAll('.preview-group-head').forEach(h => {
+    h.addEventListener('click', () => {
+      h.parentElement.classList.toggle('open');
+    });
+  });
+
+  // 移除按钮
+  list.querySelectorAll('.pg-remove').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      _addedStages = _addedStages.filter(k => k !== btn.dataset.stage);
+      renderView();
     });
   });
 }
 
-function hideSendContextMenu() {
-  const ctxMenu = document.getElementById('send-ctx-menu');
-  if (ctxMenu) ctxMenu.style.display = 'none';
+function clearAdded() {
+  _addedStages = [];
+  renderView();
 }
 
-function applyTemplateOverride(name, ctype, stage, lang, action, tplId) {
-  const members = S.sendCompanies[name] || [];
-  const usedSentences = S.sendHistory[name]?.usedSentences || [];
+// ── 加入发送队列 ──────────────────────────────────────────────────────────
+async function addToQueue() {
+  if (!_addedStages.length) { showToast('请先拖入阶段卡片', 'warn'); return; }
+
+  const data = getStageData();
+  const config = await window.electronAPI.loadConfig().catch(() => ({}));
+  const GROUP_SIZE = config?.schedule?.batch_size || 10;
+  const tplMode = document.getElementById('send-tpl-mode')?.dataset?.mode || 'adaptive';
   const userTemplates = S._userTemplates || [];
 
-  if (action === 'auto-preset') {
-    CS.setCard(name, {
-      type: ctype, stage, lang,
-      template: randomPick(ctype, stage, usedSentences),
-      _templateSource: 'preset',
-    });
-  } else if (action === 'auto-user') {
-    const matched = matchUserTemplates(userTemplates, ctype, stage, lang);
-    if (matched.length) {
-      const picked = matched[Math.floor(Math.random() * matched.length)];
-      CS.setCard(name, {
-        type: ctype, stage, lang,
-        template: randomPick(ctype, stage, usedSentences),
-        _templateSource: 'user', _userTemplate: picked,
-      });
+  let totalAdded = 0, totalPeople = 0;
+
+  for (const stageKey of _addedStages) {
+    const entries = data[stageKey] || [];
+    const targets = [];
+    for (const e of entries) {
+      for (const c of e.members) {
+        targets.push({ ...c, company: e.company });
+      }
     }
-  } else if (action === 'pick' && tplId) {
-    const tpl = userTemplates.find(t => t.id === tplId);
-    if (tpl) {
-      CS.setCard(name, {
-        type: ctype, stage, lang,
-        template: randomPick(ctype, stage, usedSentences),
-        _templateSource: 'user', _userTemplate: tpl,
+    if (!targets.length) continue;
+
+    // 自动回复联系人：先重置为冷开发
+    const isAutoreply = stageKey === 'autoreply';
+    if (isAutoreply) {
+      const emails = targets.map(c => c.email).filter(Boolean);
+      if (emails.length) {
+        await window.electronAPI.resetAutoreply(emails);
+        // 更新内存：设为 cold 阶段，未发送
+        targets.forEach(c => { c.stage = 'cold'; c.sent = false; });
+      }
+    }
+
+    const stageLabel = isAutoreply ? 'cold' : (targets[0]?.stage || stageKey);
+
+    const groups = [];
+    for (let i = 0; i < targets.length; i += GROUP_SIZE) {
+      groups.push(targets.slice(i, i + GROUP_SIZE));
+    }
+
+    for (const group of groups) {
+      const first = group[0];
+      const lang = countryToLang(first.country || '');
+
+      let tplSource = 'preset', tplLabel = '自适应', subject, body;
+      if (tplMode === 'general' && userTemplates.length) {
+        const matched = matchUserTemplates(userTemplates, first.clientType, stageLabel, lang);
+        if (matched.length) {
+          const tpl = matched[Math.floor(Math.random() * matched.length)];
+          subject = (tpl.subject || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+          body = (tpl.body || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+          tplSource = 'user'; tplLabel = tpl.name || '用户模板';
+        }
+      }
+      if (!body) {
+        const tpl = randomPick(first.clientType, stageLabel, []);
+        const subs = S.templateLib?.subjects?.[first.clientType] || { es: '', pt: '', en: '' };
+        subject = (subs[lang] || subs.es || subs.en || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+        body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, stageLabel, first.clientType, config?.sender?.bodyName, first.firstName);
+      }
+
+      const recipients = group.map(c => c.email);
+      S.queue.push({
+        id: ++S.queueIdCounter, company: first.company, companyId: '',
+        to: recipients.join(', '), recipients, subject, body, status: 'pending',
+        addedAt: new Date().toISOString(),
+        _stage: stageLabel, _type: first.clientType, _lang: lang,
+        _country: first.country || '',
+        _tplInfo: tplSource === 'user' ? 'user:tpl' : `${stageLabel}:auto`,
+        _templateSource: tplSource, _templateLabel: tplLabel,
+        _batchLabel: groups.length > 1 ? ` (${totalAdded + 1}/${groups.length})` : '',
+        _recipientStatus: recipients.map(e => ({ email: e, status: 'pending' })),
       });
+      totalAdded++; totalPeople += recipients.length;
     }
   }
 
-  // 确保公司被选中
-  CS.select(name);
-  const cb = document.querySelector(`.sc-check[data-company="${CSS.escape(name)}"]`);
-  if (cb) cb.checked = true;
-
-  // 同步队列中该公司已有条目的模板信息
-  const card = CS.getCard(name);
-  if (card) {
-    for (const q of S.queue) {
-      if (q.company !== name) continue;
-      q._tplInfo = card._templateSource === 'user' ? `user:${card._userTemplate?.id || ''}` : q._tplInfo;
-      q._templateSource = card._templateSource;
-    }
-    saveQueue();
-  }
-
-  // 刷新右侧卡片
-  updateSelectedCount();
-  renderSelectedCards();
+  saveQueue();
+  showToast(`已添加 ${totalAdded} 组 · ${totalPeople} 人`, 'ok');
+  document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
+  _addedStages = [];
+  renderView();
+  setTimeout(() => document.querySelector('[data-page="queue"]')?.click(), 300);
 }
 
+// ── 热更新 ────────────────────────────────────────────────────────────────
+window.electronAPI.onHistoryChanged(() => {
+  if (document.getElementById('page-email-send')?.classList.contains('active')) {
+    CS.refreshSendHistory();
+    CS.syncContactsUI().then(() => renderView());
+  }
+});
 
-// ── 模板预览 ──────────────────────────────────────────────────────
+// ── 模板预览 ──────────────────────────────────────────────────────────────
+
+const TPL_TYPES = { agent: '代理', direct: '直客', unlabeled: '未标签', general: '通用' };
+const TPL_STAGES = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4', general: '通用' };
+const TPL_LANGS = { es: 'ES', pt: 'PT', general: '通用' };
+
 export async function initTemplatePreview() {
   if (!S.templateLib) await CS.refreshTemplateLib();
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  // 预加载签名
   let sigHtml = '';
-  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch { /* 渲染层降级：操作失败不影响 UI */ }
+  let sigAcctId = null; // null = 全局签名
+  try { const r = await window.electronAPI.loadSignature(); if (r.ok) sigHtml = r.html; } catch { /* 渲染层降级 */ }
+
+  // 签名列表
+  let sigAccounts = [{ id: null, label: '全局签名' }];
+  try {
+    const ar = await window.electronAPI.getAccountStatus();
+    if (ar.ok && ar.data) sigAccounts.push(...ar.data.filter(a => a.active).map(a => ({ id: a.id, label: a.label || a.email })));
+  } catch { /* 降级 */ }
+
+  async function loadSignature(acctId) {
+    try { const r = await window.electronAPI.loadSignature(acctId); sigHtml = r.ok ? r.html : ''; } catch { sigHtml = ''; }
+  }
 
   let selType = 'agent', selLang = 'es', selStage = 'cold', selSource = 'preset';
 
-  // 将纯文本邮件转为 HTML（100% 复刻 main.js buildContent 输出）
   function textToHtml(bodyText) {
     const lines = bodyText.split('\n');
     const htmlLines = [];
-    let isFirstLine = true;
+    let first = true;
     for (const line of lines) {
       const t = line.trim();
       if (!t) { htmlLines.push('<br>'); continue; }
       if (t === '--' || t === '---') { htmlLines.push('<br>'); continue; }
-      const content = (isFirstLine && /^(Buen día|Bom dia|Hello|Hola|Olá|Estimado|Prezado)/i.test(t))
-        ? `<strong style="font-size:15px">${escapeHtml(t)}</strong>`
-        : escapeHtml(t);
-      htmlLines.push(`<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${content}</p>`);
-      isFirstLine = false;
+      const c = (first && /^(Buen día|Bom dia|Hello|Hola|Olá|Estimado|Prezado)/i.test(t))
+        ? `<strong style="font-size:15px">${escapeHtml(t)}</strong>` : escapeHtml(t);
+      htmlLines.push(`<p style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${c}</p>`);
+      first = false;
     }
     return htmlLines.join('\n') + '\n<br>\n' + sigHtml;
   }
@@ -270,42 +361,52 @@ export async function initTemplatePreview() {
     if (!content) return;
 
     if (selSource === 'user') {
-      // ponytail: 用户模板预览 — 找匹配的模板
       const templates = await window.electronAPI.listUserTemplates().catch(() => []);
       const matched = matchUserTemplates(templates, selType, selStage, selLang);
-
       if (!matched.length) {
-        content.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)"><p style="font-size:14px">📭 该类型/阶段暂无用户模板</p><p style="font-size:12px">请先在「模板工坊 → 用户模板」中创建</p></div>';
+        content.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary)"><p style="font-size:14px">该类型/阶段暂无用户模板</p><p style="font-size:12px">请先在「模板工坊 → 用户模板」中创建</p></div>';
         return;
       }
-
-      // 随机选一个匹配模板展示
       const tpl = matched[Math.floor(Math.random() * matched.length)];
-      const displayBody = tpl.body ? tpl.body.replace(/<[^>]+>/g, '\n').replace(/\n+/g, '\n').trim() : '(空白模板)';
-      const html = textToHtml(displayBody);
-      content.innerHTML = `<div style="margin-bottom:8px;font-size:10px;color:var(--text-secondary)">${escapeHtml(tpl.name)} · ${USER_TEMPLATE_TYPES[tpl.type] || tpl.type} · ${USER_TEMPLATE_STAGES[tpl.stage] || tpl.stage} · ${USER_TEMPLATE_LANGS[tpl.lang] || tpl.lang}</div>
+      const html = textToHtml((tpl.body || '').replace(/<[^>]+>/g, '\n').replace(/\n+/g, '\n').trim() || '(空白模板)');
+      content.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:10px;color:var(--text-secondary)">${escapeHtml(tpl.name)} · ${TPL_TYPES[tpl.type] || tpl.type} · ${TPL_STAGES[tpl.stage] || tpl.stage} · ${TPL_LANGS[tpl.lang] || tpl.lang}</span>
+        <select id="tpl-signature" style="font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-left:auto;width:auto">${sigAccounts.map(a => `<option value="${a.id||''}"${a.id===sigAcctId||(!a.id&&sigAcctId===null)?' selected':''}>${escapeHtml(a.label)}</option>`).join('')}</select>
+      </div>
         <div style="margin-bottom:4px;font-size:11px;color:var(--primary)">${lucide('mail',12)} 主题：${escapeHtml(tpl.subject || '(无)')}</div>
         <div style="background:#fff;padding:20px;border:1px solid #e0e0e0;border-radius:4px">${html}</div>`;
+      _bindSigSelector();
       return;
     }
 
-    // 预设库：现有逻辑
     if (!S.templateLib) return;
     const picked = randomPick(selType, selStage, [], false);
     const email = assembleEmail(selLang, picked.hook, picked.pain, picked.proof, picked.cta, picked.followup, selStage, selType, config?.sender?.bodyName, undefined);
     const html = textToHtml(email);
-
-    // 在正文旁标注来源 ID
     const srcLabels = [];
     if (picked.hook) srcLabels.push('Hook: ' + picked.hook.id);
     if (picked.pain) srcLabels.push('Pain: ' + picked.pain.id);
     if (picked.proof) srcLabels.push('Proof: ' + picked.proof.id);
     if (picked.cta) srcLabels.push('CTA: ' + picked.cta.id);
     if (picked.followup) srcLabels.push('FollowUp: ' + picked.followup.id);
-
-    content.innerHTML = `<div style="margin-bottom:8px;font-size:10px;color:var(--text-secondary)">${srcLabels.join(' · ')}</div>
+    content.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="font-size:10px;color:var(--text-secondary)">${srcLabels.join(' · ')}</span>
+      <select id="tpl-signature" style="font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-left:auto;width:auto">${sigAccounts.map(a => `<option value="${a.id||''}"${a.id===sigAcctId||(!a.id&&sigAcctId===null)?' selected':''}>${escapeHtml(a.label)}</option>`).join('')}</select>
+    </div>
       <div style="background:#fff;padding:20px;border:1px solid #e0e0e0;border-radius:4px">${html}</div>`;
+    _bindSigSelector();
   };
+
+  function _bindSigSelector() {
+    const sel = document.getElementById('tpl-signature');
+    if (!sel || sel._bound) return;
+    sel._bound = true;
+    sel.addEventListener('change', async () => {
+      sigAcctId = sel.value || null;
+      await loadSignature(sigAcctId);
+      render();
+    });
+  }
 
   if (!document.getElementById('tpl-regenerate')?._bound) {
     document.querySelectorAll('.tpl-type').forEach(b => b.addEventListener('click', () => {
@@ -325,633 +426,10 @@ export async function initTemplatePreview() {
       b.classList.add('active'); selSource = b.dataset.val; render();
     }));
     document.getElementById('tpl-regenerate')?.addEventListener('click', () => render());
-    document.getElementById('tpl-regenerate')._bound = true;
+    if (document.getElementById('tpl-regenerate')) document.getElementById('tpl-regenerate')._bound = true;
   }
   render();
 }
-
-export function updateMonthlyReportSection() {
-  const section = document.getElementById('monthly-report-section');
-  const countEl = document.getElementById('monthly-archived-count');
-  if (!section || !countEl) return;
-  const archivedCount = Object.entries(S.sendCompanies)
-    .filter(([name]) => S.sendHistory[name]?.stage === 'archived').length;
-  if (archivedCount > 0) {
-    section.style.display = 'block';
-    countEl.textContent = `${archivedCount} 家归档客户`;
-  } else {
-    section.style.display = 'none';
-  }
-}
-
-
-export async function loadSendContacts() {
-  await CS.refreshContacts();
-  await CS.refreshSendHistory();
-  try { S.sendBackcheckStatus = await window.electronAPI.getBackcheckStatus(); } catch { S.sendBackcheckStatus = {}; }
-  S.sendCompanies = {};
-  S.sendCompaniesById = {};
-  for (const c of S.contactsData) {
-    const name = c.company || '未命名';
-    if (!S.sendCompanies[name]) S.sendCompanies[name] = [];
-    S.sendCompanies[name].push(c);
-    // Phase 3: build companyId index
-    if (c.companyId) {
-      if (!S.sendCompaniesById[c.companyId]) S.sendCompaniesById[c.companyId] = [];
-      S.sendCompaniesById[c.companyId].push(c);
-    }
-  }
-  renderCompanyList();
-  updateMonthlyReportSection();
-}
-
-export function renderCompanyList(filter) {
-  const container = document.getElementById('send-company-list');
-  // 排序：联系人数 + 背调评分加权（评分 × 2 作为额外权重，高分优先）
-  let all = Object.entries(S.sendCompanies).sort((a, b) => {
-    const ra = S.sendBackcheckStatus[a[0]]?.rating || 0;
-    const rb = S.sendBackcheckStatus[b[0]]?.rating || 0;
-    const scoreA = a[1].length + (ra * 2);
-    const scoreB = b[1].length + (rb * 2);
-    return scoreB - scoreA;
-  });
-  if (filter) all = all.filter(([n]) => n.toLowerCase().includes(filter));
-
-  const activeList = all.filter(([name]) => S.sendHistory[name]?.stage !== 'archived');
-  const archivedList = all.filter(([name]) => S.sendHistory[name]?.stage === 'archived');
-
-  let visible;
-  if (S.sendStageFilter === 'archived') { visible = archivedList; }
-  else if (S.sendStageFilter && S.sendStageFilter !== 'active') {
-    visible = activeList.filter(([name]) => (S.sendHistory[name]?.stage || 'cold') === S.sendStageFilter);
-  } else { visible = activeList; }
-
-  const archTab = document.querySelector('.send-stage-tab[data-stage="archived"]');
-  if (archTab) archTab.textContent = `已归档 (${archivedList.length})`;
-
-  if (!visible.length) {
-    const msg = S.sendStageFilter === 'archived' ? '暂无已归档公司 — 发完 F4 后自动归档' : '无匹配公司';
-    container.innerHTML = `<p style="font-size:12px;color:var(--text-secondary);padding:8px">${msg}</p>`;
-    if (S.sendStageFilter === 'active') updateSelectedCount();
-    return;
-  }
-
-  const isArchivedView = S.sendStageFilter === 'archived';
-
-    // 按开发阶段分组
-  if (isArchivedView) {
-    container.innerHTML = visible.map(function(pair) {
-      var name = pair[0], members = pair[1];
-      var ctype = members[0]?.clientType || 'unlabeled';
-      var tagHtml = clientTypeTag(ctype);
-      var ctry = escapeHtml(members[0]?.country || '');
-      var hist = S.sendHistory[name];
-      var vipClass = members.length >= 5 ? ' ci-vip' : '';
-      var startedStr = hist?.startedAt ? formatDate(hist.startedAt) : '';
-      var daysStr = hist?.lastSent ? '<span style="font-size:10px;color:var(--accent);font-weight:600;margin-left:2px">' + daysSince(hist.lastSent) + '</span>' : '';
-      var archivedStr = hist?.archivedAt ? formatDate(hist.archivedAt) : '';
-      var subParts = [tagHtml, ctry, startedStr, archivedStr].filter(Boolean);
-      return '<div class="send-company-item archived" data-company="' + escapeHtml(name) + '" style="opacity:.7">' +
-        '<div class="sci-info">' +
-          '<span class="ci-name' + vipClass + '">' + lucide('archive',13) + ' ' + escapeHtml(name) + daysStr + '</span>' +
-          (subParts.length ? '<span class="sci-sub">' + subParts.join(' · ') + '</span>' : '') +
-        '</div>' +
-        '<button class="btn-reactivate-send" data-company="' + escapeHtml(name) + '" style="font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid var(--success);background:transparent;color:var(--success);cursor:pointer;white-space:nowrap">' + lucide('refresh-cw',11) + ' 重新激活</button>' +
-      '</div>';
-    }).join('');
-  } else {
-    // 活跃视图：按联系人个体阶段分组（同公司可出现在多个阶段）
-    const STAGE_NORM = { '冷开发':'cold', 'F1':'f1', 'F2':'f2', 'F3':'f3', 'F4':'f4' };
-    const stageGroups = {};
-    visible.forEach(([name, members]) => {
-      // 按每个联系人的个体阶段拆分
-      const byStage = {};
-      members.forEach(c => {
-        const raw = c.stage || c._stage || 'cold';
-        const st = STAGE_NORM[raw] || (typeof raw === 'string' ? raw.toLowerCase() : 'cold');
-        if (!byStage[st]) byStage[st] = [];
-        byStage[st].push(c);
-      });
-      Object.entries(byStage).forEach(([st, stageMembers]) => {
-        if (!stageGroups[st]) stageGroups[st] = [];
-        stageGroups[st].push([name, stageMembers]);
-      });
-    });
-    let html = '';
-    for (const stage of S.STAGES) {
-      const items = stageGroups[stage];
-      if (!items || !items.length) continue;
-      const totalContacts = items.reduce((s, [,m]) => s + m.length, 0);
-      const gid = 'sg-' + stage;
-      html += '<div class="send-stage-group">' +
-        '<div class="send-stage-head" data-group="' + gid + '" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:6px 10px;background:#f0f2f5;border-bottom:1px solid #e0e0e0;font-size:11px;font-weight:600">' +
-          '<span class="sg-arrow" style="display:inline-block;width:10px;font-size:9px;transition:transform .2s">▸</span>' +
-          '<span class="stage-badge stage-' + stage + '">' + S.STAGE_LABELS_SEND[stage] + '</span>' +
-          '<span>' + items.length + ' 家 · ' + totalContacts + ' 人</span>' +
-        '</div>' +
-        '<div class="send-stage-cards" data-group="' + gid + '" style="display:none">' +
-          items.map(([name, members]) => {
-            const ctype = members[0]?.clientType || 'unlabeled';
-            const tagHtml = clientTypeTag(ctype);
-            const ctry = escapeHtml(members[0]?.country || '');
-            const hist = S.sendHistory[name];
-            const vipClass = members.length >= 5 ? ' ci-vip' : '';
-            const startedStr = hist?.startedAt ? formatDate(hist.startedAt) : '';
-            const daysStr = hist?.startedAt ? '<span style="font-size:10px;color:var(--accent);font-weight:600;margin-left:2px">' + daysSince(hist.startedAt) + '</span>' : '';
-            const subParts = [tagHtml, ctry, startedStr].filter(Boolean);
-            const countStyle = members.length >= 20 ? ' style="color:var(--warning);font-weight:600"' : '';
-            return '<div class="send-company-item" data-company="' + escapeHtml(name) + '">' +
-              '<input type="checkbox" class="sc-check" data-company="' + escapeHtml(name) + '"' + (S.selectedCompanySet.has(name) ? ' checked' : '') + '>' +
-              '<div class="sci-info">' +
-                '<span class="ci-name' + vipClass + '">' + escapeHtml(name) + daysStr + '</span>' +
-                (subParts.length ? '<span class="sci-sub">' + subParts.join(' · ') + '</span>' : '') +
-              '</div>' +
-              '<span class="ci-count"' + countStyle + '>' + members.length + '</span>' +
-            '</div>';
-          }).join('') +
-        '</div>' +
-      '</div>';
-    }
-    container.innerHTML = html;
-
-    // 阶段折叠
-    container.querySelectorAll('.send-stage-head').forEach(head => {
-      head.addEventListener('click', () => {
-        const gid = head.dataset.group;
-        const cards = container.querySelector('.send-stage-cards[data-group="' + gid + '"]');
-        const arrow = head.querySelector('.sg-arrow');
-        if (!cards) return;
-        const hidden = cards.style.display === 'none';
-        cards.style.display = hidden ? 'block' : 'none';
-        if (arrow) arrow.style.transform = hidden ? 'rotate(90deg)' : '';
-      });
-    });
-    // 默认展开冷开发
-    container.querySelector('.send-stage-head[data-group="sg-cold"]')?.click();
-  }
-
-  if (isArchivedView) {
-    container.querySelectorAll('.btn-reactivate-send').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const company = btn.dataset.company;
-        if (!await showConfirm(`确定重新激活 ${company}？\n将重置为冷开发阶段，清空序列记录。`)) return;
-        btn.disabled = true; btn.textContent = '⏳';
-        await window.electronAPI.reactivateCompany(company);
-        await CS.refreshSendHistory();
-        CS.setFilter('active');
-        document.querySelectorAll('.send-stage-tab').forEach(t => {
-          t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
-        });
-        const activeTab = document.querySelector('.send-stage-tab[data-stage="active"]');
-        if (activeTab) { activeTab.classList.add('active'); activeTab.style.background = 'var(--primary)'; activeTab.style.color = '#fff'; }
-        renderCompanyList(document.getElementById('send-search')?.value || '');
-        updateMonthlyReportSection();
-        showToast(`${company} 已重新激活`, 'ok');
-      });
-    });
-    updateMonthlyReportSection();
-  } else {
-    updateSelectedCount();
-    container.querySelectorAll('.send-company-item').forEach(el => {
-      el.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
-        const cb = el.querySelector('.sc-check');
-        if (!cb) return;
-        cb.checked = !cb.checked;
-        cb.dispatchEvent(new Event('change'));
-      });
-      const cb = el.querySelector('.sc-check');
-      if (cb) {
-        cb.addEventListener('change', (e) => {
-          const name = e.target.dataset.company;
-          if (e.target.checked) CS.select(name);
-          else CS.deselect(name);
-          updateSelectedCount();
-        });
-      }
-    });
-  }
-
-  // 右键菜单：重置全部选中公司
-  container.oncontextmenu = (e) => {
-    const selected = getSelectedCompanies();
-    if (!selected.length) return;
-    e.preventDefault();
-    document.getElementById('ctx-menu')?.remove();
-    const menu = document.createElement('div');
-    menu.id = 'ctx-menu';
-    menu.style.cssText = 'position:fixed;z-index:9999;background:#fff;border:1px solid #d0d0d0;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;min-width:160px;font-size:13px';
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
-    menu.innerHTML = '<div style="padding:6px 14px;cursor:pointer;color:#333;white-space:nowrap;border-radius:4px;margin:0 4px;transition:background .15s" data-action="reset" onmouseenter="this.style.background=\'#f0f0f0\'" onmouseleave="this.style.background=\'transparent\'">重置状态 (' + selected.length + ' 家)</div>';
-    menu.querySelector('[data-action="reset"]').onclick = async () => {
-      menu.remove();
-      if (!await showConfirm(`确定重置全部 ${selected.length} 家选中公司？\n将清空序列记录，恢复为冷开发阶段。`)) return;
-      // 前端先行：立即清除选中和缓存，刷新列表
-      const names = [...selected];
-      for (const company of names) {
-        CS.deselect(company);
-        CS.removeCard(company);
-      }
-      renderCompanyList(document.getElementById('send-search')?.value || '');
-      updateMonthlyReportSection();
-      showToast(`${names.length} 家公司已重置`, 'ok');
-      // 后端异步确认
-      Promise.all(names.map(c => window.electronAPI.reactivateCompany(c))).then(async () => {
-        await CS.refreshSendHistory();
-        renderCompanyList(document.getElementById('send-search')?.value || '');
-      });
-    };
-    document.body.appendChild(menu);
-    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
-    setTimeout(() => document.addEventListener('click', close), 0);
-  };
-}
-
-export function getSelectedCompanies() {
-  return [...S.selectedCompanySet].map(id => CS.getName(id));
-}
-
-export function updateSelectedCount() {
-  const selected = getSelectedCompanies();
-  let totalContacts = 0;
-  for (const name of selected) {
-    totalContacts += (S.sendCompanies[name] || []).length;
-  }
-  const countEl = document.getElementById('send-selected-count');
-  if (countEl) countEl.textContent = '';
-  // 归档视图下隐藏加入队列按钮，显示批量重新激活
-  const addBtn = document.getElementById('ws-add-queue');
-  const listTitle = document.getElementById('send-list-title');
-  const cardsContainer = document.getElementById('send-company-cards');
-  const emptyEl = document.getElementById('send-cards-empty');
-  if (S.sendStageFilter === 'archived') {
-    if (addBtn) addBtn.style.display = 'none';
-    if (listTitle) listTitle.textContent = selected.length ? `已选归档公司 (${selected.length} 家)` : '已归档公司';
-    if (cardsContainer) cardsContainer.innerHTML = selected.length
-      ? `<div style="text-align:center;padding:40px"><button id="btn-reactivate-all" style="font-size:14px;padding:10px 24px">' + lucide('refresh-cw',14) + ' 全部重新激活 (${selected.length} 家)</button></div>`
-      : '';
-    if (emptyEl && !selected.length) { emptyEl.textContent = '← 勾选左侧公司，使用「全选」批量激活'; emptyEl.style.display = 'block'; }
-    else if (emptyEl) emptyEl.style.display = 'none';
-    // 绑定批量重新激活按钮
-    if (selected.length) {
-      setTimeout(() => {
-        document.getElementById('btn-reactivate-all')?.addEventListener('click', async () => {
-          if (!await showConfirm(`确定重新激活全部 ${selected.length} 家归档公司？`)) return;
-          const btn = document.getElementById('btn-reactivate-all');
-          if (btn) { btn.disabled = true; btn.textContent = '⏳ 激活中...'; }
-          for (const name of selected) {
-            await window.electronAPI.reactivateCompany(name).catch(() => {});
-          }
-          await CS.refreshSendHistory();
-          CS.setFilterAndClear('active');
-          document.querySelectorAll('.send-stage-tab').forEach(t => {
-            t.style.background = 'var(--bg)'; t.style.color = 'var(--text-secondary)'; t.classList.remove('active');
-          });
-          const activeTab = document.querySelector('.send-stage-tab[data-stage="active"]');
-          if (activeTab) { activeTab.classList.add('active'); activeTab.style.background = 'var(--primary)'; activeTab.style.color = '#fff'; }
-          renderCompanyList(document.getElementById('send-search')?.value || '');
-          updateMonthlyReportSection();
-          showToast(`已重新激活 ${selected.length} 家公司`, 'ok');
-        });
-      }, 0);
-    }
-  } else {
-    if (addBtn) addBtn.style.display = '';
-    if (listTitle) listTitle.textContent = selected.length ? `已选公司 (${selected.length} 家 · ${totalContacts} 人)` : '已选公司';
-    renderSelectedCards();
-  }
-}
-
-export async function renderSelectedCards() {
-  const container = document.getElementById('send-company-cards');
-  const empty = document.getElementById('send-cards-empty');
-  const title = document.getElementById('send-list-title');
-  const selected = getSelectedCompanies();
-  if (!selected.length) {
-    if (container) container.innerHTML = '';
-    if (empty) empty.style.display = 'block';
-    if (title) title.textContent = '已选公司';
-    return;
-  }
-  if (empty) empty.style.display = 'none';
-  let tc = 0;
-  for (const name of selected) { tc += (S.sendCompanies[name] || []).length; }
-  if (title) title.textContent = `已选公司 (${selected.length} 家 · ${tc} 人)`;
-
-  // ponytail: 加载用户模板和配置
-  let userTemplates = [];
-  const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  const tplMode = document.getElementById('send-tpl-mode')?.value || config?.template?.mode || 'adaptive';
-  try { userTemplates = await window.electronAPI.listUserTemplates(); } catch { /* 渲染层降级：操作失败不影响 UI */ }
-
-  for (const name of selected) {
-    const members = S.sendCompanies[name] || [];
-    const ctype = members[0]?.clientType || 'unlabeled';
-    const hist = S.sendHistory[name];
-    const stage = S.sendHistory[name]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
-    const lang = countryToLang(members[0]?.country || '');
-    const usedSentences = hist?.usedSentences || [];
-    // ponytail: 每次加入队列时重新读取全局模板模式，不保留旧选择
-    if (tplMode === 'general') {
-      const matchedTpls = matchUserTemplates(userTemplates, ctype, stage, lang);
-      if (matchedTpls.length) {
-        const pickedTpl = matchedTpls[Math.floor(Math.random() * matchedTpls.length)];
-        CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'user', _userTemplate: pickedTpl });
-      } else {
-        CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
-      }
-    } else {
-      CS.setCard(name, { type: ctype, stage, lang, template: randomPick(ctype, stage, usedSentences), _templateSource: 'preset' });
-    }
-  }
-  const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
-  CS.pruneCards(selected);
-  if (container) {
-    container.innerHTML = selected.map(name => {
-      const card = S.selectedCards[name];
-      const members = S.sendCompanies[name] || [];
-      const emailCount = members.filter(m => m.email).length;
-      const countHtml = `<span>${emailCount}人</span>`;
-      const ctry = escapeHtml(members[0]?.country || '');
-      const nextLabel = S.STAGE_LABELS_SEND[S.STAGE_NEXT_SEND[card.stage]] || 'F1';
-      const typeTag = clientTypeTag(card.type);
-      const tplLabel = typeLabelMap[card.type] || '通用模板';
-      const tplSourceTag = card._templateSource === 'user'
-        ? `<span style="color:var(--primary);font-weight:600">📝 ${escapeHtml(card._userTemplate?.name || '')}</span>`
-        : `<span>📋 ${typeLabelMap[card.type] || '自适应'}</span>`;
-      const hist2 = S.sendHistory[name];
-      const startedStr = hist2?.startedAt ? `<span>${formatDate(hist2.startedAt)}</span>` : '';
-      const daysStr2 = hist2?.lastSent ? `<span style="color:var(--accent);font-weight:600">${daysSince(hist2.lastSent)}</span>` : '';
-      const tags = [
-        typeTag,
-        ctry ? `<span>${ctry}</span>` : '',
-        `<span>${card.lang.toUpperCase()}</span>`,
-        countHtml,
-        tplSourceTag,
-        daysStr2,
-        startedStr,
-      ].filter(Boolean).join(' · ');
-      return `<div class="sc-card" data-company="${escapeHtml(name)}">
-        <div class="sc-card-header">
-          <strong>${escapeHtml(name)}</strong>
-          <span class="sc-stage">${S.STAGE_LABELS_SEND[card.stage]} → ${nextLabel}</span>
-          <button class="sc-card-remove" data-company="${escapeHtml(name)}">${lucide('x',14)}</button>
-        </div>
-        <div class="sc-card-meta">${tags}</div>
-      </div>`;
-    }).join('');
-    container.querySelectorAll('.sc-card-remove').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        CS.deselect(btn.dataset.company);
-        // 同步取消左侧勾选
-        const cb = document.querySelector(`.sc-check[data-company="${CSS.escape(btn.dataset.company)}"]`);
-        if (cb) cb.checked = false;
-        updateSelectedCount();
-      });
-    });
-  }
-}
-
-// ── 加入队列 ────────────────────────────────────────────────────────
-// ponytail: 从 app.js 迁移，适配 S.* 全局状态
-async function addToQueue() {
-  try {
-  const typeLabelMap = { agent: '代理模板', direct: '直客模板', unlabeled: '通用模板' };
-  const selected = getSelectedCompanies();
-  if (!selected.length) return await showAlert('请先勾选左侧公司');
-  const config = await window.electronAPI.loadConfig().catch(() => ({}));
-  const GROUP_SIZE = config.schedule?.batch_size || 10;
-  let added = 0, skippedNoEmail = 0, skippedInvalidEmail = 0, skippedDupOrBounced = 0, skippedQueued = 0, skippedDupEmail = 0, reactivatedCount = 0;
-  let _dupEmails = [];
-
-  // 拉最新 contacts.json，确保 _sentBy 是最新的（内存快照可能过期）
-  const freshContacts = await window.electronAPI.getContacts();
-  const sentByEmails = new Set();
-  for (const c of freshContacts) {
-    if (c._sentBy && c.email) sentByEmails.add(c.email.toLowerCase().trim());
-  }
-  // ponytail: 已重置公司的联系人视为未发过，从拦截白名单中移除
-  if (S._justReactivated) {
-    for (const name of S._justReactivated) {
-      const mbrs = S.sendCompanies[name] || [];
-      for (const m of mbrs) sentByEmails.delete((m.email || '').toLowerCase().trim());
-      if (S.sendHistory[name]) S.sendHistory[name].sentContacts = [];
-    }
-  }
-
-  if (!S._justReactivated) S._justReactivated = new Set();
-  const needReset = [];
-  for (const name of selected) {
-    const members = S.sendCompanies[name] || [];
-    if (!members.length) continue;
-    const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
-    // 统一过滤：bounced/status/tags/noEmail 由 isContactSendable 判定
-    const { sendable } = filterSendableContacts(members);
-    // 上下文相关：已发送（历史 + contacts.json）
-    const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
-    const activeMembers = sendable.filter(m => !alreadySent.includes(m));
-    const bouncedMembers = members.filter(m => m._status === 'bounced');
-    if (!activeMembers.length && !bouncedMembers.length) {
-      const stage = S.sendHistory[name]?.stage;
-      if ((!stage || stage === 'cold') && !S._justReactivated.has(name)) needReset.push({ name, count: members.length });
-    }
-  }
-
-  if (needReset.length) {
-    const listStr = needReset.map(r => `<div style="padding:2px 0">· ${escapeHtml(r.name)} &nbsp;<span style="color:#888">${r.count}人</span></div>`).join('');
-    const choice = await showConfirm(
-      `<div style="line-height:1.8">以下 <b>${needReset.length}</b> 家公司已发过但阶段未推进：<br><br>${listStr}<br>「确定」重置并重新发送 &nbsp;·&nbsp; 「取消」跳过</div>`
-    );
-    if (choice) {
-      for (const r of needReset) {
-        await window.electronAPI.reactivateCompany(r.name);
-        S._justReactivated.add(r.name);
-        reactivatedCount += r.count;
-      }
-      // 刷新全部相关内存数据，确保后续过滤不再拦截已重置的联系人
-      await CS.refreshSendHistory();
-      await CS.refreshContacts();
-      const updatedContacts = await window.electronAPI.getContacts();
-      sentByEmails.clear();
-      for (const c of updatedContacts) {
-        if (c._sentBy && c.email) sentByEmails.add(c.email.toLowerCase().trim());
-      }
-      // 更新 S.sendCompanies 中的联系人数据，并从 sentByEmails 移除已重置公司
-      for (const r of needReset) {
-        const freshMembers = updatedContacts.filter(c => (c.company || c.company_name) === r.name);
-        S.sendCompanies[r.name] = freshMembers;
-        for (const m of freshMembers) {
-          sentByEmails.delete((m.email || '').toLowerCase().trim());
-        }
-        // 同时清理 sendHistory 中的 sentContacts
-        if (S.sendHistory[r.name]) S.sendHistory[r.name].sentContacts = [];
-      }
-    } else {
-      for (const r of needReset) skippedDupOrBounced += r.count;
-    }
-  }
-
-  // 预计算队列中已有的邮箱（避免 O(n×m) 循环）
-  const queuedEmails = new Set();
-  for (const q of S.queue) {
-    if (q.status === 'pending' || q.status === 'sending') {
-      for (const r of (q.recipients || [])) queuedEmails.add(r.toLowerCase().trim());
-    }
-  }
-
-  // 统一收集本次被跳过的联系人（用于最终 alert 展示）
-  const allSkipped = new Map();
-
-  for (const name of selected) {
-    const card = S.selectedCards[name];
-    if (!card) continue;
-    const members = S.sendCompanies[name] || [];
-    // ── 统一过滤：bounced / status / tags / noEmail ──
-    const { sendable, skipped } = filterSendableContacts(members);
-    for (const [reason, contacts] of skipped) {
-      if (!allSkipped.has(reason)) allSkipped.set(reason, []);
-      allSkipped.get(reason).push(...contacts);
-    }
-
-    const sentContacts = new Set((S.sendHistory[name]?.sentContacts || []).map(e => e.toLowerCase().trim()));
-    // 上下文过滤：已发送 + 已在队列
-    const alreadySent = sendable.filter(m => sentContacts.has((m.email || '').toLowerCase().trim()) || sentByEmails.has((m.email || '').toLowerCase().trim()));
-    const alreadyQueued = sendable.filter(m => queuedEmails.has((m.email || '').toLowerCase().trim()));
-    let activeMembers = sendable.filter(m => !alreadySent.includes(m) && !alreadyQueued.includes(m));
-    if (alreadyQueued.length) skippedQueued += alreadyQueued.length;
-    if (alreadySent.length) skippedDupOrBounced += alreadySent.length;
-
-    if (!activeMembers.length && members.length > 0) {
-      // 跳过的原因已在上方各自追踪（alreadySent→skippedDupOrBounced, skipped→allSkipped, alreadyQueued→skippedQueued）
-      if (alreadyQueued.length === members.length) continue;
-      if (needReset.some(r => r.name === name)) continue;
-      continue;
-    }
-    const rawEmails = activeMembers.map(m => (m.email || '').trim()).filter(e => e);
-    const dupCount = rawEmails.length - new Set(rawEmails).size;
-    if (dupCount) {
-      skippedDupEmail += dupCount;
-      // 找出具体重复邮箱
-      const seen = new Set(); const dups = new Set();
-      for (const e of rawEmails) { if (seen.has(e)) dups.add(e); else seen.add(e); }
-      if (!_dupEmails) _dupEmails = [];
-      for (const e of dups) _dupEmails.push({ company: name, email: e });
-    }
-    const emails = [...new Set(rawEmails)];
-    if (!emails.length) { skippedNoEmail++; continue; }
-    const valid = emails.filter(e => S.EMAIL_RE.test(e));
-    const invalid = emails.filter(e => !S.EMAIL_RE.test(e));
-    if (!valid.length) { skippedInvalidEmail++; continue; }
-    if (invalid.length) {
-      const invalidList = invalid.map(e => `<div style="padding:1px 0;color:#e5484d">· ${escapeHtml(e)}</div>`).join('');
-      if (!await showConfirm(`<div style="line-height:1.8"><b>${escapeHtml(name)}</b> 有 <span style="color:#e5484d">${invalid.length}</span> 个邮箱格式异常：<br><br>${invalidList}<br>仅发送 <b>${valid.length}</b> 个有效邮箱，是否继续？</div>`)) continue;
-    }
-    const lang = card.lang;
-    const stage = S.sendHistory[name]?.stage || members[0]?.stage || members[0]?._stage || 'cold';
-
-    const useUserTpl = card._templateSource === 'user' && card._userTemplate;
-    let baseSubject, body;
-    const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
-    // Phase 3: 取第一个联系人的 firstName 用于模板变量
-    const firstNameDisplay = members[0]?.firstName || '';
-
-    if (useUserTpl) {
-      const ut = card._userTemplate;
-      baseSubject = (ut.subject || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
-      body = (ut.body || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
-    } else {
-      const subjects = S.templateLib.subjects?.[card.type] || { es: '', pt: '', en: '' };
-      baseSubject = (subjects[lang] || subjects.es || subjects.en || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
-    }
-
-    const totalGroups = Math.ceil(valid.length / GROUP_SIZE);
-    const rotateGroups = (config.schedule?.template_rotate_groups > 0 ? config.schedule.template_rotate_groups : 3);
-    let currentTpl = null;
-    let groupsOnTpl = rotateGroups; // 首组即触发随机
-
-    for (let g = 0; g < totalGroups; g++) {
-      const groupEmails = valid.slice(g * GROUP_SIZE, (g + 1) * GROUP_SIZE);
-      let groupTpl = null;
-
-      if (useUserTpl) {
-        // ponytail: 用户模板不轮换 — 用户写什么就发什么，所有组共用同一正文
-        if (!currentTpl) currentTpl = card.template;
-        groupTpl = currentTpl;
-      } else {
-        // 预设模板：每 rotateGroups 组随机换一次
-        if (groupsOnTpl >= rotateGroups) {
-          currentTpl = randomPick(card.type, stage, []);
-          groupsOnTpl = 0;
-        }
-        groupTpl = currentTpl;
-        groupsOnTpl++;
-        body = assembleEmail(lang, groupTpl.hook, groupTpl.pain, groupTpl.proof, groupTpl.cta, groupTpl.followup, stage, card.type, config?.sender?.bodyName, firstNameDisplay);
-      }
-
-      const batchLabel = totalGroups > 1 ? ` (${g + 1}/${totalGroups})` : '';
-      S.queue.push({
-        id: ++S.queueIdCounter, company: name, companyId: members[0]?.companyId || '', to: groupEmails.join(", "), recipients: groupEmails,
-        subject: baseSubject, body, status: "pending", addedAt: new Date().toISOString(),
-        _stage: stage, _type: card.type, _lang: card.lang, _country: members[0]?.country || '',
-        _tplInfo: useUserTpl ? `user:${card._userTemplate?.id}` : [groupTpl?.hook?.id, groupTpl?.pain?.id, groupTpl?.proof?.id, groupTpl?.cta?.id, groupTpl?.followup?.id].filter(Boolean).join('·'),
-        _templateSource: card._templateSource || 'preset',
-        _templateLabel: useUserTpl ? (card._userTemplate?.name || '用户模板') : (typeLabelMap[card.type] || '自适应'),
-        _groupOf: totalGroups > 1 ? name : undefined, _groupSeq: totalGroups > 1 ? g : undefined, _groupTotal: totalGroups > 1 ? totalGroups : undefined,
-        _batchLabel: batchLabel,
-        _recipientStatus: groupEmails.map(e => ({ email: e, status: 'pending' })),
-      });
-      added++;
-    }
-  }
-  if (!added) {
-    const reasons = [];
-    if (skippedNoEmail) reasons.push(`<div>${lucide('mail',14)} ${skippedNoEmail} 家无邮箱</div>`);
-    if (skippedInvalidEmail) reasons.push(`<div>${lucide('alert-triangle',14)} ${skippedInvalidEmail} 家邮箱格式无效</div>`);
-    if (skippedDupEmail) reasons.push(`<div>${lucide('copy',14)} ${skippedDupEmail} 人重复邮箱</div>`);
-    if (skippedQueued) reasons.push(`<div>${lucide('list',14)} ${skippedQueued} 人已在队列中</div>`);
-    if (skippedDupOrBounced) reasons.push(`<div>${lucide('x-circle',14)} ${skippedDupOrBounced} 人已发送</div>`);
-    const skipDetail = renderSkipDetail(allSkipped, 3);
-    return await showAlert(`<div style="text-align:center;margin-bottom:6px"><b>所选公司无法加入队列</b></div>${reasons.join('')}${skipDetail}`);
-  }
-  if (reactivatedCount > 0) showToast(`${reactivatedCount} 个联系人已重置`, 'ok');
-  saveQueue();
-  const pendingCount = S.queue.filter(e => e.status === 'pending').length;
-  document.getElementById('stat-queue').textContent = pendingCount;
-  let summaryHtml = `<div style="text-align:center;margin-bottom:6px"><b>已添加 ${added} 组 · 队列共 ${pendingCount} 组待发</b></div>`;
-  if (_dupEmails.length) {
-    const dupList = _dupEmails.slice(0, 5).map(d => `· ${escapeHtml(d.email)}（${escapeHtml(d.company)}）`).join('<br>');
-    const more = _dupEmails.length > 5 ? `<br>...等 ${_dupEmails.length} 个` : '';
-    summaryHtml += `<div style="font-size:11px;color:var(--warning);margin-top:4px">${lucide('alert-triangle',12)} 重复邮箱 ${skippedDupEmail} 人已合并：<br>${dupList}${more}</div>`;
-  }
-  const skipDetail = renderSkipDetail(allSkipped, 3);
-  if (skipDetail) summaryHtml += skipDetail;
-  await showAlert(summaryHtml, skipDetail ? 'warn' : 'info');
-  // 清空选择，防止二次添加
-  CS.clearSelection();
-  // 跳转到发送队列
-  const queueNav = document.querySelector('[data-page="queue"]');
-  if (queueNav) queueNav.click();
-  } catch (e) {
-    showToast(`加入队列失败: ${e.message}`, 'err');
-    console.error('addToQueue error:', e);
-  }
-}
-
-// ── 用户模板匹配 ────────────────────────────────────────────────────
-// ponytail: 返回匹配的模板列表。自适应模式：按类型+阶段+语言匹配；通用模式：只用含"general"的
-
-// 热更新：发送历史变更时自动刷新公司列表（自动发送跑完/阶段推进）
-window.electronAPI.onHistoryChanged(() => {
-  if (document.getElementById('page-email-send')?.classList.contains('active')) {
-    CS.refreshSendHistory();
-    buildCompanyList();
-    updateSelectedCount();
-    renderSelectedCards();
-  }
-});
 
 window.__pageHandlers['email-send'] = initEmailSend;
 window.__pageHandlers['template-preview'] = initTemplatePreview;
