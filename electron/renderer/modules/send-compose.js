@@ -243,6 +243,14 @@ async function addToQueue() {
   const tplMode = document.getElementById('send-tpl-mode')?.dataset?.mode || 'adaptive';
   const userTemplates = S._userTemplates || [];
 
+  // 已在队列中的邮箱，跳过不重复加
+  const queuedEmails = new Set();
+  for (const q of S.queue) {
+    if (q.status !== 'sent' && q.status !== 'failed') {
+      for (const r of (q.recipients || [])) queuedEmails.add(r.toLowerCase().trim());
+    }
+  }
+
   let totalAdded = 0, totalPeople = 0;
 
   for (const bucketKey of _addedStages) {
@@ -250,10 +258,29 @@ async function addToQueue() {
     const targets = [];
     for (const e of entries) {
       for (const c of e.members) {
+        if (queuedEmails.has((c.email || '').toLowerCase().trim())) continue;
         targets.push({ ...c, company: e.company });
       }
     }
     if (!targets.length) continue;
+
+    // ── 每日额度裁剪 ──
+    const dailyLimit = S.dailyLimit || 0;
+    if (dailyLimit > 0) {
+      const queuePending = S.queue.reduce((s, q) => {
+        if (q.status !== 'sent' && q.status !== 'failed') return s + (q.recipients || []).length;
+        return s;
+      }, 0);
+      const remaining = Math.max(0, dailyLimit - (S.sentToday || 0) - queuePending);
+      if (remaining <= 0) {
+        showToast('已达每日发送上限', 'warn');
+        break;
+      }
+      if (targets.length > remaining) {
+        targets.length = remaining;
+        showToast(`已按额度裁剪，仅保留 ${remaining} 人`, 'warn');
+      }
+    }
 
     // 自动回复联系人：先重置为冷开发
     const isAutoreply = bucketKey === 'autoreply';

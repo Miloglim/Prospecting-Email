@@ -115,6 +115,8 @@ setTimeout(() => initDashboardEditor(), 200);  // 等 DOM 稳定后初始化布�
 
   // 下载
   dlBtn.addEventListener('click', () => {
+    dlBtn.textContent = '下载中...';
+    dlBtn.disabled = true;
     window.electronAPI.downloadUpdate().catch(() => {
       body.textContent = '下载失败，请稍后重试';
       dlBtn.textContent = '重试';

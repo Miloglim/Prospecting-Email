@@ -260,7 +260,11 @@ const TIME_BUCKETS = [
 
 function _daysAgo(dateStr) {
   if (!dateStr) return null;
-  const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  const now = new Date();
+  const then = new Date(dateStr);
+  const nu = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const tu = Date.UTC(then.getUTCFullYear(), then.getUTCMonth(), then.getUTCDate());
+  const d = Math.floor((nu - tu) / 86400000);
   return d < 0 ? null : d;
 }
 
