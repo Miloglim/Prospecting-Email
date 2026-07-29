@@ -1,6 +1,6 @@
 // ── 邮件发送 — 阶段卡片点击选中 ────────────────────────────────────────
 const S = window.S;
-import { lucide, showToast, escapeHtml, countryToLang, formatDate } from './shared.js';
+import { lucide, showToast, escapeHtml, countryToLang, daysSince } from './shared.js';
 import { randomPick, assembleEmail, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
 import CS from './company-state.js';
@@ -181,12 +181,11 @@ function renderPreview() {
       const lang = countryToLang(e.country);
       const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
       const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
-      const lastSent = S.sendHistory?.[e.company]?.lastSent
-        ? formatDate(S.sendHistory[e.company].lastSent) : '';
+      const lastSent = daysSince(S.sendHistory?.[e.company]?.lastSent);
       return `<div class="pg-company">
         <span class="pg-cname">${escapeHtml(e.company)}</span>
+        <span class="pg-ccount" style="color:var(--text-secondary)">${lastSent}</span>
         <span class="pg-cemail">${escapeHtml(e.country||'')} · ${langLabel} · ${tplLabel}</span>
-        ${lastSent ? `<span class="pg-ccount" style="color:var(--text-secondary)">${lastSent}</span>` : ''}
         <span class="pg-ccount">${e.members.length}人</span>
       </div>`;
     }).join('');

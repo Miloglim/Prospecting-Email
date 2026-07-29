@@ -267,8 +267,61 @@
         <span>拖入 Excel/CSV 文件，或点击选择</span>
         <input type="file" id="file-input" accept=".xlsx,.xls,.csv" hidden>
       </div>
-      <div style="text-align:center;margin-bottom:16px">
+      <div class="import-guide">
+        <div class="guide-top">
+        <div class="guide-left">
+          <p class="guide-title">字段识别说明</p>
+          <p class="guide-desc">程序读取 Excel/CSV 的<strong>第一行作为表头</strong>，通过匹配列名自动识别字段。中英文列名均可，忽略大小写与空格。</p>
+          <div class="guide-more">
+            <span data-icon="check-circle"></span> 未匹配的列保留在「额外信息」中
+          </div>
+        </div>
+        <div class="guide-right">
+          <!-- 模拟 Excel 表头 -->
+          <div class="excel-sheet">
+            <div class="excel-cols">
+              <span class="excel-col">A</span><span class="excel-col">B</span><span class="excel-col">C</span><span class="excel-col">D</span><span class="excel-col">E</span><span class="excel-col">F</span><span class="excel-col">G</span><span class="excel-col">H</span>
+            </div>
+            <div class="excel-row excel-header-row">
+              <span>公司名称</span><span>收件人邮箱</span><span>姓名 | 职位</span><span>手机</span><span>行业</span><span>网站</span><span>跟进人</span><span>类型</span>
+            </div>
+            <div class="excel-row excel-arrow-row">
+              <span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span><span>↓</span>
+            </div>
+            <div class="excel-row excel-result-row">
+              <span data-icon="building"></span>
+              <span data-icon="mail"></span>
+              <span data-icon="user"></span>
+              <span data-icon="phone"></span>
+              <span data-icon="tag"></span>
+              <span data-icon="link"></span>
+              <span data-icon="user-check"></span>
+              <span data-icon="flag"></span>
+            </div>
+            <div class="excel-row excel-result-row excel-result-labels">
+              <span>公司名</span><span>邮箱</span><span>联系人</span><span>电话</span><span>品类</span><span>网站</span><span>跟进人</span><span>客户类型</span>
+            </div>
+          </div>
+        </div>
       </div>
+      </div>
+      <div class="guide-alias-grid">
+            <div class="ga-item"><span class="ga-field"><span data-icon="mail"></span>邮箱</span><span class="ga-codes"><code>邮箱</code><code>邮箱地址</code><code>邮件</code><code>收件人</code><code>email</code><code>e-mail</code><code>to</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="building"></span>公司名</span><span class="ga-codes"><code>公司</code><code>公司名称</code><code>公司全称</code><code>公司名</code><code>客户名称</code><code>客户</code><code>company</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="user"></span>联系人</span><span class="ga-codes"><code>姓名</code><code>姓名 | 职位</code><code>姓名职位</code><code>联系人</code><code>contact</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="user"></span>名</span><span class="ga-codes"><code>名</code><code>firstname</code><code>first_name</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="user"></span>姓</span><span class="ga-codes"><code>姓</code><code>lastname</code><code>last_name</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="briefcase"></span>职位</span><span class="ga-codes"><code>职位</code><code>职务</code><code>title</code><code>position</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="phone"></span>电话</span><span class="ga-codes"><code>电话</code><code>手机</code><code>phone</code><code>tel</code><code>mobile</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="globe"></span>国家</span><span class="ga-codes"><code>国家</code><code>country</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="tag"></span>品类</span><span class="ga-codes"><code>品类</code><code>行业</code><code>分类</code><code>category</code><code>industry</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="link"></span>网站</span><span class="ga-codes"><code>网站</code><code>网址</code><code>官网</code><code>website</code><code>url</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="external-link"></span>LinkedIn</span><span class="ga-codes"><code>linkedin</code><code>领英</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="user-check"></span>跟进人</span><span class="ga-codes"><code>跟进人</code><code>负责人</code><code>assignee</code><code>owner</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="user-plus"></span>对接人</span><span class="ga-codes"><code>对接人</code><code>contact_person</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="flag"></span>阶段</span><span class="ga-codes"><code>阶段</code><code>stage</code></span></div>
+            <div class="ga-item"><span class="ga-field"><span data-icon="flag"></span>客户类型</span><span class="ga-codes"><code>客户类型</code><code>类型</code><code>type</code><code>client_type</code><code>clienttype</code></span></div>
+          </div>
       <div id="clients-toolbar" style="display:none">
         <span id="clients-count"></span>
         <div class="toolbar-actions">

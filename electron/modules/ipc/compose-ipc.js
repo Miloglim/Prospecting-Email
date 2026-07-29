@@ -103,6 +103,7 @@ function register(mainIpc, deps) {
       const configPath = path.join(APP_ROOT, "send", "config.json");
       if (!fs.existsSync(configPath)) return ok([]);
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      const sigStore = require("../services/signature-store");
       const accounts = (config.smtpAccounts || []).map((a) => ({
         id: a.id || "",
         label: a.label || a.smtp?.user || "",
@@ -111,6 +112,7 @@ function register(mainIpc, deps) {
         active: a.active !== false,
         fused: !!a.fused,
         signatureText: a.signatureText || config.signature?.text || "",
+        signatureHtml: sigStore.readSignature(a.id),
       }));
       return ok(accounts);
     } catch (e) {

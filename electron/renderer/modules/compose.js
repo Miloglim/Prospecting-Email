@@ -136,6 +136,7 @@ function renderFromSelect() {
         refreshDisplay();
         renderOptions();
         closeDrop();
+        upsertSignature();
       });
     });
   }
@@ -164,6 +165,42 @@ function renderFromSelect() {
 
   refreshDisplay();
   renderOptions();
+}
+
+// ── 签名嵌入 ──────────────────────────────────────────────────────────────
+const SIG_ID = 'signature-block';
+
+function upsertSignature() {
+  const editor = $('#body-editor');
+  const sigHtml = _selectedAcct?.signatureHtml || '';
+  let sigBlock = document.getElementById(SIG_ID);
+
+  if (sigBlock) {
+    // 切换账号：替换已有签名
+    sigBlock.innerHTML = sigHtml;
+  } else if (sigHtml) {
+    // 确保正文区至少有一个空行（光标落点）
+    if (!editor.textContent.trim()) {
+      editor.innerHTML = '<p><br></p>';
+    }
+    // 签名块：不可编辑，防止光标误入
+    sigBlock = document.createElement('div');
+    sigBlock.id = SIG_ID;
+    sigBlock.contentEditable = 'false';
+    sigBlock.innerHTML = sigHtml;
+    editor.appendChild(sigBlock);
+
+    // 光标定位到正文区末尾（签名块之前）
+    const range = document.createRange();
+    const bodyEnd = editor.lastChild === sigBlock
+      ? sigBlock.previousSibling || editor.firstChild
+      : editor.lastChild;
+    range.setStartAfter(bodyEnd);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 }
 
 // ── 标题栏 ────────────────────────────────────────────────────────────────
@@ -401,6 +438,9 @@ async function init() {
   renderFromSelect();
   // 加载该联系人的草稿（如有则覆盖默认内容）
   if (_contactEmail) await loadDraft(_contactEmail);
+
+  // 默认嵌入所选账号的签名
+  upsertSignature();
 
   // 监听主进程推送的 init 数据
   if (window.composeAPI._onInit) {

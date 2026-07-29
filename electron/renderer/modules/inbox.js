@@ -566,6 +566,7 @@ async function renderDetail() {
     })()}
     <div class="inbox-detail-body-wrap"><iframe class="inbox-detail-body" sandbox="allow-scripts" scrolling="no"></iframe></div>
     <div class="inbox-detail-actions">
+      <button id="inbox-btn-reply">${lucide('reply', 12)} 回复</button>
       <button id="inbox-btn-delete">${lucide('trash', 12)} 删除邮件</button>
     </div>
   `;
@@ -591,6 +592,27 @@ async function renderDetail() {
     };
     window.addEventListener('message', onMsg);
   }
+
+  document.getElementById('inbox-btn-reply')?.addEventListener('click', () => {
+    const m = _mails[_selectedIdx];
+    if (!m) return;
+    // 正文转纯文本再引用
+    const tmp = document.createElement('div');
+    tmp.innerHTML = body || '';
+    const plain = (tmp.textContent || tmp.innerText || '').trim();
+    const quoteHtml = plain
+      ? `<br><br><div style="border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;font-size:13px">${escapeHtml(plain).replace(/\n/g, '<br>')}</div><br>`
+      : '';
+    const subject = m.subject || '';
+    const reSubject = subject.match(/^Re:\s*/i) ? subject : `Re: ${subject}`;
+    window.electronAPI.openCompose({
+      to: m.from,
+      subject: reSubject,
+      body: quoteHtml,
+      linkedAccount: m.accountLabel || m.accountId,
+      contactEmail: m.from,
+    });
+  });
 
   document.getElementById('inbox-btn-delete')?.addEventListener('click', async () => {
     await window.electronAPI.deleteInboxMail(_selectedIdx);

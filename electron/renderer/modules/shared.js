@@ -315,7 +315,7 @@ export function findById(a,i){return a?.find(x=>x.id===i)}
 export function truncate(s,l){return s?.length>l?s.slice(0,l)+'...':s}
 export function escapeHtml(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;')}
 export function formatDate(i){if(!i)return'—';const d=new Date(i);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
-export function daysSince(i){if(!i)return'';const n=new Date(),t=new Date(i),nu=Date.UTC(n.getUTCFullYear(),n.getUTCMonth(),n.getUTCDate()),tu=Date.UTC(t.getUTCFullYear(),t.getUTCMonth(),t.getUTCDate());const d=Math.floor((nu-tu)/86400000);return d>=0?`${d}天`:''}
+export function daysSince(i){if(!i)return'未发送';const n=new Date(),t=new Date(i),nu=Date.UTC(n.getUTCFullYear(),n.getUTCMonth(),n.getUTCDate()),tu=Date.UTC(t.getUTCFullYear(),t.getUTCMonth(),t.getUTCDate());const d=Math.floor((nu-tu)/86400000);if(d===0)return'今天';return d>0?`${d}天前`:''}
 export function ratingStars(n){const r=Math.min(5,Math.max(0,n));return'<span style="color:#f0a500;font-size:11px;letter-spacing:1px">'+'★'.repeat(r)+'☆'.repeat(5-r)+'</span>'}
 export function deepMerge(b,o){const out={...b};for(const k of Object.keys(o)){if(o[k]&&typeof o[k]==='object'&&!Array.isArray(o[k])&&b[k]&&typeof b[k]==='object')out[k]=deepMerge(b[k],o[k]);else out[k]=o[k]}return out}
 export async function pollBackcheckStatus(c,onDone){for(let i=0;i<45;i++){await new Promise(r=>setTimeout(r,2000));const s=await window.electronAPI.getBackcheckStatus();const st=s[c];if(st?.status==='done'||st?.status==='timeout'){onDone();return}}onDone()}

@@ -125,6 +125,11 @@
   }
   #body-editor p { margin:0 0 8px 0; }
   #body-editor a { color: var(--primary); text-decoration: underline; }
+  /* 签名块 — 不可编辑 */
+  #signature-block {
+    margin-top: 16px; padding-top: 4px;
+    opacity: 0.85; cursor: default; user-select: none;
+  }
   /* 附件 */
   #attachments { padding:4px 0; border-top:1px solid var(--border); display:none; }
   #attachments.has { display:block; }
