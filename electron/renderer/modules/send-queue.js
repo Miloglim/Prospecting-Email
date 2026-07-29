@@ -127,8 +127,9 @@ export async function renderQueue() {
   const list = document.getElementById('queue-list');
   const empty = document.getElementById('queue-empty');
   if (!list) return;
-  if (!S.queue.length) { list.innerHTML = ''; if (empty) empty.style.display = 'block'; return; }
+  if (!S.queue.length) { list.innerHTML = ''; list.style.flex = 'none'; if (empty) empty.style.display = ''; return; }
   if (empty) empty.style.display = 'none';
+  list.style.flex = '';
   // 待发送在上，已完成在底部
   const sorted = [...S.queue].sort((a, b) => {
     const aDone = a.status === 'sent' || a.status === 'failed';

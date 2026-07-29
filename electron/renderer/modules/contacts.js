@@ -53,6 +53,9 @@ export async function doImport(file) {
   const itemsHtml = items.length ? `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">${items.join('')}</div>` : '';
   const msg = `<div style="text-align:center;margin-bottom:4px"><b style="font-size:16px;color:#22a644">${lucide('check-circle',18)} ${valid} 条</b></div>${flowHtml}${itemsHtml}`;
   await showAlert(msg);
+  // 隐藏导入向导，腾出空间给客户表
+  document.querySelector('.import-guide')?.style.setProperty('display', 'none');
+  document.querySelector('.guide-alias-grid')?.style.setProperty('display', 'none');
   renderClientsTable();
 }
 
@@ -202,6 +205,9 @@ document.getElementById('clients-clear-btn')?.addEventListener('click', () => {
   S.clientsExtraCols = [];
   S.clientsPage = 1;
   if (fileInput) fileInput.value = '';
+  // 恢复导入向导
+  document.querySelector('.import-guide')?.style.setProperty('display', '');
+  document.querySelector('.guide-alias-grid')?.style.setProperty('display', '');
   renderClientsTable();
 });
 

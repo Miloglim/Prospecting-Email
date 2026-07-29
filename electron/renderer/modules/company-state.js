@@ -250,6 +250,10 @@ function _isSendable(c) {
   return true;
 }
 
+// 阶段颜色（深色调，区别于桶色）
+const STAGE_COLORS = { cold: '#6b7280', f1: '#2563eb', f2: '#ea580c', f3: '#7c3aed', f4: '#16a34a' };
+const STAGE_LABELS = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
+
 const TIME_BUCKETS = [
   { key: 'never',  label: '从未发送', minDays: null, color: '#9e9e9e' },
   { key: 'd1_3',   label: '1-3天前',  minDays: 1, maxDays: 3, color: '#2196f3' },
@@ -369,5 +373,5 @@ function _classifyContacts() {
   S.contactsClassified = classified;
 }
 
-export { TIME_BUCKETS };
+export { TIME_BUCKETS, STAGE_COLORS, STAGE_LABELS };
 export default CS;

@@ -3,7 +3,7 @@ const S = window.S;
 import { lucide, showToast, escapeHtml, countryToLang, daysSince } from './shared.js';
 import { randomPick, assembleEmail, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
-import CS, { TIME_BUCKETS } from './company-state.js';
+import CS, { TIME_BUCKETS, STAGE_COLORS, STAGE_LABELS } from './company-state.js';
 
 const BUCKET_MAP = {};
 TIME_BUCKETS.forEach(s => BUCKET_MAP[s.key] = s);
@@ -18,6 +18,7 @@ const SECTION_MAP = {};
 ALL_SECTIONS.forEach(s => SECTION_MAP[s.key] = s);
 
 let _addedStages = [];
+let _dailyRemaining = Infinity; // 每日剩余额度，点击卡片时实时比对
 
 // ── 初始化 ────────────────────────────────────────────────────────────────
 export async function initEmailSend() {
@@ -64,10 +65,21 @@ export async function loadSendContacts() {
   }
   S.sendCompanies = byName;
   if (!S.contactsClassified) await CS.syncContactsUI();
+  // 刷新每日剩余额度（直接读仪表盘）
+  try {
+    const stats = await window.electronAPI.getDashboardStats();
+    _dailyRemaining = stats.remaining ?? 0;
+  } catch { _dailyRemaining = Infinity; }
   renderView();
 }
 
-export function renderSendView() { renderView(); }
+export async function renderSendView() {
+  try {
+    const stats = await window.electronAPI.getDashboardStats();
+    _dailyRemaining = stats.remaining ?? 0;
+  } catch { _dailyRemaining = Infinity; }
+  renderView();
+}
 
 function renderView() {
   renderStageCards();
@@ -120,16 +132,23 @@ function renderStageCards() {
     </div>`;
   }).join('');
 
-  // 点击选中/取消
+  // 点击选中/取消（实时比对剩余额度）
   container.querySelectorAll('.stage-card:not(.disabled)').forEach(card => {
     card.style.cursor = 'pointer';
     card.addEventListener('click', () => {
       const key = card.dataset.stage;
       if (_addedStages.includes(key)) {
         _addedStages = _addedStages.filter(k => k !== key);
-      } else {
-        _addedStages.push(key);
+        renderView();
+        return;
       }
+      // 已满额则拒绝后续加入
+      const curPeople = _addedStages.reduce((s, k) => s + (data[k] || []).reduce((ss, e) => ss + e.members.length, 0), 0);
+      if (_dailyRemaining !== Infinity && curPeople >= _dailyRemaining) {
+        showToast(`额度已满：已选 ${curPeople} 人，剩余 ${_dailyRemaining} 人`, 'warn');
+        return;
+      }
+      _addedStages.push(key);
       renderView();
     });
   });
@@ -142,14 +161,16 @@ function renderStageCards() {
         const entries = data[key] || [];
         totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
       });
-      summary.textContent = `已选 ${_addedStages.length} 组 · ${totalPeople} 人`;
+      const capped = _dailyRemaining !== Infinity ? Math.min(totalPeople, _dailyRemaining) : totalPeople;
+      const limitStr = _dailyRemaining !== Infinity ? ` / 剩余${_dailyRemaining}人` : '';
+      summary.textContent = `已选 ${_addedStages.length} 组 · ${capped} 人${limitStr}`;
     } else {
-      summary.textContent = '';
+      summary.textContent = _dailyRemaining !== Infinity ? `今日剩余 ${_dailyRemaining} 人` : '';
     }
   }
 }
 
-// ── 右侧：预览面板（JS 驱动展开/折叠）──────────────────────────────────
+// ── 右侧：预览面板（按额度截断）─────────────────────────────────────────
 function renderPreview() {
   const list = document.getElementById('send-added-list');
   const head = document.getElementById('send-right-head');
@@ -162,30 +183,64 @@ function renderPreview() {
   }
 
   const data = getBucketData();
-  let totalCompanies = 0, totalPeople = 0;
-  _addedStages.forEach(key => {
-    const entries = data[key] || [];
-    totalCompanies += entries.length;
-    totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
-  });
 
-  if (head) head.textContent = `发送预览 · ${_addedStages.length}组 · ${totalCompanies}家 · ${totalPeople}人`;
+  // 收集所有选中桶的展平联系人列表，按阶段优先级排序
+  const STAGE_ORDER = { f4: 5, f3: 4, f2: 3, f1: 2, cold: 1 };
+  let rawContacts = [];
+  for (const key of _addedStages) {
+    for (const e of (data[key] || [])) {
+      for (const c of e.members) {
+        rawContacts.push({ contact: c, company: e.company, country: e.country, bucket: key });
+      }
+    }
+  }
+  rawContacts.sort((a, b) => (STAGE_ORDER[b.contact.stage] || 0) - (STAGE_ORDER[a.contact.stage] || 0));
+
+  const rawTotal = rawContacts.length;
+  const limit = _dailyRemaining !== Infinity ? _dailyRemaining : rawTotal;
+  const cappedPeople = Math.min(rawTotal, limit);
+
+  if (head) head.textContent = `发送预览 · ${_addedStages.length}组 · ${cappedPeople}人${rawTotal > limit ? `（${rawTotal}人中截断）` : ''}`;
+
+  // 按额度截断，按公司重新分组
+  let remaining = limit;
+  const compMap = new Map(); // company → { members, country, bucket }
+  for (const { contact, company, country, bucket } of rawContacts) {
+    if (remaining <= 0) break;
+    const key = company + '|' + bucket;
+    if (!compMap.has(key)) compMap.set(key, { company, country, bucket, members: [], _origCount: 0 });
+    const ce = compMap.get(key);
+    ce.members.push(contact);
+    remaining--;
+  }
+  // 算原始总数
+  for (const key of _addedStages) {
+    for (const e of (data[key] || [])) {
+      const mk = e.company + '|' + key;
+      if (compMap.has(mk)) compMap.get(mk)._origCount = e.members.length;
+    }
+  }
+  const truncatedEntries = [...compMap.values()];
 
   list.innerHTML = _addedStages.map(key => {
     const s = SECTION_MAP[key] || {};
-    const entries = data[key] || [];
-    const people = entries.reduce((sum, e) => sum + e.members.length, 0);
-    const STAGE_LABELS = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
-    const STAGE_COLORS = { cold: '#9e9e9e', f1: '#2196f3', f2: '#ff9800', f3: '#8e24aa', f4: '#4caf50' };
-    const cRows = entries.map(e => {
+    const bucketEntries = truncatedEntries.filter(e => {
+      // 找到属于此桶的条目（通过原始数据查找）
+      return (data[key] || []).some(orig => orig.company === e.company);
+    });
+    if (!bucketEntries.length) return '';
+    const people = bucketEntries.reduce((sum, e) => sum + e.members.length, 0);
+
+    const cRows = bucketEntries.map(e => {
       const lang = countryToLang(e.country);
       const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
       const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
       const lastSent = daysSince(S.sendHistory?.[e.company]?.lastSent);
       const stages = [...new Set(e.members.map(c => c.stage).filter(Boolean))];
-      const stageTags = stages.map(s => `<span style="display:inline-block;background:${STAGE_COLORS[s]||'#999'};color:#fff;font-size:10px;padding:0 5px;border-radius:8px">${STAGE_LABELS[s]||s}</span>`).join('');
+      const stageTags = stages.map(st => `<span style="display:inline-block;background:${STAGE_COLORS[st]||'#999'};color:#fff;font-size:10px;padding:0 5px;border-radius:8px">${STAGE_LABELS[st]||st}</span>`).join('');
+      const cutHint = e._origCount > e.members.length ? ` <span style="color:#e6a817;font-size:10px">(${e.members.length}/${e._origCount})</span>` : '';
       return `<div class="pg-company">
-        <span class="pg-cname">${escapeHtml(e.company)}${stageTags ? ' ' + stageTags : ''}</span>
+        <span class="pg-cname">${escapeHtml(e.company)}${stageTags ? ' ' + stageTags : ''}${cutHint}</span>
         <span class="pg-ccount" style="color:var(--text-secondary)">${lastSent}</span>
         <span class="pg-cemail">${escapeHtml(e.country||'')} · ${langLabel} · ${tplLabel}</span>
         <span class="pg-ccount">${e.members.length}人</span>
@@ -196,7 +251,7 @@ function renderPreview() {
       <div class="preview-group-head">
         <span class="pg-arrow">▶</span>
         <span class="pg-label">${s.label||key}</span>
-        <span class="pg-count">${entries.length}家 · ${people}人</span>
+        <span class="pg-count">${bucketEntries.length}家 · ${people}人</span>
         <span class="pg-remove" data-stage="${key}">✕</span>
       </div>
       <div class="preview-group-body hidden">${cRows || '<div style="font-size:11px;color:#ccc">无可发联系人</div>'}</div>
@@ -233,114 +288,125 @@ function clearAdded() {
   renderView();
 }
 
-// ── 加入发送队列 ──────────────────────────────────────────────────────────
+// ── 加入发送队列（按额度截断）────────────────────────────────────────────
 async function addToQueue() {
   if (!_addedStages.length) { showToast('请先点击选择卡片', 'warn'); return; }
 
   const data = getBucketData();
+
+  // 获取剩余额度
+  let quota = _dailyRemaining;
+  if (quota === Infinity) {
+    try {
+      const stats = await window.electronAPI.getDashboardStats();
+      quota = stats.remaining ?? 0;
+    } catch { quota = 9999; }
+  }
+
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const GROUP_SIZE = config?.schedule?.batch_size || 10;
   const tplMode = document.getElementById('send-tpl-mode')?.dataset?.mode || 'adaptive';
   const userTemplates = S._userTemplates || [];
 
-  // 已在队列中的邮箱，跳过不重复加
-  const queuedEmails = new Set();
-  for (const q of S.queue) {
-    if (q.status !== 'sent' && q.status !== 'failed') {
-      for (const r of (q.recipients || [])) queuedEmails.add(r.toLowerCase().trim());
+  // 收集所有选中桶的全部联系人（按桶顺序、按公司顺序展平）
+  let allTargets = [];
+  for (const bucketKey of _addedStages) {
+    const entries = data[bucketKey] || [];
+    for (const e of entries) {
+      // 自动回复联系人先标记
+      const isAutoreply = bucketKey === 'autoreply';
+      for (const c of e.members) {
+        allTargets.push({ ...c, company: e.company, stage: c.stage || 'cold', _isAutoreply: isAutoreply });
+      }
     }
   }
 
+  // 处理自动回复重置
+  const arEmails = allTargets.filter(c => c._isAutoreply).map(c => c.email).filter(Boolean);
+  if (arEmails.length) {
+    try { await window.electronAPI.resetAutoreply(arEmails); } catch { /* 静默 */ }
+    allTargets.forEach(c => { if (c._isAutoreply) c.stage = 'cold'; });
+  }
+
+  // 按阶段优先级排序：高阶段优先（f4 > f3 > f2 > f1 > cold），确保跟进客户不被新手挤掉
+  const STAGE_ORDER = { f4: 5, f3: 4, f2: 3, f1: 2, cold: 1 };
+  allTargets.sort((a, b) => (STAGE_ORDER[b.stage] || 0) - (STAGE_ORDER[a.stage] || 0));
+
+  const totalSelected = allTargets.length;
+
+  // 按额度截断
+  const added = allTargets.slice(0, quota);
+  const cut = allTargets.length - added.length;
+
+  if (!added.length) {
+    showToast('今日额度已用完', 'warn');
+    return;
+  }
+
+  // 取组内出现最多的 stage
+  const _dominantStage = (contacts) => {
+    const tally = {};
+    for (const c of contacts) { const s = c.stage || 'cold'; tally[s] = (tally[s] || 0) + 1; }
+    let best = 'cold', max = 0;
+    for (const [s, n] of Object.entries(tally)) { if (n > max) { max = n; best = s; } }
+    return best;
+  };
+
+  // 按 GROUP_SIZE 分组入队
   let totalAdded = 0, totalPeople = 0;
-
-  for (const bucketKey of _addedStages) {
-    const entries = data[bucketKey] || [];
-    const targets = [];
-    for (const e of entries) {
-      for (const c of e.members) {
-        if (queuedEmails.has((c.email || '').toLowerCase().trim())) continue;
-        targets.push({ ...c, company: e.company });
-      }
-    }
-    if (!targets.length) continue;
-
-    // ── 每日额度裁剪 ──
-    const dailyLimit = S.dailyLimit || 0;
-    if (dailyLimit > 0) {
-      const queuePending = S.queue.reduce((s, q) => {
-        if (q.status !== 'sent' && q.status !== 'failed') return s + (q.recipients || []).length;
-        return s;
-      }, 0);
-      const remaining = Math.max(0, dailyLimit - (S.sentToday || 0) - queuePending);
-      if (remaining <= 0) {
-        showToast('已达每日发送上限', 'warn');
-        break;
-      }
-      if (targets.length > remaining) {
-        targets.length = remaining;
-        showToast(`已按额度裁剪，仅保留 ${remaining} 人`, 'warn');
-      }
+  for (let i = 0; i < added.length; i += GROUP_SIZE) {
+    const group = added.slice(i, i + GROUP_SIZE);
+    const first = group[0];
+    const lang = countryToLang(first.country || '');
+    const stageLabel = _dominantStage(group);
+    // 临时诊断：输出第一组各 stage 分布
+    if (totalAdded === 0) {
+      const diag = {};
+      for (const c of group) { const s = c.stage || 'undefined'; diag[s] = (diag[s] || 0) + 1; }
+      showToast(`诊断 stage: ${JSON.stringify(diag)} → dominant: ${stageLabel}`, 'warn');
     }
 
-    // 自动回复联系人：先重置为冷开发
-    const isAutoreply = bucketKey === 'autoreply';
-    if (isAutoreply) {
-      const emails = targets.map(c => c.email).filter(Boolean);
-      if (emails.length) {
-        await window.electronAPI.resetAutoreply(emails);
-        targets.forEach(c => { c.stage = 'cold'; });
+    let tplSource = 'preset', tplLabel = '自适应', subject, body;
+    if (tplMode === 'general' && userTemplates.length) {
+      const matched = matchUserTemplates(userTemplates, first.clientType, stageLabel, lang);
+      if (matched.length) {
+        const tpl = matched[Math.floor(Math.random() * matched.length)];
+        subject = (tpl.subject || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+        body = (tpl.body || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+        tplSource = 'user'; tplLabel = tpl.name || '用户模板';
       }
     }
-
-    // 模板匹配用联系人自己的 stage，不用桶名
-    const stageLabel = isAutoreply ? 'cold' : (targets[0]?.stage || 'cold');
-
-    const groups = [];
-    for (let i = 0; i < targets.length; i += GROUP_SIZE) {
-      groups.push(targets.slice(i, i + GROUP_SIZE));
+    if (!body) {
+      const tpl = randomPick(first.clientType, stageLabel, []);
+      const subs = S.templateLib?.subjects?.[first.clientType] || { es: '', pt: '', en: '' };
+      subject = (subs[lang] || subs.es || subs.en || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+      body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, stageLabel, first.clientType, config?.sender?.bodyName, first.firstName);
     }
 
-    for (const group of groups) {
-      const first = group[0];
-      const lang = countryToLang(first.country || '');
-
-      let tplSource = 'preset', tplLabel = '自适应', subject, body;
-      if (tplMode === 'general' && userTemplates.length) {
-        const matched = matchUserTemplates(userTemplates, first.clientType, stageLabel, lang);
-        if (matched.length) {
-          const tpl = matched[Math.floor(Math.random() * matched.length)];
-          subject = (tpl.subject || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
-          body = (tpl.body || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
-          tplSource = 'user'; tplLabel = tpl.name || '用户模板';
-        }
-      }
-      if (!body) {
-        const tpl = randomPick(first.clientType, stageLabel, []);
-        const subs = S.templateLib?.subjects?.[first.clientType] || { es: '', pt: '', en: '' };
-        subject = (subs[lang] || subs.es || subs.en || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
-        body = assembleEmail(lang, tpl.hook, tpl.pain, tpl.proof, tpl.cta, tpl.followup, stageLabel, first.clientType, config?.sender?.bodyName, first.firstName);
-      }
-
-      const recipients = group.map(c => c.email);
-      S.queue.push({
-        id: ++S.queueIdCounter, company: first.company, companyId: '',
-        to: recipients.join(', '), recipients, subject, body, status: 'pending',
-        addedAt: new Date().toISOString(),
-        _stage: stageLabel, _type: first.clientType, _lang: lang,
-        _country: first.country || '',
-        _tplInfo: tplSource === 'user' ? 'user:tpl' : `${stageLabel}:auto`,
-        _templateSource: tplSource, _templateLabel: tplLabel,
-        _batchLabel: groups.length > 1 ? ` (${totalAdded + 1}/${groups.length})` : '',
-        _recipientStatus: recipients.map(e => ({ email: e, status: 'pending' })),
-      });
-      totalAdded++; totalPeople += recipients.length;
-    }
+    const recipients = group.map(c => c.email);
+    S.queue.push({
+      id: ++S.queueIdCounter, company: first.company, companyId: '',
+      to: recipients.join(', '), recipients, subject, body, status: 'pending',
+      addedAt: new Date().toISOString(),
+      _stage: stageLabel, _type: first.clientType, _lang: lang,
+      _country: first.country || '',
+      _tplInfo: tplSource === 'user' ? 'user:tpl' : `${stageLabel}:auto`,
+      _templateSource: tplSource, _templateLabel: tplLabel,
+      _batchLabel: '',
+      _recipientStatus: recipients.map(e => ({ email: e, status: 'pending' })),
+    });
+    totalAdded++; totalPeople += recipients.length;
   }
 
   saveQueue();
-  showToast(`已添加 ${totalAdded} 组 · ${totalPeople} 人`, 'ok');
+  const msg = cut > 0
+    ? `已加入 ${totalPeople} 人（${totalSelected} 人中截断，${cut} 人因额度不足未加入）`
+    : `已添加 ${totalAdded} 组 · ${totalPeople} 人`;
+  showToast(msg, cut > 0 ? 'warn' : 'ok');
   document.getElementById('stat-queue').textContent = S.queue.filter(e => e.status === 'pending').length;
   _addedStages = [];
+  // 刷新剩余额度
+  _dailyRemaining = Math.max(0, quota - totalPeople);
   renderView();
   setTimeout(() => document.querySelector('[data-page="queue"]')?.click(), 300);
 }
