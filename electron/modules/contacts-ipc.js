@@ -548,7 +548,6 @@ function register(ipcMain, deps) {
       const c = db.getByEmail((email || '').toLowerCase().trim());
       if (!c) continue;
       db.setStage(c.id, 'cold', 'manual:autoreply');
-      db.update(c.id, { last_sent_at: '', last_sent_acct: '' });
       count++;
     }
     if (count > 0) _notify();

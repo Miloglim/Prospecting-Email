@@ -14,7 +14,23 @@ function exportAll() {
   try {
     const contactsDb = require('./contacts-db');
     const contacts = contactsDb.listAll();
-    const rows = contacts.map(c => ({
+    // 从发送日志取每个邮箱的最近发送时间（不受联系人 last_sent_at 被清空影响）
+    const lastSentMap = {};
+    try {
+      const sendLog = require('./send-log-db');
+      const { records } = sendLog.list({ limit: 100000 });
+      for (const r of records) {
+        if (r.status !== 'sent') continue;
+        const email = (r.to || '').toLowerCase().trim();
+        if (email && r.time && (!lastSentMap[email] || r.time > lastSentMap[email].time)) {
+          lastSentMap[email] = { time: r.time, acct: r._accountId || '' };
+        }
+      }
+    } catch { /* 无发送日志则全部为空 */ }
+    const rows = contacts.map(c => {
+      const email = (c.email || '').toLowerCase().trim();
+      const sl = lastSentMap[email];
+      return {
       '公司': c.company_name || c.company || '',
       '国家': c.company_country || c.country || '',
       '分类': c.category || '',
@@ -31,13 +47,13 @@ function exportAll() {
       '阶段': STAGE_LABEL[c.stage] || c.stage || 'cold',
       '退信': c.is_bounced ? '是' : '',
       '退信原因': c.bounce_reason || c.bounceReason || '',
-      '最后发送': (c.last_sent_at || '').slice(0, 10),
-      '发信账号': c.last_sent_acct || '',
+      '最后发送': sl ? sl.time.slice(0, 10) : '',
+      '发信账号': sl ? sl.acct : '',
       '跟进人': c.assignee || '',
       '跟进备注': c.followup_note || '',
       '机会阶段': c.opp_stage || '',
       '添加时间': (c.created_at || '').slice(0, 10),
-    }));
+    }});
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '联系人');
   } catch { /* 降级 */ }
 
