@@ -250,15 +250,29 @@ function _isSendable(c) {
   return true;
 }
 
+const TIME_BUCKETS = [
+  { key: 'never',  label: '从未发送', minDays: null, color: '#9e9e9e' },
+  { key: 'd1_3',   label: '1-3天前',  minDays: 1, maxDays: 3, color: '#2196f3' },
+  { key: 'd4_7',   label: '4-7天前',  minDays: 4, maxDays: 7, color: '#ff9800' },
+  { key: 'd8plus', label: '7天以上',  minDays: 8, maxDays: Infinity, color: '#8e24aa' },
+  { key: 'today',  label: '今天',     minDays: 0, maxDays: 0, disabled: true, color: '#4caf50' },
+];
+
+function _daysAgo(dateStr) {
+  if (!dateStr) return null;
+  const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  return d < 0 ? null : d;
+}
+
 function _classifyContacts() {
   const contacts = S.contactsData || [];
+  const sendHist = S.sendHistory || {};
   const classified = {
-    sending: { cold: [], f1: [], f2: [], f3: [], f4: [] },
+    sending: { never: [], d1_3: [], d4_7: [], d8plus: [], today: [] },
     autoreply: [],
     reached: [],
   };
 
-  // 按公司分组
   const byCompany = {};
   for (const c of contacts) {
     const name = c.company || c.company_name || '';
@@ -268,13 +282,14 @@ function _classifyContacts() {
   }
 
   for (const [company, members] of Object.entries(byCompany)) {
-    // 拆分：autoreply 联系人独立处理，不参与阶段分类
-    const order = ['cold', 'f1', 'f2', 'f3', 'f4'];
     const normalContacts = [];
     const autoreplyContacts = [];
     const reachedContacts = [];
+    const histLastSent = sendHist[company]?.lastSent || '';
 
     for (const c of members) {
+      const lastSent = c.last_sent_at || histLastSent || '';
+      const days = _daysAgo(lastSent);
       const st = c.stage || c._stage || 'cold';
       const entry = {
         email: c.email || '',
@@ -286,7 +301,7 @@ function _classifyContacts() {
         ok: c._status === 'autoreply'
           ? !!(c.email && c.email.includes('@') && !c.email.endsWith('@no.email'))
           : _isSendable(c),
-        sent: !!(c.last_sent_acct),
+        lastSentDays: days,
         _status: c._status || '',
         tags: c.tags || [],
       };
@@ -307,46 +322,48 @@ function _classifyContacts() {
         company,
         stageLabel: 'autoreply',
         contactCount: autoreplyContacts.length,
-        sendableCount: autoreplyContacts.filter(c => c.ok && !c.sent).length,
-        sentCount: autoreplyContacts.filter(c => c.ok && c.sent).length,
+        sendableCount: autoreplyContacts.filter(c => c.ok).length,
         contacts: autoreplyContacts,
       });
     }
 
-    // ── 已触达区（不含 autoreply）──
+    // ── 已触达区 ──
     if (reachedContacts.length) {
       classified.reached.push({
         company,
         stageLabel: 'reached',
         contactCount: reachedContacts.length,
         sendableCount: 0,
-        sentCount: 0,
         contacts: reachedContacts,
       });
     }
 
-    // ── 发送阶段：按每人自己的阶段分到不同组 ──
-    const stageGroups = { cold: [], f1: [], f2: [], f3: [], f4: [] };
+    // ── 按距上次发送天数分桶 ──
     for (const c of normalContacts) {
-      const sk = order.includes(c.stage) ? c.stage : 'cold';
-      stageGroups[sk].push(c);
-    }
+      const days = c.lastSentDays;
+      let bucket;
+      if (days === null) { bucket = 'never'; }
+      else if (days === 0) { bucket = 'today'; }
+      else if (days <= 3) { bucket = 'd1_3'; }
+      else if (days <= 7) { bucket = 'd4_7'; }
+      else { bucket = 'd8plus'; }
 
-    for (const sk of order) {
-      const sc = stageGroups[sk];
-      if (!sc.length) continue;
-      classified.sending[sk].push({
-        company,
-        stageLabel: sk,
-        contactCount: sc.length,
-        sendableCount: sc.filter(c => c.ok && !c.sent).length,
-        sentCount: sc.filter(c => c.ok && c.sent).length,
-        contacts: sc,
-      });
+      if (!classified.sending[bucket]) classified.sending[bucket] = [];
+
+      // 找或建该公司在此桶中的条目
+      let compEntry = classified.sending[bucket].find(e => e.company === company);
+      if (!compEntry) {
+        compEntry = { company, stageLabel: bucket, contactCount: 0, sendableCount: 0, contacts: [] };
+        classified.sending[bucket].push(compEntry);
+      }
+      compEntry.contacts.push(c);
+      compEntry.contactCount++;
+      if (c.ok) compEntry.sendableCount++;
     }
   }
 
   S.contactsClassified = classified;
 }
 
+export { TIME_BUCKETS };
 export default CS;

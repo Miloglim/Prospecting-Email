@@ -1,22 +1,21 @@
-// ── 邮件发送 — 阶段卡片点击选中 ────────────────────────────────────────
+// ── 邮件发送 — 时间桶卡片点击选中 ────────────────────────────────────────
 const S = window.S;
 import { lucide, showToast, escapeHtml, countryToLang, daysSince } from './shared.js';
 import { randomPick, assembleEmail, matchUserTemplates } from './templates.js';
 import { saveQueue } from './send-queue.js';
-import CS from './company-state.js';
+import CS, { TIME_BUCKETS } from './company-state.js';
 
-const STAGES = [
-  { key: 'cold', label: '冷开发', color: '#9e9e9e' },
-  { key: 'f1', label: 'F1', color: '#2196f3' },
-  { key: 'f2', label: 'F2', color: '#ff9800' },
-  { key: 'f3', label: 'F3', color: '#8e24aa' },
-  { key: 'f4', label: 'F4', color: '#4caf50' },
+const BUCKET_MAP = {};
+TIME_BUCKETS.forEach(s => BUCKET_MAP[s.key] = s);
+
+// reached 和 autoreply 不算时间桶，手动补
+const EXTRA_SECTIONS = [
   { key: 'reached', label: '已触达', color: '#9e9e9e', disabled: true },
   { key: 'autoreply', label: '自动回复', color: '#e6a817' },
 ];
-
-const STAGE_MAP = {};
-STAGES.forEach(s => STAGE_MAP[s.key] = s);
+const ALL_SECTIONS = [...TIME_BUCKETS, ...EXTRA_SECTIONS];
+const SECTION_MAP = {};
+ALL_SECTIONS.forEach(s => SECTION_MAP[s.key] = s);
 
 let _addedStages = [];
 
@@ -75,40 +74,39 @@ function renderView() {
   renderPreview();
 }
 
-// ── 从分类数据中提取阶段统计 ──────────────────────────────────────────────
-function getStageData() {
+// ── 从分类数据中按时间桶提取统计 ────────────────────────────────────────────
+function getBucketData() {
   const cl = S.contactsClassified;
   if (!cl) return {};
   function entries(key) {
     const raw = cl.sending?.[key] || cl[key] || [];
-    const isSideSection = key === 'reached' || key === 'autoreply';
+    const isSide = key === 'reached' || key === 'autoreply';
     return raw.map(e => ({
       company: e.company || '',
       stageLabel: e.stageLabel || key,
       clientType: (e.contacts || e.members || [])[0]?.clientType || 'unlabeled',
       country: (e.contacts || e.members || [])[0]?.country || '',
       members: (e.members || e.contacts || []).filter(c => {
-        if (isSideSection) return c.email && !c.email.endsWith('@no.email');
-        return c.ok !== false && !c.sent && c.email && !c.email.endsWith('@no.email');
+        if (isSide) return c.email && !c.email.endsWith('@no.email');
+        return c.ok !== false && c.email && !c.email.endsWith('@no.email');
       }),
       sendableCount: e.sendableCount || 0,
-      sentCount: e.sentCount || 0,
       contactCount: e.contactCount || 0,
     })).filter(e => e.members.length > 0);
   }
   const data = {};
-  for (const s of STAGES) data[s.key] = entries(s.key);
+  for (const s of ALL_SECTIONS) data[s.key] = entries(s.key);
   return data;
 }
 
-// ── 阶段卡片（点击选中）──────────────────────────────────────────────────
+// ── 时间桶卡片（点击选中）──────────────────────────────────────────────────
 function renderStageCards() {
   const container = document.getElementById('send-stage-cards');
   const summary = document.getElementById('send-summary');
   if (!container) return;
-  const data = getStageData();
+  const data = getBucketData();
 
-  container.innerHTML = STAGES.map(s => {
+  container.innerHTML = ALL_SECTIONS.map(s => {
     const entries = data[s.key] || [];
     if (!entries.length) return '';
     const isSide = s.key === 'reached' || s.key === 'autoreply';
@@ -144,7 +142,7 @@ function renderStageCards() {
         const entries = data[key] || [];
         totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
       });
-      summary.textContent = `已选 ${_addedStages.length} 阶段 · ${totalPeople} 人`;
+      summary.textContent = `已选 ${_addedStages.length} 组 · ${totalPeople} 人`;
     } else {
       summary.textContent = '';
     }
@@ -159,11 +157,11 @@ function renderPreview() {
 
   if (!_addedStages.length) {
     list.innerHTML = '';
-    if (head) head.textContent = '点击左侧阶段卡片选择';
+    if (head) head.textContent = '点击左侧卡片选择';
     return;
   }
 
-  const data = getStageData();
+  const data = getBucketData();
   let totalCompanies = 0, totalPeople = 0;
   _addedStages.forEach(key => {
     const entries = data[key] || [];
@@ -171,19 +169,23 @@ function renderPreview() {
     totalPeople += entries.reduce((s, e) => s + e.members.length, 0);
   });
 
-  if (head) head.textContent = `发送预览 · ${_addedStages.length}阶段 · ${totalCompanies}家 · ${totalPeople}人`;
+  if (head) head.textContent = `发送预览 · ${_addedStages.length}组 · ${totalCompanies}家 · ${totalPeople}人`;
 
   list.innerHTML = _addedStages.map(key => {
-    const s = STAGE_MAP[key] || {};
+    const s = SECTION_MAP[key] || {};
     const entries = data[key] || [];
     const people = entries.reduce((sum, e) => sum + e.members.length, 0);
+    const STAGE_LABELS = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4' };
+    const STAGE_COLORS = { cold: '#9e9e9e', f1: '#2196f3', f2: '#ff9800', f3: '#8e24aa', f4: '#4caf50' };
     const cRows = entries.map(e => {
       const lang = countryToLang(e.country);
       const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
       const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
       const lastSent = daysSince(S.sendHistory?.[e.company]?.lastSent);
+      const stages = [...new Set(e.members.map(c => c.stage).filter(Boolean))];
+      const stageTags = stages.map(s => `<span style="display:inline-block;background:${STAGE_COLORS[s]||'#999'};color:#fff;font-size:10px;padding:0 5px;border-radius:8px">${STAGE_LABELS[s]||s}</span>`).join('');
       return `<div class="pg-company">
-        <span class="pg-cname">${escapeHtml(e.company)}</span>
+        <span class="pg-cname">${escapeHtml(e.company)}${stageTags ? ' ' + stageTags : ''}</span>
         <span class="pg-ccount" style="color:var(--text-secondary)">${lastSent}</span>
         <span class="pg-cemail">${escapeHtml(e.country||'')} · ${langLabel} · ${tplLabel}</span>
         <span class="pg-ccount">${e.members.length}人</span>
@@ -193,7 +195,6 @@ function renderPreview() {
     return `<div class="preview-group" data-stage="${key}">
       <div class="preview-group-head">
         <span class="pg-arrow">▶</span>
-        <span class="pg-dot" style="background:${s.color||'#999'}"></span>
         <span class="pg-label">${s.label||key}</span>
         <span class="pg-count">${entries.length}家 · ${people}人</span>
         <span class="pg-remove" data-stage="${key}">✕</span>
@@ -234,9 +235,9 @@ function clearAdded() {
 
 // ── 加入发送队列 ──────────────────────────────────────────────────────────
 async function addToQueue() {
-  if (!_addedStages.length) { showToast('请先点击选择阶段', 'warn'); return; }
+  if (!_addedStages.length) { showToast('请先点击选择卡片', 'warn'); return; }
 
-  const data = getStageData();
+  const data = getBucketData();
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const GROUP_SIZE = config?.schedule?.batch_size || 10;
   const tplMode = document.getElementById('send-tpl-mode')?.dataset?.mode || 'adaptive';
@@ -244,8 +245,8 @@ async function addToQueue() {
 
   let totalAdded = 0, totalPeople = 0;
 
-  for (const stageKey of _addedStages) {
-    const entries = data[stageKey] || [];
+  for (const bucketKey of _addedStages) {
+    const entries = data[bucketKey] || [];
     const targets = [];
     for (const e of entries) {
       for (const c of e.members) {
@@ -255,17 +256,17 @@ async function addToQueue() {
     if (!targets.length) continue;
 
     // 自动回复联系人：先重置为冷开发
-    const isAutoreply = stageKey === 'autoreply';
+    const isAutoreply = bucketKey === 'autoreply';
     if (isAutoreply) {
       const emails = targets.map(c => c.email).filter(Boolean);
       if (emails.length) {
         await window.electronAPI.resetAutoreply(emails);
-        // 更新内存：设为 cold 阶段，未发送
-        targets.forEach(c => { c.stage = 'cold'; c.sent = false; });
+        targets.forEach(c => { c.stage = 'cold'; });
       }
     }
 
-    const stageLabel = isAutoreply ? 'cold' : (targets[0]?.stage || stageKey);
+    // 模板匹配用联系人自己的 stage，不用桶名
+    const stageLabel = isAutoreply ? 'cold' : (targets[0]?.stage || 'cold');
 
     const groups = [];
     for (let i = 0; i < targets.length; i += GROUP_SIZE) {

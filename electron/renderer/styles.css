@@ -601,7 +601,13 @@ tr:hover td { background: #fafbfc; }
 .qg-arrow { transition: transform 0.2s; }
 
 /* ── 队列卡片列表 ─────────────────────────────────────────────────── */
-.queue-card-list { display: flex; flex-direction: column; gap: 6px; }
+#page-queue.active {
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+}
+#page-queue .queue-card-list {
+  flex: 1; overflow-y: auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
 .queue-card {
   background: var(--card-bg); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px 16px; cursor: pointer;
