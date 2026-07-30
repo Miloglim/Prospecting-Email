@@ -679,7 +679,7 @@ async function openDetailPanel(contactId) {
                   <div class="crm-ai-draft">
                     <div class="crm-ai-draft-label">AI 回复</div>
                     <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
-                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}">${lucide('send',12)} 加入发信箱</button>
+                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}" data-origbody="${escapeHtml(m.body||'')}" data-date="${escapeHtml(m.date||'')}">${lucide('send',12)} 加入发信箱</button>
                   </div>` : ''}
                   <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
               } else {
@@ -699,11 +699,18 @@ async function openDetailPanel(contactId) {
               const rawBody = btn.dataset.script;
               const name = btn.dataset.name;
               const subject = btn.dataset.subject;
+              const origBody = btn.dataset.origbody || '';
+              const origDate = btn.dataset.date || '';
               if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
-              // 纯文本 → HTML：换行转 <br>
-              const body = rawBody
+              // AI 回复正文 + 引用前文
+              let body = rawBody
                 ? rawBody.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>')
                 : '';
+              if (origBody) {
+                const dateStr = origDate ? new Date(origDate).toLocaleString('zh-CN') : '';
+                const attribution = dateStr ? `<div style="font-size:12px;color:#667085;margin:0 0 8px 0">On ${dateStr}, ${escapeHtml(name)} wrote:</div>` : '';
+                body += `<br><br><div style="border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#4d4d4d;font-size:13px">${attribution}${origBody}</div><br>`;
+              }
               window.electronAPI.openCompose({
                 to,
                 contactName: name || '',
@@ -1476,7 +1483,7 @@ function rebindFollowupEvents(panel, contactId) {
                   <div class="crm-ai-draft">
                     <div class="crm-ai-draft-label">AI 回复</div>
                     <div class="crm-ai-draft-text">${escapeHtml(draft)}</div>
-                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}">${lucide('send',12)} 加入发信箱</button>
+                    <button class="crm-ai-compose-btn" data-script="${escapeHtml(draft)}" data-email="${escapeHtml(m.from_addr||'')}" data-name="${escapeHtml(m.from_name||'')}" data-subject="${escapeHtml(m.subject||'')}" data-origbody="${escapeHtml(m.body||'')}" data-date="${escapeHtml(m.date||'')}">${lucide('send',12)} 加入发信箱</button>
                   </div>` : ''}
                   <button class="crm-ai-retry-btn-inline">${lucide('refresh-cw',12)} 换个思路</button>`;
               } else {
@@ -1496,11 +1503,18 @@ function rebindFollowupEvents(panel, contactId) {
               const rawBody = btn.dataset.script;
               const name = btn.dataset.name;
               const subject = btn.dataset.subject;
+              const origBody = btn.dataset.origbody || '';
+              const origDate = btn.dataset.date || '';
               if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
-              // 纯文本 → HTML：换行转 <br>
-              const body = rawBody
+              // AI 回复正文 + 引用前文
+              let body = rawBody
                 ? rawBody.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>')
                 : '';
+              if (origBody) {
+                const dateStr = origDate ? new Date(origDate).toLocaleString('zh-CN') : '';
+                const attribution = dateStr ? `<div style="font-size:12px;color:#667085;margin:0 0 8px 0">On ${dateStr}, ${escapeHtml(name)} wrote:</div>` : '';
+                body += `<br><br><div style="border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#4d4d4d;font-size:13px">${attribution}${origBody}</div><br>`;
+              }
               window.electronAPI.openCompose({
                 to,
                 contactName: name || '',

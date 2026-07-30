@@ -148,9 +148,9 @@ function register(mainIpc, deps) {
       const sigStore = require("../services/signature-store");
       const sigHtml = sigStore.readSignature(account.id);
 
-      // 正文 + 签名
-      const { buildContent } = require("../services/send-engine");
-      const { textBody, html } = buildContent(body, sigText, sigHtml);
+      // 正文已含签名，直接使用
+      const textBody = body.replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
+      const html = body;
 
       // 发件人
       const fromName = config.sender?.name || account.label || "";

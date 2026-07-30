@@ -174,6 +174,7 @@ function upsertSignature() {
   const editor = $('#body-editor');
   const sigHtml = _selectedAcct?.signatureHtml || '';
   let sigBlock = document.getElementById(SIG_ID);
+  const quoteHtml = editor.dataset.quoteHtml || '';
 
   if (sigBlock) {
     // 切换账号：替换已有签名
@@ -200,6 +201,20 @@ function upsertSignature() {
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
+  }
+
+  // 引用块：签名之后追加
+  let quoteBlock = document.getElementById('quote-block');
+  if (quoteHtml) {
+    if (!quoteBlock) {
+      quoteBlock = document.createElement('div');
+      quoteBlock.id = 'quote-block';
+      quoteBlock.contentEditable = 'false';
+      editor.appendChild(quoteBlock);
+    }
+    quoteBlock.innerHTML = quoteHtml;
+  } else if (quoteBlock) {
+    quoteBlock.remove();
   }
 }
 
@@ -420,6 +435,7 @@ async function init() {
       }
       if (d.subject) $("#subject-input").value = d.subject;
       if (d.body) $("#body-editor").innerHTML = d.body;
+      if (d.quoteHtml) $("#body-editor").dataset.quoteHtml = d.quoteHtml;
       // 标记对接邮箱并自动选中
       if (d.linkedAccount) {
         _linkedAccount = d.linkedAccount;
