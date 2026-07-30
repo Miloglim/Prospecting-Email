@@ -26,7 +26,8 @@ function register(ipcMain, deps) {
     deps.sendQueue.length = 0; deps.sendQueue.push(...emails); deps.isPaused = false;
     try { await engine.runSendBatch(deps, sendProgress); } finally {
       deps._sendInProgress = false;
-      // 发信完成后触发收件箱自动拉取（等退信到达）
+      // 发信完成后推送 CRM 刷新 + 触发收件箱自动拉取（等退信到达）
+      try { if (deps.mainWindow && !deps.mainWindow.isDestroyed()) deps.mainWindow.webContents.send('crm:changed'); } catch { /* 窗口已销毁 */ }
       try { require('./ipc/inbox-ipc').triggerInboxFetch?.(); } catch { /* 收件箱模块不存在不影响发送 */ }
     }
     return { finished: true };

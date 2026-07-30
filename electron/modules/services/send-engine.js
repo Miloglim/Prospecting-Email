@@ -197,7 +197,7 @@ function _recordSuccess(ctx, params, log, deps, logLabel) {
     const contactsDb = require('./contacts-db');
     for (const r of toList) {
       const contact = contactsDb.getByEmail(r);
-      if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (bodyText || '').slice(0, 200) });
+      if (contact) require('./interactions-db').add({ contact_id: contact.id, company_id: contact.company_id || '', type: 'sent', direction: 'outbound', subject, snippet: (bodyText || '').slice(0, 200), email_uid: messageId || '', email_account: accountId || '' });
     }
   } catch { /* 互动记录不影响发送 */ }
   Log.info('发信', `${toList.length}收件人 → ${email.company || '?'} | ${email._stage || 'cold'} | ${logLabel} | ${accountId}`);

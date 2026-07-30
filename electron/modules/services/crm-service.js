@@ -83,8 +83,12 @@ function listPipeline(filters = {}) {
      LEFT JOIN companies co ON co.id = c.company_id
      LEFT JOIN (
        SELECT contact_id, MAX(created_at) as note_at,
-         (SELECT content FROM contact_notes WHERE contact_id = cn.contact_id ORDER BY created_at DESC LIMIT 1) as note_content
-       FROM contact_notes cn GROUP BY contact_id
+         (SELECT content FROM contact_notes WHERE contact_id = u.contact_id ORDER BY created_at DESC LIMIT 1) as note_content
+       FROM (
+         SELECT contact_id, created_at FROM contact_notes
+         UNION ALL
+         SELECT contact_id, created_at FROM interactions
+       ) u GROUP BY contact_id
      ) ln ON ln.contact_id = c.id
      WHERE ${where}
      ORDER BY c.last_sent_at DESC`

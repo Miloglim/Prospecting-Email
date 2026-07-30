@@ -1,0 +1,253 @@
+{
+  "vmlog.com.br": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Carlos Gustavo Knaesel",
+        "title": "Managing Director",
+        "email": "carlos@vmlog.com.br"
+      },
+      {
+        "name": "Lorena Bosio",
+        "title": "Air Shipment Coordinator",
+        "email": "lorena@vmlog.com.br"
+      },
+      {
+        "name": "Edson Cezar C. dos Santos",
+        "title": "Import Department",
+        "email": "edson@vmlog.com.br"
+      },
+      {
+        "name": "Manuela Moro Favaro",
+        "title": "Export Department",
+        "email": "manuela@vmlog.com.br"
+      }
+    ]
+  },
+  "leadershipfreight.com": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Wagner Luiz",
+        "title": "Director",
+        "email": "wagner@leadershipfreight.com"
+      },
+      {
+        "name": "Sergio Matos",
+        "title": "CEO",
+        "email": "sergio@leadershipfreight.com"
+      }
+    ]
+  },
+  "threelogintl.com.br": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Artur Martins",
+        "title": "Contact",
+        "email": "artur@threelogintl.com.br"
+      }
+    ]
+  },
+  "fglglobal.com": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Cyro Flores",
+        "title": "International Sales",
+        "email": "cyro.flores@fglglobal.com"
+      }
+    ]
+  },
+  "nipponexpress.com": {
+    "format": "first.last",
+    "employees": [],
+    "general": [
+      "nebr.sales@nipponexpress.com"
+    ]
+  },
+  "sunstarlog.com.br": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Gabriela Barreira",
+        "title": "Contact",
+        "email": "gabriela.barreira@sunstarlog.com.br"
+      }
+    ]
+  },
+  "ranur.com": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Benjamin Min",
+        "title": "Contact",
+        "email": "bmin@ranur.com"
+      }
+    ]
+  },
+  "br-asgroup.com": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Flavio Luna",
+        "title": "Sao Paulo Office",
+        "email": "flavio.luna@br-asgroup.com"
+      }
+    ]
+  },
+  "shipuwl.com": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Sheila Waltrick",
+        "title": "Brazil Office",
+        "email": "Sheila.Waltrick@shipUWL.com"
+      }
+    ]
+  },
+  "intercarrier.com.br": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Helio Silvano",
+        "title": "Contact",
+        "email": "helio@intercarrier.com.br"
+      }
+    ]
+  },
+  "euroamerica.com.br": {
+    "format": "",
+    "employees": [],
+    "general": [
+      "rh@euroamerica.com.br"
+    ]
+  },
+  "schildcargo.com.br": {
+    "format": "first@",
+    "employees": [
+      {
+        "name": "Alexandre",
+        "title": "Contact (BLACKLISTED)",
+        "email": "alexandre@schildcargo.com.br"
+      }
+    ],
+    "general": [
+      "operacional@schildcargo.com.br"
+    ]
+  },
+  "eiffbrz.com.br": {
+    "format": "",
+    "employees": [],
+    "general": [
+      "adm@eiffbrz.com.br"
+    ]
+  },
+  "ekogf.com": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Bruno Cruz",
+        "title": "Contact",
+        "email": "bruno.cruz@ekogf.com"
+      }
+    ]
+  },
+  "afglobal.com.br": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Carlos Franco",
+        "title": "General Manager",
+        "email": "carlos.franco@afglobal.com.br"
+      },
+      {
+        "name": "Denise Ackel",
+        "title": "Director",
+        "email": "Denise.ackel@afglobal.com.br"
+      }
+    ],
+    "general": [
+      "afglobal.santos@afglobal.com.br"
+    ]
+  },
+  "bmlog.com.br": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Sergio Bini",
+        "title": "CEO",
+        "email": "sergiobini@bmlog.com.br"
+      },
+      {
+        "name": "Rodrigo Sperandio",
+        "title": "Commercial Director",
+        "email": "rodrigo.sperandio@bmlog.com.br"
+      }
+    ],
+    "general": [
+      "wca@bmlog.com.br"
+    ]
+  },
+  "msc.com": {
+    "format": "",
+    "employees": [],
+    "general": [
+      "BRA-info@msc.com"
+    ]
+  },
+  "csavgroup.com": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Carlos Caldas",
+        "title": "Contact",
+        "email": "carlos.caldas@csavgroup.com"
+      }
+    ]
+  },
+  "grupomulticargo.com.br": {
+    "format": "",
+    "employees": [],
+    "general": [
+      "multicargo@grupomulticargo.com.br"
+    ]
+  },
+  "meridional-maritima.com": {
+    "format": "",
+    "employees": [],
+    "general": [
+      "manager-mml-sts@meridional-maritima.com"
+    ]
+  },
+  "cargofast.com.br": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Rogerio Fadigas",
+        "title": "Contact",
+        "email": "rogerio.fadigas@cargofast.com.br"
+      }
+    ]
+  },
+  "suntrans.com.br": {
+    "format": "first.last",
+    "employees": [
+      {
+        "name": "Rafael Canada",
+        "title": "CEO",
+        "email": "rafael.canada@suntrans.com.br"
+      },
+      {
+        "name": "Jaqueline Silva",
+        "title": "Overseas Director",
+        "email": "jaqueline.silva@suntrans.com.br"
+      },
+      {
+        "name": "Amanda Caldas",
+        "title": "Contact",
+        "email": "amanda.caldas@suntrans.com.br"
+      }
+    ]
+  }
+}
