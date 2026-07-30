@@ -15,6 +15,7 @@ const STAGES = [
 
 let _pipelineData = null;
 let _currentDetailId = null;
+let _currentContact = null;
 let _currentTab = 'info';
 let _reminderTimers = {};
 
@@ -345,6 +346,7 @@ async function openDetailPanel(contactId) {
   if (!r.ok) { panel.innerHTML = `<div class="crm-detail-error">${escapeHtml(r.error)}</div>`; return; }
 
   const { contact, notes, interactions, indirectMails } = r.data;
+  _currentContact = contact;
   const prefs = contact._extra?.crmPreferences || {};
   const reminder = contact._extra?.crmReminder || {};
 
@@ -716,6 +718,7 @@ async function openDetailPanel(contactId) {
                 contactName: name || '',
                 subject: subject ? `Re: ${subject}` : '',
                 body,
+                linkedAccount: _currentContact?.last_sent_acct || '',
               });
               btn.innerHTML = lucide('check',12) + ' 已打开';
               setTimeout(() => { btn.innerHTML = lucide('send',12) + ' 加入发信箱'; }, 2000);
@@ -1520,6 +1523,7 @@ function rebindFollowupEvents(panel, contactId) {
                 contactName: name || '',
                 subject: subject ? `Re: ${subject}` : '',
                 body,
+                linkedAccount: _currentContact?.last_sent_acct || '',
               });
               btn.innerHTML = lucide('check',12) + ' 已打开';
               setTimeout(() => { btn.innerHTML = lucide('send',12) + ' 加入发信箱'; }, 2000);

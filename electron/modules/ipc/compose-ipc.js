@@ -263,10 +263,10 @@ function register(mainIpc, deps) {
       }
 
       // 记录互动
-      const accountId = account.id || account.smtp?.user || "";
       try {
         const contactsDb = require("../services/contacts-db");
         const interactionsDb = require("../services/interactions-db");
+        const acctId = account.id || account.smtp?.user || "";
         for (const addr of toList) {
           const contact = contactsDb.getByEmail(addr);
           if (contact)
@@ -278,7 +278,7 @@ function register(mainIpc, deps) {
               subject,
               snippet: (body || "").slice(0, 200),
               email_uid: info.messageId || "",
-              email_account: accountId,
+              email_account: acctId,
             });
         }
       } catch {
