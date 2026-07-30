@@ -33,7 +33,7 @@ export async function initCrmPipeline() {
   const si = document.getElementById('crm-search');
   if (si) { let t; si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(refreshPipeline, 300); }); }
 
-  window.electronAPI.onCrmChanged(() => { _pipelineLoaded = false; refreshPipeline(); });
+  window.electronAPI.onCrmChanged(() => { _pipelineLoaded = false; refreshPipeline(); if (_currentDetailId) openDetailPanel(_currentDetailId); });
   // 切回 CRM 页面时自动刷新，捕捉 inbox 自动收件带来的状态变化
   window.__pageHandlers['crm'] = () => refreshPipeline();
   setInterval(() => checkReminders(), 5 * 60 * 1000);

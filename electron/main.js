@@ -52,6 +52,11 @@ try {
   if (r2.migrated) _Log.info("启动", `send-log 迁移: ${r2.migrated} 条`);
 } catch (e) { /* 静默 */ }
 
+// 补齐旧 interactions sent 记录的 email_uid（从 send_log 反查匹配）
+try {
+  require("./modules/services/interactions-db").backfillSentEmailRefs();
+} catch (e) { /* 静默 */ }
+
 // inbox 迁移
 try {
   const inboxMigrate = require("./modules/services/inbox-service")._migrateInboxFromJson;

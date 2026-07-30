@@ -263,6 +263,7 @@ function register(mainIpc, deps) {
       }
 
       // 记录互动
+      const accountId = account.id || account.smtp?.user || "";
       try {
         const contactsDb = require("../services/contacts-db");
         const interactionsDb = require("../services/interactions-db");
@@ -276,11 +277,16 @@ function register(mainIpc, deps) {
               direction: "outbound",
               subject,
               snippet: (body || "").slice(0, 200),
+              email_uid: info.messageId || "",
+              email_account: accountId,
             });
         }
       } catch {
         /* 互动记录不影响发送 */
       }
+
+      // 推送 CRM 刷新
+      try { if (deps.mainWindow && !deps.mainWindow.isDestroyed()) deps.mainWindow.webContents.send('crm:changed'); } catch { /* 窗口已销毁 */ }
 
       Log.info("compose", `手动发信: ${toList.length} 人 → ${subject}`);
       return ok({ messageId: info.messageId });
