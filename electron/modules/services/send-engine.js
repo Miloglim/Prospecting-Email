@@ -111,6 +111,7 @@ function _buildContext(config) {
     maxPerDay: accounts.filter(a => a.active !== false).reduce((sum, a) => sum + (a.dailyLimit || 500), 0),
     startH: sc.start_hour_beijing ?? 19,
     endH: sc.end_hour_beijing ?? 3,
+    timeWindowEnabled: sc.time_window_enabled !== false, // 默认开启
     // 组间暂停：每发一组后暂停
     groupIntervalMin: (sc.batch_pause_min_seconds ?? 150) * 1000,
     groupIntervalMax: (sc.batch_pause_max_seconds ?? 210) * 1000,
@@ -510,7 +511,7 @@ async function runSendBatch(deps, sendProgress) {
       if (currentTotal >= totalLimit) { sendProgress({ type: 'limit', message: `已达每日上限 ${totalLimit}` }); break; }
     }
 
-    if (!inWindow() && !ctx.testMode) {
+    if (ctx.timeWindowEnabled && !inWindow() && !ctx.testMode) {
       const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
       const nextH = ctx.startH;
       const waitMsg = `发送窗口外：当前 ${h}:00，${nextH}:00 自动恢复`;
