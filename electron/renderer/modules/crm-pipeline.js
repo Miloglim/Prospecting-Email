@@ -696,10 +696,14 @@ async function openDetailPanel(contactId) {
             if (!btn) return;
             if (btn.classList.contains('crm-ai-compose-btn')) {
               const to = btn.dataset.email;
-              const body = btn.dataset.script;
+              const rawBody = btn.dataset.script;
               const name = btn.dataset.name;
               const subject = btn.dataset.subject;
               if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
+              // 纯文本 → HTML：换行转 <br>
+              const body = rawBody
+                ? rawBody.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>')
+                : '';
               window.electronAPI.openCompose({
                 to,
                 contactName: name || '',
@@ -1489,10 +1493,14 @@ function rebindFollowupEvents(panel, contactId) {
             if (!btn) return;
             if (btn.classList.contains('crm-ai-compose-btn')) {
               const to = btn.dataset.email;
-              const body = btn.dataset.script;
+              const rawBody = btn.dataset.script;
               const name = btn.dataset.name;
               const subject = btn.dataset.subject;
               if (!to) { showToast('无法获取联系人邮箱', 'err'); return; }
+              // 纯文本 → HTML：换行转 <br>
+              const body = rawBody
+                ? rawBody.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>')
+                : '';
               window.electronAPI.openCompose({
                 to,
                 contactName: name || '',

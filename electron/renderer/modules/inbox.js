@@ -596,12 +596,15 @@ async function renderDetail() {
   document.getElementById('inbox-btn-reply')?.addEventListener('click', () => {
     const m = _mails[_selectedIdx];
     if (!m) return;
-    // 正文转纯文本再引用
-    const tmp = document.createElement('div');
-    tmp.innerHTML = body || '';
-    const plain = (tmp.textContent || tmp.innerText || '').trim();
-    const quoteHtml = plain
-      ? `<br><br><div style="border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;font-size:13px">${escapeHtml(plain).replace(/\n/g, '<br>')}</div><br>`
+    // 保留原 HTML 结构，包裹为引用块
+    const origBody = body || '';
+    const date = m.date ? new Date(m.date).toLocaleString('zh-CN') : '';
+    const fromName = m.fromName || m.from || '';
+    const attribution = date
+      ? `<div style="font-size:12px;color:#667085;margin:0 0 8px 0">On ${date}, ${escapeHtml(fromName)} wrote:</div>`
+      : '';
+    const quoteHtml = origBody
+      ? `<br><br><div style="border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#4d4d4d;font-size:13px">${attribution}${origBody}</div><br>`
       : '';
     const subject = m.subject || '';
     const reSubject = subject.match(/^Re:\s*/i) ? subject : `Re: ${subject}`;
