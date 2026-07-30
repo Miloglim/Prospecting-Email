@@ -274,7 +274,7 @@ function _daysAgo(dateStr) {
 
 function _classifyContacts() {
   const contacts = S.contactsData || [];
-  const sendHist = S.sendHistory || {};
+  const sendHist = S.sendHistory || S.contactsSendHistory || {};
   const classified = {
     sending: { never: [], d1_3: [], d4_7: [], d8plus: [], today: [] },
     autoreply: [],

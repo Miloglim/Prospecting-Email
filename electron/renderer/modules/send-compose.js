@@ -78,6 +78,8 @@ export async function renderSendView() {
     const stats = await window.electronAPI.getDashboardStats();
     _dailyRemaining = stats.remaining ?? 0;
   } catch { _dailyRemaining = Infinity; }
+  await CS.refreshSendHistory();
+  await CS.syncContactsUI();
   renderView();
 }
 
