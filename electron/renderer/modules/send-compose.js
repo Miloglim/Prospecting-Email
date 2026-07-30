@@ -50,9 +50,16 @@ function _openCustomEditor() {
   overlay.querySelector('.ce-cancel')?.addEventListener('click', close);
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
 
-  overlay.querySelector('.ce-save')?.addEventListener('click', () => {
+  overlay.querySelector('.ce-save')?.addEventListener('click', async () => {
     S._customContent.subject = overlay.querySelector('.ce-subject')?.value || '';
     S._customContent.body = overlay.querySelector('.ce-editor')?.innerHTML || '';
+    // 持久化到 config
+    try {
+      const cfg = await window.electronAPI.loadConfig().catch(() => ({}));
+      if (!cfg.template) cfg.template = {};
+      cfg.template.customContent = { ...S._customContent };
+      await window.electronAPI.saveConfig(cfg);
+    } catch { /* 静默 */ }
     close();
     showToast('固定内容已保存', 'ok');
   });
@@ -67,10 +74,13 @@ export async function initEmailSend() {
   const customDrawer = document.getElementById('send-custom-drawer');
   const customEditBtn = document.getElementById('send-custom-edit');
 
-  // 读取上次模式
+  // 读取上次模式 + 自订内容
   try {
     const config = await window.electronAPI.loadConfig().catch(() => ({}));
     _tplMode = MODES.includes(config?.template?.mode) ? config.template.mode : 'adaptive';
+    if (config?.template?.customContent) {
+      S._customContent = config.template.customContent;
+    }
   } catch { /* 降级 */ }
 
   function _applyMode(mode) {
@@ -373,8 +383,9 @@ async function addToQueue() {
 
   const config = await window.electronAPI.loadConfig().catch(() => ({}));
   const GROUP_SIZE = config?.schedule?.batch_size || 10;
-  const tplMode = document.getElementById('send-tpl-mode')?.dataset?.mode || 'adaptive';
   const userTemplates = S._userTemplates || [];
+  // 初始化 S._customContent（防止 undefined）
+  if (!S._customContent) S._customContent = { subject: '', body: '' };
 
   // 收集所有选中桶的全部联系人（按桶顺序、按公司顺序展平）
   let allTargets = [];
