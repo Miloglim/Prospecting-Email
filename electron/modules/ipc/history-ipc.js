@@ -22,7 +22,7 @@ function _buildHist() {
 
   // 1. 从联系人建基础结构（阶段、创建时间）
   for (const c of contacts) {
-    const name = c.company_name || c.company || "未命名";
+    const name = c.company || c.company_name || "未命名";
     if (!hist[name]) hist[name] = { stage: "cold", lastSent: "", sentCount: 0, sentContacts: [], startedAt: c.created_at };
     const entry = hist[name];
     const order = ["cold", "f1", "f2", "f3", "f4"];
