@@ -244,6 +244,7 @@ const SKIP_TAGS = new Set(['reached']);
 
 function _isSendable(c) {
   if (!c.email || !c.email.includes('@') || c.email.endsWith('@no.email')) return false;
+  if (c._emailStatus === 'invalid_email' || c._emailStatus === 'no_email') return false;
   if (c._status === 'bounced') return false;
   if (SKIP_STATUSES.has(c._status)) return false;
   if ((c.tags || []).some(t => SKIP_TAGS.has(t))) return false;
@@ -256,7 +257,9 @@ const STAGE_LABELS = { cold: '冷开发', f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4'
 
 const TIME_BUCKETS = [
   { key: 'never',  label: '从未发送', minDays: null, color: '#9e9e9e' },
-  { key: 'd1_3',   label: '1-3天前',  minDays: 1, maxDays: 3, color: '#2196f3' },
+  { key: 'd1',     label: '1天前',    minDays: 1, maxDays: 1, color: '#42a5f5' },
+  { key: 'd2',     label: '2天前',    minDays: 2, maxDays: 2, color: '#1e88e5' },
+  { key: 'd3',     label: '3天前',    minDays: 3, maxDays: 3, color: '#1976d2' },
   { key: 'd4_7',   label: '4-7天前',  minDays: 4, maxDays: 7, color: '#ff9800' },
   { key: 'd8plus', label: '7天以上',  minDays: 8, maxDays: Infinity, color: '#8e24aa' },
   { key: 'today',  label: '今天',     minDays: 0, maxDays: 0, disabled: true, color: '#4caf50' },
@@ -279,6 +282,7 @@ function _classifyContacts() {
     sending: { never: [], d1_3: [], d4_7: [], d8plus: [], today: [] },
     autoreply: [],
     reached: [],
+    invalid: [],
   };
 
   const byCompany = {};
@@ -293,6 +297,7 @@ function _classifyContacts() {
     const normalContacts = [];
     const autoreplyContacts = [];
     const reachedContacts = [];
+    const invalidContacts = [];
     const histLastSent = sendHist[company]?.lastSent || '';
 
     for (const c of members) {
@@ -311,10 +316,13 @@ function _classifyContacts() {
           : _isSendable(c),
         lastSentDays: days,
         _status: c._status || '',
+        _emailStatus: c._emailStatus || '',
         tags: c.tags || [],
       };
 
-      if (c._status === 'autoreply') {
+      if (c._emailStatus === 'invalid_email' || c._emailStatus === 'no_email') {
+        invalidContacts.push(entry);
+      } else if (c._status === 'autoreply') {
         autoreplyContacts.push(entry);
       } else {
         normalContacts.push(entry);
@@ -322,6 +330,17 @@ function _classifyContacts() {
           reachedContacts.push(entry);
         }
       }
+    }
+
+    // ── 异常邮箱区 ──
+    if (invalidContacts.length) {
+      classified.invalid.push({
+        company,
+        stageLabel: 'invalid',
+        contactCount: invalidContacts.length,
+        sendableCount: 0,
+        contacts: invalidContacts,
+      });
     }
 
     // ── 自动回复区 ──
@@ -352,7 +371,9 @@ function _classifyContacts() {
       let bucket;
       if (days === null) { bucket = 'never'; }
       else if (days === 0) { bucket = 'today'; }
-      else if (days <= 3) { bucket = 'd1_3'; }
+      else if (days === 1) { bucket = 'd1'; }
+      else if (days === 2) { bucket = 'd2'; }
+      else if (days === 3) { bucket = 'd3'; }
       else if (days <= 7) { bucket = 'd4_7'; }
       else { bucket = 'd8plus'; }
 

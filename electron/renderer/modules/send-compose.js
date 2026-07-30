@@ -10,10 +10,13 @@ TIME_BUCKETS.forEach(s => BUCKET_MAP[s.key] = s);
 
 // reached 和 autoreply 不算时间桶，手动补
 const EXTRA_SECTIONS = [
-  { key: 'reached', label: '已触达', color: '#9e9e9e', disabled: true },
   { key: 'autoreply', label: '自动回复', color: '#e6a817' },
 ];
-const ALL_SECTIONS = [...TIME_BUCKETS, ...EXTRA_SECTIONS];
+const DISABLED_SECTIONS = [
+  { key: 'invalid', label: '异常邮箱', color: '#e5484d', disabled: true },
+  { key: 'reached', label: '已触达', color: '#9e9e9e', disabled: true },
+];
+const ALL_SECTIONS = [...TIME_BUCKETS, ...EXTRA_SECTIONS, ...DISABLED_SECTIONS];
 const SECTION_MAP = {};
 ALL_SECTIONS.forEach(s => SECTION_MAP[s.key] = s);
 

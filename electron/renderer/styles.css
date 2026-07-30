@@ -1074,6 +1074,7 @@ select option { font-size: 12px; }
 
 /* ── 设置 ─────────────────────────────────────────────────────────── */
 #page-settings { max-width: 680px; position: relative; padding-bottom: 80px; }
+#page-settings.active { height: auto; overflow: visible; }
 
 /* 右侧极简大纲导航 */
 .settings-nav {
