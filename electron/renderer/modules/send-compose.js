@@ -14,8 +14,9 @@ const EXTRA_SECTIONS = [
 ];
 const DISABLED_SECTIONS = [
   { key: 'invalid', label: '异常邮箱', color: '#e5484d', disabled: true },
-  { key: 'reached', label: '已触达', color: '#9e9e9e', disabled: true },
+  { key: 'reached', label: '已触达', color: '#9e9e9e' },
 ];
+let _tplMode = 'adaptive'; // 'adaptive' | 'general' | 'custom'
 const ALL_SECTIONS = [...TIME_BUCKETS, ...EXTRA_SECTIONS, ...DISABLED_SECTIONS];
 const SECTION_MAP = {};
 ALL_SECTIONS.forEach(s => SECTION_MAP[s.key] = s);
@@ -23,29 +24,89 @@ ALL_SECTIONS.forEach(s => SECTION_MAP[s.key] = s);
 let _addedStages = [];
 let _dailyRemaining = Infinity; // 每日剩余额度，点击卡片时实时比对
 
+// ── 自订信息编辑器 ──────────────────────────────────────────────────────────
+function _openCustomEditor() {
+  S._customContent = S._customContent || { subject: '', body: '' };
+  const overlay = document.createElement('div');
+  overlay.className = 'custom-editor-overlay';
+  overlay.innerHTML = `<div class="custom-editor-card">
+    <div class="ce-header">
+      <span>编辑固定发送内容</span>
+      <button class="ce-close">${lucide('x', 16)}</button>
+    </div>
+    <div class="ce-body">
+      <input class="ce-subject" placeholder="邮件主题" value="${escapeHtml(S._customContent.subject || '')}">
+      <div class="ce-editor" contenteditable="true">${S._customContent.body || ''}</div>
+    </div>
+    <div class="ce-footer">
+      <button class="btn-sec ce-cancel">取消</button>
+      <button class="send-btn-primary ce-save" style="width:auto;padding:5px 20px">保存</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('.ce-close')?.addEventListener('click', close);
+  overlay.querySelector('.ce-cancel')?.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  overlay.querySelector('.ce-save')?.addEventListener('click', () => {
+    S._customContent.subject = overlay.querySelector('.ce-subject')?.value || '';
+    S._customContent.body = overlay.querySelector('.ce-editor')?.innerHTML || '';
+    close();
+    showToast('固定内容已保存', 'ok');
+  });
+}
+
 // ── 初始化 ────────────────────────────────────────────────────────────────
 export async function initEmailSend() {
-  if (!S.templateLib) await CS.refreshTemplateLib();
-
+  // ── 三态切换：自适应 / 用户模板 / 自订信息 ──
+  const MODES = ['adaptive', 'general', 'custom'];
+  const MODE_LABELS = { adaptive: '自适应', general: '用户模板', custom: '自订信息' };
   const tplBtn = document.getElementById('send-tpl-mode');
-  if (tplBtn) {
-    const config = await window.electronAPI.loadConfig().catch(() => ({}));
-    const mode = config?.template?.mode || 'adaptive';
-    tplBtn.dataset.mode = mode;
-    tplBtn.textContent = mode === 'general' ? '用户模板' : '自适应';
-    if (mode === 'general') tplBtn.classList.add('user');
+  const customDrawer = document.getElementById('send-custom-drawer');
+  const customEditBtn = document.getElementById('send-custom-edit');
 
-    tplBtn.addEventListener('click', async () => {
-      const cur = tplBtn.dataset.mode;
-      const next = cur === 'general' ? 'adaptive' : 'general';
-      tplBtn.dataset.mode = next;
-      tplBtn.textContent = next === 'general' ? '用户模板' : '自适应';
-      tplBtn.classList.toggle('user', next === 'general');
-      const cfg = await window.electronAPI.loadConfig().catch(() => ({}));
-      if (!cfg.template) cfg.template = {};
-      cfg.template.mode = next;
-      await window.electronAPI.saveConfig(cfg);
+  // 读取上次模式
+  try {
+    const config = await window.electronAPI.loadConfig().catch(() => ({}));
+    _tplMode = MODES.includes(config?.template?.mode) ? config.template.mode : 'adaptive';
+  } catch { /* 降级 */ }
+
+  function _applyMode(mode) {
+    _tplMode = mode;
+    tplBtn.dataset.mode = mode;
+    tplBtn.textContent = MODE_LABELS[mode];
+    tplBtn.classList.toggle('user', mode === 'general');
+    tplBtn.classList.toggle('custom', mode === 'custom');
+    // 自订模式抽屉
+    if (customDrawer) customDrawer.classList.toggle('open', mode === 'custom');
+    // 保存
+    try {
+      window.electronAPI.loadConfig().then(cfg => {
+        if (!cfg.template) cfg.template = {};
+        cfg.template.mode = mode;
+        window.electronAPI.saveConfig(cfg);
+      }).catch(() => {});
+    } catch { /* 静默 */ }
+    renderView();
+  }
+  _applyMode(_tplMode);
+
+  if (tplBtn) {
+    tplBtn.addEventListener('click', () => {
+      const idx = MODES.indexOf(_tplMode);
+      _applyMode(MODES[(idx + 1) % MODES.length]);
     });
+  }
+
+  // 自订编辑按钮 → 弹出内容编辑窗
+  if (customEditBtn) {
+    customEditBtn.addEventListener('click', () => _openCustomEditor());
+  }
+
+  if (!S.templateLib) {
+    try { await CS.refreshTemplateLib(); } catch { /* 降级 */ }
   }
 
   try { S._userTemplates = await window.electronAPI.listUserTemplates(); } catch { S._userTemplates = []; }
@@ -129,9 +190,10 @@ function renderStageCards() {
     const isSide = s.key === 'reached' || s.key === 'autoreply';
     const people = entries.reduce((sum, e) => sum + (isSide ? e.contactCount : e.members.length), 0);
     const selected = _addedStages.includes(s.key);
-    const disabled = s.disabled;
+    // 自订模式下已触达可选取
+    let disabled = s.disabled || (s.key === 'reached' && _tplMode !== 'custom');
     return `<div class="stage-card${disabled ? ' disabled' : ''}${selected ? ' used' : ''}" data-stage="${s.key}">
-      <span class="sc-dot" style="background:${s.color}"></span>
+      <span class="sc-dot" style="background:${s.key === 'reached' && !disabled ? '#2196f3' : s.color}"></span>
       <span class="sc-stage">${s.label}</span>
       <div class="sc-count">${entries.length}家 · ${people}人</div>
     </div>`;
@@ -239,7 +301,8 @@ function renderPreview() {
     const cRows = bucketEntries.map(e => {
       const lang = countryToLang(e.country);
       const langLabel = { es: 'ES', pt: 'PT', en: 'EN' }[lang] || lang;
-      const tplLabel = document.getElementById('send-tpl-mode')?.dataset?.mode === 'general' ? '用户' : '自适应';
+      const curMode = _tplMode;
+      const tplLabel = curMode === 'custom' ? '自订' : (curMode === 'general' ? '用户' : '自适应');
       const lastSent = daysSince(S.sendHistory?.[e.company]?.lastSent);
       const stages = [...new Set(e.members.map(c => c.stage).filter(Boolean))];
       const stageTags = stages.map(st => `<span style="display:inline-block;background:${STAGE_COLORS[st]||'#999'};color:#fff;font-size:10px;padding:0 5px;border-radius:8px">${STAGE_LABELS[st]||st}</span>`).join('');
@@ -364,15 +427,15 @@ async function addToQueue() {
     const first = group[0];
     const lang = countryToLang(first.country || '');
     const stageLabel = _dominantStage(group);
-    // 临时诊断：输出第一组各 stage 分布
-    if (totalAdded === 0) {
-      const diag = {};
-      for (const c of group) { const s = c.stage || 'undefined'; diag[s] = (diag[s] || 0) + 1; }
-      showToast(`诊断 stage: ${JSON.stringify(diag)} → dominant: ${stageLabel}`, 'warn');
-    }
 
     let tplSource = 'preset', tplLabel = '自适应', subject, body;
-    if (tplMode === 'general' && userTemplates.length) {
+    // ── 自订模式：统一使用预设内容 ──
+    if (_tplMode === 'custom') {
+      const cc = S._customContent || {};
+      subject = (cc.subject || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+      body = (cc.body || '').replace(/\{\{company\}\}/g, first.company).replace(/\{\{firstName\}\}/g, first.firstName);
+      tplSource = 'custom'; tplLabel = '自订信息';
+    } else if (_tplMode === 'general' && userTemplates.length) {
       const matched = matchUserTemplates(userTemplates, first.clientType, stageLabel, lang);
       if (matched.length) {
         const tpl = matched[Math.floor(Math.random() * matched.length)];

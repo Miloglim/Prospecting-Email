@@ -247,7 +247,7 @@ ${promptBody}
         } catch { return ""; }
       };
       const reportService = require("../services/report-service");
-      const result = await reportService.generate(aiFn);
+      const result = await reportService.generate(aiFn, { isAuto: false });
       reportService.saveToDb(result.data);
 
       const { BrowserWindow } = require("electron");
@@ -255,7 +255,8 @@ ${promptBody}
       await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(result.html));
       const { APP_ROOT } = require("../config");
       const today = new Date().toISOString().slice(0, 10);
-      const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}.pdf`);
+      const suffix = result.isAuto ? '-auto' : '';
+      const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}${suffix}.pdf`);
       const dir = path.dirname(pdfPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const pdfData = await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });

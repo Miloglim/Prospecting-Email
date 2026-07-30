@@ -49,7 +49,8 @@ const PIPELINE_KEYS = PIPELINE_STAGES.map(s => s.key);
 /** _extra.crmPreferences 白名单 */
 const PREFERENCE_KEYS = [
   "preferredRoutes", "cargoTypes", "decisionRole",
-  "priceSensitivity", "preferredPorts", "annualVolume", "memo",
+  "priceSensitivity", "preferredPorts", "preferredPol", "preferredPod",
+  "annualVolume", "memo",
 ];
 
 const REMINDER_KEYS = ["nextFollowupAt", "followupNote"];

@@ -14,7 +14,10 @@ function register(ipcMain, deps) {
 
   // 通知渲染进程联系人数据已变更
   function _notify() {
-    try { deps.mainWindow?.webContents.send('contacts:changed'); } catch { /* 窗口已关闭 */ }
+    try {
+      deps.mainWindow?.webContents.send('contacts:changed');
+      deps.mainWindow?.webContents.send('crm:changed');
+    } catch { /* 窗口已关闭 */ }
   }
 
   // ponytail: SQLite 替代 JSON，不再需要缓存和手动写盘

@@ -1189,7 +1189,9 @@ function prefsTab(cid, prefs) {
     <div class="crm-field-row"><label>货物类型</label><div style="display:flex;flex-wrap:wrap;gap:4px">${['普货','危险品','冷藏','超规'].map(ct => `<label style="font-size:11px;display:flex;align-items:center;gap:3px"><input type="checkbox" class="crm-pref-input" data-pref-key="cargoTypes" value="${ct}" ${(prefs.cargoTypes||[]).includes(ct)?'checked':''}>${ct}</label>`).join('')}</div></div>
     <div class="crm-field-row"><label>决策角色</label>${sel('decisionRole',['决策者','影响者','信息提供者'],prefs.decisionRole)}</div>
     <div class="crm-field-row"><label>价格敏感度</label>${sel('priceSensitivity',['高','中','低'],prefs.priceSensitivity)}</div>
-    <div class="crm-field-row"><label>偏好港口</label><input class="crm-pref-input" data-pref-key="preferredPorts" value="${escapeHtml(prefs.preferredPorts||'')}" placeholder="上海/宁波"></div>
+    <div class="crm-field-row"><label>偏好港口</label></div>
+    <div class="crm-field-row"><label style="font-size:11px;color:var(--text-secondary)">POL</label><input class="crm-pref-input" data-pref-key="preferredPol" value="${escapeHtml(prefs.preferredPol||'')}" placeholder="起运港，如 上海"></div>
+    <div class="crm-field-row"><label style="font-size:11px;color:var(--text-secondary)">POD</label><input class="crm-pref-input" data-pref-key="preferredPod" value="${escapeHtml(prefs.preferredPod||'')}" placeholder="目的港，如 桑托斯"></div>
     <div class="crm-field-row"><label>年货量</label>${sel('annualVolume',['<100TEU','100-500TEU','500-2000TEU','>2000TEU'],prefs.annualVolume)}</div>
     <div class="crm-field-row crm-field-row-memo"><label>备注</label><textarea class="crm-pref-input" data-pref-key="memo" placeholder="自由备注..." style="width:100%;flex:1;resize:none;font-size:13px;line-height:1.5">${escapeHtml(prefs.memo||'')}</textarea></div>`;
 }

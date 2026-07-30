@@ -13,13 +13,22 @@ const TAG_COLORS = {
 
 // ── 数据采集 ──────────────────────────────────────────────────────────────────
 
-async function generate(aiFn) {
+async function generate(aiFn, opts = {}) {
   const db = getDb();
   const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }))
     .toISOString().slice(0, 10); // 上海时区当日
   const now = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
   const dateCN = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }))
     .toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+
+  // 今日新增联系人/公司
+  let newContacts = 0, newCompanies = 0;
+  try {
+    const allContacts = db.prepare("SELECT company_id, created_at FROM contacts WHERE created_at LIKE ?").all(today + "%");
+    newContacts = allContacts.length;
+    const compIds = new Set(allContacts.map(c => c.company_id).filter(Boolean));
+    newCompanies = compIds.size;
+  } catch { /* 降级 */ }
 
   // 发送数据
   const sentToday = db.prepare(
@@ -91,12 +100,13 @@ async function generate(aiFn) {
   const html = buildHtml({
     dateCN, now, sentToday, failedToday, successRate,
     newMails, replies, autoreplies, bounces, replyRate, bounceRate,
+    newContacts, newCompanies,
     stageCounts, reachedCount, quoteRate, orderRate, coopRate,
     dueCount, overdueCount, followupItems, aiText,
   });
 
-  const data = { dateCN, now, sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces, replyRate, bounceRate, stageCounts, reachedCount, quoteRate, orderRate, coopRate, dueCount, overdueCount };
-  return { html, data };
+  const data = { dateCN, now, sentToday, failedToday, successRate, newMails, replies, autoreplies, bounces, replyRate, bounceRate, newContacts, newCompanies, stageCounts, reachedCount, quoteRate, orderRate, coopRate, dueCount, overdueCount };
+  return { html, data, isAuto: opts.isAuto || false };
 }
 
 // ── HTML 生成 ─────────────────────────────────────────────────────────────────
@@ -157,6 +167,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',sy
   <div class="metric-card"><div class="val" style="color:#22a644">${d.replies}</div><div class="lbl">回复</div></div>
   <div class="metric-card"><div class="val" style="color:#e6a817">${d.autoreplies}</div><div class="lbl">自动回复</div></div>
   <div class="metric-card"><div class="val" style="color:#d93025">${d.bounces}</div><div class="lbl">退信</div></div>
+  <div class="metric-card"><div class="val" style="color:#2196f3">${d.newContacts}</div><div class="lbl">今日新增联系人</div></div>
+  <div class="metric-card"><div class="val" style="color:#2196f3">${d.newCompanies}</div><div class="lbl">今日新增公司</div></div>
 </div></div>
 
 <div class="section"><div class="section-head">客户跟进总览</div>

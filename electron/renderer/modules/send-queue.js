@@ -512,9 +512,25 @@ export async function startSend() {
         }, 1000);
       }
     } else if (data.type === 'waiting') {
-      // 更新时间窗口等待提示
+      // 显示发送窗口等待提示
       const prog = document.getElementById('queue-progress');
-      if (prog) prog.title = data.message || '等待发送窗口...';
+      if (prog) {
+        if (data.message) {
+          prog.title = data.message;
+          prog.style.cssText = 'height:4px;border-radius:2px;background:#ff9800;transition:none';
+        } else {
+          prog.title = '';
+          prog.style.cssText = '';
+        }
+      }
+      const est = document.getElementById('queue-estimate');
+      if (est && data.message) {
+        est.style.display = 'block';
+        est.style.color = '#e6a817';
+        est.textContent = '⏳ ' + data.message;
+      } else if (est && !data.message) {
+        est.style.display = '';
+      }
     } else if (data.type === 'delay') {
       const el = document.getElementById('queue-estimate');
       if (el) {
@@ -856,6 +872,7 @@ export async function doQueueRefresh() {
 
     // ponytail: 保留用户模板来源
     const isUserTpl = meta._templateSource === 'user';
+    const isCustomTpl = meta._templateSource === 'custom';
     const members = S.sendCompanies[name] || [];
     const firstNameDisplay = members[0]?.firstName || '';
     let userTpl = null;
@@ -866,8 +883,11 @@ export async function doQueueRefresh() {
       if (userTpl) {
         const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
         baseSubject = (userTpl.subject || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
-        // 正文在 per-group 循环中处理
       }
+    } else if (isCustomTpl) {
+      const cc = S._customContent || {};
+      const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
+      baseSubject = (cc.subject || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
     }
     if (!baseSubject) {
       const subjects = S.templateLib.subjects?.[t] || { es: '' };
@@ -880,7 +900,12 @@ export async function doQueueRefresh() {
       let body;
       let tplInfo;
 
-      if (userTpl && g === 0) {
+      if (isCustomTpl) {
+        const cc = S._customContent || {};
+        const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
+        body = (cc.body || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);
+        tplInfo = 'custom';
+      } else if (userTpl && g === 0) {
         // 用户模板：第一组用原文
         const companyDisplay = (!name || name.includes('未命名') || name.includes('⚠️')) ? 'Estimado cliente' : name;
         body = (userTpl.body || '').replace(/\{\{company\}\}/g, companyDisplay).replace(/\{\{firstName\}\}/g, firstNameDisplay);

@@ -25,10 +25,23 @@ async function getStats(deps) {
       const firstAt = log.first_send_at || 0;
       if (firstAt > 0 && (Date.now() - firstAt) > 24 * 3600 * 1000) {
         const reportService = require("./report-service");
-        const result = await reportService.generate(null);
+        const result = await reportService.generate(null, { isAuto: true });
         reportService.saveToDb(result.data);
         log.first_send_at = 0;
         fs.writeFileSync(logPath, JSON.stringify(log, null, 2));
+        // 自动生成 PDF
+        try {
+          const { BrowserWindow } = require("electron");
+          const win = new BrowserWindow({ width: 800, height: 1000, show: false });
+          await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(result.html));
+          const today = new Date().toISOString().slice(0, 10);
+          const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}-auto.pdf`);
+          const dir = path.dirname(pdfPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          const pdfData = await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+          fs.writeFileSync(pdfPath, pdfData);
+          win.close();
+        } catch { /* PDF 生成失败不影响主流程 */ }
       }
     }
   } catch { /* 降级 */ }

@@ -378,8 +378,21 @@ async function runSendBatch(deps, sendProgress) {
     // 先保存今日报告，再重置计数器
     try {
       const reportService = require("./report-service");
-      const result = await reportService.generate(null);
+      const result = await reportService.generate(null, { isAuto: true });
       reportService.saveToDb(result.data);
+      // 自动生成 PDF
+      try {
+        const { BrowserWindow } = require("electron");
+        const win = new BrowserWindow({ width: 800, height: 1000, show: false });
+        await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(result.html));
+        const today = new Date().toISOString().slice(0, 10);
+        const pdfPath = path.join(APP_ROOT, "send", "reports", `今日报告-${today}-auto.pdf`);
+        const dir = path.dirname(pdfPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const pdfData = await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+        fs.writeFileSync(pdfPath, pdfData);
+        win.close();
+      } catch { /* PDF 生成失败不影响主流程 */ }
       Log.info("发信", "每日报告已自动保存");
     } catch (e) { Log.warn("发信", "自动保存报告失败", e.message); }
     log.first_send_at = 0;
@@ -497,8 +510,15 @@ async function runSendBatch(deps, sendProgress) {
       if (currentTotal >= totalLimit) { sendProgress({ type: 'limit', message: `已达每日上限 ${totalLimit}` }); break; }
     }
 
-    while (!inWindow() && !deps.isPaused && !ctx.testMode && !deps.currentSendAbort) {
-      const ok = await cancellableSleep(30000, deps); if (!ok || deps.isPaused || deps.currentSendAbort) break;
+    if (!inWindow() && !ctx.testMode) {
+      const h = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
+      const nextH = ctx.startH;
+      const waitMsg = `发送窗口外：当前 ${h}:00，${nextH}:00 自动恢复`;
+      sendProgress({ type: 'waiting', message: waitMsg });
+      while (!inWindow() && !deps.isPaused && !ctx.testMode && !deps.currentSendAbort) {
+        const ok = await cancellableSleep(30000, deps); if (!ok || deps.isPaused || deps.currentSendAbort) break;
+      }
+      sendProgress({ type: 'waiting', message: '' }); // 清除等待状态
     }
     if (deps.isPaused || deps.currentSendAbort) break;
 
