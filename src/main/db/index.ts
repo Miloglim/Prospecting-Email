@@ -58,42 +58,95 @@ export function saveDatabase(): void {
 }
 
 /** 应用启动时自动执行迁移。
- *  ponytail: sql.js 不支持 drizzle-kit migrate() 直接运行，
- *  改为读取迁移 SQL 文件手动执行。 */
+ *  ponytail: sql.js 不支持 drizzle-kit migrate()，且迁移文件不打包进 dist，
+ *  改为内嵌建表 SQL（幂等 CREATE TABLE IF NOT EXISTS） */
 export function runMigrations(): void {
   if (!sqlJsDb) throw new Error("数据库未初始化");
-  const migrationsDir = path.resolve(__dirname, "..", "db", "migrations");
 
-  if (!fs.existsSync(migrationsDir)) {
-    Log.info("db.migrations", "无迁移目录，跳过");
-    return;
+  const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS email_accounts (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  email text NOT NULL UNIQUE,
+  provider text DEFAULT 'smtp' NOT NULL,
+  smtp_host text, smtp_port integer,
+  imap_host text, imap_port integer,
+  encrypted_pass text NOT NULL, display_name text, signature text,
+  consecutive_fails integer DEFAULT 0 NOT NULL,
+  circuit_open_at text, circuit_reset_after text,
+  is_active integer DEFAULT 1 NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS companies (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  name text NOT NULL, domain text, industry text, country text, size text,
+  backcheck_data text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS contacts (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  email text NOT NULL UNIQUE,
+  first_name text, last_name text, title text, phone text, linkedin_url text,
+  company_id integer,
+  custom_str1 text, custom_str2 text, custom_str3 text, custom_str4 text, custom_str5 text,
+  custom_num1 integer, custom_num2 integer, custom_num3 integer, custom_num4 integer, custom_num5 integer,
+  custom_date1 text, custom_date2 text, custom_date3 text, custom_date4 text, custom_date5 text,
+  source text DEFAULT 'manual', source_detail text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS crm_relations (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  contact_id_a integer NOT NULL REFERENCES contacts(id),
+  contact_id_b integer NOT NULL REFERENCES contacts(id),
+  relation_type text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS crm_stages (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  contact_id integer NOT NULL UNIQUE REFERENCES contacts(id),
+  stage text NOT NULL, notes text,
+  reminder_at text, reminder_note text,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox_messages (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  account_id integer NOT NULL REFERENCES email_accounts(id),
+  message_id text, from_email text NOT NULL, from_name text,
+  subject text, body_preview text, classification text,
+  matched_contact_id integer,
+  is_read integer DEFAULT 0 NOT NULL,
+  received_at text NOT NULL, raw_source text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS interactions (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  contact_id integer NOT NULL REFERENCES contacts(id),
+  type text NOT NULL, direction text NOT NULL,
+  channel text DEFAULT 'email' NOT NULL,
+  subject text, body_preview text, message_id text,
+  account_id integer REFERENCES email_accounts(id),
+  metadata text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS templates (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  name text NOT NULL, language text NOT NULL,
+  subject text NOT NULL, body text NOT NULL,
+  category text, version integer DEFAULT 1 NOT NULL,
+  is_active integer DEFAULT 1 NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+`.trim();
+
+  const statements = SCHEMA_SQL.split(";")
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+
+  for (const stmt of statements) {
+    sqlJsDb.run(stmt + ";");
   }
 
-  const files = fs.readdirSync(migrationsDir)
-    .filter(f => f.endsWith(".sql"))
-    .sort();
-
-  if (files.length === 0) {
-    Log.info("db.migrations", "无迁移文件");
-    return;
-  }
-
-  for (const file of files) {
-    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
-    const statements = sql.split(";").map(s => s.trim()).filter(Boolean);
-    for (const stmt of statements) {
-      try {
-        sqlJsDb.run(stmt);
-      } catch (err: unknown) {
-        // 跳过已存在的表（幂等性）
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("already exists")) {
-          Log.error("db.migrations", `${file} 执行失败: ${stmt.slice(0, 60)}`, msg);
-          throw err;
-        }
-      }
-    }
-  }
-
-  Log.info("db.migrations", `${files.length} 个迁移已执行`);
+  Log.info("db.migrations", `${statements.length} 条建表语句已执行`);
 }
