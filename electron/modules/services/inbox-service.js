@@ -8,6 +8,8 @@ const { simpleParser } = require('mailparser');
 const { APP_ROOT } = require('../config');
 const { Log } = require('../core/logger');
 
+const INBOX_MAX = 2000; // 收件箱缓存上限
+
 // ── 缓存路径 ────────────────────────────────────────────────────────────────
 const CACHE_PATH = path.join(APP_ROOT, 'data', 'inbox-cache.json');
 const CURSOR_PATH = path.join(APP_ROOT, 'data', 'inbox-cursor.json');
@@ -221,7 +223,7 @@ function _readCache() {
       db.prepare("UPDATE inbox SET type='replied' WHERE type='reply'").run();
       db.prepare("UPDATE inbox SET type='autoreply' WHERE type='auto-reply'").run();
     }
-    const rows = db.prepare('SELECT * FROM inbox ORDER BY important DESC, date DESC LIMIT 500').all();
+    const rows = db.prepare(`SELECT * FROM inbox ORDER BY important DESC, date DESC LIMIT ${INBOX_MAX}`).all();
     return rows.map(r => {
       try { r.contactTags = JSON.parse(r.contact_tags || '[]'); } catch { r.contactTags = []; }
       try { r.matchedContacts = JSON.parse(r.matched_contacts || '[]'); } catch { r.matchedContacts = []; }
@@ -245,11 +247,14 @@ function _writeCache(mails) {
     const { getDb } = require('./db');
     const db = getDb();
     const insert = db.prepare('INSERT OR REPLACE INTO inbox (uid, account_id, subject, from_addr, from_name, date, body, type, contact_company, contact_id, contact_db_id, contact_tags, matched_contacts, processed, important, account_label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-    // ponytail: 事务内先清表再写入，与内存缓存完全同步，防止旧记录累积
     const batch = db.transaction(() => {
-      db.exec('DELETE FROM inbox');
-      for (const m of mails.slice(-500)) {
+      for (const m of mails.slice(-INBOX_MAX)) {
         insert.run(m.uid||'', m.accountId||'', m.subject||'', m.from||'', m.fromName||'', m.date||'', m.body||'', m.type||'other', m.contactCompany||'', m.contactId||'', m.contactDbId||'', JSON.stringify(m.contactTags||[]), JSON.stringify(m.matchedContacts||[]), m.processed?1:0, m.important?1:0, m.accountLabel||'');
+      }
+      // 超出上限时清理最旧的记录
+      const count = db.prepare('SELECT COUNT(*) as n FROM inbox').get().n;
+      if (count > INBOX_MAX) {
+        db.prepare(`DELETE FROM inbox WHERE rowid IN (SELECT rowid FROM inbox ORDER BY date ASC LIMIT ${count - INBOX_MAX})`).run();
       }
     });
     batch();
@@ -815,7 +820,7 @@ async function _fetchInbox(configPath) {
   }
 
   // ponytail: 直接返回内存数据，避免写完又读
-  const result = newMails.length ? [...newMails, ...existing].slice(-500) : existing;
+  const result = newMails.length ? [...newMails, ...existing].slice(-INBOX_MAX) : existing;
   if (newMails.length) {
     _writeCache(result);
     // 写入成功后才保存游标，防止中途崩溃导致游标跳过
