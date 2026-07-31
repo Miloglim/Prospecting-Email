@@ -4,7 +4,7 @@
   "description": "Milogin's Outreacher — 货代行业客户开发工具",
   "main": "./dist/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "set NODE_OPTIONS= && electron-vite dev",
     "build": "electron-vite build",
     "pack": "electron-vite build && electron-builder --win",
     "typecheck": "tsc --noEmit",

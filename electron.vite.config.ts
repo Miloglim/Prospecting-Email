@@ -9,6 +9,7 @@ export default defineConfig({
       alias: { "@main": resolve("src/main") },
     },
     build: {
+      outDir: "dist/main",
       rollupOptions: {
         external: ["better-sqlite3"],
       },
@@ -18,6 +19,9 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: { "@preload": resolve("src/preload") },
+    },
+    build: {
+      outDir: "dist/preload",
     },
   },
   renderer: {

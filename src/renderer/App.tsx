@@ -1,24 +1,30 @@
-import { ConfigProvider, theme, App as AntApp } from "antd";
-import { AppLayout } from "./components/layout/AppLayout";
+import { RouterProvider } from "@tanstack/react-router";
+import { ConfigProvider, App as AntApp } from "antd";
+import { AppProvider } from "./AppContext";
+import { router } from "./router";
 
 export function App() {
   return (
-    <ConfigProvider
-      theme={{
-        algorithm: theme.darkAlgorithm,
-        token: {
-          colorPrimary: "#a78bfa",
-          colorBgContainer: "#18181b",
-          colorBgElevated: "#27272a",
-          colorBgLayout: "#09090b",
-          colorBorder: "#27272a",
-          borderRadius: 6,
-        },
-      }}
-    >
-      <AntApp>
-        <AppLayout />
-      </AntApp>
-    </ConfigProvider>
+    <AppProvider>
+      <ConfigProvider
+        theme={{
+          token: {
+            colorPrimary: "#1a1a1a",
+            colorBgContainer: "#ffffff",
+            colorBgElevated: "#ffffff",
+            colorBgLayout: "#f5f5f5",
+            colorBorder: "#e0e0e0",
+            colorText: "#1a1a1a",
+            colorTextSecondary: "#6b6b6b",
+            borderRadius: 8,
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          },
+        }}
+      >
+        <AntApp>
+          <RouterProvider router={router} />
+        </AntApp>
+      </ConfigProvider>
+    </AppProvider>
   );
 }
