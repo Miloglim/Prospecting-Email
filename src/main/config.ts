@@ -1,6 +1,15 @@
 import * as path from "path";
 import * as fs from "fs";
 
+// ponytail: Electron 扩展了 process.resourcesPath，Node 标准类型不含此属性
+declare global {
+  namespace NodeJS {
+    interface Process {
+      resourcesPath?: string;
+    }
+  }
+}
+
 /** 获取应用根目录。
  *  ponytail: app 模块在 Electron 主进程运行时可用，非 Electron 测试环境用 __dirname 兜底 */
 function getAppRoot(): string {
@@ -23,7 +32,7 @@ export function getResourcesRoot(): string {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { app } = require("electron");
     return app.isPackaged
-      ? path.join(process.resourcesPath, "assets")
+      ? path.join(process.resourcesPath || "", "assets")
       : path.resolve(__dirname, "..", "..", "assets");
   } catch {
     return path.resolve(__dirname, "..", "..", "assets");
