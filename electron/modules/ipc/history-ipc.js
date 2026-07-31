@@ -32,6 +32,7 @@ function _buildHist() {
   // 2. 从发送日志取真实的发送记录（不受阶段推进清除 last_sent_at 的影响）
   try {
     const { records } = sendLogDb.list({ limit: 100000 });
+    let matched = 0;
     for (const r of records) {
       if (r.status !== 'sent') continue;
       const name = r.company;
@@ -44,8 +45,10 @@ function _buildHist() {
         entry.sentContacts.push(email);
         entry.sentCount++;
       }
+      matched++;
     }
-  } catch { /* send-log 读取失败不影响基础结构 */ }
+    Log.info('发信历史', `_buildHist: send_log共${records.length}条, 命中${matched}条, 涉及${Object.values(hist).filter(e => e.lastSent).length}家公司`);
+  } catch (e) { Log.warn('发信历史', '_buildHist send_log读取失败', e.message); }
 
   return hist;
 }

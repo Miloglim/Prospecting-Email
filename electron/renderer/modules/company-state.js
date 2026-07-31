@@ -396,7 +396,9 @@ function _classifyContacts() {
   // 临时诊断
   const buckets = {};
   for (const k of Object.keys(classified.sending)) buckets[k] = classified.sending[k].reduce((s, e) => s + e.contactCount, 0);
-  console.log('[分类桶]', JSON.stringify(buckets), 'sendHist有数据的公司数:', Object.keys(sendHist).filter(k => sendHist[k]?.lastSent).length);
+  const histCompaniesWithDate = Object.keys(sendHist).filter(k => sendHist[k]?.lastSent).length;
+  const contactsWithOwnDate = contacts.filter(c => c.last_sent_at).length;
+  console.log('[分类桶]', JSON.stringify(buckets), `sendHist公司:${histCompaniesWithDate}/${Object.keys(sendHist).length} 联系人有last_sent:${contactsWithOwnDate}/${contacts.length}`);
 }
 
 export { TIME_BUCKETS, STAGE_COLORS, STAGE_LABELS };
