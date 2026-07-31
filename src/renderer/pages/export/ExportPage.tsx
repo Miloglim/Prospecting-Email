@@ -38,11 +38,11 @@ export function ExportPage() {
 
   return (
     <div className="max-w-lg mx-auto space-y-6 pt-12">
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card className="bg-white border-gray-200">
         <div className="text-center space-y-4">
           <FileExcelOutlined className="text-4xl text-green-500" />
-          <h3 className="text-lg text-zinc-100">导出联系人</h3>
-          <p className="text-sm text-zinc-500">
+          <h3 className="text-lg text-gray-900">导出联系人</h3>
+          <p className="text-sm text-gray-500">
             将联系人数据导出为 CSV 文件，可直接用 Excel 打开
           </p>
 

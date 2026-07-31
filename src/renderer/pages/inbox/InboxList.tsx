@@ -28,18 +28,18 @@ export function InboxList() {
       title: "状态", dataIndex: "isRead", key: "isRead", width: 60,
       render: (v: number) => v === 0
         ? <div className="w-2 h-2 rounded-full bg-violet-500" />
-        : <div className="w-2 h-2 rounded-full bg-zinc-700" />,
+        : <div className="w-2 h-2 rounded-full bg-gray-300" />,
     },
     { title: "发件人", key: "from",
       render: (_: unknown, r: InboxItem) => (
         <div>
           <div className="text-sm">{r.fromName || r.fromEmail}</div>
-          <div className="text-xs text-zinc-500">{r.fromEmail}</div>
+          <div className="text-xs text-gray-500">{r.fromEmail}</div>
         </div>
       ),
     },
     { title: "主题", dataIndex: "subject", key: "subject",
-      render: (v: string | null) => v || <span className="text-zinc-600">无主题</span> },
+      render: (v: string | null) => v || <span className="text-gray-400">无主题</span> },
     {
       title: "分类", dataIndex: "classification", key: "classification", width: 100,
       render: (v: string | null) => (
@@ -53,7 +53,7 @@ export function InboxList() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <span className="text-sm text-zinc-400">{items.length} 封邮件</span>
+        <span className="text-sm text-gray-600">{items.length} 封邮件</span>
         <Button icon={<ReloadOutlined />} onClick={() => refetch()}>刷新</Button>
       </div>
 

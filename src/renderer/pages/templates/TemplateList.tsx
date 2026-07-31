@@ -59,7 +59,7 @@ export function TemplateList() {
   return (
     <div className="space-y-4">
       <div className="flex justify-between">
-        <span className="text-sm text-zinc-400">{templates.length} 个模板</span>
+        <span className="text-sm text-gray-600">{templates.length} 个模板</span>
         <Button type="primary" icon={<PlusOutlined />}
           onClick={() => setAddOpen(true)}>新增模板</Button>
       </div>

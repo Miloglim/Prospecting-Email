@@ -25,7 +25,7 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-lg mx-auto space-y-6">
-      <Card title="发送设置" className="bg-zinc-900 border-zinc-800">
+      <Card title="发送设置" className="bg-white border-gray-200">
         <Form form={form} layout="vertical"
           initialValues={config?.schedule || { minDelaySeconds: 30, maxPerBatch: 50 }}
           onFinish={(values) => saveMut.mutateAsync({ schedule: values })}
@@ -45,8 +45,8 @@ export function SettingsPage() {
         </Form>
       </Card>
 
-      <Card title="系统信息" className="bg-zinc-900 border-zinc-800">
-        <div className="text-sm text-zinc-400 space-y-2">
+      <Card title="系统信息" className="bg-white border-gray-200">
+        <div className="text-sm text-gray-600 space-y-2">
           <div>版本: Prospector 4.0.0</div>
           <div>技术栈: Electron + TypeScript + React + SQLite</div>
           <div>数据库: data/prospector.db</div>

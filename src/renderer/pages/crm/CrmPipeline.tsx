@@ -58,14 +58,14 @@ export function CrmPipeline() {
             <div className="flex items-center justify-between mb-3 px-2">
               <div className="flex items-center gap-2">
                 <Tag color={STAGE_COLORS[s.stage]}>{STAGE_LABELS[s.stage]}</Tag>
-                <span className="text-xs text-zinc-500">{s.contacts.length}</span>
+                <span className="text-xs text-gray-500">{s.contacts.length}</span>
               </div>
             </div>
 
             {/* 联系人卡片 */}
             <div className="space-y-2">
               {s.contacts.map(c => (
-                <Card key={c.id} size="small" className="bg-zinc-900 border-zinc-800"
+                <Card key={c.id} size="small" className="bg-white border-gray-200"
                   actions={[
                     <Button key="move" type="text" size="small" icon={<SwapOutlined />}
                       onClick={() => moveToStage(c.id, s.stage)}
@@ -73,11 +73,11 @@ export function CrmPipeline() {
                   ]}
                 >
                   <div className="text-sm font-mono text-violet-400 truncate">{c.email}</div>
-                  <div className="text-xs text-zinc-400">
+                  <div className="text-xs text-gray-600">
                     {[c.firstName, c.lastName].filter(Boolean).join(" ") || "未命名"}
                   </div>
                   {c.companyName && (
-                    <div className="text-xs text-zinc-500 mt-1">{c.companyName}</div>
+                    <div className="text-xs text-gray-500 mt-1">{c.companyName}</div>
                   )}
                   {c.reminderAt && (
                     <div className="text-xs text-amber-500 mt-1">
@@ -87,7 +87,7 @@ export function CrmPipeline() {
                 </Card>
               ))}
               {s.contacts.length === 0 && (
-                <div className="text-center text-zinc-600 text-sm py-8">空</div>
+                <div className="text-center text-gray-400 text-sm py-8">空</div>
               )}
             </div>
           </div>

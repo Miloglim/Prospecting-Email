@@ -20,14 +20,14 @@ export function CampaignList() {
   return (
     <div className="space-y-6">
       {/* 发送状态栏 */}
-      <div className="flex items-center gap-6 p-4 bg-zinc-900 rounded-lg border border-zinc-800">
+      <div className="flex items-center gap-6 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
         <div>
-          <div className="text-2xl font-bold text-zinc-100">{sendStatus?.sentToday || 0}</div>
-          <div className="text-xs text-zinc-500">今日已发送</div>
+          <div className="text-2xl font-bold text-gray-900">{sendStatus?.sentToday || 0}</div>
+          <div className="text-xs text-gray-500">今日已发送</div>
         </div>
         <div>
-          <div className="text-2xl font-bold text-zinc-100">{sendStatus?.queueLength || 0}</div>
-          <div className="text-xs text-zinc-500">队列待发</div>
+          <div className="text-2xl font-bold text-gray-900">{sendStatus?.queueLength || 0}</div>
+          <div className="text-xs text-gray-500">队列待发</div>
         </div>
         <Tag color={sendStatus?.isPaused ? "orange" : "green"}>
           {sendStatus?.isPaused ? "已暂停" : "运行中"}
