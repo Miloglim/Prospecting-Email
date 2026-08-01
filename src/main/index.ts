@@ -12,7 +12,6 @@ import { registerAccountIPC } from "./transport/account.ipc";
 import { registerExportIPC } from "./transport/export.ipc";
 import { registerDashboardIPC } from "./transport/dashboard.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
-import { seedTestData } from "./services/seed.service";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -74,9 +73,6 @@ app.whenReady().then(async () => {
   runMigrations();
   registerAllIPC();
   createWindow();
-
-  // 测试数据 seed
-  try { seedTestData(); } catch (err) { Log.error("seed", "seed 失败", (err as Error).stack); }
 
   // 每 30 秒自动持久化
   saveInterval = setInterval(() => {
