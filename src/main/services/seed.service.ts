@@ -105,8 +105,8 @@ export function seedTestData(): Result<{ contacts: number; companies: number }> 
         source: i % 5 === 0 ? "import" : "manual",
         createdAt: now, updatedAt: now,
       }).run();
-    } catch {
-      // 重复 email 跳过
+    } catch (err: unknown) {
+      Log.warn("seed", `联系人插入失败: ${email}`, err instanceof Error ? err.message : String(err));
     }
   }
 
