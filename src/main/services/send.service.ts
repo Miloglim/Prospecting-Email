@@ -1,252 +1,268 @@
 import { nanoid } from "nanoid";
 import { getDb } from "../db";
-import { contacts } from "../db/schema/contacts";
-import { interactions, type InsertInteractionRow } from "../db/schema/interactions";
+import { contacts, type ContactRow } from "../db/schema/contacts";
+import { interactions } from "../db/schema/interactions";
 import { emailAccounts } from "../db/schema/accounts";
-import { eq, like } from "drizzle-orm";
+import { eq, sql as dsql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
 import { EVENTS } from "../events";
 
-// ── 类型定义 ──
+// ── 类型 ──
 
-export interface QueueItem {
-  id: string;
-  contactEmail: string;
-  contactId: number;
-  contactName: string;
-  subject: string;
-  body: string;
+export interface SendItem {
+  id: string; companyName: string; companyId: number;
+  recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number;
   status: "pending" | "sending" | "sent" | "failed";
-  error?: string;
-  sentAt?: string;
+  error?: string; sentAt?: string;
 }
 
-export interface SendConfig {
-  stageFilter?: string[];
-  accountId?: number;
-  search?: string;
+export interface TimeBucket {
+  key: string; label: string; description: string;
+  contacts: ContactRow[]; count: number;
 }
 
 export interface SendStatus {
-  queueLength: number;
-  sentCount: number;
-  failedCount: number;
-  isPaused: boolean;
-  isRunning: boolean;
-  consecutiveFails: number;
-  cooldownSeconds: number;
+  batchId: string | null; totalItems: number; sentCount: number; failedCount: number;
+  isPaused: boolean; isRunning: boolean;
+  currentItem: SendItem | null; delaySeconds: number;
+  accountStats: Array<{
+    accountId: number; email: string; sent: number; failed: number; isCircuitOpen: boolean;
+  }>;
 }
+
+const BUCKET_DEFS = [
+  { key: "never", label: "从未发送", desc: "新联系人，第一次接触" },
+  { key: "1-3", label: "1-3 天", desc: "最近刚发过，等回复" },
+  { key: "4-7", label: "4-7 天", desc: "适合第一次跟进" },
+  { key: "8-11", label: "7-11 天", desc: "适合第二次跟进" },
+  { key: "over11", label: "11 天以上", desc: "冷掉了，重新激活" },
+  { key: "autoreply", label: "自动回复", desc: "收到 OOO，等段时间再发" },
+  { key: "active", label: "跟进中", desc: "CRM 管线里活跃客户" },
+] as const;
 
 // ── 引擎状态 ──
 
 let state: SendStatus = {
-  queueLength: 0, sentCount: 0, failedCount: 0,
-  isPaused: false, isRunning: false,
-  consecutiveFails: 0, cooldownSeconds: 0,
+  batchId: null, totalItems: 0, sentCount: 0, failedCount: 0,
+  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, accountStats: [],
 };
 
-let queue: QueueItem[] = [];
-let currentBatchId: string | null = null;
-let tickTimeout: ReturnType<typeof setTimeout> | null = null;
-let cooldownTimeout: ReturnType<typeof setTimeout> | null = null;
+let pushFn: ((c: string, d: unknown) => void) | null = null;
+export function setPushFn(fn: (c: string, d: unknown) => void) { pushFn = fn; }
+function push(c: string, d: unknown) { try { pushFn?.(c, d); } catch { /* */ } }
 
-/** 推送事件的回调，由 transport 层注入（ponytail: service 不直接 import BrowserWindow） */
-let pushFn: ((channel: string, data: unknown) => void) | null = null;
-export function setPushFn(fn: (channel: string, data: unknown) => void) {
-  pushFn = fn;
+let sendBccFn: ((item: SendItem) => Promise<Result<void>>) | null = null;
+export function setSendBccFn(fn: (item: SendItem) => Promise<Result<void>>) { sendBccFn = fn; }
+
+// ── 可中断延迟 ──
+
+let delayTimer: ReturnType<typeof setTimeout> | null = null;
+let delayResolve: ((ok: boolean) => void) | null = null;
+let delayStarted = 0;
+let delayRemaining = 0;
+
+function sleep(ms: number): Promise<boolean> {
+  return new Promise(resolve => {
+    delayRemaining = ms; delayStarted = Date.now();
+    delayResolve = resolve;
+    delayTimer = setTimeout(() => { delayResolve = null; delayTimer = null; delayRemaining = 0; resolve(true); }, ms);
+  });
 }
-function push(channel: string, data: unknown) {
-  try { pushFn?.(channel, data); } catch { /* 静默降级 */ }
+
+export function pauseDelay() {
+  if (!delayTimer) return;
+  clearTimeout(delayTimer); delayTimer = null;
+  delayRemaining -= (Date.now() - delayStarted);
+  if (delayRemaining < 0) delayRemaining = 0;
 }
 
-/** SMTP 发送函数，由 transport 层注入 */
-let sendMailFn: ((item: QueueItem) => Promise<Result<void>>) | null = null;
-export function setSendMailFn(fn: (item: QueueItem) => Promise<Result<void>>) {
-  sendMailFn = fn;
+export function resumeDelay() {
+  if (!delayResolve || delayRemaining <= 0) return;
+  delayStarted = Date.now();
+  delayTimer = setTimeout(() => { const r = delayResolve; delayResolve = null; delayTimer = null; delayRemaining = 0; r?.(true); }, delayRemaining);
 }
 
-// ── 队列操作 ──
+// ── 时间桶计算 ──
 
-export async function startSend(config: SendConfig): Promise<Result<string>> {
-  Log.debug("send.start", JSON.stringify(config));
+export function getTimeBuckets(): Result<TimeBucket[]> {
+  const db = getDb();
+  const allContacts = db.select().from(contacts).all();
 
-  if (state.isRunning) {
-    return failResult("已有发送任务运行中");
+  const sentRows = db.select({
+    contactId: interactions.contactId,
+    maxDate: dsql<string>`MAX(${interactions.createdAt})`,
+  }).from(interactions)
+    .where(eq(interactions.type, "sent"))
+    .groupBy(interactions.contactId).all();
+
+  const lastSentMap = new Map<number, string>();
+  for (const r of sentRows) lastSentMap.set(r.contactId, r.maxDate);
+
+  const autoRows = db.select({ contactId: interactions.contactId })
+    .from(interactions).where(eq(interactions.type, "autoreply"))
+    .groupBy(interactions.contactId).all();
+  const autoSet = new Set(autoRows.map(r => r.contactId));
+
+  const now = Date.now();
+  const DAY = 86400000;
+  const buckets = new Map<string, ContactRow[]>();
+  BUCKET_DEFS.forEach(b => buckets.set(b.key, []));
+
+  for (const c of allContacts) {
+    if (autoSet.has(c.id)) { buckets.get("autoreply")!.push(c); continue; }
+
+    const lastSent = lastSentMap.get(c.id);
+    if (!lastSent) { buckets.get("never")!.push(c); continue; }
+
+    const days = Math.floor((now - new Date(lastSent).getTime()) / DAY);
+    if (days <= 3) buckets.get("1-3")!.push(c);
+    else if (days <= 7) buckets.get("4-7")!.push(c);
+    else if (days <= 11) buckets.get("8-11")!.push(c);
+    else buckets.get("over11")!.push(c);
   }
 
-  // 查联系人
-  let query = getDb().select().from(contacts);
-  if (config.stageFilter && config.stageFilter.length > 0) {
-    // 按 CRM 阶段筛选 — 需要 JOIN crm_stages
-    // ponytail: 简单实现，先查全部再内存过滤
-  }
-  if (config.search) {
-    query = query.where(
-      like(contacts.email, `%${config.search}%`)
-    ) as typeof query;
-  }
-  const allContacts = query.all();
+  return okResult(BUCKET_DEFS.map(b => ({
+    key: b.key, label: b.label, description: b.desc,
+    contacts: buckets.get(b.key) || [], count: (buckets.get(b.key) || []).length,
+  })));
+}
 
-  // 查账号
-  const accounts = config.accountId
-    ? getDb().select().from(emailAccounts).where(eq(emailAccounts.id, config.accountId)).all()
-    : getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+// ── 构建队列（按公司合并 BCC）──
 
-  if (accounts.length === 0) {
-    return failResult("没有可用的发件账号");
+function buildQueue(bucketKeys: string[]): Result<SendItem[]> {
+  const buckets = getTimeBuckets();
+  if (!buckets.success) return failResult(buckets.error);
+
+  const selected = new Map<number, ContactRow>();
+  for (const b of buckets.data) {
+    if (bucketKeys.includes(b.key)) for (const c of b.contacts) selected.set(c.id, c);
   }
 
-  // 构建队列
-  const batchId = nanoid(12);
-  queue = [];
+  if (selected.size === 0) return failResult("没有选中的联系人");
 
-  for (let i = 0; i < allContacts.length; i++) {
-    const c = allContacts[i]!;
-    const account = accounts[i % accounts.length]!;
-    // ponytail: 简单轮询分配账号
+  const companyGroups = new Map<string, ContactRow[]>();
+  for (const c of selected.values()) {
+    const k = `c_${c.companyId || 0}`;
+    if (!companyGroups.has(k)) companyGroups.set(k, []);
+    companyGroups.get(k)!.push(c);
+  }
 
-    queue.push({
-      id: nanoid(),
-      contactEmail: c.email,
-      contactId: c.id,
-      contactName: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email,
-      subject: "",  // 由调用方先渲染再传入，或在此处渲染
-      body: "",
-      accountId: account.id,
-      status: "pending",
+  const items: SendItem[] = [];
+  for (const [, group] of companyGroups) {
+    items.push({
+      id: nanoid(), companyName: `#${group[0]!.companyId || "N/A"}`,
+      companyId: group[0]!.companyId || 0,
+      recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+      accountId: 0, status: "pending",
     });
   }
+  return okResult(items);
+}
 
-  // 重置状态
+// ── 多账号并行发送 ──
+
+let queues: Map<number, SendItem[]> = new Map();
+let abortFlags: Map<number, boolean> = new Map();
+
+export async function startSend(bucketKeys: string[]): Promise<Result<string>> {
+  Log.debug("send.start", `buckets=${bucketKeys.join(",")}`);
+
+  if (state.isRunning) return failResult("已有发送任务运行中");
+
+  const qr = buildQueue(bucketKeys);
+  if (!qr.success) return failResult(qr.error);
+
+  const items = qr.data;
+  if (items.length === 0) return failResult("没有待发送项");
+
+  const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+  if (accounts.length === 0) return failResult("没有可用的发件账号");
+
+  const batchId = nanoid(12);
+  queues = new Map();
+  abortFlags = new Map();
+
+  for (let i = 0; i < items.length; i++) {
+    const aid = accounts[i % accounts.length]!.id;
+    if (!queues.has(aid)) queues.set(aid, []);
+    queues.get(aid)!.push({ ...items[i]!, accountId: aid });
+  }
+
   state = {
-    queueLength: queue.length,
-    sentCount: 0,
-    failedCount: 0,
-    isPaused: false,
-    isRunning: true,
-    consecutiveFails: 0,
-    cooldownSeconds: 0,
+    batchId, totalItems: items.length, sentCount: 0, failedCount: 0,
+    isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0,
+    accountStats: accounts.map(a => ({ accountId: a.id, email: a.email, sent: 0, failed: 0, isCircuitOpen: false })),
   };
-  currentBatchId = batchId;
 
-  Log.info("send.start", `批次 ${batchId}: ${queue.length} 封待发送`);
+  Log.info("send.start", `批次 ${batchId}: ${items.length} 组, ${accounts.length} 账号`);
 
-  // 启动发送循环
-  tick();
+  for (const a of accounts) { abortFlags.set(a.id, false); runAccountLoop(a.id); }
 
   return okResult(batchId);
 }
 
-export function pauseSend(): Result<void> {
-  Log.debug("send.pause", "");
-  state.isPaused = true;
-  return okResult(undefined);
-}
+async function runAccountLoop(accountId: number) {
+  const q = queues.get(accountId) || [];
+  let fails = 0;
 
-export function resumeSend(): Result<void> {
-  Log.debug("send.resume", "");
-  state.isPaused = false;
-  tick();
-  return okResult(undefined);
-}
+  for (let i = 0; i < q.length; i++) {
+    while (state.isPaused && state.isRunning) await sleep(1000);
+    if (!state.isRunning || abortFlags.get(accountId)) break;
 
-export function getSendStatus(): Result<SendStatus> {
-  return okResult({ ...state, queueLength: queue.filter(q => q.status === "pending").length });
-}
-
-// ── 发送循环 ──
-
-async function tick() {
-  if (!state.isRunning || state.isPaused) return;
-
-  const pending = queue.find(q => q.status === "pending");
-  if (!pending) {
-    // 队列发完
-    state.isRunning = false;
-    Log.info("send.done", `批次 ${currentBatchId}: 完成 ${state.sentCount}/${state.sentCount + state.failedCount}`);
+    const item = q[i]!;
+    state.currentItem = { ...item, status: "sending" };
     push(EVENTS.SEND_PROGRESS, state);
-    return;
+
+    if (sendBccFn) {
+      const r = await sendBccFn(item);
+      if (r.success) {
+        item.status = "sent"; state.sentCount++; fails = 0;
+        const now = new Date().toISOString();
+        for (const rc of item.recipients) {
+          try { getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", accountId, createdAt: now }).run(); } catch (err) {
+            Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
+          }
+        }
+        saveDatabase();
+        const s = state.accountStats.find(x => x.accountId === accountId);
+        if (s) s.sent++;
+      } else {
+        item.status = "failed"; item.error = r.error; state.failedCount++; fails++;
+        const s = state.accountStats.find(x => x.accountId === accountId);
+        if (s) s.failed++;
+        if (fails >= 3) { const s = state.accountStats.find(x => x.accountId === accountId); if (s) s.isCircuitOpen = true; Log.warn("send.circuit", `账号 ${accountId} 熔断`); break; }
+      }
+    } else {
+      item.status = "failed"; item.error = "发送器未配置";
+    }
+
+    state.currentItem = null;
+    push(EVENTS.SEND_PROGRESS, state);
+
+    if (i < q.length - 1 && state.isRunning && !state.isPaused) {
+      const ms = Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000;
+      state.delaySeconds = Math.floor(ms / 1000);
+      push(EVENTS.SEND_PROGRESS, state);
+      await sleep(ms);
+      state.delaySeconds = 0;
+    }
   }
 
-  if (!sendMailFn) {
-    Log.error("send.tick", "sendMailFn 未注入");
-    pending.status = "failed";
-    pending.error = "发送函数未配置";
-    state.failedCount++;
+  const allDone = Array.from(queues.values()).flat().every(x => x.status !== "pending");
+  if (allDone) {
     state.isRunning = false;
-    return;
+    Log.info("send.done", `${state.sentCount}/${state.totalItems}`);
+    push(EVENTS.SEND_PROGRESS, state);
   }
-
-  pending.status = "sending";
-  push(EVENTS.SEND_PROGRESS, { ...state, currentItem: pending });
-
-  const result = await sendMailFn(pending);
-
-  if (result.success) {
-    pending.status = "sent";
-    pending.sentAt = new Date().toISOString();
-    state.sentCount++;
-    state.consecutiveFails = 0;
-
-    // 记录互动
-    try {
-      getDb().insert(interactions).values({
-        contactId: pending.contactId,
-        type: "sent",
-        direction: "outbound",
-        channel: "email",
-        subject: pending.subject,
-        accountId: pending.accountId,
-        createdAt: pending.sentAt,
-      }).run();
-      saveDatabase();
-    } catch (err: unknown) {
-      Log.error("send.tick", "记录互动失败", err instanceof Error ? err.stack : undefined);
-    }
-  } else {
-    pending.status = "failed";
-    pending.error = result.error;
-    state.failedCount++;
-    state.consecutiveFails++;
-
-    // 熔断检查
-    if (state.consecutiveFails >= 3) {
-      enterCooldown();
-      return;
-    }
-  }
-
-  // 间隔
-  const delayMs = 30_000; // 30 秒默认，后续从 config 读取
-  tickTimeout = setTimeout(tick, delayMs);
 }
 
-// ── 熔断器 ──
-
-function enterCooldown() {
-  const exp = Math.min(state.consecutiveFails - 2, 5); // 1→4→8→16→32
-  state.cooldownSeconds = Math.min(Math.pow(2, exp) * 60, 1800);
-  state.isPaused = true;
-
-  Log.warn("send.circuit", `熔断触发: 连续 ${state.consecutiveFails} 次失败，冷却 ${state.cooldownSeconds}s`);
-  push(EVENTS.CIRCUIT_CHANGED, { consecutiveFails: state.consecutiveFails, cooldownSeconds: state.cooldownSeconds, isPaused: true });
-
-  cooldownTimeout = setTimeout(() => {
-    state.isPaused = false;
-    state.consecutiveFails = 0;
-    Log.info("send.circuit", "熔断恢复");
-    push(EVENTS.CIRCUIT_CHANGED, { consecutiveFails: 0, cooldownSeconds: 0, isPaused: false });
-    tick();
-  }, state.cooldownSeconds * 1000);
-}
-
-/** 清理定时器（应用退出时调用） */
+export function pauseSend(): Result<void> { state.isPaused = true; pauseDelay(); return okResult(undefined); }
+export function resumeSend(): Result<void> { state.isPaused = false; resumeDelay(); return okResult(undefined); }
+export function getSendStatus(): Result<SendStatus> { return okResult({ ...state }); }
 export function cleanupSendEngine() {
-  if (tickTimeout) clearTimeout(tickTimeout);
-  if (cooldownTimeout) clearTimeout(cooldownTimeout);
-  state.isRunning = false;
-  Log.info("send.cleanup", "引擎已清理");
+  state.isRunning = false; abortFlags.forEach((_, k) => abortFlags.set(k, true));
+  if (delayTimer) clearTimeout(delayTimer); Log.info("send.cleanup", "引擎已清理");
 }
