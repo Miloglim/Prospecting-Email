@@ -54,7 +54,7 @@ export async function listPipeline(): Promise<Result<StageWithContacts[]>> {
   for (const r of rows) {
     const stage = r.stage || "reaching";
     if (!grouped.has(stage)) grouped.set(stage, []);
-    grouped.get(stage)!.push(r);
+    grouped.get(stage)!.push({ ...r, id: r.contactId });
   }
 
   const result = STAGES.map(s => ({
