@@ -106,7 +106,7 @@ export function seedTestData(): Result<{ contacts: number; companies: number }> 
         createdAt: now, updatedAt: now,
       }).run();
     } catch (err: unknown) {
-      Log.warn("seed", `联系人插入失败: ${email}`, err instanceof Error ? err.message : String(err));
+      Log.warn("seed", `联系人插入失败: ${email} — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
