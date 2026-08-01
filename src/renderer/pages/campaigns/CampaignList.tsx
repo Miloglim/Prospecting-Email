@@ -76,8 +76,8 @@ export function CampaignList() {
     const r = await window.api.invoke("send:preview", {
       subject: selectedTemplate.subject,
       body: selectedTemplate.body,
-    }) as { success: boolean; data?: { subject: string; body: string } };
-    if (r?.success) { setPreview(r.data); setPreviewOpen(true); }
+    }) as { success: boolean; data?: { subject: string; body: string }; error?: string };
+    if (r?.success) { if (r.data) setPreview(r.data); setPreviewOpen(true); }
     else message.error(r?.error || "预览失败");
   };
 

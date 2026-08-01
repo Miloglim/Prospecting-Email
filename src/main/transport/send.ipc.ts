@@ -56,6 +56,6 @@ export function registerSendIPC() {
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: { to: string; accountId: number }) => {
     if (!input?.to) return failResult("收件人必填");
-    return sendBcc({ id: "test", companyName: "测试", companyId: 0, recipients: [{ contactId: 0, email: input.to, name: "Test" }], accountId: input.accountId, status: "sending" });
+    return sendBcc({ id: "test", companyName: "测试", companyId: 0, recipients: [{ contactId: 0, email: input.to, name: "Test" }], accountId: input.accountId, subject: input.to, body: "Test email from Prospector.", status: "sending" });
   });
 }
