@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import { contacts, type ContactRow, type InsertContactRow } from "../db/schema/contacts";
-import { eq, like, or, sql as dsql } from "drizzle-orm";
+import { interactions } from "../db/schema/interactions";
+import { eq, like, or, desc, sql as dsql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -89,6 +90,19 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   getDb().delete(contacts).where(eq(contacts.id, id)).run();
   saveDatabase();
   return okResult(undefined);
+}
+
+/** 查询联系人互动历史 */
+export async function getContactInteractions(id: number): Promise<Result<Array<{
+  type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string;
+}>>> {
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const rows = getDb().select().from(interactions)
+    .where(eq(interactions.contactId, id))
+    .orderBy(desc(interactions.createdAt))
+    .limit(50)
+    .all();
+  return okResult(rows);
 }
 
 /** 更新联系人状态（send/inbox 引擎调用） */

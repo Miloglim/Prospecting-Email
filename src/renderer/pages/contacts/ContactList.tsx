@@ -2,6 +2,15 @@ import { useState } from "react";
 import { Table, Button, Input, Space, Drawer, Descriptions, Tag, message, Form } from "antd";
 import { PlusOutlined, SearchOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
 import { useContacts, useUpsertContact, useDeleteContact, type Contact } from "../../hooks/useContacts";
+import { useQuery } from "@tanstack/react-query";
+import { Timeline } from "antd";
+
+const INTERACTION_COLORS: Record<string, string> = {
+  sent: "#5c6bc0", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800",
+};
+const INTERACTION_LABELS: Record<string, string> = {
+  sent: "已发送", replied: "已回复", bounced: "退信", autoreply: "自动回复",
+};
 
 export function ContactList() {
   const [search, setSearch] = useState("");
@@ -127,16 +136,68 @@ export function ContactList() {
               <Descriptions.Item label="创建时间">{new Date(detailContact.createdAt).toLocaleDateString("zh-CN")}</Descriptions.Item>
             </Descriptions>
 
-            {/* 编辑按钮 */}
-            <Button size="small" icon={<EditOutlined />} block>编辑</Button>
-
-            {/* 互动历史（占位） */}
-            <div className="text-xs text-gray-400 p-2 bg-gray-50 rounded text-center">
-              互动历史（待实现）
-            </div>
+            {/* 互动历史 */}
+            <ContactInteractions contactId={detailContact.id} />
           </div>
         )}
       </Drawer>
+    </div>
+  );
+}
+
+interface InteractionItem {
+  type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string;
+}
+
+function ContactInteractions({ contactId }: { contactId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["contacts", "interactions", contactId],
+    queryFn: () => window.api.invoke("contacts:interactions", contactId) as Promise<{
+      success: boolean; data?: InteractionItem[]; error?: string;
+    }>,
+    enabled: contactId > 0,
+  });
+
+  const items = data?.success ? data.data || [] : [];
+
+  return (
+    <div>
+      <div className="text-[11px] font-semibold text-gray-600 mb-2 flex items-center gap-2">
+        互动历史
+        <Tag className="text-[9px] px-1 my-0">{items.length} 条</Tag>
+      </div>
+
+      {isLoading ? <div className="text-xs text-gray-400 py-4 text-center">加载中...</div> :
+        items.length === 0 ? (
+          <div className="text-xs text-gray-400 p-3 bg-gray-50 rounded text-center">
+            暂无互动记录
+          </div>
+        ) : (
+          <Timeline
+            items={items.slice(0, 20).map((i, idx) => ({
+              color: INTERACTION_COLORS[i.type] || "gray",
+              children: (
+                <div key={idx} className="text-[11px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-gray-700">
+                      {INTERACTION_LABELS[i.type] || i.type}
+                    </span>
+                    <span className="text-gray-400">
+                      {new Date(i.createdAt).toLocaleDateString("zh-CN")}
+                    </span>
+                  </div>
+                  {i.subject && (
+                    <div className="text-[11px] text-gray-600 mt-0.5">{i.subject}</div>
+                  )}
+                  {i.bodyPreview && (
+                    <div className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{i.bodyPreview}</div>
+                  )}
+                </div>
+              ),
+            }))}
+          />
+        )
+      }
     </div>
   );
 }

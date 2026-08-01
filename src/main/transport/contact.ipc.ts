@@ -34,4 +34,9 @@ export function registerContactIPC() {
     if (!result.success) return result;
     return { success: true as const, data: result.data.total };
   });
+
+  ipcMain.handle("contacts:interactions", async (_e, id: number) => {
+    if (!Number.isInteger(id) || id <= 0) return failResult("参数错误: 无效的 id");
+    return svc.getContactInteractions(id);
+  });
 }
