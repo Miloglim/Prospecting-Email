@@ -87,10 +87,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   email text NOT NULL UNIQUE,
   first_name text, last_name text, title text, phone text, linkedin_url text,
-  company_id integer,
-  custom_str1 text, custom_str2 text, custom_str3 text, custom_str4 text, custom_str5 text,
-  custom_num1 integer, custom_num2 integer, custom_num3 integer, custom_num4 integer, custom_num5 integer,
-  custom_date1 text, custom_date2 text, custom_date3 text, custom_date4 text, custom_date5 text,
+  company_id integer, country text, client_type text,
   source text DEFAULT 'manual', source_detail text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -138,6 +135,9 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
+CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at);
 `.trim();
 
   const statements = SCHEMA_SQL.split(";")
