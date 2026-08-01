@@ -107,7 +107,10 @@ export function registerInboxIPC() {
     // 没抓到新邮件 → 返回 DB 已有邮件
     return InboxService.listInbox();
   });
-  ipcMain.handle(IPC.INBOX.CLASSIFY, (_e, _id) => okResult({ classification: "other" }));
+  ipcMain.handle(IPC.INBOX.CLASSIFY, async (_e, payload: { id: number; classification: string }) => {
+    if (!payload?.id || !payload?.classification) return failResult("参数错误");
+    return InboxService.classifyMessage(payload.id, payload.classification);
+  });
 }
 
 export function cleanupInboxIPC() {

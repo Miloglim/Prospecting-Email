@@ -182,6 +182,38 @@ export function listInbox(): Result<InboxMessageRow[]> {
   return okResult(rows);
 }
 
+// ── 手动更新邮件分类 ──
+
+export function classifyMessage(id: number, classification: string): Result<void> {
+  Log.debug("inbox.classify", `id=${id} type=${classification}`);
+
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const valid = ["replied", "bounce", "autoreply", "other"];
+  if (!valid.includes(classification)) return failResult(`无效分类: ${classification}`);
+
+  const existing = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+  if (!existing) return failResult("邮件不存在");
+
+  getDb().update(inboxMessages).set({
+    classification,
+    // 退信 → 同时标记关联联系人
+    ...(classification === "bounce" && existing.matchedContactId
+      ? { matchedContactId: existing.matchedContactId }
+      : {}),
+  }).where(eq(inboxMessages.id, id)).run();
+  saveDatabase();
+
+  // 退信 → 同步更新联系人状态为 bounced
+  if (classification === "bounce" && existing.matchedContactId) {
+    try {
+      const { markAsBounced } = require("./contact.service");
+      markAsBounced(existing.matchedContactId);
+    } catch { /* */ }
+  }
+
+  return okResult(undefined);
+}
+
 // ── 自动抓取 ──
 
 export function startAutoFetch(intervalMs = 5 * 60 * 1000) {

@@ -171,8 +171,15 @@ export function InboxList() {
                   style={{ width: 130, fontSize: 11 }}
                   options={Object.entries(TYPE_LABELS).map(([k, v]) => ({ value: k, label: v.label }))}
                   onChange={async (v) => {
-                    const r = await window.api.invoke("inbox:classify", selected.id);
-                    r?.success ? message.success("已更新分类") : message.error(r?.error || "失败");
+                    const r = await window.api.invoke("inbox:classify", {
+                      id: selected.id,
+                      classification: v,
+                    });
+                    if (r && typeof r === "object" && "success" in r) {
+                      const rr = r as { success: boolean; error?: string };
+                      rr.success ? message.success("已更新分类") : message.error(rr.error || "失败");
+                      if (rr.success) qc.invalidateQueries({ queryKey: ["inbox"] });
+                    }
                   }}
                 />
               </div>
