@@ -3,6 +3,7 @@ import { IPC } from "../contract";
 import { loadConfig, saveConfig } from "../config";
 import { Log } from "../logger";
 import { okResult } from "../errors";
+import { seedTestData } from "../services/seed.service";
 
 export function registerSystemIPC() {
   ipcMain.handle(IPC.SYSTEM.GET_CONFIG, () => {
@@ -25,9 +26,5 @@ export function registerSystemIPC() {
 
   ipcMain.handle(IPC.SYSTEM.APP_VERSION, () => okResult(app.getVersion()));
 
-  ipcMain.handle("system:seed", () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { seedTestData } = require("../services/seed.service");
-    return seedTestData();
-  });
+  ipcMain.handle("system:seed", () => seedTestData());
 }

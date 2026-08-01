@@ -4,11 +4,10 @@ import { IPC } from "../contract";
 import * as SendService from "../services/send.service";
 import { Log } from "../logger";
 import { failResult, okResult, type Result } from "../errors";
+import { loadConfig } from "../config";
 
 async function sendBcc(item: SendService.SendItem): Promise<Result<void>> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { loadConfig } = require("../config");
     const config = loadConfig();
     const account = config.smtpAccounts.find((a: { id: number }) => a.id === item.accountId);
     if (!account) return failResult("账号未找到");
