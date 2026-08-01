@@ -149,6 +149,10 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
                 accountId: m.accountId,
                 createdAt: m.receivedAt,
               }).run();
+              // 更新联系人状态
+              const { updateContactStatus, markAsBounced } = require("./contact.service");
+              if (m.classification === "bounce") markAsBounced(c.id);
+              else updateContactStatus(c.id, "replied");
             }
           }
         }

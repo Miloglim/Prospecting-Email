@@ -223,7 +223,11 @@ async function runAccountLoop(accountId: number) {
         item.status = "sent"; state.sentCount++; fails = 0;
         const now = new Date().toISOString();
         for (const rc of item.recipients) {
-          try { getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", accountId, createdAt: now }).run(); } catch (err) {
+          try {
+            getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", accountId, createdAt: now }).run();
+            const { updateContactStatus } = require("./contact.service");
+            updateContactStatus(rc.contactId, "reached");
+          } catch (err) {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
           }
         }

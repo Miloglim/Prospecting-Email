@@ -14,7 +14,7 @@ export function registerCrmIPC() {
 
   ipcMain.handle(IPC.CRM.ADD_REMINDER, async (_e, params: { contactId: number; reminderAt: string; note?: string }) => {
     if (!params?.contactId || !params?.reminderAt) return failResult("contactId 和 reminderAt 必填");
-    return CrmService.addReminder(params.contactId, params.reminderAt, params.note);
+    return CrmService.setReminder(params.contactId, params.reminderAt, params.note);
   });
 
   ipcMain.handle(IPC.CRM.GET_DETAIL, async (_e, contactId: number) => {

@@ -86,8 +86,16 @@ CREATE TABLE IF NOT EXISTS companies (
 CREATE TABLE IF NOT EXISTS contacts (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   email text NOT NULL UNIQUE,
-  first_name text, last_name text, title text, phone text, linkedin_url text,
-  company_id integer, country text, client_type text,
+  company_id integer, first_name text, last_name text,
+  title text, phone text, linkedin text,
+  country text, client_type text DEFAULT 'unlabeled',
+  stage text DEFAULT 'cold',
+  status text DEFAULT '',
+  tags text DEFAULT '[]',
+  extra text DEFAULT '{}',
+  is_bounced integer DEFAULT 0, bounce_reason text,
+  last_sent_at text, last_sent_acct text,
+  assignee text DEFAULT '', followup_note text,
   source text DEFAULT 'manual', source_detail text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
