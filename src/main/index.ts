@@ -55,6 +55,20 @@ function registerAllIPC() {
   Log.info("ipc", "所有 IPC 通道注册完成");
 }
 
+// 单实例锁 — 防止重复启动多个进程
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    // 已有实例运行，聚焦到已有窗口
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 app.whenReady().then(async () => {
   await initDatabase();
   runMigrations();
