@@ -337,15 +337,15 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* 右侧浮动导航 */}
-      <nav className="fixed right-8 top-1/2 -translate-y-1/2 z-20 hidden lg:block">
+      {/* 右侧浮动导航轨道 */}
+      <nav className="settings-rail hidden lg:block">
         {SECTIONS.map(s => (
-          <div key={s.id} className="flex items-center gap-2 py-1.5 cursor-pointer group"
-            onClick={() => scrollTo(s.id)}>
-            <span className={`text-[10px] transition-all duration-200 ${activeSection === s.id ? "text-gray-800" : "text-gray-400 opacity-0 group-hover:opacity-100"}`}>
-              {s.label}
-            </span>
-            <span className={`w-2 h-2 rounded-full transition-all duration-200 ${activeSection === s.id ? "bg-teal-400 shadow-[0_0_8px_rgba(0,191,165,0.4)] scale-125" : "bg-gray-300 group-hover:scale-150 group-hover:bg-teal-400"}`} />
+          <div key={s.id}
+            className={`settings-rail-item ${activeSection === s.id ? "active" : ""}`}
+            onClick={() => scrollTo(s.id)}
+          >
+            <span className="settings-rail-label">{s.label}</span>
+            <span className="settings-rail-dot" />
           </div>
         ))}
       </nav>
