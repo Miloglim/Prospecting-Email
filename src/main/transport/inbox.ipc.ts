@@ -101,7 +101,12 @@ export function registerInboxIPC() {
   InboxService.setInboxPushFn(createPushFn());
   InboxService.startAutoFetch();
 
-  ipcMain.handle(IPC.INBOX.FETCH, (_e, accountId?: number) => InboxService.fetchInbox(accountId));
+  ipcMain.handle(IPC.INBOX.FETCH, async (_e, accountId?: number) => {
+    const fetched = await InboxService.fetchInbox(accountId);
+    if (fetched.success && fetched.data.length > 0) return fetched;
+    // 没抓到新邮件 → 返回 DB 已有邮件
+    return InboxService.listInbox();
+  });
   ipcMain.handle(IPC.INBOX.CLASSIFY, (_e, _id) => okResult({ classification: "other" }));
 }
 

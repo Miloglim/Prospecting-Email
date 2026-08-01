@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
+import { inboxMessages } from "../db/schema/inbox";
 import { okResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -113,7 +114,39 @@ export function seedTestData(): Result<{ contacts: number; companies: number }> 
   }
 
   const allContacts = db.select().from(contacts).all();
+
+  // 收件箱测试数据
+  const inboxSamples = [
+    { subject: "Re: Your logistics proposal", body: "Thanks for the proposal, we'd like to discuss rates for the Shanghai–Santos lane.", type: "replied" },
+    { subject: "Mail Delivery Failure", body: "Your message could not be delivered to the following recipients: user not found (5.1.1).", type: "bounce" },
+    { subject: "Re: FWD quote request", body: "Please send us a quote for 3x40HQ from Ningbo to Guayaquil.", type: "replied" },
+    { subject: "Out of Office: Auto Reply", body: "I am out of the office until next Monday. For urgent matters please contact...", type: "autoreply" },
+    { subject: "Weekly newsletter", body: "This week in logistics: container rates, port congestion updates...", type: "other" },
+    { subject: "Re: NVOCC partnership", body: "Interested in your consolidation services for the Mexico route.", type: "replied" },
+    { subject: "Undeliverable: Returned mail", body: "Address rejected. The account you tried to reach does not exist.", type: "bounce" },
+    { subject: "Vacation reply", body: "Gracias por su mensaje. Estoy de vacaciones hasta el 15 de agosto.", type: "autoreply" },
+  ];
+
+  for (let i = 0; i < inboxSamples.length; i++) {
+    const sample = inboxSamples[i]!;
+    const contact = allContacts[i * 3]!;
+    try {
+      db.insert(inboxMessages).values({
+        accountId: 1,
+        messageId: `seed-msg-${i}`,
+        fromEmail: contact.email,
+        fromName: [contact.firstName, contact.lastName].filter(Boolean).join(" ") || null,
+        subject: sample.subject,
+        bodyPreview: sample.body,
+        classification: sample.type,
+        matchedContactId: contact.id,
+        receivedAt: new Date(Date.now() - i * 3600000).toISOString(),
+        isRead: 0,
+      }).run();
+    } catch { /* */ }
+  }
+
   saveDatabase();
-  Log.info("seed", `插入 ${allContacts.length} 联系人, ${allCompanies.length} 公司`);
+  Log.info("seed", `插入 ${allContacts.length} 联系人, ${allCompanies.length} 公司, ${inboxSamples.length} 封收件箱`);
   return okResult({ contacts: allContacts.length, companies: allCompanies.length });
 }
