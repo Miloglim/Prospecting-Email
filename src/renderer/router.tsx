@@ -2,7 +2,6 @@ import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/re
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/dashboard/Dashboard";
 import { ContactList } from "./pages/contacts/ContactList";
-import { CompanyList } from "./pages/companies/CompanyList";
 import { CrmPipeline } from "./pages/crm/CrmPipeline";
 import { InboxList } from "./pages/inbox/InboxList";
 import { CampaignList } from "./pages/campaigns/CampaignList";
@@ -24,12 +23,6 @@ const contactsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/contacts",
   component: ContactList,
-});
-
-const companiesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/companies",
-  component: CompanyList,
 });
 
 const crmRoute = createRoute({
@@ -71,7 +64,6 @@ const settingsRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   contactsRoute,
-  companiesRoute,
   crmRoute,
   inboxRoute,
   campaignsRoute,

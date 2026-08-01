@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
   InboxOutlined, PartitionOutlined, FileTextOutlined,
-  SettingOutlined, ExportOutlined, ShopOutlined,
+  SettingOutlined, ExportOutlined,
 } from "@ant-design/icons";
 import { useAppContext } from "../../AppContext";
 
@@ -13,7 +13,6 @@ const { Sider } = Layout;
 const menuItems = [
   { key: "/", icon: <DashboardOutlined />, label: "仪表盘", group: "main" },
   { key: "/contacts", icon: <UserOutlined />, label: "联系人", group: "work" },
-  { key: "/companies", icon: <ShopOutlined />, label: "公司", group: "work" },
   { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", group: "work" },
   { key: "/crm", icon: <PartitionOutlined />, label: "CRM 管线", group: "work" },
   { key: "/campaigns", icon: <SendOutlined />, label: "邮件发送", group: "send" },

@@ -8,7 +8,6 @@ const { Header, Content } = Layout;
 const pageTitles: Record<string, string> = {
   "/": "仪表盘",
   "/contacts": "联系人管理",
-  "/companies": "公司管理",
   "/campaigns": "发送管理",
   "/inbox": "收件箱",
   "/crm": "CRM 管线",
