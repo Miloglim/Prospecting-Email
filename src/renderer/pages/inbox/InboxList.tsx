@@ -93,7 +93,7 @@ export function InboxList() {
           {isLoading ? <div className="text-center text-xs text-gray-400 py-10">加载中...</div> :
             items.length === 0 ? <Empty description="没有邮件" image={Empty.PRESENTED_IMAGE_SIMPLE} className="mt-10" /> :
             items.map(i => {
-              const t = TYPE_LABELS[i.classification || "other"];
+              const t = TYPE_LABELS[i.classification || "other"] || TYPE_LABELS["other"]!;
               return (
                 <div key={i.id}
                   className={`flex items-start gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors ${selectedId === i.id ? "bg-violet-50 border-l-[3px] border-l-violet-400" : ""}`}
