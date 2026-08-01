@@ -48,7 +48,9 @@ export const IPC = {
     SET_STAGE:     chan(PREFIX.CRM, "setStage"),
     ADD_REMINDER:  chan(PREFIX.CRM, "addReminder"),
     LIST_RELATIONS: chan(PREFIX.CRM, "listRelations"),
-    ADD_RELATION:  chan(PREFIX.CRM, "addRelation"),
+    ADD_RELATION:   chan(PREFIX.CRM, "addRelation"),
+    GET_DETAIL:     chan(PREFIX.CRM, "getDetail"),
+    CHECK_REMINDERS:chan(PREFIX.CRM, "checkReminders"),
   },
   TEMPLATES: {
     LIST:   chan(PREFIX.TEMPLATES, "list"),
