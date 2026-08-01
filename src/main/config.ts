@@ -46,20 +46,52 @@ export interface SMTPAccount {
   encryptedPass: string;
 }
 
+export interface SendSchedule {
+  /** 时间窗口 */
+  timeWindowEnabled: boolean;
+  startHour: number;   // 北京时 9
+  endHour: number;     // 北京时 8（次日）
+  /** 组内单封间隔（秒） */
+  minDelaySeconds: number;
+  maxDelaySeconds: number;
+  /** 公司组之间间隔（分钟）— 模拟人工"一批一批发" */
+  companyDelayMinMinutes: number;
+  companyDelayMaxMinutes: number;
+  /** 单公司单联系人额外间隔（秒） */
+  singleRecipDelayMinSeconds: number;
+  singleRecipDelayMaxSeconds: number;
+  /** 每 N 组换模板 */
+  templateRotateGroups: number;
+  /** 每批加队列数量 + 批间暂停 */
+  batchSize: number;
+  batchPauseMinSeconds: number;
+  batchPauseMaxSeconds: number;
+}
+
 export interface RuntimeConfig {
   smtpAccounts: SMTPAccount[];
-  schedule: {
-    minDelaySeconds: number;
-    maxPerBatch: number;
-  };
+  schedule: SendSchedule;
 }
+
+export const DEFAULT_SCHEDULE: SendSchedule = {
+  timeWindowEnabled: true,
+  startHour: 9,
+  endHour: 8,
+  minDelaySeconds: 8,
+  maxDelaySeconds: 16,
+  companyDelayMinMinutes: 15,
+  companyDelayMaxMinutes: 20,
+  singleRecipDelayMinSeconds: 5,
+  singleRecipDelayMaxSeconds: 10,
+  templateRotateGroups: 3,
+  batchSize: 12,
+  batchPauseMinSeconds: 94,
+  batchPauseMaxSeconds: 167,
+};
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   smtpAccounts: [],
-  schedule: {
-    minDelaySeconds: 30,
-    maxPerBatch: 50,
-  },
+  schedule: DEFAULT_SCHEDULE,
 };
 
 export function loadConfig(): RuntimeConfig {

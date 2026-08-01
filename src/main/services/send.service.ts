@@ -10,6 +10,7 @@ import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
 import { EVENTS } from "../events";
+import { loadConfig, DEFAULT_SCHEDULE } from "../config";
 
 // ── 类型 ──
 
@@ -251,13 +252,40 @@ export async function startSend(bucketKeys: string[], template?: SendTemplate): 
   return okResult(batchId);
 }
 
+// 检查时间窗口（北京时间）
+function inWindow(sched: typeof DEFAULT_SCHEDULE): boolean {
+  if (!sched.timeWindowEnabled) return true;
+  const h = new Date(Date.now() + 8 * 3600000).getUTCHours(); // 北京时
+  return sched.startHour < sched.endHour
+    ? h >= sched.startHour && h < sched.endHour
+    : h >= sched.startHour || h < sched.endHour;
+}
+
+function randBetween(min: number, max: number): number {
+  if (max <= min) return min * 1000;
+  return (Math.floor(Math.random() * (max - min + 1)) + min) * 1000;
+}
+
 async function runAccountLoop(accountId: number) {
   const q = queues.get(accountId) || [];
   let fails = 0;
+  const sched = loadConfig().schedule || DEFAULT_SCHEDULE;
 
   for (let i = 0; i < q.length; i++) {
     while (state.isPaused && state.isRunning) await sleep(1000);
     if (!state.isRunning || abortFlags.get(accountId)) break;
+
+    // 时间窗口检查 — 窗口外等待，模拟人工只在工作时间发信
+    if (!inWindow(sched)) {
+      const waitMs = 60 * 1000; // 每分钟检查一次
+      state.delaySeconds = Math.floor(waitMs / 1000);
+      push(EVENTS.SEND_PROGRESS, state);
+      await sleep(waitMs);
+      if (!state.isRunning) break;
+      state.delaySeconds = 0;
+      i--; // 不消耗队列项，继续等
+      continue;
+    }
 
     const item = q[i]!;
     state.currentItem = { ...item, status: "sending" };
@@ -294,7 +322,15 @@ async function runAccountLoop(accountId: number) {
     push(EVENTS.SEND_PROGRESS, state);
 
     if (i < q.length - 1 && state.isRunning && !state.isPaused) {
-      const ms = Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000;
+      // 公司组之间：15-20 分钟随机间隔（模拟人工一批批处理）
+      let ms: number;
+      if (item.recipients.length <= 1) {
+        // 单联系人公司：短间隔 5-10 秒
+        ms = randBetween(sched.singleRecipDelayMinSeconds, sched.singleRecipDelayMaxSeconds);
+      } else {
+        // 多联系人公司（BCC 组）：15-20 分钟
+        ms = randBetween(sched.companyDelayMinMinutes * 60, sched.companyDelayMaxMinutes * 60);
+      }
       state.delaySeconds = Math.floor(ms / 1000);
       push(EVENTS.SEND_PROGRESS, state);
       await sleep(ms);
