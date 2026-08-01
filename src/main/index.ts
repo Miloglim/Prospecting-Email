@@ -60,6 +60,9 @@ app.whenReady().then(async () => {
   registerAllIPC();
   createWindow();
 
+  // 测试数据 seed
+  try { const { seedTestData } = require("./services/seed.service"); seedTestData(); } catch { /* */ }
+
   // 每 30 秒自动持久化
   saveInterval = setInterval(() => {
     saveDatabase();

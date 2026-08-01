@@ -23,7 +23,11 @@ export function registerSystemIPC() {
     return okResult(undefined);
   });
 
-  ipcMain.handle(IPC.SYSTEM.APP_VERSION, () => {
-    return okResult(app.getVersion());
+  ipcMain.handle(IPC.SYSTEM.APP_VERSION, () => okResult(app.getVersion()));
+
+  ipcMain.handle("system:seed", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { seedTestData } = require("../services/seed.service");
+    return seedTestData();
   });
 }
