@@ -7,7 +7,6 @@ import {
   DeleteOutlined, PlusOutlined, SendOutlined, EnvironmentOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
-import * as d3 from "d3";
 
 // ══════════════════════════════════════════════════════════════
 // 类型 & 常量（沿用旧 PE）
@@ -189,7 +188,6 @@ export function CrmPipeline() {
               { key: "prefs", label: <span className="text-[10px]">偏好设置</span> },
               { key: "followup", label: <span className="text-[10px]">跟进记录</span> },
               { key: "emails", label: <span className="text-[10px]">邮件往来</span> },
-              { key: "relations", label: <span className="text-[10px]">关系网络</span> },
             ]}
           />
 
@@ -352,10 +350,6 @@ export function CrmPipeline() {
               </div>
             )}
 
-            {/* Tab 5: 关系网络 */}
-            {currentTab === "relations" && contact && (
-              <RelationGraph contactId={contact.id} />
-            )}
           </div>
         </div>
       )}
@@ -459,105 +453,5 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => P
     <span className="flex-1 text-[11px] cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5" onClick={() => setEditing(true)}>
       {value}
     </span>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════
-// D3 关系图（沿用旧 PE 力导向图）
-// ══════════════════════════════════════════════════════════════
-
-function RelationGraph({ contactId }: { contactId: number }) {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [nodes, setNodes] = useState<Array<{ id: string; type: "company" | "contact"; label: string; color?: string; stage?: string }>>([]);
-  const [edges, setEdges] = useState<Array<{ source: string; target: string; type: "company" | "custom"; label?: string }>>([]);
-
-  useEffect(() => {
-    (async () => {
-      const r = await window.api.invoke("crm:listRelations", contactId) as {
-        success: boolean; data?: Array<{
-          id: number; firstName: string | null; lastName: string | null;
-          companyId: number | null; companyName?: string | null;
-        }>;
-      };
-      if (!r?.success || !r.data?.length) return;
-
-      const contacts = r.data;
-      const company = contacts[0]!;
-      const ns: typeof nodes = [
-        { id: `c_${company.companyId || 0}`, type: "company", label: company.companyName || "公司", color: "#1a1a1a" },
-      ];
-      const es: typeof edges = [];
-
-      for (const c of contacts) {
-        const sid = `p_${c.id}`;
-        ns.push({ id: sid, type: "contact", label: [c.firstName, c.lastName].filter(Boolean).join(" ") || "—" });
-        es.push({ source: `c_${c.companyId || 0}`, target: sid, type: "company" });
-      }
-
-      setNodes(ns);
-      setEdges(es);
-    })();
-  }, [contactId]);
-
-  useEffect(() => {
-    if (!svgRef.current || !nodes.length || !containerRef.current) return;
-
-    const w = containerRef.current.clientWidth;
-    const h = 400;
-    const svg = d3.select(svgRef.current);
-    svg.selectAll("*").remove();
-    svg.attr("width", w).attr("height", h);
-
-    const g = svg.append("g");
-    const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.3, 3]).on("zoom", (e) => { g.attr("transform", e.transform); });
-    svg.call(zoom);
-
-    const sim = d3.forceSimulation(nodes as d3.SimulationNodeDatum[])
-      .force("charge", d3.forceManyBody().strength(-200))
-      .force("center", d3.forceCenter(w / 2, h / 2))
-      .force("collision", d3.forceCollide(30))
-      .force("link", d3.forceLink(edges).distance(100))
-      .on("tick", () => {
-        g.selectAll<SVGLineElement, typeof edges[0]>("line")
-          .data(edges)
-          .join("line")
-          .attr("x1", d => ((d.source as d3.SimulationNodeDatum).x || 0))
-          .attr("y1", d => ((d.source as d3.SimulationNodeDatum).y || 0))
-          .attr("x2", d => ((d.target as d3.SimulationNodeDatum).x || 0))
-          .attr("y2", d => ((d.target as d3.SimulationNodeDatum).y || 0))
-          .attr("stroke", d => d.type === "custom" ? "#e6a817" : "#b0b0b0")
-          .attr("stroke-dasharray", d => d.type === "custom" ? "5,3" : "none")
-          .attr("stroke-opacity", 0.5);
-
-        g.selectAll<SVGCircleElement, typeof nodes[0]>("circle")
-          .data(nodes)
-          .join("circle")
-          .attr("r", d => d.type === "company" ? 24 : 10)
-          .attr("cx", d => (d as d3.SimulationNodeDatum).x || 0)
-          .attr("cy", d => (d as d3.SimulationNodeDatum).y || 0)
-          .attr("fill", d => d.type === "company" ? d.color || "#1a1a1a" : "#4caf50")
-          .attr("stroke", "#fff")
-          .attr("stroke-width", 2);
-
-        g.selectAll<SVGTextElement, typeof nodes[0]>("text")
-          .data(nodes)
-          .join("text")
-          .attr("x", d => ((d as d3.SimulationNodeDatum).x || 0))
-          .attr("y", d => ((d as d3.SimulationNodeDatum).y || 0) + (d.type === "company" ? 34 : 16))
-          .attr("text-anchor", "middle")
-          .attr("fill", "#666")
-          .attr("font-size", 9)
-          .text(d => d.label.slice(0, 8));
-      });
-
-    return () => { sim.stop(); };
-  }, [nodes, edges]);
-
-  return (
-    <div ref={containerRef} className="w-full">
-      <svg ref={svgRef} />
-      {!nodes.length && <Empty description="暂无关系数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
-    </div>
   );
 }
