@@ -2,6 +2,7 @@ import * as crypto from "crypto";
 const nanoid = () => crypto.randomUUID().slice(0, 12);
 import { getDb } from "../db";
 import { contacts, type ContactRow } from "../db/schema/contacts";
+import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { emailAccounts } from "../db/schema/accounts";
 import { eq, sql as dsql } from "drizzle-orm";
@@ -16,8 +17,15 @@ export interface SendItem {
   id: string; companyName: string; companyId: number;
   recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number;
+  subject: string;   // 渲染后的主题
+  body: string;      // 渲染后的正文
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
+}
+
+export interface SendTemplate {
+  subject: string;  // 含 {{firstName}} {{company}} 变量
+  body: string;
 }
 
 export interface TimeBucket {
@@ -131,9 +139,32 @@ export function getTimeBuckets(): Result<TimeBucket[]> {
   })));
 }
 
-// ── 构建队列（按公司合并 BCC）──
+// ── 模板渲染（沿用旧 PE: {{firstName}} {{company}}，兼容 {{ contact.firstName }}）──
 
-function buildQueue(bucketKeys: string[]): Result<SendItem[]> {
+function renderTemplate(template: string, contact: ContactRow): string {
+  let out = template || "";
+  const vars: Record<string, string> = {
+    firstName: contact.firstName || "",
+    lastName: contact.lastName || "",
+    company: "", // 由调用方填充
+    email: contact.email,
+  };
+
+  for (const [key, val] of Object.entries(vars)) {
+    // 旧 PE 格式 {{firstName}}
+    out = out.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, "gi"), val);
+    // 兼容格式 {{ contact.firstName }}
+    out = out.replace(new RegExp(`\\{\\{\\s*contact\\.${key}\\s*\\}\\}`, "gi"), val);
+  }
+
+  // 清理未替换的变量
+  out = out.replace(/\{\{\s*[a-zA-Z_.]+\s*\}\}/g, "");
+  return out;
+}
+
+// ── 构建队列（按公司合并 BCC + 渲染模板）──
+
+function buildQueue(bucketKeys: string[], template?: SendTemplate): Result<SendItem[]> {
   const buckets = getTimeBuckets();
   if (!buckets.success) return failResult(buckets.error);
 
@@ -151,12 +182,27 @@ function buildQueue(bucketKeys: string[]): Result<SendItem[]> {
     companyGroups.get(k)!.push(c);
   }
 
+  // 查公司名（用于 {{company}} 变量）
+  const companyMap = new Map<number, string>();
+  if (selected.size > 0) {
+    const companyRows = getDb().select().from(companies).all();
+    for (const comp of companyRows) companyMap.set(comp.id, comp.name);
+  }
+
   const items: SendItem[] = [];
   for (const [, group] of companyGroups) {
+    const first = group[0]!;
+    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+
+    // 用组内第一个联系人渲染模板（BCC 组共享一封，取第一人为准）
+    const subj = template ? renderTemplate(template.subject, { ...first }) : "Regarding our logistics partnership";
+    const body = template ? renderTemplate(template.body, { ...first }) : "Hello, I hope this email finds you well.\n\nBest regards";
+
     items.push({
-      id: nanoid(), companyName: `#${group[0]!.companyId || "N/A"}`,
-      companyId: group[0]!.companyId || 0,
+      id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+      companyId: first.companyId || 0,
       recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+      subject: subj, body,
       accountId: 0, status: "pending",
     });
   }
@@ -168,12 +214,12 @@ function buildQueue(bucketKeys: string[]): Result<SendItem[]> {
 let queues: Map<number, SendItem[]> = new Map();
 let abortFlags: Map<number, boolean> = new Map();
 
-export async function startSend(bucketKeys: string[]): Promise<Result<string>> {
+export async function startSend(bucketKeys: string[], template?: SendTemplate): Promise<Result<string>> {
   Log.debug("send.start", `buckets=${bucketKeys.join(",")}`);
 
   if (state.isRunning) return failResult("已有发送任务运行中");
 
-  const qr = buildQueue(bucketKeys);
+  const qr = buildQueue(bucketKeys, template);
   if (!qr.success) return failResult(qr.error);
 
   const items = qr.data;
@@ -266,6 +312,16 @@ async function runAccountLoop(accountId: number) {
 
 export function pauseSend(): Result<void> { state.isPaused = true; pauseDelay(); return okResult(undefined); }
 export function resumeSend(): Result<void> { state.isPaused = false; resumeDelay(); return okResult(undefined); }
+/** 预览模板渲染效果（用第一个联系人） */
+export function previewTemplate(template: SendTemplate): Result<{ subject: string; body: string }> {
+  const first = getDb().select().from(contacts).limit(1).get();
+  if (!first) return failResult("没有联系人可预览");
+  return okResult({
+    subject: renderTemplate(template.subject, first),
+    body: renderTemplate(template.body, first),
+  });
+}
+
 export function getSendStatus(): Result<SendStatus> { return okResult({ ...state }); }
 export function cleanupSendEngine() {
   state.isRunning = false; abortFlags.forEach((_, k) => abortFlags.set(k, true));

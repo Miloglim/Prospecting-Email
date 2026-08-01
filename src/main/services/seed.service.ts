@@ -2,6 +2,7 @@ import { getDb } from "../db";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { inboxMessages } from "../db/schema/inbox";
+import { templates } from "../db/schema/templates";
 import { okResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -146,7 +147,32 @@ export function seedTestData(): Result<{ contacts: number; companies: number }> 
     } catch { /* */ }
   }
 
+  // 模板数据
+  const templateSamples = [
+    { name: "Intro - First Contact", language: "EN", category: "hook",
+      subject: "{{firstName}} — Shipping partnership opportunity",
+      body: "Hi {{firstName}},\n\nI hope this email finds you well. I noticed that {{company}} is active in international freight.\n\nWe are a specialized freight forwarding partner covering the LatAm routes with competitive rates and reliable service.\n\nWould you be open to a quick call this week?\n\nBest regards" },
+    { name: "Intro - 首封开发信", language: "ES", category: "hook",
+      subject: "{{firstName}} — Oportunidad de colaboración",
+      body: "Hola {{firstName}},\n\nEspero que este mensaje le encuentre bien. Vi que {{company}} opera en el mercado internacional.\n\nSomos especialistas en carga internacional con tarifas competitivas.\n\n¿Le interesaría una llamada esta semana?\n\nSaludos" },
+    { name: "Follow-up F1", language: "EN", category: "followup",
+      subject: "Re: {{firstName}} — Following up",
+      body: "Hi {{firstName}},\n\nJust following up on my previous email about our freight services for {{company}}.\n\nHappy to provide a rate quote for any route you're currently shipping.\n\nBest regards" },
+    { name: "Follow-up F2", language: "EN", category: "followup",
+      subject: "{{company}} — One more thought",
+      body: "Hi {{firstName}},\n\nI know you're busy, so I'll keep this brief. We could save {{company}} 15-20% on ocean freight to LatAm.\n\nWorth a 5-minute chat?\n\nBest regards" },
+  ];
+
+  for (const t of templateSamples) {
+    try {
+      db.insert(templates).values({
+        ...t, version: 1, isActive: 1,
+        createdAt: now, updatedAt: now,
+      }).run();
+    } catch { /* */ }
+  }
+
   saveDatabase();
-  Log.info("seed", `插入 ${allContacts.length} 联系人, ${allCompanies.length} 公司, ${inboxSamples.length} 封收件箱`);
+  Log.info("seed", `插入 ${allContacts.length} 联系人, ${allCompanies.length} 公司, ${inboxSamples.length} 封收件箱, ${templateSamples.length} 模板`);
   return okResult({ contacts: allContacts.length, companies: allCompanies.length });
 }

@@ -22,8 +22,8 @@ async function sendBcc(item: SendService.SendItem): Promise<Result<void>> {
     const emails = item.recipients.map(r => r.email);
     await transporter.sendMail({
       from: account.email, bcc: emails,
-      subject: "Regarding our logistics partnership",
-      text: "Hello, I hope this email finds you well.\n\nBest regards",
+      subject: item.subject || "Regarding our logistics partnership",
+      text: item.body || "Hello, I hope this email finds you well.\n\nBest regards",
     });
     transporter.close();
     Log.debug("send.bcc", `${item.companyName}: ${emails.length} 人`);
@@ -41,13 +41,18 @@ export function registerSendIPC() {
   SendService.setSendBccFn(sendBcc);
   SendService.setPushFn(createPushFn());
 
-  ipcMain.handle(IPC.SEND.START, (_e, keys: string[]) => {
-    if (!keys || keys.length === 0) return failResult("请选择至少一个时间桶");
-    return SendService.startSend(keys);
+  ipcMain.handle(IPC.SEND.START, (_e, payload: { keys: string[]; template?: SendService.SendTemplate }) => {
+    if (!payload?.keys || payload.keys.length === 0) return failResult("请选择至少一个时间桶");
+    return SendService.startSend(payload.keys, payload.template);
   });
   ipcMain.handle(IPC.SEND.PAUSE, () => SendService.pauseSend());
   ipcMain.handle(IPC.SEND.RESUME, () => SendService.resumeSend());
   ipcMain.handle(IPC.SEND.STATUS, () => SendService.getSendStatus());
+  ipcMain.handle("send:getTimeBuckets", () => SendService.getTimeBuckets());
+  ipcMain.handle("send:preview", (_e, template: SendService.SendTemplate) => {
+    if (!template?.subject || !template?.body) return failResult("模板不完整");
+    return SendService.previewTemplate(template);
+  });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: { to: string; accountId: number }) => {
     if (!input?.to) return failResult("收件人必填");
