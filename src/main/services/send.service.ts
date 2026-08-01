@@ -1,4 +1,5 @@
-import { nanoid } from "nanoid";
+import * as crypto from "crypto";
+const nanoid = () => crypto.randomUUID().slice(0, 12);
 import { getDb } from "../db";
 import { contacts, type ContactRow } from "../db/schema/contacts";
 import { interactions } from "../db/schema/interactions";
@@ -181,7 +182,7 @@ export async function startSend(bucketKeys: string[]): Promise<Result<string>> {
   const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
   if (accounts.length === 0) return failResult("没有可用的发件账号");
 
-  const batchId = nanoid(12);
+  const batchId = nanoid();
   queues = new Map();
   abortFlags = new Map();
 
