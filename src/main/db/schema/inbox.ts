@@ -14,7 +14,6 @@ export const inboxMessages = sqliteTable("inbox_messages", {
   matchedContactId:  integer("matched_contact_id"),
   isRead:            integer("is_read").notNull().default(0),
   receivedAt:        text("received_at").notNull(),
-  rawSource:         text("raw_source"),
   createdAt:         text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 

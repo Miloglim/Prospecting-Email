@@ -8,4 +8,9 @@ export function registerExportIPC() {
     Log.debug("ipc.export.contactsToExcel", "");
     return svc.exportContactsToExcel(filter);
   });
+
+  ipcMain.handle(IPC.EXPORT.NOTES_TO_CSV, async () => {
+    Log.debug("ipc.export.notesToCsv", "");
+    return svc.exportNotesToCsv();
+  });
 }

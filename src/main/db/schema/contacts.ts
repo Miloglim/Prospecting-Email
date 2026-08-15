@@ -12,21 +12,17 @@ export const contacts = sqliteTable("contacts", {
   phone:        text("phone"),
   linkedinUrl:  text("linkedin"),
   country:      text("country"),
-  clientType:   text("client_type").default("unlabeled"),
+  clientType:   text("client_type"),
+  language:     text("language"),
   // 发送阶段（cold/f1/f2/f3/f4）
   stage:        text("stage").default("cold"),
   // 联系人状态（空 / reached / replied / bounced / autoreply）
   status:       text("status").default(""),
-  // CRM 管线标签 — JSON 数组: ["reaching"] / ["quoting"] 等
-  tags:         text("tags").default("[]"),
+  // CRM 分类 — JSON 数组，固定 6 值单选: ["reaching"] 等；NULL=未设置
+  tags:         text("tags"),
   // 扩展数据 — JSON: { crmReminder, crmPreferences, relations }
   extra:        text("extra").default("{}"),
-  isBounced:    integer("is_bounced").default(0),
-  bounceReason: text("bounce_reason"),
-  lastSentAt:   text("last_sent_at"),
-  lastSentAcct: text("last_sent_acct"),
   assignee:     text("assignee").default(""),
-  followupNote: text("followup_note"),
   source:       text("source").default("manual"),
   sourceDetail: text("source_detail"),
   createdAt:    text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

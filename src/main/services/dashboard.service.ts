@@ -1,8 +1,6 @@
 import { getDb } from "../db";
 import { contacts } from "../db/schema/contacts";
 import { interactions } from "../db/schema/interactions";
-import { crmStages } from "../db/schema/crm";
-import { inboxMessages } from "../db/schema/inbox";
 import { sql } from "drizzle-orm";
 import { okResult, type Result } from "../errors";
 import { Log } from "../logger";
@@ -12,8 +10,6 @@ export interface DashboardStats {
   totalSent: number;
   totalReplied: number;
   bounceCount: number;
-  openRate: number;
-  replyRate: number;
   pipelineSummary: Record<string, number>;
   recentActivity: Array<{
     type: string; contactEmail: string; subject: string | null; createdAt: string;
@@ -33,12 +29,16 @@ export function getStats(): Result<DashboardStats> {
   const bounceCount = db.select({ count: sql<number>`count(*)` })
     .from(interactions).where(sql`type = 'bounced'`).get()?.count || 0;
 
-  // 阶段统计
-  const stages = db.select({ stage: crmStages.stage, count: sql<number>`count(*)` })
-    .from(crmStages).groupBy(crmStages.stage).all();
+  // 阶段统计 — 从 contacts.tags（CRM 管线标签）读取，crm_stages 已废弃
+  const STAGE_KEYS = ["reaching", "quoting", "trial", "cooperating", "lost", "other"];
+  const tagRows = db.select({ tags: contacts.tags }).from(contacts).all();
   const pipelineSummary: Record<string, number> = {};
-  for (const s of stages) {
-    pipelineSummary[s.stage] = s.count;
+  for (const k of STAGE_KEYS) pipelineSummary[k] = 0;
+  for (const r of tagRows) {
+    let tags: string[] = [];
+    try { const p = JSON.parse(r.tags || "[]"); if (Array.isArray(p)) tags = p; } catch { /* 忽略坏 JSON */ }
+    const stage = STAGE_KEYS.find(k => tags.includes(k));
+    if (stage) pipelineSummary[stage] = (pipelineSummary[stage] || 0) + 1;
   }
 
   // 最近活动（前 10 条）
@@ -61,13 +61,8 @@ export function getStats(): Result<DashboardStats> {
     createdAt: r.createdAt,
   }));
 
-  const openRate = totalSent > 0 ? (bounceCount + totalReplied) / totalSent : 0;
-  const replyRate = totalSent > 0 ? totalReplied / totalSent : 0;
-
   return okResult({
     totalContacts, totalSent, totalReplied, bounceCount,
-    openRate: Math.round(openRate * 100) / 100,
-    replyRate: Math.round(replyRate * 100) / 100,
     pipelineSummary, recentActivity,
   });
 }

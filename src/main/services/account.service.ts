@@ -17,7 +17,7 @@ function getSecretKey(): Buffer {
 const ALGORITHM = "aes-256-gcm";
 
 /** 加密密码 — 每次加密用随机 IV */
-function encryptPassword(plaintext: string): string {
+export function encryptPassword(plaintext: string): string {
   const key = getSecretKey();
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
@@ -123,42 +123,43 @@ export async function listAccounts(): Promise<Result<EmailAccountRow[]>> {
 }
 
 export async function upsertAccount(
-  input: InsertEmailAccountRow & { password: string } // 接收明文密码
+  input: InsertEmailAccountRow & { password?: string; id?: number }
 ): Promise<Result<EmailAccountRow>> {
-  Log.debug("account.upsert", `email=${input.email}`);
+  const isEdit = !!input.id;
+  Log.debug("account.upsert", `email=${input.email} isEdit=${isEdit}`);
 
-  if (!input.email || !input.password || !input.smtpHost) {
-    return failResult("email、password、smtpHost 必填");
-  }
+  if (!input.email || !input.smtpHost) return failResult("email、smtpHost 必填");
+  if (!isEdit && !input.password) return failResult("新增时密码必填");
 
-  // ① 先验证连接
-  const smtpResult = await validateSmtp(input.smtpHost, input.smtpPort || 587, input.email, input.password);
-  if (!smtpResult.ok) {
-    return failResult(`SMTP 连接失败: ${smtpResult.error}`);
-  }
+  // ponytail: 编辑模式无密码 → 跳过验证，保留原密码；有密码 → 重新验证+加密
+  if (!isEdit || input.password) {
+    const pass = input.password!;
+    const smtpResult = await validateSmtp(input.smtpHost, input.smtpPort || 587, input.email, pass);
+    if (!smtpResult.ok) return failResult(`SMTP 连接失败: ${smtpResult.error}`);
 
-  if (input.imapHost) {
-    const imapResult = await validateImap(input.imapHost, input.imapPort || 993, input.email, input.password);
-    if (!imapResult.ok) {
-      return failResult(`IMAP 连接失败: ${imapResult.error}`);
+    if (input.imapHost) {
+      const imapResult = await validateImap(input.imapHost, input.imapPort || 993, input.email, pass);
+      if (!imapResult.ok) return failResult(`IMAP 连接失败: ${imapResult.error}`);
     }
   }
 
-  // ② 加密密码
-  const encryptedPass = encryptPassword(input.password);
+  // 加密密码（编辑无密码则保留原值）
+  const encryptedPass = input.password ? encryptPassword(input.password) : undefined;
 
-  // ③ 保存
-  const existing = getDb().select().from(emailAccounts)
-    .where(eq(emailAccounts.email, input.email)).get();
+  const existing = isEdit
+    ? getDb().select().from(emailAccounts).where(eq(emailAccounts.id, input.id!)).get()
+    : getDb().select().from(emailAccounts).where(eq(emailAccounts.email, input.email)).get();
 
   const now = new Date().toISOString();
 
   if (existing) {
-    getDb().update(emailAccounts).set({
+    const updateData: Record<string, unknown> = {
       smtpHost: input.smtpHost, smtpPort: input.smtpPort,
       imapHost: input.imapHost, imapPort: input.imapPort,
-      encryptedPass, displayName: input.displayName, signature: input.signature,
-    }).where(eq(emailAccounts.id, existing.id)).run();
+      displayName: input.displayName, signature: input.signature,
+    };
+    if (encryptedPass) updateData.encryptedPass = encryptedPass;
+    getDb().update(emailAccounts).set(updateData).where(eq(emailAccounts.id, existing.id)).run();
     saveDatabase();
     const updated = getDb().select().from(emailAccounts)
       .where(eq(emailAccounts.id, existing.id)).get()!;
@@ -168,7 +169,7 @@ export async function upsertAccount(
 
   getDb().insert(emailAccounts).values({
     ...input,
-    encryptedPass,
+    encryptedPass: encryptedPass!,
     createdAt: now,
   }).run();
   saveDatabase();
@@ -196,8 +197,11 @@ export async function deleteAccount(id: number): Promise<Result<void>> {
 export function getDecryptedPassword(id: number): Result<string> {
   const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, id)).get();
   if (!account) return failResult("账号不存在");
+  const raw = account.encryptedPass;
+  // ponytail: 旧格式（非 iv:tag:ciphertext）当明文，兼容加密引入前的账号
+  if (!raw.includes(":")) return okResult(raw);
   try {
-    return okResult(decryptPassword(account.encryptedPass));
+    return okResult(decryptPassword(raw));
   } catch (err: unknown) {
     return failResult("解密失败", err);
   }

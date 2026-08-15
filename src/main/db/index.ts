@@ -3,6 +3,7 @@ import { drizzle, type drizzle as DrizzleType } from "drizzle-orm/sql-js";
 import * as schema from "./schema";
 import { DB_PATH } from "../config";
 import { Log } from "../logger";
+import { migrateTagsValue } from "./tags-migrate";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -43,6 +44,12 @@ export async function initDatabase(): Promise<DrizzleDB> {
 export function getDb(): DrizzleDB {
   if (!dbInstance) throw new Error("数据库未初始化，先调用 initDatabase()");
   return dbInstance;
+}
+
+/** 获取底层 sql.js 数据库实例（drizzle 不暴露 $client，供直接 SQL 查询用） */
+export function getSqlJsDb(): SqlJsDatabase {
+  if (!sqlJsDb) throw new Error("数据库未初始化，先调用 initDatabase()");
+  return sqlJsDb;
 }
 
 /** 持久化数据库到磁盘。
@@ -88,14 +95,12 @@ CREATE TABLE IF NOT EXISTS contacts (
   email text NOT NULL UNIQUE,
   company_id integer, first_name text, last_name text,
   title text, phone text, linkedin text,
-  country text, client_type text DEFAULT 'unlabeled',
+  country text, client_type text, language text,
   stage text DEFAULT 'cold',
   status text DEFAULT '',
-  tags text DEFAULT '[]',
+  tags text,
   extra text DEFAULT '{}',
-  is_bounced integer DEFAULT 0, bounce_reason text,
-  last_sent_at text, last_sent_acct text,
-  assignee text DEFAULT '', followup_note text,
+  assignee text DEFAULT '',
   source text DEFAULT 'manual', source_detail text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -121,7 +126,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
   subject text, body_preview text, classification text,
   matched_contact_id integer,
   is_read integer DEFAULT 0 NOT NULL,
-  received_at text NOT NULL, raw_source text,
+  received_at text NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE TABLE IF NOT EXISTS interactions (
@@ -138,10 +143,21 @@ CREATE TABLE IF NOT EXISTS templates (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   name text NOT NULL, language text NOT NULL,
   subject text NOT NULL, body text NOT NULL,
-  category text, version integer DEFAULT 1 NOT NULL,
+  category text, stage text, version integer DEFAULT 1 NOT NULL,
   is_active integer DEFAULT 1 NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS send_queue (
+  id text PRIMARY KEY NOT NULL,
+  batch_id text NOT NULL,
+  company_name text, company_id integer,
+  recipients text NOT NULL,
+  account_id integer NOT NULL, account_email text,
+  subject text, body text,
+  status text DEFAULT 'pending' NOT NULL,
+  error text, sent_at text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
@@ -154,6 +170,82 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
 
   for (const stmt of statements) {
     sqlJsDb.run(stmt + ";");
+  }
+
+  // ponytail: 旧库列迁移 — contacts 表删除冗余字段（DROP COLUMN 需 SQLite 3.35+，sql.js 支持）
+  try {
+    const cols = (sqlJsDb.exec("PRAGMA table_info(contacts)")[0]?.values || []).map(r => String(r[1]));
+    for (const col of ["is_bounced", "bounce_reason", "last_sent_at", "last_sent_acct", "followup_note"]) {
+      if (cols.includes(col)) sqlJsDb.run(`ALTER TABLE contacts DROP COLUMN ${col};`);
+    }
+  } catch { /* 表不存在或无此列 → 忽略 */ }
+
+  // v4.1: templates 表补 stage 列
+  try {
+    const tcols = (sqlJsDb.exec("PRAGMA table_info(templates)")[0]?.values || []).map(r => String(r[1]));
+    if (!tcols.includes("stage")) {
+      sqlJsDb.run("ALTER TABLE templates ADD COLUMN stage text;");
+      Log.info("db.migrate", "templates 表已添加 stage 列");
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v4.0: contacts 表补 language 列（国家+语言分离）
+  try {
+    const ccols = (sqlJsDb.exec("PRAGMA table_info(contacts)")[0]?.values || []).map(r => String(r[1]));
+    if (!ccols.includes("language")) {
+      sqlJsDb.run("ALTER TABLE contacts ADD COLUMN language text;");
+      Log.info("db.migrate", "contacts 表已添加 language 列");
+    }
+  } catch { /* 忽略 */ }
+
+  // v4.0: tags 收敛为固定 6 值分类（CRM 阶段）单选 — 丢弃自定义标签，只保留首个阶段 key
+  try {
+    const rows = sqlJsDb.exec("SELECT id, tags, status FROM contacts")[0]?.values || [];
+    for (const r of rows) {
+      const id = r[0] as number;
+      const oldTags = String(r[1] || "");
+      const status = String(r[2] || "");
+      const newTags = migrateTagsValue(oldTags, status);
+      if (newTags !== (oldTags || null)) {
+        if (newTags === null) sqlJsDb.run("UPDATE contacts SET tags = NULL WHERE id = ?", [id]);
+        else sqlJsDb.run("UPDATE contacts SET tags = ? WHERE id = ?", [newTags, id]);
+      }
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v4.1: 回填 inbox 关联 — 历史邮件 matched_contact_id 补全 + interactions 补记（幂等，lower 大小写不敏感）
+  try {
+    sqlJsDb.run(`
+      UPDATE inbox_messages
+      SET matched_contact_id = (
+        SELECT c.id FROM contacts c
+        WHERE lower(c.email) = lower(inbox_messages.from_email)
+        LIMIT 1
+      )
+      WHERE matched_contact_id IS NULL
+    `);
+    const bfMatched = sqlJsDb.getRowsModified();
+    sqlJsDb.run(`
+      INSERT INTO interactions (contact_id, type, direction, channel, subject, body_preview, message_id, account_id, created_at)
+      SELECT i.matched_contact_id,
+             CASE i.classification WHEN 'bounce' THEN 'bounced' WHEN 'replied' THEN 'replied' WHEN 'autoreply' THEN 'autoreply' END,
+             'inbound', 'email', i.subject, i.body_preview, i.message_id, i.account_id, i.received_at
+      FROM inbox_messages i
+      WHERE i.matched_contact_id IS NOT NULL
+        AND i.classification IN ('bounce','replied','autoreply')
+        AND NOT EXISTS (
+          SELECT 1 FROM interactions it
+          WHERE it.contact_id = i.matched_contact_id
+            AND it.message_id = i.message_id
+            AND it.type IN ('bounced','replied','autoreply')
+        )
+    `);
+    const bfInteractions = sqlJsDb.getRowsModified();
+    if (bfMatched > 0 || bfInteractions > 0) {
+      Log.info("db.backfill", `inbox 关联回填: matched=${bfMatched} interactions=${bfInteractions}`);
+    }
+  } catch (e) {
+    Log.warn("db.backfill", `回填失败: ${(e as Error).message}`);
   }
 
   Log.info("db.migrations", `${statements.length} 条建表语句已执行`);

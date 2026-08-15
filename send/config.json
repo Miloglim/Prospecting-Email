@@ -1,0 +1,42 @@
+{
+  "fromName": "",
+  "bodyName": "",
+  "signature": "",
+  "schedule": {
+    "timeWindowEnabled": true,
+    "startHour": 21,
+    "endHour": 8,
+    "companyDelayMinMinutes": 15,
+    "companyDelayMaxMinutes": 20,
+    "singleRecipDelayMinSeconds": 5,
+    "singleRecipDelayMaxSeconds": 10,
+    "templateRotateGroups": 3,
+    "batchSize": 12,
+    "batchPauseMinSeconds": 94,
+    "batchPauseMaxSeconds": 167
+  },
+  "test": {
+    "email": "",
+    "company": "",
+    "enabled": false,
+    "dryRun": true
+  },
+  "crm": {
+    "followupDays": {
+      "reaching": 3,
+      "quoting": 3,
+      "trial": 5,
+      "cooperating": 7,
+      "lost": 14,
+      "other": 7
+    },
+    "todoAdvanceDays": 2,
+    "autoArchiveDays": 30
+  },
+  "sendQuota": {
+    "dailyLimit": 1500
+  },
+  "general": {
+    "closeAction": "quit"
+  }
+}

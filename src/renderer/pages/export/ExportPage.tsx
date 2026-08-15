@@ -1,39 +1,44 @@
 import { useState } from "react";
 import { Button, Card, Input, message, Space } from "antd";
-import { DownloadOutlined, FileExcelOutlined } from "@ant-design/icons";
+import { DownloadOutlined, FileExcelOutlined, FileTextOutlined } from "@ant-design/icons";
+
+function downloadCsv(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export function ExportPage() {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportingNotes, setExportingNotes] = useState(false);
 
   const handleExport = async () => {
     setExporting(true);
     try {
       const result = await window.api.invoke("export:contactsToExcel", { search });
-      if (!result || typeof result !== "object" || !("success" in result)) {
-        message.error("导出失败");
-        return;
-      }
       const r = result as { success: boolean; data?: string; error?: string };
-      if (!r.success) {
-        message.error(r.error || "导出失败");
-        return;
-      }
-
-      // 下载 CSV 文件
-      const blob = new Blob([r.data || ""], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `contacts_${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (!r?.success) { message.error(r?.error || "导出失败"); return; }
+      downloadCsv(r.data || "", `contacts_${new Date().toISOString().slice(0, 10)}.csv`);
       message.success("导出完成");
-    } catch {
-      message.error("导出失败");
-    } finally {
-      setExporting(false);
-    }
+    } catch { message.error("导出失败"); }
+    finally { setExporting(false); }
+  };
+
+  const handleExportNotes = async () => {
+    setExportingNotes(true);
+    try {
+      const result = await window.api.invoke("export:notesToCsv");
+      const r = result as { success: boolean; data?: string; error?: string };
+      if (!r?.success) { message.error(r?.error || "导出失败"); return; }
+      downloadCsv(r.data || "", `跟进记录_${new Date().toISOString().slice(0, 10)}.csv`);
+      message.success("导出完成");
+    } catch { message.error("导出失败"); }
+    finally { setExportingNotes(false); }
   };
 
   return (
@@ -54,7 +59,22 @@ export function ExportPage() {
 
           <Button type="primary" icon={<DownloadOutlined />}
             loading={exporting} onClick={handleExport} block>
-            导出 CSV
+            导出联系人 CSV
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="bg-white border-gray-200">
+        <div className="text-center space-y-4">
+          <FileTextOutlined className="text-4xl text-blue-500" />
+          <h3 className="text-lg text-gray-900">导出跟进记录</h3>
+          <p className="text-sm text-gray-500">
+            导出全部联系人跟进记录（interactions 中的 note），按时间倒序
+          </p>
+
+          <Button icon={<DownloadOutlined />}
+            loading={exportingNotes} onClick={handleExportNotes} block>
+            导出跟进记录 CSV
           </Button>
         </div>
       </Card>

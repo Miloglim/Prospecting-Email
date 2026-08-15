@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contact Parser</title>
+<style>
+  :root { --bg: #fff; --text: #111; --border: #e0e0e0; --muted: #888; --hover: #f5f5f5; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); max-width: 1200px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; }
+
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+
+  .row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .row label { font-size: 13px; white-space: nowrap; }
+  .row input, .row select { padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: 5px; }
+  .row input:focus, .row select:focus { outline: none; border-color: #000; }
+
+  textarea {
+    width: 100%; min-height: 200px; padding: 12px; font: 13px/1.6 monospace;
+    border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: #000; }
+
+  .toolbar { display: flex; gap: 8px; margin: 12px 0; align-items: center; }
+  button {
+    padding: 6px 16px; font-size: 13px; border: 1px solid var(--border);
+    background: var(--bg); border-radius: 5px; cursor: pointer;
+  }
+  button:hover { background: var(--hover); }
+  button.primary { background: #000; color: #fff; border-color: #000; }
+  button.primary:hover { background: #333; }
+  button.danger {
+    border-color: #e00; color: #e00;
+    transition: border-color 0.6s, color 0.6s;
+  }
+  button.danger:hover { background: #fef0f0; }
+
+  .stats { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; font-size: 11px; text-transform: uppercase; color: var(--muted); position: sticky; top: 0; background: var(--bg); cursor: grab; user-select: none; }
+  th:active { cursor: grabbing; }
+  th.drag-over { box-shadow: inset 2px 0 0 #000; }
+  tr:hover td { background: var(--hover); }
+  .tag { display: inline-block; padding: 2px 8px; background: #f0f0f0; border-radius: 10px; font-size: 11px; }
+  .email { font-family: monospace; color: var(--muted); }
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) scale(0.8);
+    padding: 8px 20px; background: #16a34a; color: #fff; border-radius: 6px;
+    font-size: 13px; opacity: 0; pointer-events: none; z-index: 999;
+    transition: opacity 0.2s, transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) scale(1); }
+</style>
+</head>
+<body>
+
+<div style="flex:1">
+
+<h1>Contact Parser</h1>
+
+<div class="row">
+  <input type="text" id="company" placeholder="公司名(可选)" style="width:160px">
+  <input type="text" id="country" placeholder="国家(可选)" style="width:120px">
+  <select id="clientType" style="width:150px">
+    <option value="">直客/代理(可选)</option>
+    <option value="直客">直客</option>
+    <option value="代理">代理</option>
+  </select>
+</div>
+
+<textarea id="input" placeholder="粘贴联系人数据..."></textarea>
+
+<div class="toolbar">
+  <button class="primary" id="parseBtn">解析</button>
+  <button id="addMoreBtn" style="display:none">继续添加</button>
+  <button id="copyTSV">复制表格</button>
+  <button id="clearBtn">清空</button>
+  <span class="stats" id="stats"></span>
+  <label style="font-size:13px;white-space:nowrap"><input type="checkbox" id="skipHeader"> 去除表头</label>
+</div>
+
+<div class="col-toggles" id="colToggles" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+
+<div id="output">
+  <div class="guide">
+    <p style="font-weight:600;margin-bottom:8px">使用说明</p>
+    <ol style="font-size:13px;color:var(--muted);line-height:2;padding-left:18px">
+      <li>在外贸通联系人列表中，从第一个联系人按住选中至最后一个（可选 <b>100条/页</b> 加大选取量），粘贴后点击<b>解析</b>，再点击<b>复制表格</b>粘贴至你的表格中</li>
+      <li>字段可<b>拖动</b>调整顺序，点击标签<b>隐藏/显示</b></li>
+      <li>该工具按<b>邮箱</b>识别联系人，并自动提取邮箱下方的<b>电话号码</b></li>
+      <li>勾选<b>去除表头</b>后复制表格时不包含列名行</li>
+      <li><b>继续添加</b>时相同邮箱不会重复添加</li>
+    </ol>
+  </div>
+</div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+<p style="text-align:center;font-size:12px;color:var(--muted);padding:16px 0">Developed by Zayne</p>
+
+<script>
+const input = document.getElementById('input');
+const clientType = document.getElementById('clientType');
+clientType.style.color = 'var(--muted)';
+clientType.onchange = () => { clientType.style.color = clientType.value ? '' : 'var(--muted)'; };
+const company = document.getElementById('company');
+const output = document.getElementById('output');
+const stats = document.getElementById('stats');
+
+let lastContacts = [];
+let columnOrder = ['company', 'name', 'title', 'email', 'phone', 'type', 'country', 'tag'];
+let hiddenCols = new Set();
+
+const colLabels = { company:'公司', type:'类型', country:'国家', name:'姓名', title:'职位', email:'邮箱', phone:'电话', tag:'标签' };
+
+function renderToggles() {
+  const container = document.getElementById('colToggles');
+  container.innerHTML = columnOrder.map(k => {
+    const hidden = hiddenCols.has(k);
+    return `<span class="col-chip${hidden ? ' off' : ''}" data-key="${k}" style="
+      display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;
+      cursor:pointer;border:1px solid ${hidden ? 'var(--border)' : '#000'};
+      background:${hidden ? 'transparent' : '#000'};color:${hidden ? 'var(--muted)' : '#fff'};
+    ">${colLabels[k]}</span>`;
+  }).join('');
+
+  container.querySelectorAll('.col-chip').forEach(chip => {
+    chip.onclick = () => {
+      const key = chip.dataset.key;
+      if (hiddenCols.has(key)) hiddenCols.delete(key); else hiddenCols.add(key);
+      renderToggles();
+      if (lastContacts.length) render(lastContacts);
+    };
+  });
+}
+
+function getColumns() {
+  const companyName = company.value.trim();
+  const clientType = document.getElementById('clientType').value;
+  const countryName = document.getElementById('country').value.trim();
+
+  const all = {
+    company: { label: '公司', get: () => companyName },
+    type:    { label: '类型', get: () => clientType },
+    country: { label: '国家', get: () => countryName },
+    name:    { label: '姓名', get: c => `<strong>${esc(c.name)}</strong>`, raw: c => c.name },
+    title:   { label: '职位', get: c => esc(c.title), raw: c => c.title },
+    email:   { label: '邮箱', get: c => `<span class="email">${esc(c.email)}</span>`, raw: c => c.email },
+    phone:   { label: '电话', get: c => esc(c.phone || ''), raw: c => c.phone || '' },
+    tag:     { label: '标签', get: c => `<span class="tag">${esc(c.tag)}</span>`, raw: c => c.tag },
+  };
+
+  return columnOrder
+    .filter(k => all[k] && !hiddenCols.has(k))
+    .map(k => all[k]);
+}
+
+function render(contacts) {
+  if (!contacts.length) {
+    output.innerHTML = '<div class="empty">未识别到联系人，请检查粘贴格式</div>';
+    return;
+  }
+
+  const columns = getColumns();
+
+  const thead = `<thead><tr>${columns.map((col, i) =>
+    `<th draggable="true" data-idx="${i}">${col.label}</th>`
+  ).join('')}</tr></thead>`;
+
+  const tbody = `<tbody>${contacts.map(c =>
+    `<tr>${columns.map(col => `<td>${col.get(c)}</td>`).join('')}</tr>`
+  ).join('')}</tbody>`;
+
+  output.innerHTML = `<table>${thead}${tbody}</table>`;
+  document.getElementById('clearBtn').classList.add('danger');
+  renderToggles();
+
+  // drag-and-drop: reorder columns
+  let dragIdx = -1;
+  output.querySelectorAll('th').forEach(th => {
+    th.addEventListener('dragstart', e => { dragIdx = +e.target.dataset.idx; e.target.style.opacity = '0.5'; });
+    th.addEventListener('dragend', e => { e.target.style.opacity = ''; output.querySelectorAll('th').forEach(t => t.classList.remove('drag-over')); });
+    th.addEventListener('dragover', e => { e.preventDefault(); });
+    th.addEventListener('dragenter', e => {
+      e.preventDefault();
+      const targetIdx = +e.target.dataset.idx;
+      if (targetIdx !== dragIdx) {
+        output.querySelectorAll('th').forEach(t => t.classList.remove('drag-over'));
+        e.target.classList.add('drag-over');
+      }
+    });
+    th.addEventListener('drop', e => {
+      e.preventDefault();
+      const from = dragIdx;
+      const to = +e.target.dataset.idx;
+      if (from !== to && from >= 0 && to >= 0) {
+        // reorder the global columnOrder (only visible columns)
+        const visible = columnOrder.filter(k => !hiddenCols.has(k));
+        const [moved] = visible.splice(from, 1);
+        visible.splice(to, 0, moved);
+        // merge back: visible first, then hidden
+        columnOrder = [...visible, ...columnOrder.filter(k => hiddenCols.has(k))];
+        render(contacts);
+      }
+    });
+  });
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function toTSV(contacts) {
+  const skipHeader = document.getElementById('skipHeader').checked;
+  const companyName = company.value.trim();
+  const clientType = document.getElementById('clientType').value;
+  const countryName = document.getElementById('country').value.trim();
+
+  const rawMap = {
+    company: () => companyName,
+    type:    () => clientType,
+    country: () => countryName,
+    name:    c => c.name,
+    title:   c => c.title,
+    email:   c => c.email,
+    phone:   c => c.phone || '',
+    tag:     c => c.tag,
+  };
+
+  const labels = colLabels;
+  const active = columnOrder.filter(k => !hiddenCols.has(k));
+
+  const rows = contacts.map(c => active.map(k => rawMap[k](c)).join('\t'));
+  if (skipHeader) return rows.join('\n');
+  return [active.map(k => labels[k]).join('\t'), ...rows].join('\n');
+}
+
+document.getElementById('parseBtn').onclick = () => {
+  lastContacts = parse(input.value);
+  render(lastContacts);
+  input.value = '';
+  document.getElementById('addMoreBtn').style.display = lastContacts.length ? '' : 'none';
+};
+
+document.getElementById('addMoreBtn').onclick = () => {
+  const more = parse(input.value);
+  const existEmails = new Set(lastContacts.map(c => c.email).filter(Boolean));
+  const fresh = more.filter(c => !c.email || !existEmails.has(c.email));
+  const dupes = more.length - fresh.length;
+  lastContacts = [...fresh, ...lastContacts];
+  render(lastContacts);
+  input.value = '';
+  showToast(`已添加 ${fresh.length} 条` + (dupes ? `，跳过 ${dupes} 条重复` : '') + `，共 ${lastContacts.length} 条`);
+};
+
+document.getElementById('clearBtn').onclick = () => {
+  input.value = '';
+  company.value = '';
+  document.getElementById('clientType').value = '';
+  document.getElementById('country').value = '';
+  output.innerHTML = `<div class="guide">
+    <p style="font-weight:600;margin-bottom:8px">使用说明</p>
+    <ol style="font-size:13px;color:var(--muted);line-height:2;padding-left:18px">
+      <li>在外贸通联系人列表中，从第一个联系人按住选中至最后一个（可选 <b>100条/页</b> 加大选取量），粘贴后点击<b>解析</b>，再点击<b>复制表格</b>粘贴至你的表格中</li>
+      <li>字段可<b>拖动</b>调整顺序，点击标签<b>隐藏/显示</b></li>
+      <li>该工具按<b>邮箱</b>识别联系人，并自动提取邮箱下方的<b>电话号码</b></li>
+      <li>勾选<b>去除表头</b>后复制表格时不包含列名行</li>
+      <li><b>继续添加</b>时相同邮箱不会重复添加</li>
+    </ol>
+  </div>`;
+  stats.textContent = '';
+  lastContacts = [];
+  columnOrder = ['company', 'name', 'title', 'email', 'phone', 'type', 'country', 'tag'];
+  hiddenCols = new Set();
+  document.getElementById('colToggles').innerHTML = '';
+  document.getElementById('clearBtn').classList.remove('danger');
+};
+
+document.getElementById('copyTSV').onclick = async () => {
+  const contacts = lastContacts.length ? lastContacts : parse(input.value);
+  if (!contacts.length) return;
+  await navigator.clipboard.writeText(toTSV(contacts));
+  showToast(`已复制 ${contacts.length} 条到剪贴板`);
+};
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+function parse(text) {
+  const blocks = text.split(/\n\s*\n/).filter(b => b.trim());
+  const contacts = [];
+  const isPhone = l => /^\+\d[\d\s\-().]*$/.test(l);
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) continue;
+
+    const emailIdx = lines.findIndex(l => l.includes('@'));
+    const phoneIdx = lines.findIndex(isPhone);
+
+    if (emailIdx === -1 && phoneIdx === -1) continue;
+
+    let name, title, email, phone, tagLine;
+
+    if (emailIdx !== -1) {
+      email = lines[emailIdx];
+      const before = lines.slice(0, emailIdx);
+      const after = lines.slice(emailIdx + 1);
+      const phones = after.filter(isPhone);
+      phone = phones.join(' / ');
+      tagLine = after.filter(l => !isPhone(l) && l.toLowerCase() !== 'icon').pop() || '';
+      name = before[0] || '';
+      title = before.slice(1).join(' ');
+    } else {
+      // 纯电话块：没有邮箱，以电话号码为核心
+      email = '';
+      phone = lines[phoneIdx];
+      const before = lines.slice(0, phoneIdx);
+      const after = lines.slice(phoneIdx + 1);
+      tagLine = after.filter(l => l.toLowerCase() !== 'icon').pop() || '';
+      name = before[0] || '';
+      title = before.slice(1).join(' ');
+    }
+
+    contacts.push({ name, title, email, phone, tag: tagLine });
+  }
+
+  return contacts;
+}
+</script>
+</body>
+</html>

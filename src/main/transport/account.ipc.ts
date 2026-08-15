@@ -12,9 +12,10 @@ export function registerAccountIPC() {
 
   ipcMain.handle(IPC.ACCOUNTS.UPSERT, async (_e, input) => {
     Log.debug("ipc.accounts.upsert", `email=${input?.email}`);
-    if (!input?.email || !input?.password || !input?.smtpHost) {
-      return failResult("参数错误: email、password、smtpHost 必填");
+    if (!input?.email || !input?.smtpHost) {
+      return failResult("参数错误: email、smtpHost 必填");
     }
+    // ponytail: 编辑时可不传密码，service 层做最终校验
     return AccountService.upsertAccount(input);
   });
 
@@ -28,21 +29,5 @@ export function registerAccountIPC() {
     Log.debug("ipc.accounts.validate", `id=${id}`);
     if (!Number.isInteger(id) || id <= 0) return failResult("参数错误: 无效的 id");
     return AccountService.validateAccount(id);
-  });
-
-  ipcMain.handle(IPC.ACCOUNTS.CIRCUIT_STATUS, async (_e, id: number) => {
-    Log.debug("ipc.accounts.circuitStatus", `id=${id}`);
-    const result = await AccountService.listAccounts();
-    if (!result.success) return result;
-    // eslint-disable-next-line prefer-const
-    let account: { consecutiveFails: number; circuitOpenAt: string | null } | undefined;
-    for (const a of result.data) {
-      if (a.id === id) { account = a; break; }
-    }
-    if (!account) return failResult("账号不存在");
-    return { success: true as const, data: {
-      consecutiveFails: account.consecutiveFails,
-      isOpen: !!account.circuitOpenAt,
-    }};
   });
 }

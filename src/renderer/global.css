@@ -7,13 +7,21 @@ body {
   background: #f5f5f5;
   color: #1a1a1a;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-/* 滚动条 */
-::-webkit-scrollbar { width: 4px; }
+/* 滚动条 — 轻量扁平 */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.2); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.35); }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.16); }
+::-webkit-scrollbar-corner { background: transparent; }
+/* 隐藏滚动条直到 hover（可选，保留轻量可见的默认态） */
+
+/* 自定义标题栏 — 无边框窗口 */
+.titlebar-drag { -webkit-app-region: drag; z-index: 1100; position: relative; }
+.titlebar-nodrag { -webkit-app-region: no-drag; }
 
 /* 暗色侧边栏菜单覆盖 */
 .ant-menu-dark { background: #1a1a1a !important; }
@@ -103,6 +111,19 @@ body {
 }
 .save-pulse { animation: save-pulse 0.8s ease-out; }
 
+/* 联系人详情 — 头部+Tab导航固定，仅内容滚动，隐藏滚动条 */
+.contact-detail-tabs { display: flex !important; flex-direction: column !important; flex: 1; min-height: 0; }
+.contact-detail-tabs .ant-tabs-nav { flex-shrink: 0; }
+.contact-detail-tabs .ant-tabs-content-holder { flex: 1; min-height: 0; overflow-y: auto; }
+.contact-detail-tabs .ant-tabs-content-holder::-webkit-scrollbar { width: 0; display: none; }
+.crm-detail-scroll::-webkit-scrollbar { width: 0; display: none; }
+
+/* 操作列按钮：无色→悬停显色 */
+.btn-hover-color:not(.ant-btn-disabled):hover { color: #1a1a1a !important; }
+.btn-hover-color:last-child:not(.ant-btn-disabled):hover { color: #e5484d !important; }
+/* 禁用按钮不改变指针、不变色 */
+.ant-btn[disabled], .ant-btn-disabled { cursor: default !important; pointer-events: none !important; }
+
 .settings-rail {
   position: fixed;
   right: 22px;
@@ -145,8 +166,8 @@ body {
   transform: translateX(0);
 }
 .settings-rail-dot {
-  width: 7px;
-  height: 7px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #d4d4d4;
   transition: background 0.3s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;

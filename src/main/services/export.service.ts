@@ -1,6 +1,10 @@
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { listContacts } from "./contact.service";
+import { getDb } from "../db";
+import { interactions } from "../db/schema/interactions";
+import { contacts } from "../db/schema/contacts";
+import { sql } from "drizzle-orm";
 
 export async function exportContactsToExcel(filter?: { search?: string }): Promise<Result<string>> {
   Log.debug("export.contactsToExcel", "");
@@ -39,4 +43,39 @@ export async function exportContactsToExcel(filter?: { search?: string }): Promi
   const content = bom + csvContent;
 
   return okResult(content);
+}
+
+/** 导出全部跟进记录（interactions type=note），按时间倒序 */
+export function exportNotesToCsv(): Result<string> {
+  Log.debug("export.notesToCsv", "");
+
+  const rows = getDb().select({
+    contactEmail: contacts.email,
+    contactName: sql<string>`${contacts.firstName} || ' ' || ${contacts.lastName}`,
+    text: interactions.bodyPreview,
+    createdAt: interactions.createdAt,
+  })
+    .from(interactions)
+    .leftJoin(contacts, sql`${interactions.contactId} = ${contacts.id}`)
+    .where(sql`${interactions.type} = 'note'`)
+    .orderBy(sql`${interactions.createdAt} DESC`)
+    .all();
+
+  if (rows.length === 0) {
+    return failResult("没有跟进记录可导出");
+  }
+
+  const headers = ["联系人邮箱", "姓名", "跟进内容", "时间"];
+  const data = rows.map(r => [
+    r.contactEmail || "",
+    (r.contactName || "").trim(),
+    r.text || "",
+    r.createdAt || "",
+  ]);
+
+  const csvContent = [headers, ...data]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+
+  return okResult("﻿" + csvContent);
 }

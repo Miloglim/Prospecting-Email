@@ -8,6 +8,7 @@ export const templates = sqliteTable("templates", {
   subject:   text("subject").notNull(),
   body:      text("body").notNull(),
   category:  text("category"),
+  stage:     text("stage"),
   version:   integer("version").notNull().default(1),
   isActive:  integer("is_active").notNull().default(1),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

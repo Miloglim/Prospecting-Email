@@ -17,8 +17,8 @@ export async function listTemplates(language?: string): Promise<Result<TemplateR
   return okResult(query.all().filter(t => t.isActive === 1));
 }
 
-export async function upsertTemplate(input: InsertTemplateRow): Promise<Result<TemplateRow>> {
-  Log.debug("template.upsert", `name=${input.name}`);
+export async function upsertTemplate(input: InsertTemplateRow & { id?: number }): Promise<Result<TemplateRow>> {
+  Log.debug("template.upsert", `name=${input.name} id=${input.id}`);
 
   if (!input.name || !input.subject || !input.body) {
     return failResult("name、subject、body 必填");
@@ -26,10 +26,16 @@ export async function upsertTemplate(input: InsertTemplateRow): Promise<Result<T
 
   const now = new Date().toISOString();
 
-  // 按名称 + 语言判重
-  const existing = getDb().select().from(templates)
-    .where(and(eq(templates.name, input.name), eq(templates.language, input.language || "EN")))
-    .get();
+  // 有 id → 直接更新（编辑模式）；无 id → 按名称 + 语言判重（新增/复制）
+  let existing: TemplateRow | undefined;
+  if (input.id) {
+    existing = getDb().select().from(templates).where(eq(templates.id, input.id)).get();
+    if (!existing) return failResult("模板不存在");
+  } else {
+    existing = getDb().select().from(templates)
+      .where(and(eq(templates.name, input.name), eq(templates.language, input.language || "EN")))
+      .get();
+  }
 
   if (existing) {
     getDb().update(templates).set({
@@ -69,19 +75,3 @@ export async function deleteTemplate(id: number): Promise<Result<void>> {
   return okResult(undefined);
 }
 
-/** ponytail: Liquid 变量替换 — 正则匹配 {{ contact.xxx }} */
-export function renderTemplate(template: TemplateRow, contact: Record<string, unknown>): Result<string> {
-  if (!template.body) return failResult("模板内容为空");
-
-  let result = template.body;
-  let subject = template.subject;
-
-  for (const [key, value] of Object.entries(contact)) {
-    const pattern = new RegExp(`\\{\\{\\s*contact\\.${key}\\s*\\}\\}`, "gi");
-    const replacement = value != null ? String(value) : "";
-    result = result.replace(pattern, replacement);
-    subject = subject.replace(pattern, replacement);
-  }
-
-  return okResult(result);
-}

@@ -1,4 +1,4 @@
-import { createRootRoute, createRoute, createRouter, Outlet } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, createHashHistory, Outlet } from "@tanstack/react-router";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/dashboard/Dashboard";
 import { ContactList } from "./pages/contacts/ContactList";
@@ -6,7 +6,10 @@ import { CrmPipeline } from "./pages/crm/CrmPipeline";
 import { InboxList } from "./pages/inbox/InboxList";
 import { CampaignList } from "./pages/campaigns/CampaignList";
 import { TemplateList } from "./pages/templates/TemplateList";
-import { ExportPage } from "./pages/export/ExportPage";
+import { ImportPage } from "./pages/import/ImportPage";
+import { HistoryPage } from "./pages/history/HistoryPage";
+import { CompanyPage } from "./pages/companies/CompanyPage";
+import { QueuePage } from "./pages/queue/QueuePage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 
 const rootRoute = createRootRoute({
@@ -49,10 +52,28 @@ const templatesRoute = createRoute({
   component: TemplateList,
 });
 
-const exportRoute = createRoute({
+const importRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/export",
-  component: ExportPage,
+  path: "/import",
+  component: ImportPage,
+});
+
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  component: HistoryPage,
+});
+
+const queueRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/queue",
+  component: QueuePage,
+});
+
+const companiesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/companies",
+  component: CompanyPage,
 });
 
 const settingsRoute = createRoute({
@@ -68,11 +89,14 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   campaignsRoute,
   templatesRoute,
-  exportRoute,
+  importRoute,
+  historyRoute,
+  queueRoute,
+  companiesRoute,
   settingsRoute,
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree, history: createHashHistory() });
 
 declare module "@tanstack/react-router" {
   interface Register {

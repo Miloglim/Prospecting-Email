@@ -3,28 +3,74 @@ import { inboxMessages, type InboxMessageRow, type InsertInboxMessageRow } from 
 import { emailAccounts } from "../db/schema/accounts";
 import { contacts, type ContactRow } from "../db/schema/contacts";
 import { interactions } from "../db/schema/interactions";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
-import { saveDatabase } from "../db";
+import { saveDatabase, getSqlJsDb } from "../db";
+import { updateContactStatus, markAsBounced } from "./contact.service";
+import * as path from "path";
+import * as fs from "fs";
+import { DB_PATH } from "../config";
+
+// ── 已删除集持久化（防重取，参照旧 PE inbox-deleted.json）──
+
+const DELETED_PATH = path.join(path.dirname(DB_PATH), "inbox-deleted.json");
+
+// 内存缓存：isDeleted 在拉取循环里逐封调用，若每次读盘+JSON.parse 整个文件会卡（量一大几千次 IO）
+let _deletedCache: Set<string> | null = null;
+
+function _readDeleted(): Set<string> {
+  if (_deletedCache) return _deletedCache;
+  try {
+    if (fs.existsSync(DELETED_PATH)) {
+      _deletedCache = new Set(JSON.parse(fs.readFileSync(DELETED_PATH, "utf-8")));
+    }
+  } catch { /* 文件损坏 → 空集 */ }
+  if (!_deletedCache) _deletedCache = new Set();
+  return _deletedCache;
+}
+
+function _writeDeleted(set: Set<string>): void {
+  _deletedCache = set;
+  try {
+    const dir = path.dirname(DELETED_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DELETED_PATH, JSON.stringify([...set].slice(-2000)));
+  } catch { /* 静默 */ }
+}
+
+/** 检查指定 key 是否已被删除 */
+export function isDeleted(key: string): boolean {
+  return _readDeleted().has(key);
+}
 
 // ── 分类关键词（移植自旧 PE inbox-service.js）──
 
+// ponytail: 关键词从旧 PE inbox-keywords.json 同步，覆盖 25+ 语言
 const KEYWORDS = {
   auto_reply: [
     "automatic reply","auto-reply","auto reply","out of office","out of the office",
     "vacation","vacaciones","feriado","holiday notice","ooo -","[ooo]","ausente",
     "ausência","fuera de la oficina","fora do escritório","respuesta automática",
     "resposta automática","away from office","no estaré","estare ausente","estoy fuera",
-    "自動返信","자동 응답","부재중","balasan otomatis","abwesend","urlaub",
-    "en vacances","assenza","fuori sede","自动回复","休假",
+    "licença maternidade","maternity leave","acceso limitado","automaattinen vastaus",
+    "自動返信","자동 응답","부재중","автоответ","вне офиса","отпуск",
+    "otomatik yanıt","ofis dışında","izinli","رد تلقائي","خارج المكتب","إجازة",
+    "trả lời tự động","vắng mặt","nghỉ phép","ไม่อยู่ที่ทำงาน","ตอบกลับอัตโนมัติ",
+    "स्वचालित उत्तर","कार्यालय से बाहर","balasan otomatis","di luar kantor",
+    "abwesenheitsnotiz","abwesend","urlaub","réponse automatique",
+    "automatische antwort","automatisch antwoord","risposta automatica",
+    "assenza","fuori sede","en vacances","estou de férias","estaré de vuelta",
+    "自动回复","休假",
   ],
   bounce_subject: [
     "undelivered","returned mail","delivery failure","mail delivery failed",
     "returned to sender","message could not be delivered","delivery status notification",
     "failure notice","mail system","address rejected","user unknown","mailbox full",
-    "not found","does not exist","undeliverable","permanent failure","退信","退回","退件",
-    "系统退信","投递失败","发送失败",
+    "not found","does not exist","non remis","nicht zugestellt","no se pudo entregar",
+    "退信","退回","退件","系统退信","投递失败","发送失败",
+    "undeliverable","permanent failure","message undelivered",
+    "warning: message","delayed delivery","delivery incomplete","rejected mail",
   ],
   bounce_senders: [
     "mailer-daemon","postmaster","mail delivery subsystem","mailadmin@","mailer@",
@@ -35,6 +81,9 @@ const KEYWORDS = {
     "not accepting mail","unrouteable address","recipient rejected","status: 5",
     "over quota","mailbox exceeded","message blocked","smtp error",
     "delivery failed permanently","unable to deliver","recipient unknown",
+    "couldn't be delivered","couldn't deliver to","weren't found at",
+    "unknown to address","the following recipients","action required",
+    "recipients weren't found",
   ],
   bounce_left: [
     "no longer","has left","left the company","no longer with",
@@ -51,12 +100,15 @@ const KEYWORDS = {
 // ── 分类方法 ──
 
 export type { InboxMessageRow } from "../db/schema/inbox";
-export type Classification = "replied" | "bounce" | "autoreply" | "other";
+export type Classification = "replied" | "bounce" | "autoreply" | "other" | "sent";
 
-export function classify(subject: string | null, from: string | null, bodyPreview: string | null): Classification {
+export function classify(
+  subject: string | null, from: string | null, bodyText: string | null,
+  hasContactMatch = false,
+): Classification {
   const s = (subject || "").toLowerCase();
   const f = (from || "").toLowerCase();
-  const b = (bodyPreview || "").toLowerCase().slice(0, 500);
+  const b = (bodyText || "").toLowerCase().slice(0, 500);
 
   // 0. 自动回复优先（可能也带 Re:）
   if (KEYWORDS.auto_reply.some(k => s.includes(k) || b.includes(k))) return "autoreply";
@@ -72,14 +124,19 @@ export function classify(subject: string | null, from: string | null, bodyPrevie
   if (KEYWORDS.reply_prefix.some(k => s.startsWith(k))) return "replied";
   if (KEYWORDS.inquiry.some(k => s.includes(k) || b.includes(k))) return "replied";
 
+  // 3. 匹配到已知联系人 → 升级为 replied
+  if (hasContactMatch) return "replied";
+
   return "other";
 }
 
 // ── 联系人匹配 ──
 
 export function matchContact(email: string): ContactRow | null {
+  const needle = (email || "").toLowerCase().trim();
+  if (!needle) return null;
   const row = getDb().select().from(contacts)
-    .where(eq(contacts.email, email.toLowerCase().trim()))
+    .where(sql`lower(${contacts.email}) = ${needle}`)
     .get();
   return row || null;
 }
@@ -93,6 +150,12 @@ let fetchInterval: ReturnType<typeof setInterval> | null = null;
 let imapFetchFn: ((accountId: number) => Promise<Result<InboxMessageRow[]>>) | null = null;
 export function setImapFetchFn(fn: (accountId: number) => Promise<Result<InboxMessageRow[]>>) {
   imapFetchFn = fn;
+}
+
+// 正文懒加载：按 messageId 单封拉取（由 transport 注入，避免 service 依赖 imapflow）
+let imapFetchBodyFn: ((accountId: number, messageId: string, classification?: string | null) => Promise<Result<string>>) | null = null;
+export function setImapFetchBodyFn(fn: (accountId: number, messageId: string, classification?: string | null) => Promise<Result<string>>) {
+  imapFetchBodyFn = fn;
 }
 
 /** 推送事件的回调 */
@@ -117,50 +180,52 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
 
   const allNew: InboxMessageRow[] = [];
 
-  for (const account of accounts) {
-    try {
-      const result = await imapFetchFn(account.id);
-      if (!result.success) {
-        Log.warn("inbox.fetch", `账号 ${account.email} 抓取失败: ${result.error}`);
-        continue;
-      }
+  // ponytail: 并行抓取所有账号
+  const results = await Promise.allSettled(
+    accounts.map(acc => imapFetchFn!(acc.id).then(
+      r => ({ account: acc, result: r }),
+    ))
+  );
 
-      // 去重 UID
-      const newItems = result.data.filter(m => !SEEN_UIDS.has(m.messageId || ""));
-      for (const item of newItems) {
-        if (item.messageId) SEEN_UIDS.add(item.messageId);
-      }
-      allNew.push(...newItems);
+  for (const r of results) {
+    if (r.status === "rejected") { Log.warn("inbox.fetch", "账号抓取异常"); continue; }
+    const { account, result } = r.value;
+    if (!result.success) {
+      Log.warn("inbox.fetch", `账号 ${account.email} 抓取失败: ${result.error}`);
+      continue;
+    }
 
-      if (newItems.length > 0) {
-        Log.info("inbox.fetch", `${account.email}: ${newItems.length} 封新邮件`);
-        // 记录互动（退信、回复）
-        for (const m of newItems) {
-          if (m.classification === "bounce" || m.classification === "replied") {
-            const c = matchContact(m.fromEmail);
-            if (c) {
-              getDb().insert(interactions).values({
-                contactId: c.id,
-                type: m.classification === "bounce" ? "bounced" : "replied",
-                direction: "inbound",
-                subject: m.subject,
-                bodyPreview: m.bodyPreview,
-                messageId: m.messageId,
-                accountId: m.accountId,
-                createdAt: m.receivedAt,
+    // 去重 UID
+    const newItems = result.data.filter(m => !SEEN_UIDS.has(m.messageId || ""));
+    for (const item of newItems) {
+      if (item.messageId) SEEN_UIDS.add(item.messageId);
+    }
+    allNew.push(...newItems);
+
+    if (newItems.length > 0) {
+      Log.info("inbox.fetch", `${account.email}: ${newItems.length} 封新邮件`);
+      for (const m of newItems) {
+        if (m.classification === "bounce" || m.classification === "replied" || m.classification === "autoreply") {
+          const cid = m.matchedContactId ?? (matchContact(m.fromEmail)?.id || null);
+          if (cid) {
+            const typeMap: Record<string, string> = { bounce: "bounced", replied: "replied", autoreply: "autoreply" };
+            getDb().insert(interactions).values({
+              contactId: cid,
+              type: typeMap[m.classification] || m.classification,
+              direction: "inbound",
+              subject: m.subject,
+              bodyPreview: m.bodyPreview,
+              messageId: m.messageId,
+              accountId: m.accountId,
+              createdAt: m.receivedAt,
               }).run();
               // 更新联系人状态
-              const { updateContactStatus, markAsBounced } = require("./contact.service");
-              if (m.classification === "bounce") markAsBounced(c.id);
-              else updateContactStatus(c.id, "replied");
+              if (m.classification === "bounce") markAsBounced(cid);
+              else updateContactStatus(cid, m.classification);
             }
           }
         }
-        saveDatabase();
-      }
-    } catch (err: unknown) {
-      Log.error("inbox.fetch", `${account.email} 异常`,
-        err instanceof Error ? err.stack : String(err));
+      saveDatabase();
     }
   }
 
@@ -169,17 +234,194 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
     try { pushFn("inbox:newMail", { count: allNew.length }); } catch { /* 静默 */ }
   }
 
+  // 每次抓取后自动清理超限旧邮件
+  if (allNew.length > 0) {
+    try { cleanupInbox(); } catch { /* */ }
+  }
+
   return okResult(allNew);
+}
+
+// ── 清理超上限旧邮件（先备份再删除）──
+const CLEANUP_LIMITS: Record<string, number> = {
+  sent: 500, replied: 2000, autoreply: 2000, bounce: 1000, other: 500,
+};
+
+const ARCHIVE_PATH = path.join(path.dirname(DB_PATH), "inbox-archive.jsonl");
+
+export function cleanupInbox(): void {
+  const db = getDb();
+  let archiveLines: string[] = [];
+
+  for (const [cls, limit] of Object.entries(CLEANUP_LIMITS)) {
+    const rows = db.select({
+      id: inboxMessages.id, fromEmail: inboxMessages.fromEmail,
+      fromName: inboxMessages.fromName, subject: inboxMessages.subject,
+      bodyPreview: inboxMessages.bodyPreview, classification: inboxMessages.classification,
+      matchedContactId: inboxMessages.matchedContactId, receivedAt: inboxMessages.receivedAt,
+      accountId: inboxMessages.accountId,
+    })
+      .from(inboxMessages)
+      .where(eq(inboxMessages.classification, cls))
+      .orderBy(desc(inboxMessages.receivedAt))
+      .all();
+    if (rows.length <= limit) continue;
+    const toDelete = rows.slice(limit);
+
+    // 备份：写入 JSON Lines 格式
+    for (const r of toDelete) {
+      archiveLines.push(JSON.stringify({
+        fromEmail: r.fromEmail, fromName: r.fromName,
+        subject: r.subject, body: r.bodyPreview,
+        classification: r.classification,
+        receivedAt: r.receivedAt, accountId: r.accountId,
+        archivedAt: new Date().toISOString(),
+      }));
+    }
+
+    for (const r of toDelete) db.delete(inboxMessages).where(eq(inboxMessages.id, r.id)).run();
+    Log.info("inbox.cleanup", `${cls}: 备份+删除 ${toDelete.length} 封，保留 ${limit}`);
+  }
+
+  // 追加写入备份文件（每行一条 JSON）
+  if (archiveLines.length > 0) {
+    try {
+      const dir = path.dirname(ARCHIVE_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(ARCHIVE_PATH, archiveLines.join("\n") + "\n");
+      Log.info("inbox.archive", `已备份 ${archiveLines.length} 封邮件 → ${ARCHIVE_PATH}`);
+    } catch (err) {
+      Log.error("inbox.archive", "备份写入失败", err instanceof Error ? err.stack : undefined);
+    }
+  }
+  if (archiveLines.length > 0) saveDatabase();
 }
 
 // ── 列表 ──
 
 export function listInbox(): Result<InboxMessageRow[]> {
-  const rows = getDb().select().from(inboxMessages)
+  const db = getDb();
+  // 按分类分别限定数量，合并返回
+  const all: InboxMessageRow[] = [];
+  for (const [cls, limit] of Object.entries(CLEANUP_LIMITS)) {
+    const rows = db.select().from(inboxMessages)
+      .where(eq(inboxMessages.classification, cls))
+      .orderBy(desc(inboxMessages.receivedAt))
+      .limit(limit)
+      .all();
+    all.push(...rows);
+  }
+  // 按时间统一排序
+  all.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+
+  // ponytail: 批量查关联数据（发件账号 + 联系人状态），避免前端 N 次请求
+  const accountIds = [...new Set(all.map(r => r.accountId).filter(Boolean))];
+  const contactIds = [...new Set(all.map(r => r.matchedContactId).filter(Boolean))];
+  const accountMap = new Map<number, string>();
+  const contactMap = new Map<number, { status: string; tags: string }>();
+  for (const aid of accountIds) {
+    const a = db.select({ email: emailAccounts.email }).from(emailAccounts).where(eq(emailAccounts.id, aid)).get();
+    if (a) accountMap.set(aid, a.email);
+  }
+  for (const cid of contactIds) {
+    if (cid == null) continue;
+    const c = db.select({ status: contacts.status, tags: contacts.tags })
+      .from(contacts).where(eq(contacts.id, cid)).get();
+    if (c) contactMap.set(cid, { status: c.status || "", tags: c.tags || "[]" });
+  }
+
+  // 扩展返回字段（前端不需要改接口定义，通过 unknown→any 带过去）
+  const enriched = all.map(r => ({
+    ...r,
+    _accountEmail: accountMap.get(r.accountId) || null,
+    _contactStatus: contactMap.get(r.matchedContactId ?? 0)?.status || null,
+    _contactTags: contactMap.get(r.matchedContactId ?? 0)?.tags || null,
+  }));
+  return okResult(enriched as unknown as InboxMessageRow[]);
+}
+
+// ── 正文落盘（正文不进库，独立文件存储，参照 Foxmail 索引/正文分离）──
+
+const BODY_DIR = path.join(path.dirname(DB_PATH), "bodies");
+
+function bodyFilePath(id: number): string {
+  return path.join(BODY_DIR, `${id}.html`);
+}
+
+/** 正文写入磁盘文件（异步，避免阻塞主进程） */
+export async function writeBodyFile(id: number, html: string): Promise<void> {
+  if (!html) return;
+  if (!fs.existsSync(BODY_DIR)) fs.mkdirSync(BODY_DIR, { recursive: true });
+  await fs.promises.writeFile(bodyFilePath(id), html, "utf-8");
+}
+
+/** insert 后立即调用：把正文写入刚插入的邮件（用 last_insert_rowid 拿自增 id） */
+export async function writeBodyForLastInsert(html: string): Promise<void> {
+  if (!html) return;
+  const res = getSqlJsDb().exec("SELECT last_insert_rowid() as id");
+  const id = res[0]?.values?.[0]?.[0];
+  if (typeof id === "number" && id > 0) await writeBodyFile(id, html);
+}
+
+// ── 获取邮件正文 ──
+
+export async function getBody(id: number): Promise<Result<string>> {
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+  if (!row) return failResult("邮件不存在");
+  // ① 正文已在磁盘文件 → 直接读（毫秒级，持久，重启后依然秒开）
+  const file = bodyFilePath(id);
+  if (fs.existsSync(file)) {
+    try { return okResult(await fs.promises.readFile(file, "utf-8")); }
+    catch (err) { Log.error("inbox.body", `正文文件读取失败 id=${id}`, err instanceof Error ? err.stack : undefined); }
+  }
+  // ② 懒加载：IMAP 拉单封（fetchBody 内部会落盘文件）
+  if (row.messageId && imapFetchBodyFn) {
+    const r = await imapFetchBodyFn(row.accountId, row.messageId, row.classification);
+    if (r.success && r.data) return okResult(r.data);
+  }
+  return okResult(row.bodyPreview || "");
+}
+
+/** 预加载最近 N 封无正文文件的邮件（限速 ~50ms/封，参考 Foxmail 读条后秒开体验） */
+export async function prefetchRecentBodies(limit = 20): Promise<void> {
+  if (!imapFetchBodyFn) return;
+  const rows = getDb().select({ id: inboxMessages.id, accountId: inboxMessages.accountId, messageId: inboxMessages.messageId, classification: inboxMessages.classification })
+    .from(inboxMessages)
+    .where(sql`${inboxMessages.messageId} IS NOT NULL`)
     .orderBy(desc(inboxMessages.receivedAt))
-    .limit(200)
+    .limit(limit)
     .all();
-  return okResult(rows);
+  let loaded = 0;
+  for (const r of rows) {
+    if (!r.messageId) continue;
+    if (fs.existsSync(bodyFilePath(r.id))) continue; // 已落盘 → 跳过（幂等）
+    try {
+      await imapFetchBodyFn(r.accountId, r.messageId, r.classification);
+      loaded++;
+      await new Promise(res => setTimeout(res, 50)); // 限速，避免瞬间打爆 IMAP
+    } catch { /* 单封失败跳过 */ }
+  }
+  if (loaded > 0) Log.info("inbox.prefetch", `预加载 ${loaded}/${rows.length} 封正文`);
+}
+
+/** 一次性迁移：存量 raw_source 正文导出到文件 + 删除列（幂等，启动时调用） */
+export async function migrateBodiesOut(): Promise<void> {
+  const js = getSqlJsDb();
+  const cols = (js.exec("PRAGMA table_info(inbox_messages)")[0]?.values || []).map(r => String(r[1]));
+  if (!cols.includes("raw_source")) return; // 已迁移过
+  const rows = js.exec("SELECT id, raw_source FROM inbox_messages WHERE raw_source IS NOT NULL AND raw_source != ''")[0]?.values || [];
+  let n = 0;
+  for (const r of rows) {
+    const id = Number(r[0]);
+    const html = String(r[1] || "");
+    if (!id || !html) continue;
+    try { await writeBodyFile(id, html); n++; }
+    catch (err) { Log.error("inbox.migrate", `正文导出失败 id=${id}`, err instanceof Error ? err.stack : undefined); }
+  }
+  js.run("ALTER TABLE inbox_messages DROP COLUMN raw_source;");
+  saveDatabase();
+  Log.info("inbox.migrate", `正文出库 ${n} 封 → ${BODY_DIR}，库已瘦身`);
 }
 
 // ── 手动更新邮件分类 ──
@@ -188,7 +430,7 @@ export function classifyMessage(id: number, classification: string): Result<void
   Log.debug("inbox.classify", `id=${id} type=${classification}`);
 
   if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
-  const valid = ["replied", "bounce", "autoreply", "other"];
+  const valid = ["replied", "bounce", "autoreply", "other", "sent"];
   if (!valid.includes(classification)) return failResult(`无效分类: ${classification}`);
 
   const existing = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
@@ -203,15 +445,82 @@ export function classifyMessage(id: number, classification: string): Result<void
   }).where(eq(inboxMessages.id, id)).run();
   saveDatabase();
 
-  // 退信 → 同步更新联系人状态为 bounced
-  if (classification === "bounce" && existing.matchedContactId) {
-    try {
-      const { markAsBounced } = require("./contact.service");
-      markAsBounced(existing.matchedContactId);
-    } catch { /* */ }
+  // 回写联系人状态
+  if (existing.matchedContactId) {
+    if (classification === "bounce") markAsBounced(existing.matchedContactId);
+    else if (classification === "autoreply") updateContactStatus(existing.matchedContactId, "autoreply");
   }
 
   return okResult(undefined);
+}
+
+// ── 标记已回复（外部客户端发送后记录）──
+
+export function markReplied(id: number): Result<void> {
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const existing = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+  if (!existing) return failResult("邮件不存在");
+
+  getDb().update(inboxMessages).set({ classification: "replied" })
+    .where(eq(inboxMessages.id, id)).run();
+
+  if (existing.matchedContactId) {
+    getDb().insert(interactions).values({
+      contactId: existing.matchedContactId,
+      type: "sent",
+      direction: "outbound",
+      subject: `Re: ${existing.subject || ""}`,
+      bodyPreview: `已通过外部客户端回复: ${existing.fromEmail}`,
+      messageId: existing.messageId,
+      accountId: existing.accountId,
+    }).run();
+    updateContactStatus(existing.matchedContactId, "replied");
+  }
+  saveDatabase();
+  return okResult(undefined);
+}
+
+// ── 标记已读 / 删除 ──
+
+export function markRead(id: number): Result<void> {
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  getDb().update(inboxMessages).set({ isRead: 1 })
+    .where(eq(inboxMessages.id, id)).run();
+  saveDatabase();
+  return okResult(undefined);
+}
+
+export function deleteMessage(id: number): Result<void> {
+  if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const existing = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+  if (!existing) return failResult("邮件不存在");
+  // 记录已删除 key（accountId|uid）防止重取
+  const key = `${existing.accountId}|${existing.messageId}`;
+  const deleted = _readDeleted();
+  deleted.add(key);
+  _writeDeleted(deleted);
+  getDb().delete(inboxMessages).where(eq(inboxMessages.id, id)).run();
+  saveDatabase();
+  return okResult(undefined);
+}
+
+/** 一键删除所有退信 */
+export function deleteAllBounce(): Result<number> {
+  const deleted = _readDeleted();
+  const bounceMsgs = getDb().select().from(inboxMessages)
+    .where(eq(inboxMessages.classification, "bounce"))
+    .all();
+  for (const m of bounceMsgs) {
+    const key = `${m.accountId}|${m.messageId}`;
+    deleted.add(key);
+  }
+  _writeDeleted(deleted);
+  getDb().delete(inboxMessages)
+    .where(eq(inboxMessages.classification, "bounce"))
+    .run();
+  saveDatabase();
+  Log.info("inbox.deleteBounce", `已删除 ${bounceMsgs.length} 封退信`);
+  return okResult(bounceMsgs.length);
 }
 
 // ── 自动抓取 ──

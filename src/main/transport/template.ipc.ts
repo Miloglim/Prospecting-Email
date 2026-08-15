@@ -1,10 +1,13 @@
 import { ipcMain } from "electron";
 import { IPC } from "../contract";
 import * as svc from "../services/template.service";
+import { PRESET_TEMPLATES } from "../services/presetTemplates";
 import { Log } from "../logger";
 import { failResult } from "../errors";
 
 export function registerTemplateIPC() {
+  ipcMain.handle(IPC.TEMPLATES.PRESETS, () => ({ success: true as const, data: PRESET_TEMPLATES }));
+
   ipcMain.handle(IPC.TEMPLATES.LIST, async (_e, language?: string) => {
     Log.debug("ipc.template.list", `language=${language}`);
     return svc.listTemplates(language);

@@ -1,15 +1,23 @@
-import { ipcMain, app } from "electron";
+import { ipcMain, app, dialog, BrowserWindow } from "electron";
 import { IPC } from "../contract";
 import { loadConfig, saveConfig, DEFAULT_SCHEDULE } from "../config";
 import { Log } from "../logger";
-import { okResult } from "../errors";
+import { okResult, failResult } from "../errors";
 
 export function registerSystemIPC() {
+  ipcMain.handle(IPC.SYSTEM.SELECT_DIRECTORY, async () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    const r = win
+      ? await dialog.showOpenDialog(win, { title: "选择旧版 Prospecting Email 目录", properties: ["openDirectory"] })
+      : await dialog.showOpenDialog({ title: "选择旧版 Prospecting Email 目录", properties: ["openDirectory"] });
+    if (r.canceled || r.filePaths.length === 0) return failResult("已取消");
+    return okResult(r.filePaths[0]);
+  });
   ipcMain.handle(IPC.SYSTEM.GET_CONFIG, () => {
     try {
       return okResult(loadConfig());
     } catch (err) {
-      return okResult({ smtpAccounts: [], schedule: DEFAULT_SCHEDULE });
+      return okResult(loadConfig());
     }
   });
 

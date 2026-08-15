@@ -9,13 +9,28 @@ interface DashboardStats {
   totalSent: number;
   totalReplied: number;
   bounceCount: number;
-  openRate: number;
-  replyRate: number;
   pipelineSummary: Record<string, number>;
   recentActivity: Array<{
     type: string; contactEmail: string; subject: string | null; createdAt: string;
   }>;
 }
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return `今天 ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `昨天 ${time}`;
+  return `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  reaching: "触达中", quoting: "报价中", trial: "试单",
+  cooperating: "合作中", lost: "已流失", other: "其他",
+};
 
 export function Dashboard() {
   const { data, isLoading } = useQuery({
@@ -81,7 +96,7 @@ export function Dashboard() {
           <Row gutter={16}>
             {Object.entries(stats.pipelineSummary).map(([stage, count]) => (
               <Col key={stage} span={3}>
-                <Statistic title={stage} value={count} />
+                <Statistic title={STAGE_LABELS[stage] || stage} value={count} />
               </Col>
             ))}
           </Row>
@@ -97,7 +112,8 @@ export function Dashboard() {
               { title: "类型", dataIndex: "type", key: "type", width: 100 },
               { title: "联系人", dataIndex: "contactEmail", key: "contactEmail" },
               { title: "主题", dataIndex: "subject", key: "subject" },
-              { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 180 },
+              { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 150,
+                render: (v: string) => <span className="text-[11px] text-gray-500">{fmtTime(v)}</span> },
             ]}
             rowKey={(_, i) => String(i)}
             size="small"
@@ -114,7 +130,7 @@ export function Dashboard() {
 
 interface ReminderContact {
   id: number; email: string; firstName: string | null; lastName: string | null;
-  companyName: string | null; reminderAt: string | null; reminderNote: string | null;
+  companyName: string | null; reminderAt: string | null; followupNote: string | null;
 }
 
 function TodayTasks() {
@@ -165,9 +181,9 @@ function TodayTasks() {
             render: (v: string | null) => v || "-" },
           {
             title: "提醒时间", dataIndex: "reminderAt", key: "at", width: 110,
-            render: (v: string) => <span className="text-[11px]">{new Date(v).toLocaleDateString("zh-CN")}</span>,
+            render: (v: string) => <span className="text-[11px]">{fmtTime(v)}</span>,
           },
-          { title: "备注", dataIndex: "reminderNote", key: "note",
+          { title: "备注", dataIndex: "followupNote", key: "note",
             render: (v: string | null) => <span className="text-[11px] text-gray-500">{v || "-"}</span> },
         ]}
       />

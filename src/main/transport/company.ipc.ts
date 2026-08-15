@@ -11,9 +11,14 @@ export function registerCompanyIPC() {
     return svc.getCompanyById(id);
   });
 
-  ipcMain.handle(IPC.COMPANIES.LIST, async (_e, search?: string) => {
+  ipcMain.handle(IPC.COMPANIES.LIST, async (_e, search?: string, page?: number, pageSize?: number) => {
     Log.debug("ipc.company.list", `search=${search}`);
-    return svc.listCompanies(search);
+    return svc.listCompaniesWithCounts(search, page, pageSize);
+  });
+
+  ipcMain.handle(IPC.COMPANIES.GET_DETAIL, async (_e, companyId: number) => {
+    if (!companyId || typeof companyId !== "number") return failResult("companyId 必填");
+    return svc.getCompanyDetail(companyId);
   });
 
   ipcMain.handle(IPC.COMPANIES.UPSERT, async (_e, input) => {
