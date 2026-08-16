@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button, Empty, message, Select, Tabs, Timeline, Spin, Alert, Modal, Tooltip, Progress } from "antd";
 
 // (Button etc. used in sub-components)
@@ -114,10 +114,14 @@ export function InboxList() {
   const [menu, setMenu] = useState<{ x: number; y: number; item: InboxItem } | null>(null);
   // 虚拟滚动：只渲染可视区，避免千余封邮件全量渲染卡顿
   const ROW_H = 72; // 固定行高
+  const SENDER_ROW_H = 54; // 发信人行高（固定）
   const OVERSCAN = 6; // 上下多渲染几行，滚动不露白
   const listRef = useRef<HTMLDivElement>(null);
   const [listH, setListH] = useState(600);
   const [scrollTop, setScrollTop] = useState(0);
+  // 视图切换：全部邮件 / 按发信人
+  const [view, setView] = useState<"flat" | "sender">("flat");
+  const [senderFilter, setSenderFilter] = useState<string | null>(null); // 选中的发信人邮箱
 
   const { data, isLoading } = useQuery({
     queryKey: ["inbox"],
@@ -160,50 +164,92 @@ export function InboxList() {
     const q = search.toLowerCase();
     items = items.filter(i => (i.subject || "").toLowerCase().includes(q) || i.fromEmail.toLowerCase().includes(q) || (i.fromName || "").toLowerCase().includes(q));
   }
+
+  // 发信人聚合（按 fromEmail 精确分组，邮件数降序）
+  const senderGroups = (() => {
+    const map = new Map<string, { email: string; name: string | null; count: number; types: Set<string>; latest: string }>();
+    for (const i of items) {
+      const g = map.get(i.fromEmail);
+      if (g) {
+        g.count++;
+        if (i.classification) g.types.add(i.classification);
+        if (i.receivedAt > g.latest) g.latest = i.receivedAt;
+      } else {
+        map.set(i.fromEmail, { email: i.fromEmail, name: i.fromName, count: 1, types: new Set(i.classification ? [i.classification] : []), latest: i.receivedAt });
+      }
+    }
+    return [...map.values()].sort((a, b) => (b.latest > a.latest ? 1 : b.latest < a.latest ? -1 : 0));
+  })();
+
+  // 发信人视图：选中某发信人则过滤
+  if (view === "sender" && senderFilter) {
+    items = items.filter(i => i.fromEmail === senderFilter);
+  }
   const sel_ = items.find(i => i.id === sid) || null;
 
   // 虚拟滚动可视区计算
   const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
   const endIdx = Math.min(items.length, Math.ceil((scrollTop + listH) / ROW_H) + OVERSCAN);
   const visibleItems = items.slice(startIdx, endIdx);
+  // 发信人可视区（独立行高）
+  const senderStart = Math.max(0, Math.floor(scrollTop / SENDER_ROW_H) - OVERSCAN);
+  const senderEnd = Math.min(senderGroups.length, Math.ceil((scrollTop + listH) / SENDER_ROW_H) + OVERSCAN);
+  const visibleSenders = senderGroups.slice(senderStart, senderEnd);
 
-  // 邮箱匹配 — 参照旧 PE _extractBodyContacts
-  const matchedContacts: { email: string; company: string; id: number }[] = [];
-  const unmatchedEmails: string[] = [];
-  let senderContact: { company: string; id: number } | null = null;
-  const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-  const matchReady = !!(body && contactsData?.success);
-  if (matchReady) {
-    const contacts = contactsData!.data!.items || [];
-    const idx: Record<string, { company: string; id: number }> = {};
-    for (const c of contacts) {
-      if (c.email) idx[c.email.toLowerCase().trim()] = { company: c.companyName || "", id: c.id };
+  // 邮箱匹配 — 参照旧 PE _extractBodyContacts（memo 化，避免每次渲染重复正则处理大正文）
+  const { matchedContacts, unmatchedEmails, senderContact, matchReady } = useMemo(() => {
+    const matched: { email: string; company: string; id: number }[] = [];
+    const unmatched: string[] = [];
+    let sender: { company: string; id: number } | null = null;
+    const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const ready = !!(body && contactsData?.success);
+    if (ready) {
+      const contacts = contactsData!.data!.items || [];
+      const idx: Record<string, { company: string; id: number }> = {};
+      for (const c of contacts) {
+        if (c.email) idx[c.email.toLowerCase().trim()] = { company: c.companyName || "", id: c.id };
+      }
+      // ① 发件人
+      if (sel_) {
+        const sk = sel_.fromEmail.toLowerCase().trim();
+        const sc = idx[sk];
+        if (sc) { sender = sc; matched.push({ email: sel_.fromEmail, company: sc.company, id: sc.id }); }
+        else unmatched.push(sel_.fromEmail);
+      }
+      // ② 正文：剥 HTML 标签 + 拼接 raw 原文，跟旧 PE 一样
+      const seen = new Set<string>();
+      if (sel_) seen.add(sel_.fromEmail.toLowerCase().trim());
+      const textBody = body!
+        .replace(/<[^>]+>/g, " ")      // 剥 HTML → 纯文本
+        .replace(/&[#a-z0-9]+;/gi, " ") // 实体解码
+        .replace(/\s+/g, " ");          // 合并空白
+      const emails = textBody.match(EMAIL_RE) || [];
+      for (const em of emails) {
+        if (matched.length >= 20) break;
+        const key = em.toLowerCase().trim();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const c = idx[key];
+        if (c) matched.push({ email: em, company: c.company, id: c.id });
+        else unmatched.push(em);
+      }
     }
-    // ① 发件人
-    if (sel_) {
-      const sk = sel_.fromEmail.toLowerCase().trim();
-      const sc = idx[sk];
-      if (sc) { senderContact = sc; matchedContacts.push({ email: sel_.fromEmail, company: sc.company, id: sc.id }); }
-      else unmatchedEmails.push(sel_.fromEmail);
-    }
-    // ② 正文：剥 HTML 标签 + 拼接 raw 原文，跟旧 PE 一样
-    const seen = new Set<string>();
-    if (sel_) seen.add(sel_.fromEmail.toLowerCase().trim());
-    const textBody = body!
-      .replace(/<[^>]+>/g, " ")      // 剥 HTML → 纯文本
-      .replace(/&[#a-z0-9]+;/gi, " ") // 实体解码
-      .replace(/\s+/g, " ");          // 合并空白
-    const emails = textBody.match(EMAIL_RE) || [];
-    for (const em of emails) {
-      if (matchedContacts.length >= 20) break;
-      const key = em.toLowerCase().trim();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const c = idx[key];
-      if (c) matchedContacts.push({ email: em, company: c.company, id: c.id });
-      else unmatchedEmails.push(em);
-    }
-  }
+    return { matchedContacts: matched, unmatchedEmails: unmatched, senderContact: sender, matchReady: ready };
+  }, [body, contactsData, sel_]);
+
+  // 正文 iframe 文档（memo 化，避免每次渲染重新拼接大字符串触发 iframe 重载）
+  const bodyDoc = useMemo(() => {
+    if (!body) return undefined;
+    return "<!DOCTYPE html><html><head><meta charset=utf-8><style>" +
+      "html,body{margin:0;padding:0}" +
+      "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.8;color:#333;padding:0 20px 20px}" +
+      "a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}" +
+      "blockquote{border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;margin:12px 0}" +
+      "table{border-collapse:collapse}" +
+      "td,th{border:1px solid #e5e5e5;padding:6px 10px;font-size:13px}" +
+      "pre{background:#f5f5f5;padding:10px 14px;border-radius:4px;font-size:12px;overflow-x:auto}" +
+      "</style><script>var z=1;document.addEventListener('wheel',function(e){if(e.ctrlKey){e.preventDefault();z*=e.deltaY<0?1.1:0.9;z=Math.min(3,Math.max(0.3,z));document.body.style.zoom=z}},{passive:false})</script></head><body>" + body + "</body></html>";
+  }, [body]);
 
   useEffect(() => { setSid(null); setSel(new Set()); setLast(null); }, [filter]);
 
@@ -217,11 +263,11 @@ export function InboxList() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // 过滤/搜索变化时回到顶部
+  // 过滤/搜索/视图/发信人变化时回到顶部
   useEffect(() => {
     setScrollTop(0);
     if (listRef.current) listRef.current.scrollTop = 0;
-  }, [filter, search]);
+  }, [filter, search, view, senderFilter]);
 
   // 选中邮件 → 加载正文 + 量高度（优先前端缓存，切回已看邮件秒开）
   useEffect(() => {
@@ -365,6 +411,45 @@ export function InboxList() {
           <span>其他 {counts.other ?? 0}</span>
         </div>
 
+        {/* 视图切换 */}
+        <div style={{ display: "flex", padding: "4px 14px", gap: 4, flexShrink: 0 }}>
+          {(["flat", "sender"] as const).map(v => {
+            const on = view === v;
+            return (
+              <button key={v} onClick={() => { setView(v); setSenderFilter(null); }}
+                style={{
+                  flex: 1, padding: "5px 0", fontSize: 11, cursor: "pointer", border: "1px solid #e5e5e5",
+                  borderRadius: 6, background: on ? "#1a1a1a" : "#fff", color: on ? "#fff" : "#666",
+                  fontWeight: on ? 600 : 400, transition: "all .12s",
+                }}>
+                {v === "flat" ? "全部邮件" : "按发信人"}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 发信人选中后的面包屑栏：让用户一眼看出是从发信人列表点进来的邮件汇总 */}
+        {view === "sender" && senderFilter && (() => {
+          const cur = senderGroups.find(g => g.email === senderFilter);
+          const curName = cur?.name || senderFilter;
+          return (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderBottom: "1px solid #e8e8e8", background: "#fafafa", flexShrink: 0 }}>
+              <button onClick={() => setSenderFilter(null)}
+                style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e5e5", borderRadius: 6, background: "#fff", color: "#555", flexShrink: 0, transition: "all .12s" }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#2563eb"; (e.currentTarget as HTMLElement).style.color = "#2563eb"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#e5e5e5"; (e.currentTarget as HTMLElement).style.color = "#555"; }}>
+                ← 返回发信人列表
+              </button>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{curName}</span>
+                {curName !== senderFilter && (
+                  <span style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{senderFilter}</span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* 筛选 */}
         <div style={{ display: "flex", borderBottom: "1px solid #e8e8e8", flexShrink: 0 }}>
           {FILTERS.map(f => {
@@ -399,9 +484,41 @@ export function InboxList() {
         <div ref={listRef} className="thin-scroll" style={{ flex: 1, overflow: "auto" }}
           onScroll={e => {
             const top = e.currentTarget.scrollTop;
-            setScrollTop(prev => (Math.abs(prev - top) >= ROW_H ? top : prev));
+            const rowH = (view === "sender" && !senderFilter) ? SENDER_ROW_H : ROW_H;
+            setScrollTop(prev => (Math.abs(prev - top) >= rowH ? top : prev));
           }}>
-          {isLoading ? <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>加载中...</div>
+          {view === "sender" && !senderFilter ? (
+            senderGroups.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>暂无邮件</div>
+            ) : (
+              <div style={{ height: senderGroups.length * SENDER_ROW_H, position: "relative" }}>
+                {visibleSenders.map((g, idx) => {
+                  const realIdx = senderStart + idx;
+                  return (
+                    <div key={g.email} onClick={() => setSenderFilter(g.email)}
+                      style={{ position: "absolute", top: realIdx * SENDER_ROW_H, left: 0, right: 0, height: SENDER_ROW_H, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", cursor: "pointer", borderBottom: "1px solid #f5f5f5" }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(0,0,0,.015)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: "#1a1a1a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {g.name || g.email}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#999", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {g.email} · {shortTime(g.latest)}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                        {(["replied", "bounce", "autoreply", "other", "sent"] as const).filter(t => g.types.has(t)).map(t => (
+                          <span key={t} style={{ width: 6, height: 6, borderRadius: "50%", background: TYPE[t]?.dot || "#8b8b8b" }} />
+                        ))}
+                      </div>
+                      <span style={{ fontSize: 10, color: "#bbb", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{g.count} 封</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : isLoading ? <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>加载中...</div>
             : items.length === 0 ? <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>{search ? "无匹配" : "暂无邮件"}</div>
               : (
                 <div style={{ height: items.length * ROW_H, position: "relative" }}>
@@ -480,23 +597,18 @@ export function InboxList() {
           </div>
         ) : (
           <>
-            {/* 头部 — 参照旧 PE 双列网格 */}
+            {/* 头部 — 紧凑双列网格（label 宽度压缩，账号+关联一行，状态+标签一行） */}
             <div style={{ borderBottom: "1px solid #e8e8e8", flexShrink: 0 }}>
               {[
-                ["发件人", `${sel_.fromName || ""} <${sel_.fromEmail}>`, 2],
-                ["主题", sel_.subject || "无主题", 2],
-                ["时间", new Date(sel_.receivedAt).toLocaleString("zh-CN"), 1],
-                ["分类", sel_.classification || "other", 1],
-              ].map(([label, value, span], idx) => (
+                ["发件人", `${sel_.fromName || ""} <${sel_.fromEmail}>`, true],
+                ["主题", sel_.subject || "无主题", true],
+                ["时间", new Date(sel_.receivedAt).toLocaleString("zh-CN"), false],
+                ["分类", sel_.classification || "other", false],
+              ].map(([label, value, full], idx) => (
                 <div key={idx}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 8, fontSize: 12,
-                    padding: "7px 18px", borderBottom: "1px solid #f5f5f5",
-                    gridColumn: span === 2 ? "span 2" : undefined,
-                    ...(span === 2 ? {} : { width: "50%", display: "inline-flex" }),
-                  }}>
-                  <span style={{ color: "#999", fontWeight: 600, fontSize: 11, minWidth: 48, flexShrink: 0 }}>{label}</span>
-                  <span style={{ wordBreak: "break-all", lineHeight: 1.4 }}>
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", borderBottom: "1px solid #f5f5f5", width: full ? "100%" : "50%" }}>
+                  <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>{label}</span>
+                  <span style={{ wordBreak: "break-all", lineHeight: 1.4, minWidth: 0 }}>
                     {label === "分类" ? (
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: (TYPE as Record<string, {dot: string}>)[String(value)]?.dot || "#8b8b8b" }} />
@@ -506,44 +618,46 @@ export function InboxList() {
                   </span>
                 </div>
               ))}
-              {senderContact && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "7px 18px", borderBottom: "1px solid #f5f5f5" }}>
-                  <span style={{ color: "#999", fontWeight: 600, fontSize: 11, minWidth: 48, flexShrink: 0 }}>关联</span>
-                  <span
-                    onClick={() => { window.location.hash = `#/contacts?detail=${senderContact.id}`; }}
-                    style={{ color: "#1565c0", fontWeight: 500, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: "2px" }}
-                    title="点击打开联系人详情"
-                  >{senderContact.company || "已匹配联系人"}</span>
+              {/* 账号 + 关联 一行两栏 */}
+              <div style={{ display: "flex", borderBottom: "1px solid #f5f5f5" }}>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: senderContact ? "50%" : "100%" }}>
+                  <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>账号</span>
+                  <span style={{ fontSize: 11, color: (sel_ as InboxItem & { _accountEmail?: string })._accountEmail ? "#555" : "#ccc", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {(sel_ as InboxItem & { _accountEmail?: string })._accountEmail || "—"}
+                  </span>
                 </div>
-              )}
-              {/* 扩展信息：发件账号 + 联系人状态 + CRM标签 — 始终显示 */}
+                {senderContact && (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: "50%" }}>
+                    <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>关联</span>
+                    <span
+                      onClick={() => { window.location.hash = `#/contacts?detail=${senderContact.id}`; }}
+                      style={{ color: "#1565c0", fontWeight: 500, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: "2px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title="点击打开联系人详情"
+                    >{senderContact.company || "已匹配联系人"}</span>
+                  </div>
+                )}
+              </div>
+              {/* 状态 + 标签 一行两栏 */}
               {sel_ && (() => {
-                const acct = (sel_ as InboxItem & { _accountEmail?: string })._accountEmail || null;
                 const status = (sel_ as InboxItem & { _contactStatus?: string })._contactStatus || null;
                 const rawTags = (sel_ as InboxItem & { _contactTags?: string })._contactTags || "[]";
                 const tags: string[] = (() => { try { const t = JSON.parse(rawTags); return Array.isArray(t) ? t : []; } catch { return []; } })();
                 const statusDot: Record<string, string> = { replied: "#22a644", bounce: "#e5484d", autoreply: "#e6a817", reached: "#2563eb" };
                 const statusLabel: Record<string, string> = { replied: "已回复", bounce: "退信", autoreply: "自动回复", reached: "已触达" };
                 return (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "7px 18px", borderBottom: "1px solid #f5f5f5" }}>
-                      <span style={{ color: "#999", fontWeight: 600, fontSize: 11, minWidth: 48, flexShrink: 0 }}>账号</span>
-                      <span style={{ fontSize: 11, color: acct ? "#555" : "#ccc" }}>{acct || "—"}</span>
+                  <div style={{ display: "flex", borderBottom: "1px solid #f5f5f5" }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: "50%" }}>
+                      <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>状态</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {status && <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusDot[status] || "#ccc" }} />}
+                        <span style={{ fontSize: 11, color: status ? "#555" : "#ccc" }}>{status ? (statusLabel[status] || status) : "—"}</span>
+                      </span>
                     </div>
-                    <div style={{ display: "flex", fontSize: 12, borderBottom: "1px solid #f5f5f5" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 18px", width: "50%" }}>
-                        <span style={{ color: "#999", fontWeight: 600, fontSize: 11, minWidth: 48, flexShrink: 0 }}>状态</span>
-                        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          {status && <span style={{ width: 6, height: 6, borderRadius: "50%", background: statusDot[status] || "#ccc" }} />}
-                          <span style={{ fontSize: 11, color: status ? "#555" : "#ccc" }}>{status ? (statusLabel[status] || status) : "—"}</span>
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 18px", width: "50%" }}>
-                        <span style={{ color: "#999", fontWeight: 600, fontSize: 11, minWidth: 48, flexShrink: 0 }}>标签</span>
-                        <span style={{ fontSize: 11, color: tags.length > 0 ? "#555" : "#ccc" }}>{tags.length > 0 ? tags.join(", ") : "—"}</span>
-                      </div>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: "50%" }}>
+                      <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>标签</span>
+                      <span style={{ fontSize: 11, color: tags.length > 0 ? "#555" : "#ccc", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tags.length > 0 ? tags.join(", ") : "—"}</span>
                     </div>
-                  </>
+                  </div>
                 );
               })()}
             </div>
@@ -634,17 +748,8 @@ export function InboxList() {
                         ) : body ? (
                           <iframe className="body-iframe" style={{ flex: 1, minHeight: 0, width: "100%" }}
                             scrolling="auto" sandbox="allow-scripts"
-                            srcDoc={
-                              "<!DOCTYPE html><html><head><meta charset=utf-8><style>" +
-                              "html,body{margin:0;padding:0}" +
-                              "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.8;color:#333;padding:0 20px 20px}" +
-                              "a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}" +
-                              "blockquote{border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;margin:12px 0}" +
-                              "table{border-collapse:collapse}" +
-                              "td,th{border:1px solid #e5e5e5;padding:6px 10px;font-size:13px}" +
-                              "pre{background:#f5f5f5;padding:10px 14px;border-radius:4px;font-size:12px;overflow-x:auto}" +
-                              "</style><script>var z=1;document.addEventListener('wheel',function(e){if(e.ctrlKey){e.preventDefault();z*=e.deltaY<0?1.1:0.9;z=Math.min(3,Math.max(0.3,z));document.body.style.zoom=z}},{passive:false})</script></head><body>" + (body || "") + "</body></html>"
-                            } />
+                            srcDoc={bodyDoc}
+                          />
                         ) : (
                           <div className="body-preview">{sel_.bodyPreview || "(无法加载正文)"}</div>
                         )}

@@ -6,7 +6,7 @@ import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { inboxMessages } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
-import { eq, sql as dsql, desc } from "drizzle-orm";
+import { eq, sql as dsql, desc, inArray } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -22,8 +22,9 @@ export interface SendItem {
   id: string; companyName: string; companyId: number;
   recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number;
-  subject: string;   // 渲染后的主题
-  body: string;      // 渲染后的正文
+  subject: string;   // 渲染后的主题（小，提前渲染）
+  tplBody: string;   // 正文模板快照（含变量/随机词，发送时组装）
+  contactVars: TemplateVars;  // 首联系人渲染变量
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
 }
@@ -38,7 +39,7 @@ export interface SendTemplate {
 
 export interface TimeBucket {
   key: string; label: string; description: string;
-  contacts: ContactRow[]; count: number;
+  contacts: { id: number }[]; count: number;
 }
 
 export interface SendStatus {
@@ -130,8 +131,8 @@ let pushFn: ((c: string, d: unknown) => void) | null = null;
 export function setPushFn(fn: (c: string, d: unknown) => void) { pushFn = fn; }
 function push(c: string, d: unknown) { try { pushFn?.(c, d); } catch { /* */ } }
 
-let sendBccFn: ((item: SendItem) => Promise<Result<void>>) | null = null;
-export function setSendBccFn(fn: (item: SendItem) => Promise<Result<void>>) { sendBccFn = fn; }
+let sendBccFn: ((item: SendItem & { body: string }) => Promise<Result<void>>) | null = null;
+export function setSendBccFn(fn: (item: SendItem & { body: string }) => Promise<Result<void>>) { sendBccFn = fn; }
 
 // ── 可中断延迟 ──
 
@@ -192,7 +193,7 @@ export function getTimeBuckets(): Result<TimeBucket[]> {
 
   return okResult(BUCKET_DEFS.map(b => ({
     key: b.key, label: b.label, description: b.desc,
-    contacts: buckets.get(b.key) || [], count: (buckets.get(b.key) || []).length,
+    contacts: (buckets.get(b.key) || []).map(c => ({ id: c.id })), count: (buckets.get(b.key) || []).length,
   })));
 }
 
@@ -220,7 +221,7 @@ export function getStageBuckets(): Result<TimeBucket[]> {
 
   return okResult(STAGE_BUCKET_DEFS.map(b => ({
     key: b.key, label: b.label, description: b.desc,
-    contacts: buckets.get(b.key) || [], count: (buckets.get(b.key) || []).length,
+    contacts: (buckets.get(b.key) || []).map(c => ({ id: c.id })), count: (buckets.get(b.key) || []).length,
   })));
 }
 
@@ -272,18 +273,27 @@ export function getSendTimeBuckets(): Result<TimeBucket[]> {
 
   return okResult(SEND_TIME_BUCKET_DEFS.map(b => ({
     key: b.key, label: b.label, description: b.desc,
-    contacts: buckets.get(b.key) || [], count: (buckets.get(b.key) || []).length,
+    contacts: (buckets.get(b.key) || []).map(c => ({ id: c.id })), count: (buckets.get(b.key) || []).length,
   })));
 }
 
 // ── 模板渲染（沿用旧 PE: {{firstName}} {{company}}，兼容 {{ contact.firstName }}）──
 
-function renderTemplate(template: string, contact: ContactRow): string {
+interface TemplateVars {
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string;
+  email: string;
+  title?: string | null;
+  phone?: string | null;
+}
+
+function renderTemplate(template: string, contact: TemplateVars): string {
   let out = template || "";
   const vars: Record<string, string> = {
     firstName: contact.firstName || "",
     lastName: contact.lastName || "",
-    company: "", // 由调用方填充
+    company: contact.company || "",
     email: contact.email,
     title: contact.title || "",
     phone: contact.phone || "",
@@ -350,15 +360,20 @@ function pickTemplate(tpls: SendTemplate[], contact: ContactRow): SendTemplate {
 // ── 构建队列（按公司合并 BCC + 渲染模板，每组随机选模板）──
 
 export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Result<SendItem[]> {
-  const buckets = getTimeBuckets();
-  if (!buckets.success) return failResult(buckets.error);
-
-  const selected = new Map<number, ContactRow>();
-  for (const b of buckets.data) {
-    if (bucketKeys.includes(b.key)) for (const c of b.contacts) selected.set(c.id, c);
+  // 三个维度（状态/阶段/发送时间）收集选中联系人 id —— 桶查询只返回 id，避免传输完整联系人
+  const selectedIds = new Set<number>();
+  for (const br of [getTimeBuckets(), getStageBuckets(), getSendTimeBuckets()]) {
+    if (!br.success) continue;
+    for (const b of br.data) {
+      if (bucketKeys.includes(b.key)) for (const c of b.contacts) selectedIds.add(c.id);
+    }
   }
+  if (selectedIds.size === 0) return failResult("没有选中的联系人");
 
-  if (selected.size === 0) return failResult("没有选中的联系人");
+  // 用 id 一次查完整联系人（供模板渲染）
+  const selected = new Map<number, ContactRow>();
+  const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
+  for (const c of selectedRows) selected.set(c.id, c);
 
   const companyGroups = new Map<string, ContactRow[]>();
   for (const c of selected.values()) {
@@ -381,14 +396,17 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
   const activeAccounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
   const activeIds = new Set(activeAccounts.map(a => a.id));
 
-  // 批量查上次发送账号
+  // 批量查上次发送账号（一次查询 + 内存去重，避免 N 次查询卡顿）
   const lastAccountMap = new Map<number, number>();
-  const allCids = [...companyGroups.values()].flat().map(c => c.id);
-  for (const cid of allCids) {
-    const last = getDb().select({ accountId: interactions.accountId })
-      .from(interactions).where(eq(interactions.contactId, cid))
-      .orderBy(desc(interactions.createdAt)).limit(1).get();
-    if (last?.accountId && activeIds.has(last.accountId)) lastAccountMap.set(cid, last.accountId);
+  const cidSet = new Set([...companyGroups.values()].flat().map(c => c.id));
+  const sentRows = getDb().select({ contactId: interactions.contactId, accountId: interactions.accountId })
+    .from(interactions).where(eq(interactions.type, "sent"))
+    .orderBy(desc(interactions.createdAt)).all();
+  for (const r of sentRows) {
+    if (r.contactId == null || r.accountId == null) continue;
+    if (cidSet.has(r.contactId) && !lastAccountMap.has(r.contactId) && activeIds.has(r.accountId)) {
+      lastAccountMap.set(r.contactId, r.accountId);
+    }
   }
 
   const items: SendItem[] = [];
@@ -397,8 +415,12 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
     const first = group[0]!;
     const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
     const t = pickTemplate(userTpls, first);
-    const subj = renderTemplate(t.subject, { ...first });
-    const body = renderTemplate(t.body, { ...first });
+    const contactVars: TemplateVars = {
+      firstName: first.firstName, lastName: first.lastName,
+      company: companyName, email: first.email,
+      title: first.title, phone: first.phone,
+    };
+    const subj = renderTemplate(t.subject, contactVars);
 
     const preferredAid = lastAccountMap.get(first.id);
     const aid = preferredAid || activeAccounts[roundRobinIdx % activeAccounts.length]?.id || 0;
@@ -408,7 +430,7 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
       id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
       companyId: first.companyId || 0,
       recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-      subject: subj, body,
+      subject: subj, tplBody: t.body, contactVars,
       accountId: aid, status: "pending",
     });
   }
@@ -450,15 +472,15 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
   const lastAccountMap = new Map<number, number>(); // contactId → accountId
   const allContactIds = items.flatMap(it => it.recipients.map(r => r.contactId));
   if (allContactIds.length > 0) {
-    // 批量查每个联系人的最后一次发送账号
-    for (const cid of allContactIds) {
-      const last = getDb().select({ accountId: interactions.accountId })
-        .from(interactions)
-        .where(eq(interactions.contactId, cid))
-        .orderBy(desc(interactions.createdAt))
-        .limit(1).get();
-      if (last?.accountId && activeIds.has(last.accountId)) {
-        lastAccountMap.set(cid, last.accountId);
+    // 批量查每个联系人的最后一次发送账号（一次查询 + 内存去重）
+    const cidSet = new Set(allContactIds);
+    const sentRows = getDb().select({ contactId: interactions.contactId, accountId: interactions.accountId })
+      .from(interactions).where(eq(interactions.type, "sent"))
+      .orderBy(desc(interactions.createdAt)).all();
+    for (const r of sentRows) {
+      if (r.contactId == null || r.accountId == null) continue;
+      if (cidSet.has(r.contactId) && !lastAccountMap.has(r.contactId) && activeIds.has(r.accountId)) {
+        lastAccountMap.set(r.contactId, r.accountId);
       }
     }
   }
@@ -505,21 +527,26 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
     }
   }
 
-  // 持久化：清除旧批次，写入新队列
+  // 持久化：清除旧批次，分批批量写入（避免逐条 insert 卡顿）
   try {
     getDb().delete(sendQueue).run();
     const now = new Date().toISOString();
+    const rows: any[] = [];
     for (const [aid, q] of queues) {
       const acctEmail = accounts.find(a => a.id === aid)?.email || "";
       for (const item of q) {
-        getDb().insert(sendQueue).values({
+        rows.push({
           id: item.id, batchId, companyName: item.companyName, companyId: item.companyId,
           recipients: JSON.stringify(item.recipients),
           accountId: aid, accountEmail: acctEmail,
-          subject: item.subject, body: item.body,
+          subject: item.subject, tplBody: item.tplBody, contactVars: JSON.stringify(item.contactVars),
           status: "pending", createdAt: now,
-        }).run();
+        });
       }
+    }
+    // 每批 200 行，避免单条 SQL 过长
+    for (let i = 0; i < rows.length; i += 200) {
+      getDb().insert(sendQueue).values(rows.slice(i, i + 200)).run();
     }
     saveDatabase();
   } catch (err) {
@@ -573,7 +600,10 @@ async function runAccountLoop(accountId: number) {
     push(EVENTS.SEND_PROGRESS, state);
 
     if (sendBccFn) {
-      const r = await sendBccFn(item);
+      // 发送前按模板现场组装正文（随机词每组重新随机）
+      const body = renderTemplate(item.tplBody, item.contactVars);
+      const sendItem = { ...item, body };
+      const r = await sendBccFn(sendItem);
       if (r.success) {
         item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; fails = 0;
         recordQuotaSend();
@@ -581,16 +611,16 @@ async function runAccountLoop(accountId: number) {
         const now = new Date().toISOString();
         for (const rc of item.recipients) {
           try {
-            getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", subject: item.subject, bodyPreview: item.body.slice(0, 200), accountId, createdAt: now }).run();
+            getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", subject: item.subject, bodyPreview: body.slice(0, 200), accountId, createdAt: now }).run();
             // 收件箱「已发送」:SMTP 发信不进 IMAP Sent 文件夹,直接落 inbox_messages 让前端可见并关联联系人
             getDb().insert(inboxMessages).values({
               accountId, messageId: null,
               fromEmail: rc.email, fromName: rc.name,
-              subject: item.subject, bodyPreview: item.body.slice(0, 500),
+              subject: item.subject, bodyPreview: body.slice(0, 500),
               classification: "sent", matchedContactId: rc.contactId,
               isRead: 1, receivedAt: now,
             }).run();
-            await writeBodyForLastInsert(item.body); // 正文落盘文件
+            await writeBodyForLastInsert(body); // 正文落盘文件
             // v4.0: 发信不再自动标已触达 — reached 只能用户手动设置/改标签触发
           } catch (err) {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
@@ -698,7 +728,9 @@ export function getQueueItems(): Result<Array<SendItem & { accountEmail?: string
       id: r.id, companyName: r.companyName || "", companyId: r.companyId || 0,
       recipients: (() => { try { return JSON.parse(r.recipients); } catch { return []; } })(),
       accountId: r.accountId, accountEmail: r.accountEmail || emailMap.get(r.accountId) || "",
-      subject: r.subject || "", body: r.body || "",
+      subject: r.subject || "",
+      tplBody: r.tplBody || "",
+      contactVars: (() => { try { return JSON.parse(r.contactVars || "{}"); } catch { return {}; } })(),
       status: r.status === "sending" ? "pending" : (r.status as SendItem["status"]),
       error: r.error || undefined, sentAt: r.sentAt || undefined,
     }));
@@ -730,10 +762,11 @@ export function resumeQueue(): Result<string> {
 
     for (const r of rows) {
       const recipients = (() => { try { return JSON.parse(r.recipients); } catch { return []; } })();
+      const contactVars = (() => { try { return JSON.parse(r.contactVars || "{}"); } catch { return {}; } })();
       const item: SendItem = {
         id: r.id, companyName: r.companyName || "", companyId: r.companyId || 0,
         recipients, accountId: r.accountId,
-        subject: r.subject || "", body: r.body || "",
+        subject: r.subject || "", tplBody: r.tplBody || "", contactVars,
         status: "pending",
         error: r.error || undefined, sentAt: r.sentAt || undefined,
       };

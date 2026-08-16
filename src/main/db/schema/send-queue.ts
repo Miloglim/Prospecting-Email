@@ -9,7 +9,8 @@ export const sendQueue = sqliteTable("send_queue", {
   accountId: integer("account_id").notNull(),
   accountEmail: text("account_email"),
   subject: text("subject"),
-  body: text("body"),
+  tplBody: text("tpl_body"),
+  contactVars: text("contact_vars"), // JSON
   status: text("status").default("pending").notNull(), // pending | sending | sent | failed
   error: text("error"),
   sentAt: text("sent_at"),

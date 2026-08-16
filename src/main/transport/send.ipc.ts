@@ -14,7 +14,7 @@ import { loadConfig, saveConfig } from "../config";
 
 
 /** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
-async function sendBcc(item: SendService.SendItem): Promise<Result<void>> {
+async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<void>> {
   const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, item.accountId)).get();
   if (!account) return failResult("账号未找到");
 
@@ -134,6 +134,7 @@ export function registerSendIPC() {
       id: "crm", companyName: company, companyId,
       recipients: [{ contactId, email: input.to, name }],
       accountId: input.accountId, subject, body, status: "sending",
+      tplBody: "", contactVars: { email: input.to },
     });
   });
 }

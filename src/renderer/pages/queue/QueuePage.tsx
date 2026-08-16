@@ -11,7 +11,7 @@ interface QueueItem {
   id: string; companyName: string; companyId: number;
   recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number; accountEmail?: string;
-  subject: string; body: string;
+  subject: string;
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
 }

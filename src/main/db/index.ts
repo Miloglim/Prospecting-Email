@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS send_queue (
   company_name text, company_id integer,
   recipients text NOT NULL,
   account_id integer NOT NULL, account_email text,
-  subject text, body text,
+  subject text, tpl_body text, contact_vars text,
   status text DEFAULT 'pending' NOT NULL,
   error text, sent_at text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -187,6 +187,14 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
       sqlJsDb.run("ALTER TABLE templates ADD COLUMN stage text;");
       Log.info("db.migrate", "templates 表已添加 stage 列");
     }
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v4.2: send_queue 表补 tpl_body + contact_vars 列（body 延迟组装，不再持久化渲染后正文）
+  try {
+    const qcols = (sqlJsDb.exec("PRAGMA table_info(send_queue)")[0]?.values || []).map(r => String(r[1]));
+    if (!qcols.includes("tpl_body")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN tpl_body text;");
+    if (!qcols.includes("contact_vars")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN contact_vars text;");
+    Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars 列");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.0: contacts 表补 language 列（国家+语言分离）

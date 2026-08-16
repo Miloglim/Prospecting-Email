@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
   InboxOutlined, PartitionOutlined, FileTextOutlined, BankOutlined,
-  SettingOutlined, UploadOutlined, HistoryOutlined, UnorderedListOutlined,
+  SettingOutlined, UploadOutlined, HistoryOutlined,
 } from "@ant-design/icons";
 import { useAppContext } from "../../AppContext";
 
@@ -31,7 +31,6 @@ const navGroups: { items: NavItem[] }[] = [
   {
     items: [
       { key: "/campaigns", icon: <SendOutlined />, label: "邮件发送" },
-      { key: "/queue", icon: <UnorderedListOutlined />, label: "发送队列" },
       { key: "/templates", icon: <FileTextOutlined />, label: "模板" },
       { key: "/history", icon: <HistoryOutlined />, label: "发送总览" },
     ],
