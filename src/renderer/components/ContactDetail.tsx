@@ -33,7 +33,7 @@ export const CRM_STAGES: { key: string; label: string; color: string }[] = [
   { key: "other", label: "其他", color: "#333333" },
 ];
 const INTERACTION_COLORS: Record<string, string> = {
-  sent: "#5c6bc0", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800",
+  sent: "#2563eb", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800",
 };
 const INTERACTION_LABELS: Record<string, string> = {
   sent: "已发送", replied: "已回复", bounced: "退信", autoreply: "自动回复", note: "跟进",

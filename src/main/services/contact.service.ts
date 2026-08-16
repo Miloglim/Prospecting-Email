@@ -2,7 +2,7 @@ import { getDb } from "../db";
 import { contacts, type ContactRow, type InsertContactRow } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
-import { eq, like, or, desc, sql as dsql } from "drizzle-orm";
+import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -109,7 +109,32 @@ export async function listContacts(params?: {
     clientType: params?.clientType as string | undefined,
     country: params?.country as string | undefined,
   };
-  let query = getDb().select({
+  // 构建 where 条件（count 与分页查询复用）
+  const conds: (SQL | undefined)[] = [];
+  if (search) {
+    const pattern = `%${search}%`;
+    conds.push(or(
+      like(contacts.email, pattern),
+      like(contacts.firstName, pattern),
+      like(contacts.lastName, pattern),
+      like(contacts.title, pattern),
+      like(companies.name, pattern),
+    ));
+  }
+  if (filters.stage) conds.push(eq(contacts.stage, filters.stage));
+  if (filters.status) conds.push(eq(contacts.status, filters.status));
+  if (filters.tags) conds.push(like(contacts.tags, `%${filters.tags}%`));
+  if (filters.clientType) conds.push(eq(contacts.clientType, filters.clientType));
+  if (filters.country) conds.push(eq(contacts.country, filters.country));
+  const where = (conds.length ? and(...conds) : dsql`1=1`) as SQL;
+
+  // 总数：COUNT 一次，不查全表
+  const total = Number(getDb().select({ n: count() })
+    .from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+    .where(where).get()?.n) || 0;
+
+  // 真分页：SQL LIMIT/OFFSET
+  const items = getDb().select({
     id: contacts.id, email: contacts.email, companyId: contacts.companyId,
     firstName: contacts.firstName, lastName: contacts.lastName,
     title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl,
@@ -120,31 +145,13 @@ export async function listContacts(params?: {
     source: contacts.source, sourceDetail: contacts.sourceDetail,
     createdAt: contacts.createdAt, updatedAt: contacts.updatedAt,
     companyName: companies.name,
-  }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id));
+  }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+    .where(where)
+    .orderBy(dsql`${contacts.updatedAt} DESC`)
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+    .all();
 
-  if (search) {
-    const pattern = `%${search}%`;
-    query = query.where(or(
-      like(contacts.email, pattern),
-      like(contacts.firstName, pattern),
-      like(contacts.lastName, pattern),
-      like(contacts.title, pattern),
-      like(companies.name, pattern),
-    )) as typeof query;
-  }
-
-  // 多维筛选（精确匹配）
-  if (filters.stage) query = query.where(eq(contacts.stage, filters.stage)) as typeof query;
-  if (filters.status) query = query.where(eq(contacts.status, filters.status)) as typeof query;
-  if (filters.tags) query = query.where(like(contacts.tags, `%${filters.tags}%`)) as typeof query;
-  if (filters.clientType) query = query.where(eq(contacts.clientType, filters.clientType)) as typeof query;
-  if (filters.country) query = query.where(eq(contacts.country, filters.country)) as typeof query;
-
-  query = query.orderBy(dsql`${contacts.updatedAt} DESC`) as typeof query;
-  const all = query.all();
-  const total = all.length;
-  const start = (page - 1) * pageSize;
-  const items = all.slice(start, start + pageSize);
   return okResult({ items, total });
 }
 

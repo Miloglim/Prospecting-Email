@@ -50,7 +50,8 @@ async function parseRawEmail(rawSource: string | Buffer): Promise<{
   bodyText: string; bodyHtml: string; date: string;
 } | null> {
   try {
-    const input = typeof rawSource === "string" ? rawSource : rawSource.toString("binary");
+    // Buffer（IMAP）直接解析保字节；string（POP3 latin1 保字节）转回 Buffer 再解析，避免双重转码破坏 MIME/中文/签名
+    const input = typeof rawSource === "string" ? Buffer.from(rawSource, "latin1") : rawSource;
     const parsed = await simpleParser(input);
     const fromAddr = parsed.from?.value?.[0]?.address || "";
     const fromName = parsed.from?.value?.[0]?.name || null;
@@ -434,7 +435,7 @@ async function detectSent(accountId: number): Promise<number> {
         .map(r => r.messageId)
         .filter((x): x is string => !!x)
     );
-    const stream = client.fetch(sentRange, { uid: true, envelope: true }, { uid: true });
+    const stream = client.fetch(sentRange, { uid: true, envelope: true, source: true }, { uid: true });
     let scanned = 0, added = 0, maxUid = 0;
     for await (const msg of stream) {
       const msgUid = (msg as { uid?: number }).uid || 0;
@@ -457,6 +458,19 @@ async function detectSent(accountId: number): Promise<number> {
         classification: "sent", matchedContactId: contact?.id || null,
         isRead: 0, receivedAt: env.date ? new Date(env.date as string | Date).toISOString() : new Date().toISOString(),
       }).run();
+      // 正文直接落盘文件（已拉 source，避免懒加载搜索 messageId 失败导致无正文）
+      if (msg.source) {
+        try {
+          const raw = await parseRawEmail(msg.source as Buffer);
+          if (raw) {
+            await InboxService.writeBodyForLastInsert(raw.bodyHtml || raw.bodyText || "");
+            getDb().update(inboxMessages)
+              .set({ bodyPreview: raw.bodyText.slice(0, 500) })
+              .where(and(eq(inboxMessages.messageId, msgId), eq(inboxMessages.accountId, accountId)))
+              .run();
+          }
+        } catch { /* 单封正文解析失败跳过 */ }
+      }
       existing.add(msgId);
       added++;
       if (contact) {

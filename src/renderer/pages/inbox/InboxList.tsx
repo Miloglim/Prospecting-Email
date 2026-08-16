@@ -98,19 +98,8 @@ export function InboxList() {
   const [sl, setSl] = useState(false);
   const [body, setBody] = useState<string | null>(null);
   const [bl, setBl] = useState(false);
-  const [iframeH, setIframeH] = useState(600);
   // 前端正文缓存：点开过的邮件切回秒开，不重复 invoke / 不闪 loading
   const bodyCache = useRef<Map<number, string | null>>(new Map());
-  const measureBody = useCallback((html: string) => {
-    const safe = html.replace(/<script[\s\S]*?<\/script>/gi, "");
-    const probe = document.createElement("div");
-    probe.style.cssText = "position:absolute;visibility:hidden;width:700px;max-width:100%";
-    probe.innerHTML = safe;
-    document.body.appendChild(probe);
-    const h = probe.scrollHeight;
-    document.body.removeChild(probe);
-    setIframeH(Math.max(h + 40, 400));
-  }, []);
 
   // 联系人库（选中邮件后才加载）
   const { data: contactsData, isLoading: contactsLoading } = useQuery({
@@ -123,6 +112,12 @@ export function InboxList() {
   const [last, setLast] = useState<number | null>(null);
   const [viewed, setViewed] = useState<Set<string>>(loadViewed);
   const [menu, setMenu] = useState<{ x: number; y: number; item: InboxItem } | null>(null);
+  // 虚拟滚动：只渲染可视区，避免千余封邮件全量渲染卡顿
+  const ROW_H = 72; // 固定行高
+  const OVERSCAN = 6; // 上下多渲染几行，滚动不露白
+  const listRef = useRef<HTMLDivElement>(null);
+  const [listH, setListH] = useState(600);
+  const [scrollTop, setScrollTop] = useState(0);
 
   const { data, isLoading } = useQuery({
     queryKey: ["inbox"],
@@ -167,6 +162,11 @@ export function InboxList() {
   }
   const sel_ = items.find(i => i.id === sid) || null;
 
+  // 虚拟滚动可视区计算
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const endIdx = Math.min(items.length, Math.ceil((scrollTop + listH) / ROW_H) + OVERSCAN);
+  const visibleItems = items.slice(startIdx, endIdx);
+
   // 邮箱匹配 — 参照旧 PE _extractBodyContacts
   const matchedContacts: { email: string; company: string; id: number }[] = [];
   const unmatchedEmails: string[] = [];
@@ -207,13 +207,28 @@ export function InboxList() {
 
   useEffect(() => { setSid(null); setSel(new Set()); setLast(null); }, [filter]);
 
+  // 测量列表容器高度
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const measure = () => setListH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // 过滤/搜索变化时回到顶部
+  useEffect(() => {
+    setScrollTop(0);
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, [filter, search]);
+
   // 选中邮件 → 加载正文 + 量高度（优先前端缓存，切回已看邮件秒开）
   useEffect(() => {
     if (!sid) { setBody(null); return; }
     const cached = bodyCache.current.get(sid);
     if (cached !== undefined) {
       setBody(cached);
-      if (cached) measureBody(cached);
       return;
     }
     setBl(true);
@@ -222,9 +237,8 @@ export function InboxList() {
       const html = rr?.success ? rr.data || null : null;
       bodyCache.current.set(sid, html);
       setBody(html);
-      if (html) measureBody(html);
     }).catch(() => setBody(null)).finally(() => setBl(false));
-  }, [sid, bodyCache, measureBody]);
+  }, [sid, bodyCache]);
 
 
   // 首次加载：存量邮件全部标为已读
@@ -382,11 +396,18 @@ export function InboxList() {
         )}
 
         {/* 列表 */}
-        <div className="thin-scroll" style={{ flex: 1, overflow: "auto" }}>
+        <div ref={listRef} className="thin-scroll" style={{ flex: 1, overflow: "auto" }}
+          onScroll={e => {
+            const top = e.currentTarget.scrollTop;
+            setScrollTop(prev => (Math.abs(prev - top) >= ROW_H ? top : prev));
+          }}>
           {isLoading ? <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>加载中...</div>
             : items.length === 0 ? <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#ccc" }}>{search ? "无匹配" : "暂无邮件"}</div>
-              : items.map(i => {
-                const t = TYPE[i.classification || "other"]!;
+              : (
+                <div style={{ height: items.length * ROW_H, position: "relative" }}>
+                  {visibleItems.map((i, idx) => {
+                    const realIdx = startIdx + idx;
+                    const t = TYPE[i.classification || "other"]!;
                 const isNew = !viewed.has(mk(i));
                 const isSel = sel.has(i.id);
                 const isAct = i.id === sid;
@@ -395,6 +416,8 @@ export function InboxList() {
                     onClick={e => click(e, i)}
                     onContextMenu={e => ctxMenu(e, i)}
                     style={{
+                      position: "absolute", top: realIdx * ROW_H, left: 0, right: 0, height: ROW_H,
+                      boxSizing: "border-box",
                       display: "flex", alignItems: "flex-start", gap: 8,
                       padding: "10px 14px 10px 11px", cursor: "pointer",
                       background: isAct ? "rgba(0,0,0,.04)" : "transparent",
@@ -418,15 +441,14 @@ export function InboxList() {
                         <span style={{ fontSize: 11, color: "#999", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{i.fromName || i.fromEmail}</span>
                         {i.classification && i.classification !== "other" && <span style={{ fontSize: 9, padding: "0 6px", borderRadius: 10, background: t.dot + "15", color: t.dot, flexShrink: 0 }}>{t.label}</span>}
                       </div>
-                      {/* 已匹配 + 发件账号 + 联系人状态（始终显示） */}
+                      {/* 已匹配 + 联系人状态（始终显示） */}
                       {(() => {
                         const tags = (() => { try { const t = JSON.parse(i._contactTags || "[]"); return Array.isArray(t) ? t : []; } catch { return []; } })();
-                        const hasAny = i.matchedContactId || i._accountEmail || i._contactStatus || tags.length > 0;
+                        const hasAny = i.matchedContactId || i._contactStatus || tags.length > 0;
                         if (!hasAny) return null;
                         return (
                           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: "#bbb", marginTop: 1 }}>
                             {i.matchedContactId && <span>已匹配</span>}
-                            {i._accountEmail && <span>{i._accountEmail}</span>}
                             {i._contactStatus && (
                               <>
                                 <span style={{
@@ -443,7 +465,9 @@ export function InboxList() {
                     </div>
                   </div>
                 );
-              })}
+                  })}
+                </div>
+              )}
         </div>
       </div>
 
@@ -601,24 +625,25 @@ export function InboxList() {
                   {
                     key: "body", label: <span style={{ fontSize: 12 }}>正文</span>,
                     children: (
-                      <div className="body-pane thin-scroll" style={{ height: "calc(100vh - 360px)" }}>
-                        <div style={{ padding: "14px 20px" }}>
+                      <div className="body-pane" style={{ height: "calc(100vh - 360px)", display: "flex", flexDirection: "column" }}>
+                        <div style={{ padding: "14px 20px 0", flexShrink: 0 }}>
                           <EmailAiSummary data={sel_} summary={summary} setSummary={setSummary} sl={sl} setSl={setSl} qc={qc} />
                         </div>
                         {bl ? (
                           <div style={{ textAlign: "center", padding: "60px 0", color: "#ccc", fontSize: 13 }}>加载正文中...</div>
                         ) : body ? (
-                          <iframe className="body-iframe" style={{ height: iframeH }}
+                          <iframe className="body-iframe" style={{ flex: 1, minHeight: 0, width: "100%" }}
                             scrolling="auto" sandbox="allow-scripts"
                             srcDoc={
                               "<!DOCTYPE html><html><head><meta charset=utf-8><style>" +
-                              "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.8;color:#333;padding:0 20px 20px;margin:0;word-break:break-word;overflow-wrap:break-word;max-width:100%}" +
-                              "img{max-width:100%!important;height:auto!important}" +
+                              "html,body{margin:0;padding:0}" +
+                              "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.8;color:#333;padding:0 20px 20px}" +
                               "a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}" +
-                              "blockquote{border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;margin:12px 0;word-break:break-word}" +
-                              "table{max-width:100%!important;border-collapse:collapse;table-layout:fixed;word-wrap:break-word}td,th{border:1px solid #e5e5e5;padding:6px 10px;font-size:13px;word-break:break-word;overflow-wrap:break-word}" +
-                              "pre{background:#f5f5f5;padding:10px 14px;border-radius:4px;font-size:12px;overflow-x:auto;white-space:pre-wrap;word-break:break-word}" +
-                              "</style></head><body>" + (body || "") + "</body></html>"
+                              "blockquote{border-left:3px solid #d0d5dd;padding:4px 0 4px 12px;color:#667085;margin:12px 0}" +
+                              "table{border-collapse:collapse}" +
+                              "td,th{border:1px solid #e5e5e5;padding:6px 10px;font-size:13px}" +
+                              "pre{background:#f5f5f5;padding:10px 14px;border-radius:4px;font-size:12px;overflow-x:auto}" +
+                              "</style><script>var z=1;document.addEventListener('wheel',function(e){if(e.ctrlKey){e.preventDefault();z*=e.deltaY<0?1.1:0.9;z=Math.min(3,Math.max(0.3,z));document.body.style.zoom=z}},{passive:false})</script></head><body>" + (body || "") + "</body></html>"
                             } />
                         ) : (
                           <div className="body-preview">{sel_.bodyPreview || "(无法加载正文)"}</div>
@@ -684,7 +709,7 @@ export function InboxList() {
         .btn:hover{background:#f5f5f5;border-color:#d5d5d5}
         .btn:active{background:#eee}
         .detail-body .ant-tabs-tabpane{overflow:visible!important}
-        .body-pane{overflow-y:auto!important;overflow-x:hidden!important}
+        .body-pane{overflow:hidden!important}
         .body-iframe{width:100%!important;border:0!important;display:block!important}
         .body-preview{flex:1!important;padding:20px!important;font-size:14px!important;color:#555!important;white-space:pre-wrap!important;line-height:1.9!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;overflow-y:auto!important}
         .thin-scroll::-webkit-scrollbar{width:6px}

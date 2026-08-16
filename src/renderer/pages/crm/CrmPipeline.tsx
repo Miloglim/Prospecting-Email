@@ -35,7 +35,7 @@ const STAGES = [
 ];
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  sent: { label: "已发送", color: "green" },
+  sent: { label: "已发送", color: "#2563eb" },
   replied: { label: "已回复", color: "#22a644" },
   bounced: { label: "退信", color: "#d93025" },
   autoreply: { label: "自动回复", color: "#ff9800" },
@@ -604,7 +604,7 @@ export function CrmPipeline() {
                           {i.type === "note" ? (
                             i.bodyPreview && <div className="text-[11px] mt-0.5 text-gray-600 leading-relaxed">{i.bodyPreview}</div>
                           ) : (
-                            i.subject && <div className="text-[11px] mt-0.5 font-medium text-gray-700 truncate">{i.subject}</div>
+                            i.subject && <div className="text-[11px] mt-0.5 font-medium text-gray-700 truncate" title={i.subject}>{i.subject}</div>
                           )}
                         </>
                       )}
