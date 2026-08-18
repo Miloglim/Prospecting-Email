@@ -131,7 +131,7 @@ function registerAllIPC() {
 }
 
 // 单实例锁 — 防止重复启动多个进程
-app.setAppUserModelId("com.milogin.prospecting-email");
+app.setAppUserModelId("com.miloglim.prospecting-email");
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();

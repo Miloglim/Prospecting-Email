@@ -74,6 +74,7 @@ export function MyPage() {
 | 配置键时间值 | 混用 `min` 和 `_seconds` 后缀 | 时间值强制 `_seconds` 后缀 |
 | IPC 通道三步走 | 漏写 contract 或 preload 导致静默失败 | 编译期检查 + 交付前核对 |
 | sql.js 异步 | 忘记 await 导致拿到 Promise 而非数据 | TS 类型检查自动捕获 |
+| AppUserModelID | 运行时 `setAppUserModelId` 与打包 `appId` 拼写不一致，任务栏固定图标空白+快捷方式失效 | AUMID 必须与 package.json `build.appId` 完全一致 |
 
 ## 注意事项
 - sql.js 在内存中运行，写操作后必须 `saveDatabase()` 持久化

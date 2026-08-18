@@ -535,16 +535,17 @@ export function InboxList() {
                     style={{
                       position: "absolute", top: realIdx * ROW_H, left: 0, right: 0, height: ROW_H,
                       boxSizing: "border-box",
-                      display: "flex", alignItems: "flex-start", gap: 8,
+                      display: "flex", alignItems: "center", gap: 8,
                       padding: "10px 14px 10px 11px", cursor: "pointer",
                       background: isAct ? "rgba(0,0,0,.04)" : "transparent",
                       borderLeft: isAct ? "3px solid #1a1a1a" : "3px solid transparent",
+                      borderBottom: "1px solid #f5f5f5",
                       transition: "background .12s",
                     }}
                     onMouseEnter={e => { if (!isAct) (e.currentTarget as HTMLElement).style.background = "rgba(0,0,0,.015)"; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isAct ? "rgba(0,0,0,.04)" : "transparent"; }}
                   >
-                    <span style={{ flexShrink: 0, width: 10, textAlign: "center", paddingTop: 2 }}>
+                    <span style={{ flexShrink: 0, width: 10, textAlign: "center" }}>
                       <span style={{ color: t.dot, fontSize: 8, lineHeight: 1, display: "inline-block", transform: isNew ? "scale(1.8)" : "scale(1)", transition: "transform .3s ease" }}>●</span>
                     </span>
                     <div style={{ flex: 1, minWidth: 0 }}>
