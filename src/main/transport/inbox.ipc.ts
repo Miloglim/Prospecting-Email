@@ -17,25 +17,9 @@ import * as fs from "fs";
 import * as imapflow from "imapflow";
 import { simpleParser } from "mailparser";
 
-// ── IMAP UID 持久化状态 ──
-import { DB_PATH } from "../config";
-
-const IMAP_STATE_PATH = path.join(path.dirname(DB_PATH), "imap-state.json");
-
-function loadImapState(): Record<string, { lastUid: number; lastAt: string }> {
-  try {
-    if (fs.existsSync(IMAP_STATE_PATH)) return JSON.parse(fs.readFileSync(IMAP_STATE_PATH, "utf-8"));
-  } catch { /* */ }
-  return {};
-}
-
-function saveImapState(state: Record<string, { lastUid: number; lastAt: string }>): void {
-  try {
-    const dir = path.dirname(IMAP_STATE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(IMAP_STATE_PATH, JSON.stringify(state, null, 2));
-  } catch { /* */ }
-}
+// ── 拉取时间窗口（天）──
+// ponytail: 只拉最近 N 天，替代 uid 增量（uid 增量在大量历史邮件下会卡死停在一个日期）
+const FETCH_DAYS = 5;
 
 // ── POP3 端口检测 ──
 
@@ -307,19 +291,20 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     await client.connect();
     await client.mailboxOpen("INBOX");
 
-    const total = client.mailbox === false ? 0 : client.mailbox.exists || 0;
-    // 增量拉取：仅拉上次 lastUid 之后的新邮件；首次(lastUid=0)才全量，避免每次刷新全量跑一遍
-    const prevState = loadImapState();
-    const lastUid = prevState[String(account.id)]?.lastUid || 0;
-    const incremental = lastUid > 0;
-    const range = incremental ? `${lastUid + 1}:*` : "1:*";
-    Log.info("inbox.imap", `${account.email}: ${incremental ? `增量(uid>${lastUid})` : "首次全量"}，共 ${total} 封`);
+    // 拉近 FETCH_DAYS 天：SEARCH SINCE 按时间窗口，替代 uid 增量（+1 天缓冲时区差）
+    const since = new Date(Date.now() - (FETCH_DAYS + 1) * 86400_000);
+    const uids = (await client.search({ since }, { uid: true })) || [];
+    Log.info("inbox.imap", `${account.email}: 近 ${FETCH_DAYS} 天共 ${uids.length} 封`);
+    if (uids.length === 0) {
+      await client!.logout();
+      client = null;
+      return okResult([]);
+    }
 
     // 拉信封（不拉 source，正文懒加载）— 流式处理，逐封插入不阻塞
     const parsed: InboxService.InboxMessageRow[] = [];
     let scanned = 0;
     let inserted = 0;
-    let maxUid = 0;
 
     // 一次性载入已存在 messageId → 内存 Set，避免逐封查库（拉全部时关键）
     const existing = new Set(
@@ -331,10 +316,8 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         .filter((x): x is string => !!x)
     );
 
-    const stream = client.fetch(range, { uid: true, envelope: true }, { uid: true });
+    const stream = client.fetch(uids, { uid: true, envelope: true }, { uid: true });
     for await (const msg of stream) {
-      const msgUid = (msg as { uid?: number }).uid || 0;
-      if (msgUid > maxUid) maxUid = msgUid;
       scanned++;
 
       const env = msg.envelope as Record<string, unknown>;
@@ -372,19 +355,12 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         createdAt: new Date().toISOString(),
       });
 
-      if (!incremental && scanned % 25 === 0) pushProgress(accountId, scanned, total);
-    }
-
-    // UID 持久化：记录最大 UID 供下次增量判断
-    if (maxUid > 0) {
-      const state = loadImapState();
-      state[String(account.id)] = { lastUid: maxUid, lastAt: new Date().toISOString() };
-      saveImapState(state);
+      if (scanned % 25 === 0) pushProgress(accountId, scanned, uids.length);
     }
 
     if (inserted > 0) saveDatabase();
-    if (!incremental) pushProgress(accountId, scanned, total);
-    Log.info("inbox.imap", `${account.email}: ${incremental ? "增量" : "全量"}扫描 ${scanned} 封，新增 ${inserted} 封`);
+    pushProgress(accountId, scanned, uids.length);
+    Log.info("inbox.imap", `${account.email}: 扫描 ${scanned} 封，新增 ${inserted} 封`);
 
     await client!.logout();
     client = null;
@@ -419,12 +395,10 @@ async function detectSent(accountId: number): Promise<number> {
     const sentMailbox = await findSentMailbox(client);
     if (!sentMailbox) { Log.warn("inbox.sent", `${account.email}: 未找到 Sent 文件夹`); return 0; }
     await client.mailboxOpen(sentMailbox);
-    const total = client.mailbox === false ? 0 : client.mailbox.exists || 0;
-    // 增量：sent 文件夹 lastUid 单独记录（key 加 -sent）
-    const sentKey = `${account.id}-sent`;
-    const sentLastUid = loadImapState()[sentKey]?.lastUid || 0;
-    const sentRange = sentLastUid > 0 ? `${sentLastUid + 1}:*` : "1:*";
-    Log.info("inbox.sent", `${account.email}: Sent 文件夹「${sentMailbox}」共 ${total} 封`);
+    // 拉近 FETCH_DAYS 天（+1 天缓冲时区差）
+    const since = new Date(Date.now() - (FETCH_DAYS + 1) * 86400_000);
+    const sentUids = (await client.search({ since }, { uid: true })) || [];
+    Log.info("inbox.sent", `${account.email}: Sent 文件夹「${sentMailbox}」近 ${FETCH_DAYS} 天 ${sentUids.length} 封`);
 
     // 拉 sent 信封（不拉 source，正文懒加载）
     const existing = new Set(
@@ -435,11 +409,9 @@ async function detectSent(accountId: number): Promise<number> {
         .map(r => r.messageId)
         .filter((x): x is string => !!x)
     );
-    const stream = client.fetch(sentRange, { uid: true, envelope: true, source: true }, { uid: true });
-    let scanned = 0, added = 0, maxUid = 0;
+    const stream = client.fetch(sentUids, { uid: true, envelope: true, source: true }, { uid: true });
+    let scanned = 0, added = 0;
     for await (const msg of stream) {
-      const msgUid = (msg as { uid?: number }).uid || 0;
-      if (msgUid > maxUid) maxUid = msgUid;
       scanned++;
       const env = msg.envelope as Record<string, unknown>;
       const msgId = (env.messageId as string) || null;
@@ -482,11 +454,6 @@ async function detectSent(accountId: number): Promise<number> {
       }
     }
     if (added > 0) { saveDatabase(); }
-    if (maxUid > 0) {
-      const st = loadImapState();
-      st[sentKey] = { lastUid: maxUid, lastAt: new Date().toISOString() };
-      saveImapState(st);
-    }
     Log.info("inbox.sent", `${account.email}: 扫描 ${scanned} 封，新增 ${added} 封`);
     return added;
   } catch (err) {

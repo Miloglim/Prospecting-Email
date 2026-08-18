@@ -4,7 +4,7 @@ import {
   Card, Input, InputNumber, Button, message, Table, Modal, Form, Tag, Space,
   Switch, TimePicker, Tooltip, Badge,
 } from "antd";
-import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, RobotOutlined, EditOutlined, DownloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, RobotOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { MigrationSection } from "../../components/MigrationSection";
 
 interface EmailAccount {
@@ -803,6 +803,23 @@ export function SettingsPage() {
                   } else { message.error(r?.error || "导出失败"); }
                 }}
               >导出跟进记录</Button>
+            </Space>
+          </SettingCard>
+          <SettingCard icon="" title="数据文件夹">
+            <div className="text-[11px] text-gray-400 mb-3">邮件数据库、正文和归档备份都存放在本机数据目录。</div>
+            <Space>
+              <Button size="small" icon={<FolderOpenOutlined />}
+                onClick={async () => {
+                  const r = await window.api.invoke("system:openPath", "data") as { success: boolean; error?: string };
+                  if (!r?.success) message.error(r?.error || "打开失败");
+                }}
+              >打开数据目录</Button>
+              <Button size="small"
+                onClick={async () => {
+                  const r = await window.api.invoke("system:openPath", "archive") as { success: boolean; error?: string };
+                  if (!r?.success) message.error(r?.error || "打开失败");
+                }}
+              >定位归档文件</Button>
             </Space>
           </SettingCard>
         </div>

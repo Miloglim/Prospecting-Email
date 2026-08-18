@@ -1,6 +1,7 @@
-import { ipcMain, app, dialog, BrowserWindow } from "electron";
+import { ipcMain, app, dialog, BrowserWindow, shell } from "electron";
+import * as path from "path";
 import { IPC } from "../contract";
-import { loadConfig, saveConfig, DEFAULT_SCHEDULE } from "../config";
+import { loadConfig, saveConfig, DEFAULT_SCHEDULE, DB_PATH } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult } from "../errors";
 
@@ -34,5 +35,25 @@ export function registerSystemIPC() {
   });
 
   ipcMain.handle(IPC.SYSTEM.APP_VERSION, () => okResult(app.getVersion()));
+
+  ipcMain.handle(IPC.SYSTEM.OPEN_PATH, async (_e, type: string) => {
+    try {
+      const dataDir = path.dirname(DB_PATH);
+      if (type === "data") {
+        await shell.openPath(dataDir);
+        return okResult(undefined);
+      }
+      if (type === "archive") {
+        const archive = path.join(dataDir, "inbox-archive.jsonl");
+        shell.showItemInFolder(archive);
+        return okResult(undefined);
+      }
+      return failResult("参数错误: 未知的路径类型");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Log.error("ipc.system.openPath", msg, err instanceof Error ? err.stack : undefined);
+      return failResult(msg);
+    }
+  });
 
 }

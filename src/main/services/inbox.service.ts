@@ -244,8 +244,8 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
 
 // ── 清理超上限旧邮件（先备份再删除）──
 const CLEANUP_LIMITS: Record<string, number> = {
-  sent: 500, replied: 2000, autoreply: 2000, bounce: 1000, other: 500,
-};
+  replied: 2000, autoreply: 2000, bounce: 1000, other: 500,
+}; // sent 完全解除限制：真实发信量远大于 500，不再清理/截断
 
 const ARCHIVE_PATH = path.join(path.dirname(DB_PATH), "inbox-archive.jsonl");
 
@@ -311,6 +311,12 @@ export function listInbox(): Result<InboxMessageRow[]> {
       .all();
     all.push(...rows);
   }
+  // sent 完全解除限制：全量返回，不截断
+  const sentRows = db.select().from(inboxMessages)
+    .where(eq(inboxMessages.classification, "sent"))
+    .orderBy(desc(inboxMessages.receivedAt))
+    .all();
+  all.push(...sentRows);
   // 按时间统一排序
   all.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
 

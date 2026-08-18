@@ -96,6 +96,7 @@ export function CrmPipeline() {
   const [noteText, setNoteText] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [crmNote, setCrmNote] = useState("");
   const [sendContact, setSendContact] = useState<PipelineContact | null>(null);
   const [sendTemplateId, setSendTemplateId] = useState<number | undefined>();
   const [sendAccountId, setSendAccountId] = useState<number | undefined>();
@@ -198,6 +199,15 @@ export function CrmPipeline() {
   const stages: StageData[] = data?.success ? data.data || [] : STAGES.map(s => ({ ...s, contacts: [] }));
   const contact = detail?.success ? detail.data?.contact : null;
   const detailData = detail?.success ? detail.data : null;
+
+  // 备注输入受控：contact 切换时同步 extra.crmNote 到本地 state
+  useEffect(() => {
+    if (!contact) { setCrmNote(""); return; }
+    try {
+      const extra = (contact as unknown as Record<string, unknown>).extra as Record<string, unknown> || {};
+      setCrmNote(String(extra.crmNote || ""));
+    } catch { setCrmNote(""); }
+  }, [contact?.id]);
 
   // 自动展开有联系人的阶段，收起空阶段（collapsed=true 表示收起）
   useEffect(() => {
@@ -517,11 +527,9 @@ export function CrmPipeline() {
                     <Input.TextArea
                       className="flex-1"
                       style={{ fontSize: 11, resize: "none" }}
-                      value={String(extra.crmNote || "")}
+                      value={crmNote}
                       placeholder="客户的特殊需求、偏好细节、注意事项…"
-                      onChange={e => {
-                        extra.crmNote = e.target.value;
-                      }}
+                      onChange={e => setCrmNote(e.target.value)}
                       onBlur={async (e) => {
                         await saveExtra({ crmNote: e.target.value || null });
                       }}

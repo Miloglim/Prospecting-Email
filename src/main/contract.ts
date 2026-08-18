@@ -30,6 +30,7 @@ export const IPC = {
     EXPORT:    chan(PREFIX.CONTACTS, "export"),
     COUNT:     chan(PREFIX.CONTACTS, "count"),
     INTERACTIONS: chan(PREFIX.CONTACTS, "interactions"),
+    LIST_FOR_MATCH: chan(PREFIX.CONTACTS, "listForMatch"),
   },
   COMPANIES: {
     LIST:      chan(PREFIX.COMPANIES, "list"),
@@ -119,6 +120,7 @@ export const IPC = {
     GET_LOGS:         chan(PREFIX.SYSTEM, "getLogs"),
     APP_VERSION:      chan(PREFIX.SYSTEM, "appVersion"),
     SELECT_DIRECTORY: chan(PREFIX.SYSTEM, "selectDirectory"),
+    OPEN_PATH:        chan(PREFIX.SYSTEM, "openPath"),
   },
   UPDATE: {
     CHECK:        chan(PREFIX.UPDATE, "check"),

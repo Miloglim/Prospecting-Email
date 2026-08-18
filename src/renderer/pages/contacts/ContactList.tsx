@@ -185,9 +185,14 @@ export function ContactList() {
               e.stopPropagation();
               if (deletingId) return;
               setDeletingId(r.id);
-              const res = await deleteContact.mutateAsync(r.id);
-              res?.success ? message.success("已删除") : message.error(res?.error || "失败");
-              setDeletingId(null);
+              try {
+                const res = await deleteContact.mutateAsync(r.id);
+                res?.success ? message.success("已删除") : message.error(res?.error || "失败");
+              } catch {
+                message.error("删除失败");
+              } finally {
+                setDeletingId(null);
+              }
             }}
           />
         </Space>
@@ -280,7 +285,7 @@ export function ContactList() {
         loading={isLoading}
         size="small"
         scroll={{ x: "max-content" }}
-        className="[&_.ant-table-thead>tr>th]:!text-[11px] [&_.ant-table-thead>tr>th]:!text-gray-400 [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-row]:hover:!bg-gray-50"
+        className="[&_.ant-table-thead>tr>th]:!text-[11px] [&_.ant-table-thead>tr>th]:!text-gray-400 [&_.ant-table-thead>tr>th]:!font-medium"
         pagination={{
           current: page, pageSize: 50, total, onChange: setPage,
           size: "small", showSizeChanger: false,

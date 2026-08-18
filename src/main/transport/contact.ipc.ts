@@ -17,6 +17,10 @@ export function registerContactIPC() {
     return svc.listContacts(params || {});
   });
 
+  ipcMain.handle(IPC.CONTACTS.LIST_FOR_MATCH, async () => {
+    return svc.listContactsForMatch();
+  });
+
   ipcMain.handle(IPC.CONTACTS.UPSERT, async (_e, input) => {
     Log.debug("ipc.contact.upsert", `email=${input?.email}`);
     if (!input?.email) return failResult("参数错误: email 必填");

@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Button, Empty, message, Select, Tabs, Timeline, Spin, Alert, Modal, Tooltip, Progress } from "antd";
+import { Button, message, Alert, Modal, Tooltip, Progress } from "antd";
 
 // (Button etc. used in sub-components)
-// (Empty, message, Select, Tabs, Timeline, Spin, Alert, Modal — used inline)
 import {
   ReloadOutlined, MailOutlined,
-  DeleteOutlined, ArrowRightOutlined, ArrowLeftOutlined,
+  DeleteOutlined,
   ThunderboltOutlined, SaveOutlined,
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -19,11 +18,6 @@ interface InboxItem {
   _accountEmail?: string | null;
   _contactStatus?: string | null;
   _contactTags?: string | null;
-}
-
-interface ThreadItem {
-  type: string; direction: string; subject: string | null;
-  bodyPreview: string | null; createdAt: string;
 }
 
 interface EmailSummary { summary: string; nextStep: string; }
@@ -44,10 +38,6 @@ const FILTERS = [
   { key: "bounce", label: "退信", dot: "#e5484d" },
   { key: "other", label: "其他", dot: "#8b8b8b" },
 ];
-
-const THREAD: Record<string, string> = {
-  sent: "已发", replied: "回复", bounced: "退信", autoreply: "自动回复", note: "跟进",
-};
 
 // ── 未读追踪 ──
 
@@ -103,8 +93,8 @@ export function InboxList() {
 
   // 联系人库（选中邮件后才加载）
   const { data: contactsData, isLoading: contactsLoading } = useQuery({
-    queryKey: ["contacts", "all"],
-    queryFn: () => window.api.invoke("contacts:list", {}) as Promise<{ success: boolean; data?: { items?: { id: number; email: string; companyName?: string; firstName?: string; lastName?: string }[] } }>,
+    queryKey: ["contacts", "match"],
+    queryFn: () => window.api.invoke("contacts:listForMatch") as Promise<{ success: boolean; data?: { id: number; email: string; companyName: string | null }[] }>,
     enabled: sid !== null,
   });
 
@@ -204,7 +194,7 @@ export function InboxList() {
     const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const ready = !!(body && contactsData?.success);
     if (ready) {
-      const contacts = contactsData!.data!.items || [];
+      const contacts = contactsData!.data || [];
       const idx: Record<string, { company: string; id: number }> = {};
       for (const c of contacts) {
         if (c.email) idx[c.email.toLowerCase().trim()] = { company: c.companyName || "", id: c.id };
@@ -735,57 +725,21 @@ export function InboxList() {
 
             {/* 正文 */}
             <div className="detail-body">
-              <Tabs size="small" tabBarStyle={{ padding: "4px 18px 0", marginBottom: 0 }}
-                items={[
-                  {
-                    key: "body", label: <span style={{ fontSize: 12 }}>正文</span>,
-                    children: (
-                      <div className="body-pane" style={{ height: "calc(100vh - 360px)", display: "flex", flexDirection: "column" }}>
-                        <div style={{ padding: "14px 20px 0", flexShrink: 0 }}>
-                          <EmailAiSummary data={sel_} summary={summary} setSummary={setSummary} sl={sl} setSl={setSl} qc={qc} />
-                        </div>
-                        {bl ? (
-                          <div style={{ textAlign: "center", padding: "60px 0", color: "#ccc", fontSize: 13 }}>加载正文中...</div>
-                        ) : body ? (
-                          <iframe className="body-iframe" style={{ flex: 1, minHeight: 0, width: "100%" }}
-                            scrolling="auto" sandbox="allow-scripts"
-                            srcDoc={bodyDoc}
-                          />
-                        ) : (
-                          <div className="body-preview">{sel_.bodyPreview || "(无法加载正文)"}</div>
-                        )}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "thread", label: <span style={{ fontSize: 12 }}>往来记录</span>,
-                    disabled: !sel_.matchedContactId,
-                    children: sel_.matchedContactId
-                      ? <div className="thin-scroll" style={{ padding: "0 18px", overflow: "auto", height: "calc(100vh - 360px)" }}><ThreadView contactId={sel_.matchedContactId} /></div>
-                      : <Empty description="未匹配到联系人" image={Empty.PRESENTED_IMAGE_SIMPLE} className="mt-10" />,
-                  },
-                ]}
-              />
-            </div>
-
-            {/* 底部 */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 18px", borderTop: "1px solid #e8e8e8", flexShrink: 0 }}>
-              <Select size="small" value={sel_.classification || "other"}
-                style={{ width: 96, fontSize: 11 }}
-                options={Object.entries(TYPE).map(([k, v]) => ({ value: k, label: v.label }))}
-                onChange={async (v) => {
-                  const r = await classMut.mutateAsync({ id: sel_.id, classification: v });
-                  if (r && typeof r === "object" && "success" in r) message[(r as { success: boolean }).success ? "success" : "error"]("已更新");
-                }}
-              />
-              <div style={{ flex: 1 }} />
-              <button className="btn" style={{ padding: "4px 12px", fontSize: 11, gap: 3 }}
-                onClick={() => {
-                  const rs = sel_.subject?.match(/^Re:\s*/i) ? sel_.subject : `Re: ${sel_.subject || ""}`;
-                  window.open(`mailto:${sel_.fromEmail}?subject=${encodeURIComponent(rs)}`, "_blank");
-                }}>回复</button>
-              <button className="btn" style={{ padding: "4px 12px", fontSize: 11, color: "#e5484d" }}
-                onClick={() => { Modal.confirm({ title: "删除此邮件？", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delMut.mutate([sel_.id]) }); }}>删除</button>
+              <div className="body-pane" style={{ height: "calc(100vh - 290px)", display: "flex", flexDirection: "column" }}>
+                <div style={{ padding: "14px 20px 0", flexShrink: 0 }}>
+                  <EmailAiSummary data={sel_} summary={summary} setSummary={setSummary} sl={sl} setSl={setSl} qc={qc} />
+                </div>
+                {bl ? (
+                  <div style={{ textAlign: "center", padding: "60px 0", color: "#ccc", fontSize: 13 }}>加载正文中...</div>
+                ) : body ? (
+                  <iframe className="body-iframe" style={{ flex: 1, minHeight: 0, width: "100%" }}
+                    scrolling="auto" sandbox="allow-scripts"
+                    srcDoc={bodyDoc}
+                  />
+                ) : (
+                  <div className="body-preview">{sel_.bodyPreview || "(无法加载正文)"}</div>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -795,6 +749,11 @@ export function InboxList() {
       {menu && (
         <div style={{ position: "fixed", zIndex: 50, left: menu.x, top: menu.y, minWidth: 140, background: "#fff", borderRadius: 8, padding: "4px 0", border: "1px solid #e5e5e5", boxShadow: "0 4px 16px rgba(0,0,0,.08)", fontSize: 12 }}>
           <div className="ctx-item" onClick={() => { batchRead(); setMenu(null); }}>一键已读</div>
+          <div className="ctx-item" onClick={() => {
+            const rs = menu.item.subject?.match(/^Re:\s*/i) ? menu.item.subject : `Re: ${menu.item.subject || ""}`;
+            window.open(`mailto:${menu.item.fromEmail}?subject=${encodeURIComponent(rs)}`, "_blank");
+            setMenu(null);
+          }}>回复</div>
           <div style={{ borderTop: "1px solid #eee", margin: "2px 0" }} />
           {(["replied", "bounce", "autoreply", "sent", "other"] as const).filter(t => t !== (menu.item.classification || "other")).map(t => (
             <div key={t} className="ctx-item" onClick={() => { batchType(t); setMenu(null); }} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -824,39 +783,6 @@ export function InboxList() {
         .thin-scroll::-webkit-scrollbar-thumb:hover{background:#bbb}
       `}</style>
     </div>
-  );
-}
-
-// ── 往来记录 ──
-
-function ThreadView({ contactId }: { contactId: number }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["contacts", "interactions", contactId],
-    queryFn: () => window.api.invoke("contacts:interactions", contactId) as Promise<{ success: boolean; data?: ThreadItem[] }>,
-  });
-  const items = data?.success ? data.data || [] : [];
-  if (isLoading) return <Spin className="flex justify-center mt-10" />;
-  if (items.length === 0) return <Empty description="暂无往来记录" image={Empty.PRESENTED_IMAGE_SIMPLE} className="mt-10" />;
-  return (
-    <Timeline items={items.map((it, idx) => {
-      const out = it.direction === "outbound";
-      const label = THREAD[it.type] || it.type;
-      const c = it.type === "sent" ? "#2563eb" : it.type === "replied" ? "#22a644" : it.type === "bounced" ? "#e5484d" : it.type === "autoreply" ? "#e6a817" : "#8b8b8b";
-      return {
-        key: `${idx}-${it.createdAt}`, color: c,
-        children: (
-          <div className="text-[11px]" style={{ color: out ? "#555" : "#888" }}>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {out ? <ArrowRightOutlined className="text-blue-500" /> : <ArrowLeftOutlined className="text-gray-400" />}
-              <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 8, background: c + "18", color: c, fontWeight: 500 }}>{label}</span>
-              <span style={{ fontSize: 10, color: "#aaa" }}>{new Date(it.createdAt).toLocaleString("zh-CN")}</span>
-            </div>
-            {it.subject && <div className="mt-1 font-medium">{it.subject}</div>}
-            {it.bodyPreview && <div className="mt-0.5 text-[10px] text-gray-400 line-clamp-3 whitespace-pre-wrap">{it.bodyPreview}</div>}
-          </div>
-        ),
-      };
-    })} />
   );
 }
 

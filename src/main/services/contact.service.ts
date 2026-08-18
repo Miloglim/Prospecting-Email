@@ -2,6 +2,8 @@ import { getDb } from "../db";
 import { contacts, type ContactRow, type InsertContactRow } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
+import { crmStages, crmRelations } from "../db/schema/crm";
+import { inboxMessages } from "../db/schema/inbox";
 import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
@@ -155,6 +157,14 @@ export async function listContacts(params?: {
   return okResult({ items, total });
 }
 
+/** 收件箱匹配用：全量联系人 id/email/companyName（不分页，供右侧匹配栏建邮箱索引） */
+export function listContactsForMatch(): Result<{ id: number; email: string; companyName: string | null }[]> {
+  const rows = getDb().select({
+    id: contacts.id, email: contacts.email, companyName: companies.name,
+  }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id)).all();
+  return okResult(rows);
+}
+
 /** 解析 tags 列（JSON 数组文本 → string[]），坏 JSON/空 → [] */
 function parseTagsArr(s: string | null | undefined): string[] {
   if (!s) return [];
@@ -259,6 +269,14 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   const existing = getDb().select().from(contacts).where(eq(contacts.id, id)).get();
   if (!existing) return failResult(`联系人不存在: id=${id}`);
   const companyId = existing.companyId;
+
+  // 级联清理关联数据（PRAGMA foreign_keys=ON 会阻止直接删除有引用的人）
+  getDb().delete(interactions).where(eq(interactions.contactId, id)).run();
+  getDb().delete(crmStages).where(eq(crmStages.contactId, id)).run();
+  getDb().delete(crmRelations).where(or(eq(crmRelations.contactIdA, id), eq(crmRelations.contactIdB, id))).run();
+  // 收件箱邮件保留，仅解除联系人关联
+  getDb().update(inboxMessages).set({ matchedContactId: null }).where(eq(inboxMessages.matchedContactId, id)).run();
+
   getDb().delete(contacts).where(eq(contacts.id, id)).run();
 
   // 公司无联系人时自动清理
