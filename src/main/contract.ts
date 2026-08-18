@@ -95,6 +95,7 @@ export const IPC = {
   HISTORY: {
     LIST:      chan(PREFIX.HISTORY, "list"),
     GET_DATES: chan(PREFIX.HISTORY, "getDates"),
+    CLEAR:     chan(PREFIX.HISTORY, "clear"),
   },
   BOUNCE: {
     LIST: chan(PREFIX.BOUNCE, "list"),

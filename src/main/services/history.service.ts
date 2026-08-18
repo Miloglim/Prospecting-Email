@@ -1,4 +1,4 @@
-import { getDb } from "../db";
+import { getDb, saveDatabase } from "../db";
 import { interactions } from "../db/schema/interactions";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
@@ -59,6 +59,17 @@ export function listHistory(filters?: HistoryFilters): Result<SendHistoryRow[]> 
 
   const rows = q.orderBy(sql`${interactions.createdAt} DESC`).limit(limit).all();
   return okResult(rows);
+}
+
+/** 清空发送历史（interactions type=sent）— 返回删除数量 */
+export function clearHistory(): Result<number> {
+  Log.debug("history.clear", "");
+  const db = getDb();
+  const count = db.select({ n: sql<number>`count(*)` }).from(interactions).where(eq(interactions.type, "sent")).get()?.n || 0;
+  db.delete(interactions).where(eq(interactions.type, "sent")).run();
+  saveDatabase();
+  Log.info("history.clear", `已清除 ${count} 条发送历史`);
+  return okResult(count);
 }
 
 /** 有发送记录的日期列表（倒序） — 用于历史页日期筛选 */

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Table, Card, Tabs, Input, Tag, Select } from "antd";
-import { SearchOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { Table, Card, Tabs, Input, Tag, Select, Button, Popconfirm, message } from "antd";
+import { SearchOutlined, DeleteOutlined } from "@ant-design/icons";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 interface HistoryRow {
   id: number; contactId: number; email: string;
@@ -24,6 +24,7 @@ const DATE_FMT = (s: string) => {
 };
 
 export function HistoryPage() {
+  const qc = useQueryClient();
   const [q, setQ] = useState("");
   const [accountId, setAccountId] = useState<number | undefined>();
 
@@ -49,6 +50,16 @@ export function HistoryPage() {
   });
 
   const histRows = history?.success ? history.data || [] : [];
+
+  const clearMut = useMutation({
+    mutationFn: () => window.api.invoke("history:clear") as Promise<{ success: boolean; data?: number; error?: string }>,
+    onSuccess: (r: unknown) => {
+      const rr = r as { success: boolean; data?: number; error?: string };
+      rr?.success ? message.success(`已清除 ${rr.data} 条发送历史`) : message.error(rr?.error || "失败");
+      qc.invalidateQueries({ queryKey: ["history"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
   const bounceRows = bounces?.success ? bounces.data || [] : [];
 
   const historyColumns = [
@@ -118,6 +129,12 @@ export function HistoryPage() {
             key: "history", label: `发送历史 (${histRows.length})`,
             children: (
               <Card size="small">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs text-gray-400">共 {histRows.length} 条记录</span>
+                  <Popconfirm title="清空所有发送历史？此操作不可恢复，仪表盘「已发送」计数也会清零" okText="清空" okType="danger" cancelText="取消" onConfirm={() => clearMut.mutate()}>
+                    <Button size="small" danger icon={<DeleteOutlined />} loading={clearMut.isPending}>清空发送历史</Button>
+                  </Popconfirm>
+                </div>
                 <Table dataSource={histRows} columns={historyColumns} rowKey="id"
                   loading={histLoading} size="small" pagination={{ pageSize: 50, showSizeChanger: false }} />
               </Card>
