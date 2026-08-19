@@ -12,6 +12,15 @@ import { eq } from "drizzle-orm";
 import { getDecryptedPassword } from "../services/account.service";
 import { loadConfig, saveConfig } from "../config";
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+}
+const isHtml = (s: string) => /<[a-z][\s\S]*>/i.test(s);
+
 
 /** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
 async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<void>> {
@@ -34,14 +43,26 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     const config = loadConfig();
     const displayName = account.displayName || config.fromName || "";
     const emails = item.recipients.map(r => r.email);
-    const body = (item.body || "Hello, I hope this email finds you well.\n\nBest regards")
-      + (config.signature ? `\n\n${config.signature}` : "");
-    await transporter.sendMail({
-      from: displayName ? `"${displayName}" <${account.email}>` : account.email,
-      bcc: emails,
-      subject: item.subject || "Regarding our logistics partnership",
-      text: body,
-    });
+    const signature = (account.signature || config.signature || "").trim();
+    const body = item.body || "Hello, I hope this email finds you well.\n\nBest regards";
+
+    const from = displayName ? `"${displayName}" <${account.email}>` : account.email;
+    const subject = item.subject || "Regarding our logistics partnership";
+
+    if (isHtml(body) || isHtml(signature)) {
+      const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
+      const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
+      await transporter.sendMail({
+        from, bcc: emails, subject,
+        text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
+        html: bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""),
+      });
+    } else {
+      await transporter.sendMail({
+        from, bcc: emails, subject,
+        text: body + (signature ? `\n\n${signature}` : ""),
+      });
+    }
     Log.debug("send.bcc", `${item.companyName}: ${emails.length} 人`);
     return okResult(undefined);
   } catch (err: unknown) {
@@ -75,9 +96,9 @@ export function registerSendIPC() {
   ipcMain.handle(IPC.SEND.GET_SEND_TIME_BUCKETS, () => SendService.getSendTimeBuckets());
   ipcMain.handle(IPC.SEND.GET_QUOTA, () => ({ success: true as const, data: SendService.getQuotaStatus() }));
   ipcMain.handle(IPC.SEND.PREVIEW, (_e, payload) => {
-    // 句库预览：已禁用
+    // 句库预览：{ lang, clientType, stage }
     if (typeof payload?.lang === "string") {
-      return failResult("预设句库已禁用");
+      return SendService.previewSentence(payload.lang, payload.clientType, payload.stage);
     }
     // 收件人预览：{ keys, templates? } — 无模板时自适应组装
     if (payload?.keys && Array.isArray(payload.keys)) {

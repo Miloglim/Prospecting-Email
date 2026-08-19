@@ -92,6 +92,7 @@ export function useDeleteContact() {
       qc.invalidateQueries({ queryKey: ["contacts"] });
       qc.invalidateQueries({ queryKey: ["crm"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["send"] }); // 退信桶等按联系人统计的桶缓存
     },
   });
 }

@@ -14,6 +14,7 @@ import { sendQueue } from "../db/schema/send-queue";
 import { EVENTS } from "../events";
 import { loadConfig, DEFAULT_SCHEDULE } from "../config";
 import { writeBodyForLastInsert } from "./inbox.service";
+import { assembleEmail, type Lang, type ClientType, type Stage } from "./sentence-library";
 
 
 // ── 类型 ──
@@ -437,8 +438,71 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
   return okResult(items);
 }
 
-export function buildAdaptiveQueue(_bucketKeys: string[]): Result<SendItem[]> {
-  return failResult("预设句库已禁用");
+function normalizeLang(l: string | null | undefined): Lang {
+  const v = (l || "EN").toUpperCase();
+  return v === "ES" || v === "PT" ? v : "EN";
+}
+
+const VALID_STAGES: Stage[] = ["initial", "followup1", "followup2", "closing", "reactivate"];
+
+/** 句库预览：按语言/客户类型/阶段组装一封（{{company}} 用占位词替换展示） */
+export function previewSentence(lang: string, clientType: string, stage: string): Result<{ subject: string; body: string }> {
+  const s: Stage = (VALID_STAGES as string[]).includes(stage) ? (stage as Stage) : "initial";
+  const r = assembleEmail({
+    lang: normalizeLang(lang),
+    clientType: mapClientType(clientType) as ClientType,
+    stage: s,
+    includeCompany: true,
+  });
+  r.body = r.body.replace(/\{\{\s*company\s*\}\}/gi, "your company");
+  return okResult(r);
+}
+
+/** 自适应模式：无模板时用组件句库组装（按公司 BCC 分组，每组随机组装） */
+export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
+  const selectedIds = new Set<number>();
+  for (const br of [getTimeBuckets(), getStageBuckets(), getSendTimeBuckets()]) {
+    if (!br.success) continue;
+    for (const b of br.data) {
+      if (bucketKeys.includes(b.key)) for (const c of b.contacts) selectedIds.add(c.id);
+    }
+  }
+  if (selectedIds.size === 0) return failResult("没有选中的联系人");
+
+  const selected = new Map<number, ContactRow>();
+  const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
+  for (const c of selectedRows) selected.set(c.id, c);
+
+  const companyGroups = new Map<string, ContactRow[]>();
+  for (const c of selected.values()) {
+    const k = `c_${c.companyId || 0}`;
+    if (!companyGroups.has(k)) companyGroups.set(k, []);
+    companyGroups.get(k)!.push(c);
+  }
+
+  const companyMap = new Map<number, string>();
+  for (const comp of getDb().select().from(companies).all()) companyMap.set(comp.id, comp.name);
+
+  const items: SendItem[] = [];
+  for (const [, group] of companyGroups) {
+    const first = group[0]!;
+    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+    const assembled = assembleEmail({
+      lang: normalizeLang(first.language),
+      clientType: mapClientType(first.clientType || "") as ClientType,
+      stage: (STAGE_MAP[first.stage || ""] || "initial") as Stage,
+      includeCompany: !!companyName,
+    });
+    items.push({
+      id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+      companyId: first.companyId || 0,
+      recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+      subject: assembled.subject, tplBody: assembled.body,
+      contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
+      accountId: 0, status: "pending",
+    });
+  }
+  return okResult(items);
 }
 
 // ── 多账号并行发送 ──
@@ -687,13 +751,15 @@ export function cancelSend(): Result<void> {
   push(EVENTS.SEND_PROGRESS, state);
   return okResult(undefined);
 }
-/** 预览模板渲染效果（用第一个联系人） */
+/** 预览模板渲染效果（用第一个联系人），附全局署名签名 */
 export function previewTemplate(template: SendTemplate): Result<{ subject: string; body: string }> {
   const first = getDb().select().from(contacts).limit(1).get();
   if (!first) return failResult("没有联系人可预览");
+  const signature = (loadConfig().signature || "").trim();
+  const body = renderTemplate(template.body, first) + (signature ? `\n\n${signature}` : "");
   return okResult({
     subject: renderTemplate(template.subject, first),
-    body: renderTemplate(template.body, first),
+    body,
   });
 }
 

@@ -5,7 +5,7 @@ import {
   Switch, TimePicker, Tooltip, Badge,
 } from "antd";
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, RobotOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
-import { MigrationSection } from "../../components/MigrationSection";
+import { RichTextEditor } from "../../components/RichTextEditor";
 
 interface EmailAccount {
   id: number; email: string; provider: string;
@@ -38,7 +38,6 @@ const SECTIONS = [
   { id: "sec-mail", label: "邮件发送" },
   { id: "sec-api", label: "API 与服务" },
   { id: "sec-crm", label: "客户跟进" },
-  { id: "sec-migrate", label: "数据迁移" },
   { id: "sec-advanced", label: "高级" },
 ];
 
@@ -764,12 +763,9 @@ export function SettingsPage() {
           </SettingCard>
         </div>
 
-        {/* ═══ 数据迁移 ═══ */}
-        <div id="sec-migrate" className="settings-section">
-          <div className="text-[13px] font-bold mb-3 text-gray-800">数据迁移</div>
-          <SettingCard icon="" title="旧版 PE → 4.0">
-            <MigrationSection />
-          </SettingCard>
+        {/* ═══ 数据 ═══ */}
+        <div className="settings-section">
+          <div className="text-[13px] font-bold mb-3 text-gray-800">数据</div>
           <SettingCard icon="" title="导出数据库">
             <div className="text-[11px] text-gray-400 mb-3">将联系人数据和跟进记录导出为 CSV 文件，可用 Excel 打开。</div>
             <Space>
@@ -895,7 +891,12 @@ export function SettingsPage() {
           </Form.Item>
           <Form.Item name="imapHost" label="IMAP 服务器"><Input placeholder="自动推导" /></Form.Item>
           <Form.Item name="imapPort" label="IMAP 端口"><InputNumber min={1} max={65535} style={{ width: "100%" }} placeholder="993" /></Form.Item>
-          <Form.Item name="signature" label="HTML 签名"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="signature" label="HTML 签名">
+            <RichTextEditor
+              placeholder="粘贴签名（支持富文本格式与图片）"
+              style={{ maxHeight: 160, overflowY: "auto", border: "1px solid #d9d9d9", borderRadius: 6, padding: 8 }}
+            />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

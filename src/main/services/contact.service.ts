@@ -263,6 +263,17 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
   return okResult(created);
 }
 
+/** 删除联系人的级联清理（子表删除 + 收件箱解绑 + 删本人）。不 saveDatabase，由调用方统一持久化。 */
+export function deleteContactCascade(id: number): void {
+  // 级联清理关联数据（PRAGMA foreign_keys=ON 会阻止直接删除有引用的人）
+  getDb().delete(interactions).where(eq(interactions.contactId, id)).run();
+  getDb().delete(crmStages).where(eq(crmStages.contactId, id)).run();
+  getDb().delete(crmRelations).where(or(eq(crmRelations.contactIdA, id), eq(crmRelations.contactIdB, id))).run();
+  // 收件箱邮件保留，仅解除联系人关联
+  getDb().update(inboxMessages).set({ matchedContactId: null }).where(eq(inboxMessages.matchedContactId, id)).run();
+  getDb().delete(contacts).where(eq(contacts.id, id)).run();
+}
+
 export async function deleteContact(id: number): Promise<Result<void>> {
   Log.debug("contact.delete", `id=${id}`);
   if (!Number.isInteger(id) || id <= 0) return failResult(`无效的 ID: ${id}`);
@@ -270,14 +281,7 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   if (!existing) return failResult(`联系人不存在: id=${id}`);
   const companyId = existing.companyId;
 
-  // 级联清理关联数据（PRAGMA foreign_keys=ON 会阻止直接删除有引用的人）
-  getDb().delete(interactions).where(eq(interactions.contactId, id)).run();
-  getDb().delete(crmStages).where(eq(crmStages.contactId, id)).run();
-  getDb().delete(crmRelations).where(or(eq(crmRelations.contactIdA, id), eq(crmRelations.contactIdB, id))).run();
-  // 收件箱邮件保留，仅解除联系人关联
-  getDb().update(inboxMessages).set({ matchedContactId: null }).where(eq(inboxMessages.matchedContactId, id)).run();
-
-  getDb().delete(contacts).where(eq(contacts.id, id)).run();
+  deleteContactCascade(id);
 
   // 公司无联系人时自动清理
   if (companyId) {

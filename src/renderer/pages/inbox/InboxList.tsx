@@ -589,7 +589,7 @@ export function InboxList() {
         ) : (
           <>
             {/* 头部 — 紧凑双列网格（label 宽度压缩，账号+关联一行，状态+标签一行） */}
-            <div style={{ borderBottom: "1px solid #e8e8e8", flexShrink: 0 }}>
+            <div className="selectable" style={{ borderBottom: "1px solid #e8e8e8", flexShrink: 0 }}>
               {[
                 ["发件人", `${sel_.fromName || ""} <${sel_.fromEmail}>`, true],
                 ["主题", sel_.subject || "无主题", true],
@@ -737,7 +737,7 @@ export function InboxList() {
                     srcDoc={bodyDoc}
                   />
                 ) : (
-                  <div className="body-preview">{sel_.bodyPreview || "(无法加载正文)"}</div>
+                  <div className="body-preview selectable">{sel_.bodyPreview || "(无法加载正文)"}</div>
                 )}
               </div>
             </div>

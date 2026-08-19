@@ -11,6 +11,16 @@ body {
   -webkit-user-select: none;
 }
 
+/* 内容区可选中（覆盖 body 的全局 user-select:none，用于正文/信息栏/预览） */
+.selectable { user-select: text; -webkit-user-select: text; }
+
+/* 富文本编辑器占位符 */
+.rich-editor { outline: none; }
+.rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: #bbb;
+}
+
 /* 滚动条 — 轻量扁平 */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

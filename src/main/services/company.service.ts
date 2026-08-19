@@ -6,6 +6,7 @@ import { eq, like, or, and, sql, count } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
+import { deleteContactCascade } from "./contact.service";
 
 export async function getCompanyById(id: number): Promise<Result<CompanyRow>> {
   Log.debug("company.getById", `id=${id}`);
@@ -201,7 +202,13 @@ export async function deleteCompany(id: number): Promise<Result<void>> {
   const existing = getDb().select().from(companies).where(eq(companies.id, id)).get();
   if (!existing) return failResult(`公司不存在: id=${id}`);
 
+  // 连带删除该公司下所有联系人（含各自子表级联）
+  const contactIds = getDb().select({ id: contacts.id })
+    .from(contacts).where(eq(contacts.companyId, id)).all();
+  for (const c of contactIds) deleteContactCascade(c.id);
+
   getDb().delete(companies).where(eq(companies.id, id)).run();
   saveDatabase();
+  Log.debug("company.delete", `公司 ${id} 及 ${contactIds.length} 个联系人已删除`);
   return okResult(undefined);
 }

@@ -3,7 +3,7 @@ import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { inboxMessages } from "../db/schema/inbox";
-import { eq, desc, and, sql as dsql } from "drizzle-orm";
+import { eq, desc, and, ne, sql as dsql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -23,9 +23,13 @@ export interface PipelineContact {
   id: number; email: string; firstName: string | null; lastName: string | null;
   title: string | null; phone: string | null; linkedinUrl: string | null;
   companyName: string | null; companyId: number | null;
-  stage: string; tags: string[];
+  stage: string;            // CRM 管线阶段（tags 推导）
+  sendStage: string;        // 发送阶段（contacts.stage: cold/f1..f4）
+  tags: string[];
   status: string;
   reminderAt: string | null;
+  lastFollowupAt: string | null;
+  lastFollowupNote: string | null;
   country: string | null; language: string | null; clientType: string | null;
   assignee: string | null;
   extra: Record<string, unknown>;
@@ -44,6 +48,7 @@ export function listPipeline(): Result<StageData[]> {
     firstName: contacts.firstName, lastName: contacts.lastName,
     title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl,
     companyName: companies.name, companyId: contacts.companyId,
+    sendStage: contacts.stage,
     tags: contacts.tags, status: contacts.status,
     extra: contacts.extra, country: contacts.country, language: contacts.language, clientType: contacts.clientType,
     assignee: contacts.assignee,
@@ -53,18 +58,32 @@ export function listPipeline(): Result<StageData[]> {
     .where(eq(contacts.status, "reached"))
     .all();
 
+  // 最近一次跟进：一次查询全量 note，按联系人取最新一条（避免 N 次查库）
+  const noteRows = db.select({
+    contactId: interactions.contactId, bodyPreview: interactions.bodyPreview, createdAt: interactions.createdAt,
+  }).from(interactions).where(eq(interactions.type, "note")).orderBy(desc(interactions.createdAt)).all();
+  const lastNote = new Map<number, { at: string; note: string }>();
+  for (const n of noteRows) {
+    if (!lastNote.has(n.contactId)) lastNote.set(n.contactId, { at: n.createdAt, note: n.bodyPreview || "" });
+  }
+
   const grouped = new Map<string, PipelineContact[]>();
   for (const r of rows) {
     const tags = parseStringArray(r.tags || "[]");
     const extra = parseJSON(r.extra || "{}");
     const reminder = extra.crmReminder as Record<string, string> | undefined;
     const stage: string = PIPE_KEYS.find(k => tags.includes(k)) || "reaching";
+    const ln = lastNote.get(r.id);
 
     const c: PipelineContact = {
       ...r, tags, extra,
-      stage, status: r.status || "",
+      stage,
+      sendStage: r.sendStage || "cold",
+      status: r.status || "",
       companyName: r.companyName || null,
       reminderAt: reminder?.nextFollowupAt || null,
+      lastFollowupAt: ln?.at || null,
+      lastFollowupNote: ln?.note || null,
       stageChangedAt: extra.stageChangedAt as string || null,
     };
 
@@ -192,7 +211,7 @@ export async function updateNote(interactionId: number, text: string): Promise<R
 export function getDetail(contactId: number): Result<{
   contact: PipelineContact | null;
   interactions: Array<{ type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-  emails: Array<{ fromEmail: string; subject: string | null; classification: string | null; receivedAt: string; bodyPreview: string | null }>;
+  emails: Array<{ fromEmail: string; direction: "inbound" | "outbound"; subject: string | null; classification: string | null; receivedAt: string; bodyPreview: string | null }>;
 }> {
   const db = getDb();
   const row = db.select({
@@ -200,6 +219,7 @@ export function getDetail(contactId: number): Result<{
     firstName: contacts.firstName, lastName: contacts.lastName,
     title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl,
     companyName: companies.name, companyId: contacts.companyId,
+    sendStage: contacts.stage,
     tags: contacts.tags, status: contacts.status,
     extra: contacts.extra, country: contacts.country, language: contacts.language, clientType: contacts.clientType,
     assignee: contacts.assignee,
@@ -215,8 +235,11 @@ export function getDetail(contactId: number): Result<{
   const contact: PipelineContact | null = row ? {
     ...row, tags, extra, companyName: row.companyName || null,
     stage: PIPE_KEYS.find(k => tags.includes(k)) || "reaching",
+    sendStage: row.sendStage || "cold",
     status: row.status || "",
     reminderAt: reminder?.nextFollowupAt || null,
+    lastFollowupAt: null,
+    lastFollowupNote: null,
     stageChangedAt: extra.stageChangedAt as string || null,
   } : null;
 
@@ -224,12 +247,19 @@ export function getDetail(contactId: number): Result<{
     .where(eq(interactions.contactId, contactId))
     .orderBy(desc(interactions.createdAt)).limit(50).all();
 
-  // 收件（IMAP）
+  // 最近一次跟进（interactionRows 已按时间倒序，取第一条 note）
+  const lastNoteRow = interactionRows.find(i => i.type === "note");
+  if (contact && lastNoteRow) {
+    contact.lastFollowupAt = lastNoteRow.createdAt;
+    contact.lastFollowupNote = lastNoteRow.bodyPreview || null;
+  }
+
+  // 收件（IMAP）— 排除 sent（发件已写入 inbox_messages，且 fromEmail 实为收件人，会与 sentRows 重复+方向错乱）
   const inboxRows = db.select().from(inboxMessages)
-    .where(eq(inboxMessages.matchedContactId, contactId))
+    .where(and(eq(inboxMessages.matchedContactId, contactId), ne(inboxMessages.classification, "sent")))
     .orderBy(desc(inboxMessages.receivedAt)).limit(30).all()
     .map(e => ({
-      fromEmail: e.fromEmail, subject: e.subject,
+      fromEmail: e.fromEmail, direction: "inbound" as const, subject: e.subject,
       classification: e.classification, receivedAt: e.receivedAt,
       bodyPreview: e.bodyPreview,
     }));
@@ -240,6 +270,7 @@ export function getDetail(contactId: number): Result<{
     .orderBy(desc(interactions.createdAt)).limit(30).all()
     .map(i => ({
       fromEmail: "我（发件）",
+      direction: "outbound" as const,
       subject: i.subject,
       classification: "sent" as const,
       receivedAt: i.createdAt,
@@ -281,9 +312,10 @@ export function checkReminders(): Result<{ due: ReminderContact[]; overdue: Remi
 
     const c: PipelineContact = {
       ...r, companyName: r.companyName || null, companyId: null,
-      extra, stage: "reaching", tags: [],
+      extra, stage: "reaching", sendStage: "cold", tags: [],
       status: r.status || "",
       reminderAt: reminder.nextFollowupAt,
+      lastFollowupAt: null, lastFollowupNote: null,
       stageChangedAt: extra.stageChangedAt as string || null,
       title: null, phone: null, linkedinUrl: null,
     };

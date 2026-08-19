@@ -11,6 +11,8 @@ export const inboxMessages = sqliteTable("inbox_messages", {
   subject:           text("subject"),
   bodyPreview:       text("body_preview"),
   classification:    text("classification"),
+  cc:                text("cc"),
+  myRole:            text("my_role"),
   matchedContactId:  integer("matched_contact_id"),
   isRead:            integer("is_read").notNull().default(0),
   receivedAt:        text("received_at").notNull(),

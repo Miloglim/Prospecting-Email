@@ -15,7 +15,6 @@ import { registerDashboardIPC } from "./transport/dashboard.ipc";
 import { registerHistoryIPC } from "./transport/history.ipc";
 import { registerBounceIPC } from "./transport/bounce.ipc";
 import { registerAiIPC } from "./transport/ai.ipc";
-import { registerMigrateIPC } from "./transport/migrate.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
 import { initUpdater, cleanupUpdater } from "./updater";
 import { getResourcesRoot, loadConfig } from "./config";
@@ -116,7 +115,6 @@ function registerAllIPC() {
   registerHistoryIPC();
   registerBounceIPC();
   registerAiIPC();
-  registerMigrateIPC();
   registerSystemIPC();
 
   // 窗口控制

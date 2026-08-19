@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Table, Button, Input, Modal, Form, Select, message, Tag, Tabs, Card, Radio } from "antd";
 import { PlusOutlined, DeleteOutlined, ImportOutlined, ThunderboltOutlined, EditOutlined, CopyOutlined, EyeOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
 
 const LANGUAGES = ["EN", "ES", "PT"];
 const CATEGORIES = ["direct", "peer", "general"];
@@ -230,9 +231,7 @@ export function TemplateList() {
                         </div>
                       </div>
                       <div className="px-4 pb-4">
-                        <div className="text-[13px] text-gray-700 whitespace-pre-wrap leading-relaxed">
-                          {rendered.body}
-                        </div>
+                        <HtmlText html={rendered.body} className="text-[13px] text-gray-700 leading-relaxed" />
                       </div>
                     </div>
                   </div>
@@ -294,8 +293,10 @@ export function TemplateList() {
             <Input placeholder="{{firstName}} — 关于您的货运需求" />
           </Form.Item>
           <Form.Item name="body" label="正文" rules={[{ required: true }]}>
-            <Input.TextArea rows={8}
-              placeholder={"Hi {{firstName}},\n\nI noticed that your company..."} />
+            <RichTextEditor
+              placeholder={"Hi {{firstName}},\n\nI noticed that your company..."}
+              style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #d9d9d9", borderRadius: 6, padding: 8 }}
+            />
           </Form.Item>
           <div className="flex items-center justify-between">
             <div className="text-[10px] text-gray-400">
@@ -324,9 +325,7 @@ export function TemplateList() {
         {previewModal && (
           <div className="text-sm space-y-3">
             <div className="font-semibold text-gray-800">{previewModal.subject}</div>
-            <div className="border-t pt-3 text-[13px] text-gray-700 whitespace-pre-wrap leading-relaxed">
-              {previewModal.body}
-            </div>
+            <HtmlText html={previewModal.body} className="border-t pt-3 text-[13px] text-gray-700 leading-relaxed" />
           </div>
         )}
       </Modal>

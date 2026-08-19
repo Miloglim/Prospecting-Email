@@ -16,8 +16,9 @@ interface PipelineContact {
   id: number; email: string; firstName: string | null; lastName: string | null;
   title: string | null; phone: string | null; linkedinUrl: string | null;
   companyName: string | null; companyId: number | null;
-  stage: string; notes: string | null;
-  reminderAt: string | null; reminderNote: string | null;
+  stage: string; sendStage: string;
+  reminderAt: string | null;
+  lastFollowupAt: string | null; lastFollowupNote: string | null;
   country: string | null; language: string | null; clientType: string | null;
   assignee: string | null;
   stageChangedAt: string | null;
@@ -97,6 +98,9 @@ export function CrmPipeline() {
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [crmNote, setCrmNote] = useState("");
+  const [portsDraft, setPortsDraft] = useState<Array<{ pol: string; pod: string }>>([]);
+  const portsRef = useRef<Array<{ pol: string; pod: string }>>([]);
+  const extraRef = useRef<Record<string, unknown>>({});
   const [sendContact, setSendContact] = useState<PipelineContact | null>(null);
   const [sendTemplateId, setSendTemplateId] = useState<number | undefined>();
   const [sendAccountId, setSendAccountId] = useState<number | undefined>();
@@ -114,7 +118,7 @@ export function CrmPipeline() {
       success: boolean; data?: {
         contact: PipelineContact | null;
         interactions: Array<{ id?: number; type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-        emails: Array<{ id?: number; fromEmail: string; subject: string | null; classification: string | null; receivedAt: string; bodyPreview?: string | null }>;
+        emails: Array<{ id?: number; fromEmail: string; direction?: string; subject: string | null; classification: string | null; receivedAt: string; bodyPreview?: string | null }>;
       };
     }>,
     enabled: !!detailId,
@@ -200,14 +204,28 @@ export function CrmPipeline() {
   const contact = detail?.success ? detail.data?.contact : null;
   const detailData = detail?.success ? detail.data : null;
 
-  // 备注输入受控：contact 切换时同步 extra.crmNote 到本地 state
+  // 备注/港口草稿：contact 切换时同步 extra 到本地 state（含 ref，供 saveExtra 读最新值避免并发覆盖）
   useEffect(() => {
-    if (!contact) { setCrmNote(""); return; }
+    if (!contact) {
+      setCrmNote("");
+      setPortsDraft([]); portsRef.current = [];
+      extraRef.current = {};
+      return;
+    }
     try {
       const extra = (contact as unknown as Record<string, unknown>).extra as Record<string, unknown> || {};
-      setCrmNote(String(extra.crmNote || ""));
-    } catch { setCrmNote(""); }
-  }, [contact?.id]);
+      extraRef.current = extra;
+      // #17: 兼容旧导入字段 extra.note
+      setCrmNote(String(extra.crmNote || extra.note || ""));
+      const p = JSON.parse(String(extra.preferredPorts || "[]"));
+      const arr = Array.isArray(p) ? (p as Array<{ pol: string; pod: string }>) : [];
+      setPortsDraft(arr); portsRef.current = arr;
+    } catch {
+      extraRef.current = {};
+      setCrmNote("");
+      setPortsDraft([]); portsRef.current = [];
+    }
+  }, [contact]);
 
   // 自动展开有联系人的阶段，收起空阶段（collapsed=true 表示收起）
   useEffect(() => {
@@ -246,6 +264,17 @@ export function CrmPipeline() {
     await window.api.invoke("crm:addNote", { contactId: contact.id, text: noteText.trim() });
     setNoteText("");
     qc.invalidateQueries({ queryKey: ["crm", "detail", detailId] });
+  };
+
+  // 跟进记录编辑：保存并退出编辑态（onBlur 与按钮共用）
+  const commitEditNote = async () => {
+    if (!editingNoteId) return;
+    const r = await updateNoteMut.mutateAsync({ interactionId: editingNoteId, text: editText });
+    if (r && typeof r === "object" && "success" in r) {
+      const rr = r as { success: boolean; error?: string };
+      rr.success ? message.success("已更新") : message.error(rr.error || "更新失败");
+    }
+    setEditingNoteId(null);
   };
 
   return (
@@ -287,6 +316,14 @@ export function CrmPipeline() {
                           }
                           return null;
                         })()}
+                        {c.lastFollowupAt ? (
+                          <Tooltip title={`最近跟进: ${c.lastFollowupNote || ""}`}>
+                            <span className="text-[10px] text-gray-400 flex items-center gap-0.5">
+                              <EditOutlined className="text-[9px]" />
+                              {daysAgo(c.lastFollowupAt)}
+                            </span>
+                          </Tooltip>
+                        ) : null}
                         {c.reminderAt ? (
                           <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
                             <ClockCircleOutlined className="text-[9px]" />
@@ -321,6 +358,14 @@ export function CrmPipeline() {
                   className="text-[11px] text-gray-400 hover:text-blue-500 cursor-pointer transition-colors"
                   onClick={() => {
                     if (contact?.id) window.location.hash = `#/contacts?detail=${contact.id}`;
+                  }}
+                />
+              </Tooltip>
+              <Tooltip title="在收件箱中查看">
+                <MailOutlined
+                  className="text-[11px] text-gray-400 hover:text-blue-500 cursor-pointer transition-colors"
+                  onClick={() => {
+                    if (contact?.email) window.location.hash = `#/inbox?search=${encodeURIComponent(contact.email)}`;
                   }}
                 />
               </Tooltip>
@@ -360,7 +405,7 @@ export function CrmPipeline() {
                   ] },
                   { label: "职位", type: "text", field: "title" },
                   { label: "负责人", type: "text", field: "assignee" },
-                  { label: "发送阶段", type: "select", field: "stage", options: [
+                  { label: "发送阶段", type: "select", field: "sendStage", saveField: "stage", options: [
                     { key: "cold", label: "新线索", color: "#1565c0" },
                     { key: "f1", label: "第1轮", color: "#2e7d32" },
                     { key: "f2", label: "第2轮", color: "#e65100" },
@@ -383,7 +428,8 @@ export function CrmPipeline() {
                         value={String((contact as unknown as Record<string, string>)[(row as unknown as { field: string }).field] || "—")}
                         options={(row as unknown as { options: string[] | { key: string; label: string; color?: string }[] }).options}
                         onChange={async (v) => {
-                          await upsertMut.mutateAsync({ id: contact.id, email: contact.email, [(row as { field: string }).field]: v });
+                          const saveField = (row as unknown as { saveField?: string }).saveField ?? (row as { field: string }).field;
+                          await upsertMut.mutateAsync({ id: contact.id, email: contact.email, [saveField]: v });
                           qc.invalidateQueries({ queryKey: ["crm", "detail", detailId] });
                         }}
                       />
@@ -438,28 +484,34 @@ export function CrmPipeline() {
 
             {/* Tab 2: 偏好设置 — 存储在 contact.extra */}
             {currentTab === "prefs" && contact && (() => {
-              const extra = (contact as unknown as Record<string, unknown>).extra as Record<string, unknown> || {};
-              const ports: Array<{ pol: string; pod: string }> = (() => {
-                try { const p = JSON.parse(String(extra.preferredPorts || "[]")); return Array.isArray(p) ? p : []; } catch { return []; }
-              })();
+              const extra = extraRef.current;
 
               const saveExtra = async (patch: Record<string, unknown>) => {
-                const newExtra = { ...extra, ...patch };
+                const newExtra = { ...extraRef.current, ...patch };
+                extraRef.current = newExtra; // 立即更新 ref，港口/备注共用避免并发覆盖
                 await upsertMut.mutateAsync({ id: contact.id, email: contact.email, extra: JSON.stringify(newExtra) });
                 qc.invalidateQueries({ queryKey: ["crm", "detail", detailId] });
               };
 
-              const updatePort = async (idx: number, field: "pol" | "pod", val: string) => {
-                const next = ports.map((p, i) => i === idx ? { ...p, [field]: val } : p);
+              // 港口：本地 draft 同步击键（无异步竞态），blur 一次性持久化
+              const updatePort = (idx: number, field: "pol" | "pod", val: string) => {
+                setPortsDraft(prev => {
+                  const next = prev.map((p, i) => i === idx ? { ...p, [field]: val } : p);
+                  portsRef.current = next;
+                  return next;
+                });
+              };
+              const persistPorts = async () => {
+                await saveExtra({ preferredPorts: JSON.stringify(portsRef.current) });
+              };
+              const addPort = async () => {
+                const next = [...portsRef.current, { pol: "", pod: "" }];
+                portsRef.current = next; setPortsDraft(next);
                 await saveExtra({ preferredPorts: JSON.stringify(next) });
               };
-
-              const addPort = async () => {
-                await saveExtra({ preferredPorts: JSON.stringify([...ports, { pol: "", pod: "" }]) });
-              };
-
               const removePort = async (idx: number) => {
-                const next = ports.filter((_, i) => i !== idx);
+                const next = portsRef.current.filter((_, i) => i !== idx);
+                portsRef.current = next; setPortsDraft(next);
                 await saveExtra({ preferredPorts: JSON.stringify(next) });
               };
 
@@ -473,21 +525,23 @@ export function CrmPipeline() {
                         <Button size="small" type="dashed" icon={<PlusOutlined />} style={{ fontSize: 10, height: 22 }}
                           onClick={addPort}>添加</Button>
                       </div>
-                      {ports.length === 0 ? (
+                      {portsDraft.length === 0 ? (
                         <div className="text-[10px] text-gray-300 py-2 text-center">暂无，点击"添加"录入</div>
                       ) : (
                         <div className="space-y-1">
-                          {ports.map((p, idx) => (
+                          {portsDraft.map((p, idx) => (
                             <div key={idx} className="flex items-center gap-1.5">
                               <span className="text-[9px] text-gray-400 w-4 flex-shrink-0">#{idx + 1}</span>
                               <Input size="small" style={{ width: 120, fontSize: 10 }}
                                 value={p.pol || ""} placeholder="装货港 POL"
                                 onChange={e => updatePort(idx, "pol", e.target.value)}
+                                onBlur={persistPorts}
                               />
                               <span className="text-[9px] text-gray-300">→</span>
                               <Input size="small" style={{ width: 120, fontSize: 10 }}
                                 value={p.pod || ""} placeholder="卸货港 POD"
                                 onChange={e => updatePort(idx, "pod", e.target.value)}
+                                onBlur={persistPorts}
                               />
                               <Button type="text" size="small" danger icon={<DeleteOutlined />}
                                 style={{ padding: 0, minWidth: 16, height: 16, fontSize: 10 }}
@@ -569,14 +623,8 @@ export function CrmPipeline() {
                         {i.type === "note" && editingNoteId === i.id ? (
                           <Button type="text" size="small" icon={<SaveOutlined />}
                             style={{ padding: 0, minWidth: 16, height: 16 }}
-                            onClick={async () => {
-                              const r = await updateNoteMut.mutateAsync({ interactionId: i.id as number, text: editText });
-                              if (r && typeof r === "object" && "success" in r) {
-                                const rr = r as { success: boolean; error?: string };
-                                rr.success ? message.success("已更新") : message.error(rr.error || "更新失败");
-                              }
-                              setEditingNoteId(null);
-                            }} />
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={commitEditNote} />
                         ) : i.type === "note" ? (
                           <>
                             <Button type="text" size="small" icon={<EditOutlined />}
@@ -593,18 +641,14 @@ export function CrmPipeline() {
                       {editingNoteId === i.id ? (
                         <div className="mt-1">
                           <Input.TextArea size="small" rows={2} value={editText}
-                            onChange={e => setEditText(e.target.value)} style={{ fontSize: 10 }} />
+                            onChange={e => setEditText(e.target.value)} style={{ fontSize: 10 }}
+                            onBlur={commitEditNote} />
                           <div className="flex gap-1 mt-1">
                             <Button size="small" type="primary" loading={updateNoteMut.isPending}
-                              onClick={async () => {
-                                const r = await updateNoteMut.mutateAsync({ interactionId: i.id as number, text: editText });
-                                if (r && typeof r === "object" && "success" in r) {
-                                  const rr = r as { success: boolean; error?: string };
-                                  rr.success ? message.success("已更新") : message.error(rr.error || "更新失败");
-                                }
-                                setEditingNoteId(null);
-                              }}>保存</Button>
-                            <Button size="small" onClick={() => setEditingNoteId(null)}>取消</Button>
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={commitEditNote}>保存</Button>
+                            <Button size="small" onMouseDown={e => e.preventDefault()}
+                              onClick={() => setEditingNoteId(null)}>取消</Button>
                           </div>
                         </div>
                       ) : (
@@ -638,6 +682,9 @@ export function CrmPipeline() {
                   >
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <MailOutlined className="text-[9px] text-gray-400" />
+                      <span className={`text-[9px] ${e.direction === "outbound" ? "text-blue-500" : "text-green-600"}`}>
+                        {e.direction === "outbound" ? "发" : "收"}
+                      </span>
                       <span className="text-[10px] font-mono">{e.fromEmail}</span>
                       {e.classification && (
                         <Tag color={TYPE_LABELS[e.classification]?.color || "default"}
@@ -667,7 +714,7 @@ export function CrmPipeline() {
               <span>发件人: {emailPopup.fromEmail}</span>
               <span>{new Date(emailPopup.receivedAt).toLocaleString("zh-CN")}</span>
             </div>
-            <div className="border-t pt-2 whitespace-pre-wrap text-[11px] leading-relaxed">
+            <div className="border-t pt-2 whitespace-pre-wrap text-[11px] leading-relaxed selectable">
               {emailPopup.bodyPreview || "（无法加载正文）"}
             </div>
           </div>
@@ -786,16 +833,17 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => P
       <div className="flex-1 flex gap-1">
         <Input size="small" value={val} onChange={e => setVal(e.target.value)}
           onPressEnter={save} autoFocus style={{ fontSize: 11, height: 22 }}
+          onBlur={save}
           onKeyDown={e => { if (e.key === "Escape") { setVal(value); setEditing(false); } }}
         />
-        <Button type="text" size="small" icon={<SaveOutlined />} style={{ padding: 0, minWidth: 18, height: 18 }} onClick={save} />
-        <Button type="text" size="small" icon={<CloseOutlined />} style={{ padding: 0, minWidth: 18, height: 18 }} onClick={() => { setVal(value); setEditing(false); }} />
+        <Button type="text" size="small" icon={<SaveOutlined />} style={{ padding: 0, minWidth: 18, height: 18 }} onMouseDown={e => e.preventDefault()} onClick={save} />
+        <Button type="text" size="small" icon={<CloseOutlined />} style={{ padding: 0, minWidth: 18, height: 18 }} onMouseDown={e => e.preventDefault()} onClick={() => { setVal(value); setEditing(false); }} />
       </div>
     );
   }
 
   return (
-    <span className="flex-1 text-[11px] cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5" onClick={() => setEditing(true)}>
+    <span className="flex-1 text-[11px] cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5" onClick={() => { setVal(value); setEditing(true); }}>
       {value}
     </span>
   );

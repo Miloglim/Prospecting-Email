@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
   account_id integer NOT NULL REFERENCES email_accounts(id),
   message_id text, from_email text NOT NULL, from_name text,
   subject text, body_preview text, classification text,
+  cc text, my_role text,
   matched_contact_id integer,
   is_read integer DEFAULT 0 NOT NULL,
   received_at text NOT NULL,
@@ -195,6 +196,14 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     if (!qcols.includes("tpl_body")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN tpl_body text;");
     if (!qcols.includes("contact_vars")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN contact_vars text;");
     Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars 列");
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v4.3: inbox_messages 补 cc + my_role 列（识别抄送，仅抄送不判已回复）
+  try {
+    const icols = (sqlJsDb.exec("PRAGMA table_info(inbox_messages)")[0]?.values || []).map(r => String(r[1]));
+    if (!icols.includes("cc")) sqlJsDb.run("ALTER TABLE inbox_messages ADD COLUMN cc text;");
+    if (!icols.includes("my_role")) sqlJsDb.run("ALTER TABLE inbox_messages ADD COLUMN my_role text;");
+    Log.info("db.migrate", "inbox_messages 表已添加 cc/my_role 列");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.0: contacts 表补 language 列（国家+语言分离）

@@ -104,7 +104,7 @@ export type Classification = "replied" | "bounce" | "autoreply" | "other" | "sen
 
 export function classify(
   subject: string | null, from: string | null, bodyText: string | null,
-  hasContactMatch = false,
+  hasContactMatch = false, isCcOnly = false,
 ): Classification {
   const s = (subject || "").toLowerCase();
   const f = (from || "").toLowerCase();
@@ -120,11 +120,14 @@ export function classify(
   if (KEYWORDS.bounce_body.some(k => b.includes(k))) return "bounce";
   if (KEYWORDS.bounce_left.some(k => b.includes(k))) return "bounce";
 
-  // 2. 回复
+  // 2. 仅被抄送 → 不算回复（不触发联系人状态「已回复」）
+  if (isCcOnly) return "other";
+
+  // 3. 回复
   if (KEYWORDS.reply_prefix.some(k => s.startsWith(k))) return "replied";
   if (KEYWORDS.inquiry.some(k => s.includes(k) || b.includes(k))) return "replied";
 
-  // 3. 匹配到已知联系人 → 升级为 replied
+  // 4. 匹配到已知联系人 → 升级为 replied
   if (hasContactMatch) return "replied";
 
   return "other";

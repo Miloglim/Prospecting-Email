@@ -31,6 +31,7 @@ function isPop3Port(port: number): boolean {
 
 async function parseRawEmail(rawSource: string | Buffer): Promise<{
   subject: string; fromEmail: string; fromName: string | null;
+  to: string[]; cc: string[];
   bodyText: string; bodyHtml: string; date: string;
 } | null> {
   try {
@@ -39,6 +40,14 @@ async function parseRawEmail(rawSource: string | Buffer): Promise<{
     const parsed = await simpleParser(input);
     const fromAddr = parsed.from?.value?.[0]?.address || "";
     const fromName = parsed.from?.value?.[0]?.name || null;
+    // mailparser: to/cc 可能是单个 AddressObject 或数组，统一归一化成地址列表
+    const normAddr = (v: unknown): string[] => {
+      if (!v) return [];
+      const list = Array.isArray(v) ? v : [v];
+      return list.flatMap((x) => ((x as { value?: Array<{ address?: string }> })?.value || []).map(a => a.address || "")).filter(Boolean);
+    };
+    const to = normAddr(parsed.to);
+    const cc = normAddr(parsed.cc);
     const subject = parsed.subject || "(无主题)";
     const bodyText = parsed.text || "";
     const bodyHtml = parsed.html || parsed.text || "";
@@ -48,7 +57,7 @@ async function parseRawEmail(rawSource: string | Buffer): Promise<{
     const tp = d.toLocaleTimeString("en-CA", { timeZone: "Asia/Shanghai", hour12: false });
     const date = `${dp}T${tp}+08:00`;
 
-    return { subject, fromEmail: fromAddr, fromName, bodyText, bodyHtml, date };
+    return { subject, fromEmail: fromAddr, fromName, to, cc, bodyText, bodyHtml, date };
   } catch {
     return null;
   }
@@ -224,8 +233,13 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
       const msg = await parseRawEmail(raw);
       if (!msg) continue;
 
+      // 我方角色：直接收件（to）还是仅被抄送（cc）
+      const myEmail = account.email.toLowerCase();
+      const myRole = msg.to.some(a => a.toLowerCase() === myEmail) ? "to"
+        : msg.cc.some(a => a.toLowerCase() === myEmail) ? "cc" : null;
+
       const contact = InboxService.matchContact(msg.fromEmail);
-      const classification = InboxService.classify(msg.subject, msg.fromEmail, msg.bodyText, !!contact);
+      const classification = InboxService.classify(msg.subject, msg.fromEmail, msg.bodyText, !!contact, myRole === "cc");
 
       getDb().insert(inboxMessages).values({
         accountId,
@@ -235,6 +249,8 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         subject: msg.subject,
         bodyPreview: msg.bodyText.slice(0, 500),
         classification,
+        cc: msg.cc.join(", "),
+        myRole,
         matchedContactId: contact?.id || null,
         receivedAt: msg.date,
       }).run();
@@ -248,6 +264,8 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         subject: msg.subject,
         bodyPreview: msg.bodyText.slice(0, 500),
         classification,
+        cc: msg.cc.join(", "),
+        myRole,
         matchedContactId: contact?.id || null,
         isRead: 0,
         receivedAt: msg.date,
@@ -332,14 +350,23 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       if (msgId && InboxService.isDeleted(`${accountId}|${msgId}`)) continue;
       if (msgId && existing.has(msgId)) continue;
 
+      // 我方角色：直接收件（to）还是仅被抄送（cc）
+      const toArr = (env.to as Array<{ address?: string }>) || [];
+      const ccArr = (env.cc as Array<{ address?: string }>) || [];
+      const myEmail = account.email.toLowerCase();
+      const myRole = toArr.some(a => (a.address || "").toLowerCase() === myEmail) ? "to"
+        : ccArr.some(a => (a.address || "").toLowerCase() === myEmail) ? "cc" : null;
+      const ccList = ccArr.map(a => a.address || "").filter(Boolean).join(", ");
+
       // 元数据阶段：正文留空，正文懒加载时再补（避免每封拉 source 卡顿）
       const contact = InboxService.matchContact(fromEmail);
-      const classification = InboxService.classify(subject, fromEmail, "", !!contact);
+      const classification = InboxService.classify(subject, fromEmail, "", !!contact, myRole === "cc");
 
       getDb().insert(inboxMessages).values({
         accountId, messageId: msgId,
         fromEmail, fromName, subject,
         bodyPreview: "", classification,
+        cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         receivedAt: date,
       }).run();
@@ -350,6 +377,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         id: 0, accountId, messageId: msgId,
         fromEmail, fromName, subject,
         bodyPreview: "", classification,
+        cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         isRead: 0, receivedAt: date,
         createdAt: new Date().toISOString(),

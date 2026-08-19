@@ -11,7 +11,6 @@ const PREFIX = {
   HISTORY:   "history",
   BOUNCE:    "bounce",
   AI:        "ai",
-  MIGRATE:   "migrate",
   SYSTEM:    "system",
   UPDATE:    "update",
 } as const;
@@ -108,11 +107,6 @@ export const IPC = {
     BACKCHECK:      chan(PREFIX.AI, "backcheck"),
     GENERATE_DRAFT: chan(PREFIX.AI, "generateDraft"),
     SUMMARIZE_EMAIL: chan(PREFIX.AI, "summarizeEmail"),
-  },
-  MIGRATE: {
-    DETECT:  chan(PREFIX.MIGRATE, "detect"),
-    PREVIEW: chan(PREFIX.MIGRATE, "preview"),
-    RUN:     chan(PREFIX.MIGRATE, "run"),
   },
   SYSTEM: {
     GET_CONFIG:       chan(PREFIX.SYSTEM, "getConfig"),

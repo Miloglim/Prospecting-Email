@@ -104,22 +104,22 @@ export function ContactList() {
 
   // 从收件箱跳转来的预填/详情（读 hash 路由的 search 部分）
   useEffect(() => {
-    if (contacts.length === 0 && !isLoading) return; // 等数据加载
     const rawHash = window.location.hash; // 如 "#/contacts?add=1&email=..." 或 "#/contacts?detail=123"
     const qs = rawHash.includes("?") ? rawHash.split("?")[1] : "";
     if (!qs) return;
     const sp = new URLSearchParams(qs);
 
-    // 打开详情
+    // 打开详情 — 直接按 id 拉取，不依赖当前分页/筛选结果（否则目标联系人不在当前页就弹不出）
     const detailId = sp.get("detail");
     if (detailId) {
       const id = Number(detailId);
       if (!isNaN(id)) {
-        const found = contacts.find(c => c.id === id);
-        if (found) { setDetailContact(found); }
-        const base = rawHash.split("?")[0]!;
-        window.location.hash = base;
+        window.api.invoke("contacts:getById", id).then((res) => {
+          const r = res as { success: boolean; data?: Contact };
+          if (r?.success && r.data) setDetailContact(r.data);
+        });
       }
+      window.location.hash = rawHash.split("?")[0]!;
       return;
     }
 
@@ -133,8 +133,7 @@ export function ContactList() {
         clientType: sp.get("clientType") || undefined,
       });
       setAddOpen(true);
-      const base = rawHash.split("?")[0]!;
-      window.location.hash = base;
+      window.location.hash = rawHash.split("?")[0]!;
     }
   }, [contacts, isLoading]);
 
