@@ -1,4 +1,29 @@
+import * as fs from "fs";
+import * as path from "path";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
+
+// 日志文件路径（打包→userData/logs，开发→项目根/logs；非 Electron 环境返回 null 不写文件）
+function resolveLogFile(): string | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { app } = require("electron");
+    const root = app.isPackaged ? app.getPath("userData") : path.resolve(__dirname, "..", "..");
+    return path.join(root, "logs", "app.log");
+  } catch {
+    return null;
+  }
+}
+
+function appendLogFile(line: string): void {
+  try {
+    const file = resolveLogFile();
+    if (!file) return;
+    const dir = path.dirname(file);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(file, line + "\n");
+  } catch { /* 写日志失败静默，避免日志影响业务 */ }
+}
 
 interface LoggerOpts {
   writeFn?: (line: string) => void; // 测试注入
@@ -31,7 +56,8 @@ export function createLogger(opts: LoggerOpts = {}) {
     if (opts.writeFn) {
       opts.writeFn(line);
     } else {
-      // 生产环境输出到 console，后续可改为文件写入
+      appendLogFile(line);
+      // 同时输出到 console（便于开发调试）
       switch (level) {
         case "error":
           console.error(line);

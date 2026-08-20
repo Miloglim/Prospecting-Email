@@ -289,6 +289,7 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   if (!existing) return failResult(`联系人不存在: id=${id}`);
   const companyId = existing.companyId;
 
+  // 内存删除（真正的删除）：SQL 异常才报失败
   try {
     deleteContactCascade(id);
 
@@ -301,12 +302,18 @@ export async function deleteContact(id: number): Promise<Result<void>> {
         Log.debug("contact.delete", `已删除空壳公司 id=${companyId}`);
       }
     }
-    saveDatabase();
-    return okResult(undefined);
   } catch (err) {
     Log.error("contact.delete", `删除失败 id=${id}`, err instanceof Error ? err.stack : String(err));
     return failResult(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  // 持久化：写盘失败不阻塞删除（内存已删，30s 自动保存会重试，避免误报「删除失败」）
+  try {
+    saveDatabase();
+  } catch (err) {
+    Log.warn("contact.delete", `持久化失败 id=${id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return okResult(undefined);
 }
 
 /** 查询联系人互动历史 */

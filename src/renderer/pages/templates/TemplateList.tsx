@@ -214,10 +214,8 @@ export function TemplateList() {
                     onClick={() => setPvSeed(s => s + 1)}>换一组</Button>
                 </div>
 
-                {/* 结果 */}
-                {pvFetching ? (
-                  <div className="text-xs text-gray-400 py-16 text-center">加载中...</div>
-                ) : rendered ? (
+                {/* 结果 — 有旧内容时保留（刷新期间不清空，只替换预览框内容） */}
+                {rendered ? (
                   <div className="space-y-3">
                     <div className="text-[10px] text-gray-400 flex items-center gap-2">
                       <Tag className="text-[9px]">{pvSource === "preset" ? "句库" : "我的模板"}</Tag>
@@ -235,6 +233,8 @@ export function TemplateList() {
                       </div>
                     </div>
                   </div>
+                ) : pvFetching ? (
+                  <div className="text-xs text-gray-400 py-16 text-center">加载中...</div>
                 ) : pvError ? (
                   <div className="text-xs text-red-500 py-16 text-center">
                     预览出错：{pvError}

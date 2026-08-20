@@ -320,6 +320,19 @@ export function CampaignList() {
                 </div>
               ),
             },
+            {
+              key: "preset", label: "预设句库",
+              children: (
+                <div className="space-y-2">
+                  <div className="text-[11px] text-gray-400">
+                    使用内置多语言句库（EN/ES/PT），按联系人类型 + 阶段自动组装开发信，无需手动选模板
+                  </div>
+                  <div className="text-[10px] text-gray-400">
+                    每家公司随机组合一套：称呼 → 问候 → 自我介绍 → 价值连接 → 服务要点 → 行动号召 → 收尾
+                  </div>
+                </div>
+              ),
+            },
           ]}
         />
       </Card>
