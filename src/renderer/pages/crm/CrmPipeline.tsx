@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { HtmlText } from "../../components/RichTextEditor";
 import {
   ClockCircleOutlined, CloseOutlined, MailOutlined, SearchOutlined,
   DownOutlined, RightOutlined, EditOutlined, SaveOutlined,
@@ -50,19 +51,6 @@ function daysAgo(d: string) {
   return `${delta} 天前`;
 }
 
-function stageDays(c: PipelineContact): { days: number; warn: boolean; danger: boolean } {
-  if (!c.stageChangedAt) return { days: 0, warn: false, danger: false };
-  const days = Math.floor((Date.now() - new Date(c.stageChangedAt).getTime()) / 86400000);
-  // 按阶段设阈值
-  const thresholds: Record<string, { warn: number; danger: number }> = {
-    reaching: { warn: 7, danger: 14 },
-    quoting: { warn: 5, danger: 10 },
-    trial: { warn: 10, danger: 21 },
-  };
-  const t = thresholds[c.stage];
-  return { days, warn: t ? days >= t.warn : false, danger: t ? days >= t.danger : false };
-}
-
 // ══════════════════════════════════════════════════════════════
 // 主组件
 // ══════════════════════════════════════════════════════════════
@@ -92,8 +80,10 @@ export function CrmPipeline() {
     window.location.hash = base;
   }, []);
   const [emailPopup, setEmailPopup] = useState<{
-    fromEmail: string; subject: string | null; receivedAt: string; bodyPreview: string | null;
+    id?: number; fromEmail: string; subject: string | null; receivedAt: string; bodyPreview: string | null;
   } | null>(null);
+  const [emailBody, setEmailBody] = useState<string | null>(null);
+  const [emailBodyLoading, setEmailBodyLoading] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
@@ -263,7 +253,7 @@ export function CrmPipeline() {
     // 只写跟进记录，不设置提醒（提醒由用户通过 DatePicker 手动设置）
     await window.api.invoke("crm:addNote", { contactId: contact.id, text: noteText.trim() });
     setNoteText("");
-    qc.invalidateQueries({ queryKey: ["crm", "detail", detailId] });
+    qc.invalidateQueries({ queryKey: ["crm"] }); // 刷新详情 + 看板「最近跟进」
   };
 
   // 跟进记录编辑：保存并退出编辑态（onBlur 与按钮共用）
@@ -305,31 +295,22 @@ export function CrmPipeline() {
                       <span className="font-medium flex-shrink-0 w-20 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
                       <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
                       <span className="flex items-center gap-2 flex-shrink-0">
-                        {(() => {
-                          const sd = stageDays(c);
-                          if (sd.days > 0) {
-                            return (
-                              <span className={`text-[10px] ${sd.danger ? "text-red-500 font-semibold" : sd.warn ? "text-amber-500" : "text-gray-400"}`}>
-                                {sd.days}天
-                              </span>
-                            );
-                          }
-                          return null;
-                        })()}
                         {c.lastFollowupAt ? (
-                          <Tooltip title={`最近跟进: ${c.lastFollowupNote || ""}`}>
-                            <span className="text-[10px] text-gray-400 flex items-center gap-0.5">
-                              <EditOutlined className="text-[9px]" />
-                              {daysAgo(c.lastFollowupAt)}
-                            </span>
-                          </Tooltip>
+                          <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                            <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
+                            <EditOutlined className="text-[9px] flex-shrink-0" />
+                            <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
+                          </span>
                         ) : null}
                         {c.reminderAt ? (
                           <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
                             <ClockCircleOutlined className="text-[9px]" />
                             {new Date(c.reminderAt) < new Date() ? `逾期${daysAgo(c.reminderAt)}` : dayjs(c.reminderAt).format("MM/DD")}
                           </span>
-                        ) : <span className="text-[10px] text-gray-300">—</span>}
+                        ) : null}
+                        {c.assignee ? (
+                          <span className="text-[10px] text-gray-400">{c.assignee}</span>
+                        ) : null}
                       </span>
                       <SendOutlined className="text-[11px] text-gray-300 hover:text-blue-500 cursor-pointer"
                         onClick={(e) => { e.stopPropagation(); setSendContact(c); setSendTemplateId(undefined); setSendAccountId(undefined); setSendPreview(null); }}
@@ -673,12 +654,24 @@ export function CrmPipeline() {
               <div className="space-y-1.5">
                 {detailData.emails.map((e, i) => (
                   <div key={i} className="border border-gray-100 rounded p-2 text-xs hover:border-gray-300 cursor-pointer"
-                    onClick={() => setEmailPopup({
-                      fromEmail: e.fromEmail,
-                      subject: e.subject,
-                      receivedAt: e.receivedAt,
-                      bodyPreview: e.bodyPreview ?? null,
-                    })}
+                    onClick={() => {
+                      setEmailPopup({
+                        id: e.id,
+                        fromEmail: e.fromEmail,
+                        subject: e.subject,
+                        receivedAt: e.receivedAt,
+                        bodyPreview: e.bodyPreview ?? null,
+                      });
+                      setEmailBody(null);
+                      setEmailBodyLoading(!!e.id);
+                      if (e.id) {
+                        window.api.invoke("inbox:getBody", e.id).then((res) => {
+                          const r = res as { success: boolean; data?: string };
+                          setEmailBody(r?.success ? (r.data || null) : null);
+                          setEmailBodyLoading(false);
+                        }).catch(() => setEmailBodyLoading(false));
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <MailOutlined className="text-[9px] text-gray-400" />
@@ -714,8 +707,12 @@ export function CrmPipeline() {
               <span>发件人: {emailPopup.fromEmail}</span>
               <span>{new Date(emailPopup.receivedAt).toLocaleString("zh-CN")}</span>
             </div>
-            <div className="border-t pt-2 whitespace-pre-wrap text-[11px] leading-relaxed selectable">
-              {emailPopup.bodyPreview || "（无法加载正文）"}
+            <div className="border-t pt-2 text-[11px] leading-relaxed selectable">
+              {emailBodyLoading
+                ? "加载正文中..."
+                : emailBody
+                  ? <HtmlText html={emailBody} />
+                  : (emailPopup.bodyPreview || "（无法加载正文）")}
             </div>
           </div>
         )}

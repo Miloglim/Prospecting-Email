@@ -211,7 +211,7 @@ export async function updateNote(interactionId: number, text: string): Promise<R
 export function getDetail(contactId: number): Result<{
   contact: PipelineContact | null;
   interactions: Array<{ type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-  emails: Array<{ fromEmail: string; direction: "inbound" | "outbound"; subject: string | null; classification: string | null; receivedAt: string; bodyPreview: string | null }>;
+  emails: Array<{ id: number | null; fromEmail: string; direction: "inbound" | "outbound"; subject: string | null; classification: string | null; receivedAt: string; bodyPreview: string | null }>;
 }> {
   const db = getDb();
   const row = db.select({
@@ -254,27 +254,24 @@ export function getDetail(contactId: number): Result<{
     contact.lastFollowupNote = lastNoteRow.bodyPreview || null;
   }
 
-  // 收件（IMAP）— 排除 sent（发件已写入 inbox_messages，且 fromEmail 实为收件人，会与 sentRows 重复+方向错乱）
+  // 收件（IMAP/POP3）— 排除 sent（发件单独从 inbox_messages 取，方向 outbound）
   const inboxRows = db.select().from(inboxMessages)
     .where(and(eq(inboxMessages.matchedContactId, contactId), ne(inboxMessages.classification, "sent")))
     .orderBy(desc(inboxMessages.receivedAt)).limit(30).all()
     .map(e => ({
-      fromEmail: e.fromEmail, direction: "inbound" as const, subject: e.subject,
+      id: e.id, fromEmail: e.fromEmail, direction: "inbound" as const, subject: e.subject,
       classification: e.classification, receivedAt: e.receivedAt,
       bodyPreview: e.bodyPreview,
     }));
 
-  // 发件（从 interactions 取 sent + outbound）
-  const sentRows = db.select().from(interactions)
-    .where(and(eq(interactions.contactId, contactId), eq(interactions.type, "sent"), eq(interactions.direction, "outbound")))
-    .orderBy(desc(interactions.createdAt)).limit(30).all()
-    .map(i => ({
-      fromEmail: "我（发件）",
-      direction: "outbound" as const,
-      subject: i.subject,
-      classification: "sent" as const,
-      receivedAt: i.createdAt,
-      bodyPreview: i.bodyPreview,
+  // 发件 — 从 inbox_messages（classification=sent）取，带 id 供前端懒加载完整正文
+  const sentRows = db.select().from(inboxMessages)
+    .where(and(eq(inboxMessages.matchedContactId, contactId), eq(inboxMessages.classification, "sent")))
+    .orderBy(desc(inboxMessages.receivedAt)).limit(30).all()
+    .map(e => ({
+      id: e.id, fromEmail: e.fromEmail, direction: "outbound" as const,
+      subject: e.subject, classification: "sent" as const,
+      receivedAt: e.receivedAt, bodyPreview: e.bodyPreview,
     }));
 
   // 合并：收件 + 发件，按时间倒序
