@@ -179,7 +179,15 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
     Object.entries(input).map(([k, v]) => [k, v === "" ? null : v])
   ) as typeof input;
 
-  const existing = getDb().select().from(contacts).where(eq(contacts.email, input.email)).get();
+  // 编辑时按 id 定位（email 可改）；新增/导入按 email（唯一键）
+  const existing = input.id
+    ? getDb().select().from(contacts).where(eq(contacts.id, input.id)).get()
+    : getDb().select().from(contacts).where(eq(contacts.email, input.email)).get();
+  // 改邮箱时校验唯一性（避免撞 UNIQUE 约束报错）
+  if (existing && existing.email !== input.email) {
+    const dup = getDb().select().from(contacts).where(eq(contacts.email, input.email)).get();
+    if (dup) return failResult(`邮箱已被占用: ${input.email}`);
+  }
   const now = new Date().toISOString();
 
   // 公司名 → companyId 解析（新增/编辑联系人时传入 companyName 而非 companyId）
@@ -281,19 +289,24 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   if (!existing) return failResult(`联系人不存在: id=${id}`);
   const companyId = existing.companyId;
 
-  deleteContactCascade(id);
+  try {
+    deleteContactCascade(id);
 
-  // 公司无联系人时自动清理
-  if (companyId) {
-    const remaining = getDb().select({ id: contacts.id })
-      .from(contacts).where(eq(contacts.companyId, companyId)).all();
-    if (remaining.length === 0) {
-      getDb().delete(companies).where(eq(companies.id, companyId)).run();
-      Log.debug("contact.delete", `已删除空壳公司 id=${companyId}`);
+    // 公司无联系人时自动清理
+    if (companyId) {
+      const remaining = getDb().select({ id: contacts.id })
+        .from(contacts).where(eq(contacts.companyId, companyId)).all();
+      if (remaining.length === 0) {
+        getDb().delete(companies).where(eq(companies.id, companyId)).run();
+        Log.debug("contact.delete", `已删除空壳公司 id=${companyId}`);
+      }
     }
+    saveDatabase();
+    return okResult(undefined);
+  } catch (err) {
+    Log.error("contact.delete", `删除失败 id=${id}`, err instanceof Error ? err.stack : String(err));
+    return failResult(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
   }
-  saveDatabase();
-  return okResult(undefined);
 }
 
 /** 查询联系人互动历史 */

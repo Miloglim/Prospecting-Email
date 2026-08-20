@@ -309,7 +309,7 @@ export function CrmPipeline() {
                           </span>
                         ) : null}
                         {c.assignee ? (
-                          <span className="text-[10px] text-gray-400">{c.assignee}</span>
+                          <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5 flex-shrink-0">{c.assignee}</Tag>
                         ) : null}
                       </span>
                       <SendOutlined className="text-[11px] text-gray-300 hover:text-blue-500 cursor-pointer"

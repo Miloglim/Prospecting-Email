@@ -13,7 +13,9 @@ const DEFAULT_COLS = ["name", "email", "companyName", "clientType", "status", "s
 interface ColDef { key: string; title: string; width?: number; render: (c: Contact) => ReactNode; }
 
 const Muted = ({ v }: { v: string | null | undefined }) => (
-  <span className="text-xs text-gray-500">{v || "-"}</span>
+  <Tooltip title={v || undefined}>
+    <span className="text-xs text-gray-500 block truncate">{v || "-"}</span>
+  </Tooltip>
 );
 const Dash = () => <span className="text-xs text-gray-300">—</span>;
 const fmtDate = (s: string | null | undefined) =>
@@ -28,12 +30,12 @@ const COLUMN_DEFS: ColDef[] = [
     key: "name", title: "姓名", width: 120,
     render: (c) => {
       const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email.split("@")[0];
-      return <span className="text-xs font-medium text-gray-800 truncate">{name}</span>;
+      return <Tooltip title={name}><span className="text-xs font-medium text-gray-800 block truncate">{name}</span></Tooltip>;
     },
   },
   {
     key: "email", title: "邮箱", width: 200,
-    render: (c) => <span className="text-xs font-mono text-blue-600">{c.email}</span>,
+    render: (c) => <Tooltip title={c.email}><span className="text-xs font-mono text-blue-600 block truncate">{c.email}</span></Tooltip>,
   },
   { key: "companyName", title: "公司", width: 140, render: (c) => <Muted v={c.companyName} /> },
   { key: "title", title: "职位", width: 120, render: (c) => <Muted v={c.title} /> },

@@ -352,11 +352,6 @@ function UpdateChecker() {
     await window.api.invoke("update:install");
   };
 
-  const handleDownloadVersion = async (version: string) => {
-    setPendingVersion(version);
-    await handleDownload();
-  };
-
   const releases = versionData?.releases || [];
   const hasUpdate = pendingVersion && !downloaded;
   const isLatest = !hasUpdate && !downloaded && !!versionData;
@@ -456,11 +451,7 @@ function UpdateChecker() {
                   </span>
                   {rel.isCurrent ? (
                     <span className="text-[10px] text-teal-600 font-medium">当前</span>
-                  ) : (
-                    <Button size="small" type="link" className="!text-[10px] !px-1 !py-0"
-                      onClick={() => handleDownloadVersion(rel.version)}
-                    >下载</Button>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>

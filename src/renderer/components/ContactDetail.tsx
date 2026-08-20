@@ -145,7 +145,7 @@ function InfoTab({ contact, onSaveField }: {
       <FieldRow label="职位"><EditText value={contact.title} onSave={v => onSaveField("title", v)} placeholder="如 Purchasing Manager" /></FieldRow>
 
       <SectionTitle>联系方式</SectionTitle>
-      <FieldRow label="邮箱"><span className="text-xs text-blue-500 font-mono truncate">{contact.email}</span></FieldRow>
+      <FieldRow label="邮箱"><EditText value={contact.email} onSave={v => onSaveField("email", v)} /></FieldRow>
       <FieldRow label="电话"><EditText value={contact.phone} onSave={v => onSaveField("phone", v)} placeholder="含国家码" /></FieldRow>
       <FieldRow label="LinkedIn"><EditText value={contact.linkedinUrl} onSave={v => onSaveField("linkedinUrl", v)} placeholder="linkedin.com/in/..." /></FieldRow>
       <FieldRow label="国家"><EditText value={contact.country} onSave={v => onSaveField("country", v)} placeholder="如 MX, BR" /></FieldRow>
