@@ -20,18 +20,47 @@ export async function exportContactsToExcel(filter?: { search?: string }): Promi
     return failResult("没有可导出的联系人");
   }
 
+  // 值 → 中文标签
+  const CLIENT_TYPE: Record<string, string> = { agent: "代理", direct: "直客" };
+  const STATUS: Record<string, string> = { reached: "已触达", replied: "已回复", bounced: "退信", autoreply: "自动回复" };
+  const STAGE: Record<string, string> = { cold: "新线索", f1: "跟进1", f2: "跟进2", f3: "跟进3", f4: "跟进4" };
+  const CRM_TAGS: Record<string, string> = { reaching: "触达中", quoting: "报价中", trial: "试单", cooperating: "合作中", lost: "已流失", other: "其他" };
+
+  const fmtDate = (s: string | null | undefined): string => {
+    if (!s) return "";
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const fmtTags = (s: string | null): string => {
+    if (!s) return "";
+    try {
+      const a = JSON.parse(s);
+      return Array.isArray(a) ? a.map((k: string) => CRM_TAGS[k] || k).join("、") : "";
+    } catch { return ""; }
+  };
+
   // ponytail: 生成 CSV（不依赖 xlsx 库），Excel 可直接打开
-  const headers = ["邮箱", "名", "姓", "职位", "电话", "LinkedIn", "公司ID", "来源", "创建时间"];
+  const headers = ["邮箱", "名", "姓", "公司", "职位", "电话", "LinkedIn", "国家", "语言", "客户类型", "状态", "阶段", "负责人", "标签", "来源", "创建时间", "更新时间"];
   const rows = items.map(c => [
     c.email,
     c.firstName || "",
     c.lastName || "",
+    c.companyName || "",
     c.title || "",
     c.phone || "",
     c.linkedinUrl || "",
-    String(c.companyId || ""),
+    c.country || "",
+    c.language || "",
+    CLIENT_TYPE[c.clientType || ""] || c.clientType || "",
+    STATUS[c.status || ""] || c.status || "",
+    STAGE[c.stage || ""] || c.stage || "",
+    c.assignee || "",
+    fmtTags(c.tags),
     c.source || "",
-    c.createdAt || "",
+    fmtDate(c.createdAt),
+    fmtDate(c.updatedAt),
   ]);
 
   const csvContent = [headers, ...rows]
@@ -39,10 +68,7 @@ export async function exportContactsToExcel(filter?: { search?: string }): Promi
     .join("\n");
 
   // BOM for Excel UTF-8
-  const bom = "﻿";
-  const content = bom + csvContent;
-
-  return okResult(content);
+  return okResult("﻿" + csvContent);
 }
 
 /** 导出全部跟进记录（interactions type=note），按时间倒序 */

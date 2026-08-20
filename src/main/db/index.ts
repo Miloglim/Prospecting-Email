@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
   message_id text, from_email text NOT NULL, from_name text,
   subject text, body_preview text, classification text,
   cc text, my_role text,
-  matched_contact_id integer,
+  matched_contact_id integer, related_contact_ids text,
   is_read integer DEFAULT 0 NOT NULL,
   received_at text NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -203,7 +203,8 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     const icols = (sqlJsDb.exec("PRAGMA table_info(inbox_messages)")[0]?.values || []).map(r => String(r[1]));
     if (!icols.includes("cc")) sqlJsDb.run("ALTER TABLE inbox_messages ADD COLUMN cc text;");
     if (!icols.includes("my_role")) sqlJsDb.run("ALTER TABLE inbox_messages ADD COLUMN my_role text;");
-    Log.info("db.migrate", "inbox_messages 表已添加 cc/my_role 列");
+    if (!icols.includes("related_contact_ids")) sqlJsDb.run("ALTER TABLE inbox_messages ADD COLUMN related_contact_ids text;");
+    Log.info("db.migrate", "inbox_messages 表已添加 cc/my_role/related_contact_ids 列");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.0: contacts 表补 language 列（国家+语言分离）

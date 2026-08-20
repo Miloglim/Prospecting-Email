@@ -3,7 +3,8 @@ import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { inboxMessages } from "../db/schema/inbox";
-import { eq, desc, and, ne, sql as dsql } from "drizzle-orm";
+import { emailAccounts } from "../db/schema/accounts";
+import { eq, desc, and, sql as dsql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
@@ -211,7 +212,7 @@ export async function updateNote(interactionId: number, text: string): Promise<R
 export function getDetail(contactId: number): Result<{
   contact: PipelineContact | null;
   interactions: Array<{ type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-  emails: Array<{ id: number | null; fromEmail: string; direction: "inbound" | "outbound"; subject: string | null; classification: string | null; receivedAt: string; bodyPreview: string | null }>;
+  emails: Array<{ id: number | null; fromEmail: string; direction: "inbound" | "outbound"; type: "sent" | "replied" | "cc"; subject: string | null; receivedAt: string; bodyPreview: string | null }>;
 }> {
   const db = getDb();
   const row = db.select({
@@ -254,30 +255,31 @@ export function getDetail(contactId: number): Result<{
     contact.lastFollowupNote = lastNoteRow.bodyPreview || null;
   }
 
-  // 收件（IMAP/POP3）— 排除 sent（发件单独从 inbox_messages 取，方向 outbound）
-  const inboxRows = db.select().from(inboxMessages)
-    .where(and(eq(inboxMessages.matchedContactId, contactId), ne(inboxMessages.classification, "sent")))
-    .orderBy(desc(inboxMessages.receivedAt)).limit(30).all()
-    .map(e => ({
-      id: e.id, fromEmail: e.fromEmail, direction: "inbound" as const, subject: e.subject,
-      classification: e.classification, receivedAt: e.receivedAt,
-      bodyPreview: e.bodyPreview,
-    }));
+  // 邮件往来：主联系人匹配 OR relatedContactIds 含该联系人（抄送/多人也进入）
+  const accountEmails = new Set(
+    db.select({ email: emailAccounts.email }).from(emailAccounts).all().map(a => a.email.toLowerCase()),
+  );
+  const contactEmail = (row?.email || "").toLowerCase();
 
-  // 发件 — 从 inbox_messages（classification=sent）取，带 id 供前端懒加载完整正文
-  const sentRows = db.select().from(inboxMessages)
-    .where(and(eq(inboxMessages.matchedContactId, contactId), eq(inboxMessages.classification, "sent")))
-    .orderBy(desc(inboxMessages.receivedAt)).limit(30).all()
-    .map(e => ({
-      id: e.id, fromEmail: e.fromEmail, direction: "outbound" as const,
-      subject: e.subject, classification: "sent" as const,
-      receivedAt: e.receivedAt, bodyPreview: e.bodyPreview,
-    }));
-
-  // 合并：收件 + 发件，按时间倒序
-  const emailRows = [...inboxRows, ...sentRows]
-    .sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime())
-    .slice(0, 50);
+  const emailRows = db.select().from(inboxMessages)
+    .where(dsql`(${inboxMessages.matchedContactId} = ${contactId} OR instr(',' || COALESCE(${inboxMessages.relatedContactIds}, '') || ',', ',' || ${contactId} || ',') > 0)`)
+    .orderBy(desc(inboxMessages.receivedAt)).limit(60).all()
+    .map(e => {
+      const fromLower = (e.fromEmail || "").toLowerCase();
+      let direction: "inbound" | "outbound";
+      let type: "sent" | "replied" | "cc";
+      if (e.classification === "sent" || accountEmails.has(fromLower)) {
+        direction = "outbound"; type = "sent";
+      } else if (contactEmail && fromLower === contactEmail) {
+        direction = "inbound"; type = "replied";
+      } else {
+        direction = "inbound"; type = "cc";
+      }
+      return {
+        id: e.id, fromEmail: e.fromEmail, direction, type,
+        subject: e.subject, receivedAt: e.receivedAt, bodyPreview: e.bodyPreview,
+      };
+    });
 
   return okResult({ contact, interactions: interactionRows, emails: emailRows });
 }

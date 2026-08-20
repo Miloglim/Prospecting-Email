@@ -44,6 +44,12 @@ const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   note: { label: "跟进", color: "#607d8b" },
 };
 
+const EMAIL_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+  sent: { label: "发件", color: "#2563eb" },
+  replied: { label: "回复", color: "#22a644" },
+  cc: { label: "抄送", color: "#ff9800" },
+};
+
 function daysAgo(d: string) {
   const delta = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
   if (delta === 0) return "今天";
@@ -108,7 +114,7 @@ export function CrmPipeline() {
       success: boolean; data?: {
         contact: PipelineContact | null;
         interactions: Array<{ id?: number; type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-        emails: Array<{ id?: number; fromEmail: string; direction?: string; subject: string | null; classification: string | null; receivedAt: string; bodyPreview?: string | null }>;
+        emails: Array<{ id?: number; fromEmail: string; direction?: string; type?: string; subject: string | null; receivedAt: string; bodyPreview?: string | null }>;
       };
     }>,
     enabled: !!detailId,
@@ -675,15 +681,10 @@ export function CrmPipeline() {
                   >
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <MailOutlined className="text-[9px] text-gray-400" />
-                      <span className={`text-[9px] ${e.direction === "outbound" ? "text-blue-500" : "text-green-600"}`}>
-                        {e.direction === "outbound" ? "发" : "收"}
-                      </span>
+                      <Tag color={EMAIL_TYPE_LABELS[e.type || ""]?.color || "default"}
+                        className="text-[9px] leading-none px-1"
+                      >{EMAIL_TYPE_LABELS[e.type || ""]?.label || "收"}</Tag>
                       <span className="text-[10px] font-mono">{e.fromEmail}</span>
-                      {e.classification && (
-                        <Tag color={TYPE_LABELS[e.classification]?.color || "default"}
-                          className="text-[9px] leading-none px-1 ml-auto"
-                        >{TYPE_LABELS[e.classification]?.label || e.classification}</Tag>
-                      )}
                     </div>
                     <div className="text-[10px] truncate">{e.subject || "无主题"}</div>
                     <div className="text-[9px] text-gray-400 mt-0.5">{new Date(e.receivedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</div>

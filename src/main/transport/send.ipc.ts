@@ -23,7 +23,7 @@ const isHtml = (s: string) => /<[a-z][\s\S]*>/i.test(s);
 
 
 /** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
-async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<void>> {
+async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<{ messageId: string | null }>> {
   const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, item.accountId)).get();
   if (!account) return failResult("账号未找到");
 
@@ -49,22 +49,23 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     const from = displayName ? `"${displayName}" <${account.email}>` : account.email;
     const subject = item.subject || "Regarding our logistics partnership";
 
+    let info: { messageId?: string } | null = null;
     if (isHtml(body) || isHtml(signature)) {
       const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
       const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
-      await transporter.sendMail({
+      info = await transporter.sendMail({
         from, bcc: emails, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
         html: bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""),
       });
     } else {
-      await transporter.sendMail({
+      info = await transporter.sendMail({
         from, bcc: emails, subject,
         text: body + (signature ? `\n\n${signature}` : ""),
       });
     }
     Log.debug("send.bcc", `${item.companyName}: ${emails.length} 人`);
-    return okResult(undefined);
+    return okResult({ messageId: info?.messageId || null });
   } catch (err: unknown) {
     return failResult(err instanceof Error ? err.message : "发送失败");
   } finally {

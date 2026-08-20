@@ -144,6 +144,16 @@ export function matchContact(email: string): ContactRow | null {
   return row || null;
 }
 
+/** 匹配一组邮箱到联系人，返回逗号分隔的联系人 id（去重）。用于 to/cc 关联多个联系人。 */
+export function matchContactIds(emails: string[]): string {
+  const ids = new Set<number>();
+  for (const e of emails) {
+    const c = matchContact(e);
+    if (c) ids.add(c.id);
+  }
+  return [...ids].join(",");
+}
+
 // ── 抓取器状态 ──
 
 const SEEN_UIDS = new Set<string>();

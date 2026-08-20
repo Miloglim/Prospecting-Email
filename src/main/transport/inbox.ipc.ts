@@ -240,6 +240,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
 
       const contact = InboxService.matchContact(msg.fromEmail);
       const classification = InboxService.classify(msg.subject, msg.fromEmail, msg.bodyText, !!contact, myRole === "cc");
+      const relatedContactIds = InboxService.matchContactIds([...msg.to, ...msg.cc]);
 
       getDb().insert(inboxMessages).values({
         accountId,
@@ -252,6 +253,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         cc: msg.cc.join(", "),
         myRole,
         matchedContactId: contact?.id || null,
+        relatedContactIds,
         receivedAt: msg.date,
       }).run();
       await InboxService.writeBodyForLastInsert(msg.bodyHtml); // 正文落盘文件
@@ -267,6 +269,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         cc: msg.cc.join(", "),
         myRole,
         matchedContactId: contact?.id || null,
+        relatedContactIds,
         isRead: 0,
         receivedAt: msg.date,
         createdAt: new Date().toISOString(),
@@ -361,6 +364,9 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       // 元数据阶段：正文留空，正文懒加载时再补（避免每封拉 source 卡顿）
       const contact = InboxService.matchContact(fromEmail);
       const classification = InboxService.classify(subject, fromEmail, "", !!contact, myRole === "cc");
+      const relatedContactIds = InboxService.matchContactIds(
+        [...toArr, ...ccArr].map(a => a.address || "").filter(Boolean),
+      );
 
       getDb().insert(inboxMessages).values({
         accountId, messageId: msgId,
@@ -368,6 +374,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         bodyPreview: "", classification,
         cc: ccList, myRole,
         matchedContactId: contact?.id || null,
+        relatedContactIds,
         receivedAt: date,
       }).run();
       if (msgId) existing.add(msgId);
@@ -379,6 +386,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         bodyPreview: "", classification,
         cc: ccList, myRole,
         matchedContactId: contact?.id || null,
+        relatedContactIds,
         isRead: 0, receivedAt: date,
         createdAt: new Date().toISOString(),
       });
@@ -446,16 +454,32 @@ async function detectSent(accountId: number): Promise<number> {
       if (!msgId) continue;
       if (InboxService.isDeleted(`${accountId}|${msgId}`)) continue;
       if (existing.has(msgId)) continue;
-      const to = env.to as Array<{ address?: string; name?: string }> | undefined;
-      if (!to?.length) continue;
-      const toEmail = to[0]!.address || "";
+      // 收件人：BCC 邮件的收件人在 bcc 不在 to，to+cc+bcc 全解析
+      const toArr = (env.to as Array<{ address?: string; name?: string }>) || [];
+      const ccArr = (env.cc as Array<{ address?: string; name?: string }>) || [];
+      const bccArr = (env.bcc as Array<{ address?: string; name?: string }>) || [];
+      const allRecipients = [...toArr, ...ccArr, ...bccArr].map(a => a.address || "").filter(Boolean);
+      if (allRecipients.length === 0) continue;
+
       const subject = (env.subject as string) || "";
-      const contact = InboxService.matchContact(toEmail);
+      const recipientsStr = allRecipients.join(", ");
+
+      // 匹配所有联系人（去重），主联系人取第一个
+      const matchedIds = new Set<number>();
+      for (const email of allRecipients) {
+        const c = InboxService.matchContact(email);
+        if (c) matchedIds.add(c.id);
+      }
+      const contactIds = [...matchedIds];
+      const primaryContactId = contactIds[0] || null;
+
       getDb().insert(inboxMessages).values({
         accountId, messageId: msgId,
-        fromEmail: toEmail, fromName: to[0]!.name || null, subject,
-        bodyPreview: `发给: ${toEmail}`, // 元数据占位，正文懒加载时再补
-        classification: "sent", matchedContactId: contact?.id || null,
+        fromEmail: account.email, fromName: account.displayName || null, subject,
+        bodyPreview: `发给: ${recipientsStr}`, // 元数据占位，正文懒加载时再补
+        classification: "sent",
+        matchedContactId: primaryContactId,
+        relatedContactIds: contactIds.join(","),
         isRead: 0, receivedAt: env.date ? new Date(env.date as string | Date).toISOString() : new Date().toISOString(),
       }).run();
       // 正文直接落盘文件（已拉 source，避免懒加载搜索 messageId 失败导致无正文）
@@ -473,10 +497,11 @@ async function detectSent(accountId: number): Promise<number> {
       }
       existing.add(msgId);
       added++;
-      if (contact) {
+      // 每个匹配的联系人都写互动记录（BCC 多人全对应）
+      for (const cid of contactIds) {
         getDb().insert(interactions).values({
-          contactId: contact.id, type: "sent", direction: "outbound",
-          subject, bodyPreview: `已发送至 ${toEmail}`,
+          contactId: cid, type: "sent", direction: "outbound",
+          subject, bodyPreview: `已发送至 ${recipientsStr}`,
           messageId: msgId, accountId,
         }).run();
       }

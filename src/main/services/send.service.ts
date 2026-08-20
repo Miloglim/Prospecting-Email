@@ -132,8 +132,8 @@ let pushFn: ((c: string, d: unknown) => void) | null = null;
 export function setPushFn(fn: (c: string, d: unknown) => void) { pushFn = fn; }
 function push(c: string, d: unknown) { try { pushFn?.(c, d); } catch { /* */ } }
 
-let sendBccFn: ((item: SendItem & { body: string }) => Promise<Result<void>>) | null = null;
-export function setSendBccFn(fn: (item: SendItem & { body: string }) => Promise<Result<void>>) { sendBccFn = fn; }
+let sendBccFn: ((item: SendItem & { body: string }) => Promise<Result<{ messageId: string | null }>>) | null = null;
+export function setSendBccFn(fn: (item: SendItem & { body: string }) => Promise<Result<{ messageId: string | null }>>) { sendBccFn = fn; }
 
 // ── 可中断延迟 ──
 
@@ -321,6 +321,9 @@ const STAGE_MAP: Record<string, string> = {
   cold: "initial", f1: "followup1", f2: "followup2", f3: "closing", f4: "reactivate",
 };
 
+// 已建立联系的人不能进开发信发送桶（跟进走客户跟进界面，避免给已触达客户发开发信）
+const EXCLUDED_STATUSES = ["reached", "replied", "autoreply", "bounced"];
+
 // ── 联系人 clientType → 模板 category 映射 ──
 function mapClientType(ct: string): string {
   const v = (ct || "").toLowerCase();
@@ -374,7 +377,10 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
   // 用 id 一次查完整联系人（供模板渲染）
   const selected = new Map<number, ContactRow>();
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
-  for (const c of selectedRows) selected.set(c.id, c);
+  for (const c of selectedRows) {
+    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达/已回复/退信/自动回复不进开发信
+    selected.set(c.id, c);
+  }
 
   const companyGroups = new Map<string, ContactRow[]>();
   for (const c of selected.values()) {
@@ -471,7 +477,10 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
 
   const selected = new Map<number, ContactRow>();
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
-  for (const c of selectedRows) selected.set(c.id, c);
+  for (const c of selectedRows) {
+    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达/已回复/退信/自动回复不进开发信
+    selected.set(c.id, c);
+  }
 
   const companyGroups = new Map<string, ContactRow[]>();
   for (const c of selected.values()) {
@@ -669,6 +678,7 @@ async function runAccountLoop(accountId: number) {
       const sendItem = { ...item, body };
       const r = await sendBccFn(sendItem);
       if (r.success) {
+        const messageId = r.data?.messageId || null;
         item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; fails = 0;
         recordQuotaSend();
         try { getDb().update(sendQueue).set({ status: "sent", sentAt: item.sentAt }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
@@ -678,7 +688,7 @@ async function runAccountLoop(accountId: number) {
             getDb().insert(interactions).values({ contactId: rc.contactId, type: "sent", direction: "outbound", channel: "email", subject: item.subject, bodyPreview: body.slice(0, 200), accountId, createdAt: now }).run();
             // 收件箱「已发送」:SMTP 发信不进 IMAP Sent 文件夹,直接落 inbox_messages 让前端可见并关联联系人
             getDb().insert(inboxMessages).values({
-              accountId, messageId: null,
+              accountId, messageId,
               fromEmail: rc.email, fromName: rc.name,
               subject: item.subject, bodyPreview: body.slice(0, 500),
               classification: "sent", matchedContactId: rc.contactId,
