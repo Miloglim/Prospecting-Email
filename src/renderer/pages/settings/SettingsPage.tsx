@@ -159,6 +159,14 @@ function ApiKeyRow({ label, name, hint }: { label: string; name: string; hint?: 
           </span>
           {hint && <span className="text-[10px] text-gray-400 whitespace-nowrap">{hint}</span>}
           {configured && saving === "saved" && <span className="text-[11px] text-green-500">✓</span>}
+          {configured && (
+            <Button size="small" danger type="text"
+              onClick={async () => {
+                const r = await window.api.invoke("ai:setKey", { name, value: "" }) as { success: boolean; error?: string };
+                if (r?.success) { qc.invalidateQueries({ queryKey: ["ai", "keys"] }); message.success(`${label} 已删除`); }
+                else message.error(r?.error || "删除失败");
+              }}>删除</Button>
+          )}
         </>
       )}
     </div>

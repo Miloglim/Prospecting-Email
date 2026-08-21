@@ -471,10 +471,11 @@ export interface AssembleInput {
   clientType: ClientType;
   stage: Stage;
   includeCompany?: boolean;
+  subjectOverride?: string;
 }
 
 export function assembleEmail(input: AssembleInput): { subject: string; body: string } {
-  const { lang, clientType, stage, includeCompany } = input;
+  const { lang, clientType, stage, includeCompany, subjectOverride } = input;
   const parts: string[] = [];
 
   // 1. 称呼
@@ -529,28 +530,52 @@ export function assembleEmail(input: AssembleInput): { subject: string; body: st
     return opts[Math.floor(Math.random() * opts.length)]!;
   });
 
-  // 主题
+  // 主题（按客户类型 × 语言区分，直客/同行/通用各一套）
   const subjects: Record<string, string[]> = {
-    EN: [
-      "Introduction — international logistics support",
-      "Exploring a potential logistics partnership",
+    "direct.EN": [
+      "Freight partnership for your LATAM shipments",
+      "A logistics proposal for your company",
+      "Optimizing your ocean freight to Latin America",
+    ],
+    "direct.ES": [
+      "Propuesta logística para sus envíos a LATAM",
+      "Optimice su carga marítima a Latinoamérica",
+      "Alianza de carga para sus operaciones",
+    ],
+    "direct.PT": [
+      "Proposta logística para seus envios à LATAM",
+      "Otimize seu frete marítimo para a América Latina",
+      "Parceria de frete para suas operações",
+    ],
+    "peer.EN": [
+      "Capacity partnership for LATAM lanes",
+      "Freight cooperation for forwarders",
+      "Backup capacity for your shipments",
+    ],
+    "peer.ES": [
+      "Alianza de capacidad para rutas LATAM",
+      "Cooperación de carga para forwarders",
+      "Capacidad de respaldo para sus envíos",
+    ],
+    "peer.PT": [
+      "Parceria de capacidade para rotas LATAM",
+      "Cooperação de frete para forwarders",
+      "Capacidade de backup para seus envios",
+    ],
+    "general.EN": [
+      "International logistics support",
       "Regarding international freight cooperation",
-      "Introduction and logistics partnership inquiry",
     ],
-    ES: [
-      "Presentación — soporte logístico internacional",
-      "Explorando una posible alianza logística",
+    "general.ES": [
+      "Soporte logístico internacional",
       "Cooperación en carga internacional",
-      "Presentación y propuesta de colaboración logística",
     ],
-    PT: [
-      "Apresentação — suporte logístico internacional",
-      "Explorando uma possível parceria logística",
+    "general.PT": [
+      "Suporte logístico internacional",
       "Cooperação em carga internacional",
-      "Apresentação e proposta de parceria logística",
     ],
   };
-  let subject = pickOne(subjects[lang] || subjects["EN"]!);
+  let subject = subjectOverride || pickOne(subjects[`${clientType}.${lang}`] || subjects[`general.${lang}`] || subjects["general.EN"]!);
   subject = subject.replace(/\{([^{}|]+\|[^{}]+)\}/g, (_m, choices: string) => {
     const opts = choices.split("|");
     return opts[Math.floor(Math.random() * opts.length)]!;

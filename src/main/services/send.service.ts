@@ -454,11 +454,14 @@ const VALID_STAGES: Stage[] = ["initial", "followup1", "followup2", "closing", "
 /** 句库预览：按语言/客户类型/阶段组装一封（{{company}} 用占位词替换展示） */
 export function previewSentence(lang: string, clientType: string, stage: string): Result<{ subject: string; body: string }> {
   const s: Stage = (VALID_STAGES as string[]).includes(stage) ? (stage as Stage) : "initial";
+  const l = normalizeLang(lang);
+  const ct = mapClientType(clientType) as ClientType;
   const r = assembleEmail({
-    lang: normalizeLang(lang),
-    clientType: mapClientType(clientType) as ClientType,
+    lang: l,
+    clientType: ct,
     stage: s,
     includeCompany: true,
+    subjectOverride: loadConfig().sentenceSubjects?.[`${ct}.${l}`] || undefined,
   });
   r.body = r.body.replace(/\{\{\s*company\s*\}\}/gi, "your company");
   return okResult(r);
@@ -496,11 +499,14 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
   for (const [, group] of companyGroups) {
     const first = group[0]!;
     const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+    const l = normalizeLang(first.language);
+    const ct = mapClientType(first.clientType || "") as ClientType;
     const assembled = assembleEmail({
-      lang: normalizeLang(first.language),
-      clientType: mapClientType(first.clientType || "") as ClientType,
+      lang: l,
+      clientType: ct,
       stage: (STAGE_MAP[first.stage || ""] || "initial") as Stage,
       includeCompany: !!companyName,
+      subjectOverride: loadConfig().sentenceSubjects?.[`${ct}.${l}`] || undefined,
     });
     items.push({
       id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,

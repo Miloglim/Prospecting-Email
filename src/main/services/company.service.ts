@@ -141,7 +141,7 @@ export interface CompanyDetail {
   company: CompanyRow;
   contacts: Array<{
     id: number; email: string; firstName: string | null; lastName: string | null;
-    title: string | null; stage: string | null; status: string | null;
+    title: string | null; phone: string | null; stage: string | null; status: string | null;
   }>;
   sentCount: number; repliedCount: number;
 }
@@ -155,7 +155,7 @@ export function getCompanyDetail(companyId: number): Result<CompanyDetail> {
   const contactRows = db.select({
     id: contacts.id, email: contacts.email,
     firstName: contacts.firstName, lastName: contacts.lastName,
-    title: contacts.title, stage: contacts.stage, status: contacts.status,
+    title: contacts.title, phone: contacts.phone, stage: contacts.stage, status: contacts.status,
   }).from(contacts).where(eq(contacts.companyId, companyId)).all();
 
   const contactIds = contactRows.map(r => r.id);

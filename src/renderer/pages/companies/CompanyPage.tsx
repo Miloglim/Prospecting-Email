@@ -12,7 +12,7 @@ interface CompanyWithCounts {
 
 interface CompanyDetail {
   company: { id: number; name: string; domain: string | null; industry: string | null; country: string | null; size: string | null; createdAt: string };
-  contacts: Array<{ id: number; email: string; firstName: string | null; lastName: string | null; title: string | null; stage: string | null; status: string | null }>;
+  contacts: Array<{ id: number; email: string; firstName: string | null; lastName: string | null; title: string | null; phone: string | null; stage: string | null; status: string | null }>;
   sentCount: number; repliedCount: number;
 }
 
@@ -236,6 +236,7 @@ export function CompanyPage() {
                         </span>
                         <span className="font-mono text-[11px] text-blue-600 flex-1 truncate">{c.email}</span>
                         {c.title && <span className="text-[10px] text-gray-400">{c.title}</span>}
+                        {c.phone && <span className="text-[10px] text-gray-500 font-mono">{c.phone}</span>}
                         {c.stage && STAGE_LABELS[c.stage] && (
                           <Tag color={STAGE_LABELS[c.stage]!.color} className="text-[9px] leading-none px-1">
                             {STAGE_LABELS[c.stage]!.label}

@@ -24,11 +24,12 @@ export function registerSystemIPC() {
 
   ipcMain.handle(IPC.SYSTEM.UPDATE_CONFIG, (_e, partial) => {
     const current = loadConfig();
-    // schedule 深度合并，避免前端只传部分字段时覆盖丢失
+    // schedule / sentenceSubjects 深度合并，避免前端只传部分字段时覆盖丢失
     const merged = {
       ...current,
       ...partial,
       schedule: { ...DEFAULT_SCHEDULE, ...(current.schedule || {}), ...(partial?.schedule || {}) },
+      sentenceSubjects: { ...(current.sentenceSubjects || {}), ...(partial?.sentenceSubjects || {}) },
     };
     saveConfig(merged);
     return okResult(undefined);

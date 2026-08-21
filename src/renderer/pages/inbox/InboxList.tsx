@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Button, message, Alert, Modal, Tooltip, Progress } from "antd";
+import { Button, message, Modal, Tooltip, Progress } from "antd";
 
 // (Button etc. used in sub-components)
 import {
   ReloadOutlined, MailOutlined,
   DeleteOutlined,
-  ThunderboltOutlined, SaveOutlined,
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -19,8 +18,6 @@ interface InboxItem {
   _contactStatus?: string | null;
   _contactTags?: string | null;
 }
-
-interface EmailSummary { summary: string; nextStep: string; }
 
 const TYPE: Record<string, { label: string; dot: string }> = {
   replied: { label: "回复", dot: "#22a644" },
@@ -84,8 +81,6 @@ export function InboxList() {
   const [sid, setSid] = useState<number | null>(null);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [summary, setSummary] = useState<EmailSummary | null>(null);
-  const [sl, setSl] = useState(false);
   const [body, setBody] = useState<string | null>(null);
   const [bl, setBl] = useState(false);
   // 前端正文缓存：点开过的邮件切回秒开，不重复 invoke / 不闪 loading
@@ -726,9 +721,6 @@ export function InboxList() {
             {/* 正文 */}
             <div className="detail-body">
               <div className="body-pane" style={{ height: "calc(100vh - 290px)", display: "flex", flexDirection: "column" }}>
-                <div style={{ padding: "14px 20px 0", flexShrink: 0 }}>
-                  <EmailAiSummary data={sel_} summary={summary} setSummary={setSummary} sl={sl} setSl={setSl} qc={qc} />
-                </div>
                 {bl ? (
                   <div style={{ textAlign: "center", padding: "60px 0", color: "#ccc", fontSize: 13 }}>加载正文中...</div>
                 ) : body ? (
@@ -786,32 +778,3 @@ export function InboxList() {
   );
 }
 
-// ── AI 总结 ──
-
-function EmailAiSummary(props: {
-  data: InboxItem; summary: EmailSummary | null; setSummary: (s: EmailSummary | null) => void;
-  sl: boolean; setSl: (b: boolean) => void; qc: ReturnType<typeof useQueryClient>;
-}) {
-  const { data: d, summary, setSummary, sl, setSl, qc } = props;
-  const run = async () => {
-    setSl(true);
-    try {
-      const r = await window.api.invoke("ai:summarizeEmail", { fromName: d.fromName, fromEmail: d.fromEmail, subject: d.subject, bodyPreview: d.bodyPreview }) as { success: boolean; data?: EmailSummary; error?: string };
-      if (r?.success && r.data) setSummary(r.data); else message.error(r?.error || "失败");
-    } catch { message.error("失败"); } finally { setSl(false); }
-  };
-  const save = async () => {
-    if (!d.matchedContactId) { message.warning("未匹配联系人"); return; }
-    const r = await window.api.invoke("crm:addNote", { contactId: d.matchedContactId, text: `【AI 总结】${summary?.summary || ""}\n【建议】${summary?.nextStep || ""}` }) as { success: boolean; error?: string };
-    if (r?.success) { message.success("已写入跟进"); qc.invalidateQueries({ queryKey: ["contacts", "interactions"] }); qc.invalidateQueries({ queryKey: ["crm"] }); } else message.error(r?.error || "失败");
-  };
-  return (
-    <div className="mb-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Button size="small" icon={<ThunderboltOutlined />} loading={sl} onClick={run}>AI 总结</Button>
-        {summary && <Button size="small" icon={<SaveOutlined />} onClick={save} disabled={!d.matchedContactId}>写入跟进</Button>}
-      </div>
-      {summary && <Alert type="success" showIcon className="mb-2" message={<div className="text-xs space-y-1.5"><div><b className="text-gray-700">总结：</b><span className="text-gray-600">{summary.summary}</span></div><div><b className="text-gray-700">建议：</b><span className="text-gray-600">{summary.nextStep}</span></div></div>} />}
-    </div>
-  );
-}

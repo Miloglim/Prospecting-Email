@@ -85,6 +85,8 @@ export interface RuntimeConfig {
     /** 自动归档天数（发信后 N 天无回复自动标记为 lost，0=禁用） */
     autoArchiveDays: number;
   };
+  /** 预设句库自定义主题（key = `${clientType}.${lang}`，如 direct.EN） */
+  sentenceSubjects?: Record<string, string>;
 }
 
 export const DEFAULT_SCHEDULE: SendSchedule = {

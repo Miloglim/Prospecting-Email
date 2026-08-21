@@ -35,6 +35,8 @@ export function TemplateList() {
   const [pvStage, setPvStage] = useState<string>("initial");
   const [pvSource, setPvSource] = useState<string>("preset");
   const [pvSeed, setPvSeed] = useState(0);
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [subjectDraft, setSubjectDraft] = useState("");
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [form] = Form.useForm();
@@ -103,6 +105,17 @@ export function TemplateList() {
   }, [pvType, pvLang, pvStage, pvSource, pvSeed, templates]);
   useEffect(() => { fetchPreview(); }, [fetchPreview]);
   const rendered = pvRendered;
+
+  // 预设句库主题编辑保存（按客户类型+语言持久化，发送时用该主题）
+  const saveSubject = async () => {
+    if (!editingSubject) return;
+    setEditingSubject(false);
+    const newSubject = subjectDraft.trim();
+    if (!newSubject) return;
+    await window.api.invoke("system:updateConfig", { sentenceSubjects: { [`${pvType}.${pvLang}`]: newSubject } });
+    message.success("主题已保存");
+    setPvSeed(s => s + 1); // 触发重新预览（读已保存主题）
+  };
 
   const columns = [
     { title: "名称", dataIndex: "name", key: "name" },
@@ -223,10 +236,20 @@ export function TemplateList() {
                     </div>
                     <div className="border rounded bg-white">
                       <div className="p-4 pb-2">
-                        <div className="text-[10px] text-gray-400 mb-1">主题</div>
-                        <div className="text-sm font-semibold text-gray-800 mb-4 pb-3 border-b">
-                          {rendered.subject}
-                        </div>
+                        <div className="text-[10px] text-gray-400 mb-1">主题{pvSource === "preset" && "（点击编辑）"}</div>
+                        {pvSource === "preset" && editingSubject ? (
+                          <Input size="small" value={subjectDraft} autoFocus
+                            onChange={e => setSubjectDraft(e.target.value)}
+                            onPressEnter={saveSubject}
+                            onBlur={saveSubject}
+                            style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}
+                          />
+                        ) : (
+                          <div className={`text-sm font-semibold text-gray-800 mb-4 pb-3 border-b ${pvSource === "preset" ? "cursor-pointer hover:bg-gray-50 rounded px-1" : ""}`}
+                            onClick={() => { if (pvSource === "preset") { setSubjectDraft(rendered.subject); setEditingSubject(true); } }}>
+                            {rendered.subject}
+                          </div>
+                        )}
                       </div>
                       <div className="px-4 pb-4">
                         <HtmlText html={rendered.body} className="text-[13px] text-gray-700 leading-relaxed" />
