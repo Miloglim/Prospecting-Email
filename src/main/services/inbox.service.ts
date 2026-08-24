@@ -7,7 +7,7 @@ import { eq, desc, sql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase, getSqlJsDb } from "../db";
-import { updateContactStatus, markAsBounced } from "./contact.service";
+import { updateContactStatus, markAsBounced, deleteContactCascade } from "./contact.service";
 import * as path from "path";
 import * as fs from "fs";
 import { DB_PATH } from "../config";
@@ -242,9 +242,16 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
     }
   }
 
-  // 推送新邮件通知
+  // 推送新邮件通知（含详细分类数目）
   if (allNew.length > 0 && pushFn) {
-    try { pushFn("inbox:newMail", { count: allNew.length }); } catch { /* 静默 */ }
+    try {
+      const byClass: Record<string, number> = {};
+      for (const m of allNew) {
+        const c = m.classification || "other";
+        byClass[c] = (byClass[c] || 0) + 1;
+      }
+      pushFn("inbox:newMail", { count: allNew.length, byClass });
+    } catch { /* 静默 */ }
   }
 
   // 每次抓取后自动清理超限旧邮件
@@ -265,6 +272,42 @@ const ARCHIVE_PATH = path.join(path.dirname(DB_PATH), "inbox-archive.jsonl");
 export function cleanupInbox(): void {
   const db = getDb();
   let archiveLines: string[] = [];
+
+  // 退信去重：同 subject+发件人+时间 的重复退信只保留最小 id（退信服务批量发的重复退信）
+  try {
+    getSqlJsDb().run(`
+      DELETE FROM inbox_messages
+      WHERE classification = 'bounce'
+        AND id NOT IN (
+          SELECT MIN(id) FROM inbox_messages
+          WHERE classification = 'bounce'
+          GROUP BY subject, from_email, received_at
+        )
+    `);
+    const deleted = getSqlJsDb().getRowsModified();
+    if (deleted > 0) {
+      Log.info("inbox.cleanup", `退信去重删除 ${deleted} 封`);
+      saveDatabase();
+    }
+  } catch (e) { Log.warn("inbox.cleanup", `退信去重失败: ${(e as Error).message}`); }
+
+  // messageId 去重：相同 messageId 多行只保留最小 id（detectSent 并发导致的重复）
+  try {
+    getSqlJsDb().run(`
+      DELETE FROM inbox_messages
+      WHERE message_id IS NOT NULL AND message_id != ''
+        AND id NOT IN (
+          SELECT MIN(id) FROM inbox_messages
+          WHERE message_id IS NOT NULL AND message_id != ''
+          GROUP BY message_id
+        )
+    `);
+    const deleted2 = getSqlJsDb().getRowsModified();
+    if (deleted2 > 0) {
+      Log.info("inbox.cleanup", `messageId 去重删除 ${deleted2} 封`);
+      saveDatabase();
+    }
+  } catch (e) { Log.warn("inbox.cleanup", `messageId 去重失败: ${(e as Error).message}`); }
 
   for (const [cls, limit] of Object.entries(CLEANUP_LIMITS)) {
     const rows = db.select({
@@ -523,23 +566,21 @@ export function deleteMessage(id: number): Result<void> {
   return okResult(undefined);
 }
 
-/** 一键删除所有退信 */
+/** 一键删除所有退信匹配的联系人（不删邮件） */
 export function deleteAllBounce(): Result<number> {
-  const deleted = _readDeleted();
-  const bounceMsgs = getDb().select().from(inboxMessages)
+  // 查所有退信邮件匹配到的联系人（去重）
+  const bounceMsgs = getDb().select({ matchedContactId: inboxMessages.matchedContactId })
+    .from(inboxMessages)
     .where(eq(inboxMessages.classification, "bounce"))
     .all();
-  for (const m of bounceMsgs) {
-    const key = `${m.accountId}|${m.messageId}`;
-    deleted.add(key);
-  }
-  _writeDeleted(deleted);
-  getDb().delete(inboxMessages)
-    .where(eq(inboxMessages.classification, "bounce"))
-    .run();
+  const contactIds = [...new Set(
+    bounceMsgs.map(m => m.matchedContactId).filter((x): x is number => x != null),
+  )];
+  // 级联删除这些联系人（收件箱邮件保留，仅解除关联）
+  for (const cid of contactIds) deleteContactCascade(cid);
   saveDatabase();
-  Log.info("inbox.deleteBounce", `已删除 ${bounceMsgs.length} 封退信`);
-  return okResult(bounceMsgs.length);
+  Log.info("inbox.deleteBounce", `已删除 ${contactIds.length} 个退信匹配的联系人`);
+  return okResult(contactIds.length);
 }
 
 // ── 自动抓取 ──

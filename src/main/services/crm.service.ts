@@ -59,10 +59,10 @@ export function listPipeline(): Result<StageData[]> {
     .where(eq(contacts.status, "reached"))
     .all();
 
-  // 最近一次跟进：一次查询全量 note，按联系人取最新一条（避免 N 次查库）
+  // 最近一次跟进：一次查询全量 interactions，按联系人取最新一条（不限类型，跟进取所有互动最新）
   const noteRows = db.select({
     contactId: interactions.contactId, bodyPreview: interactions.bodyPreview, createdAt: interactions.createdAt,
-  }).from(interactions).where(eq(interactions.type, "note")).orderBy(desc(interactions.createdAt)).all();
+  }).from(interactions).orderBy(desc(interactions.createdAt)).all();
   const lastNote = new Map<number, { at: string; note: string }>();
   for (const n of noteRows) {
     if (!lastNote.has(n.contactId)) lastNote.set(n.contactId, { at: n.createdAt, note: n.bodyPreview || "" });
@@ -248,8 +248,8 @@ export function getDetail(contactId: number): Result<{
     .where(eq(interactions.contactId, contactId))
     .orderBy(desc(interactions.createdAt)).limit(50).all();
 
-  // 最近一次跟进（interactionRows 已按时间倒序，取第一条 note）
-  const lastNoteRow = interactionRows.find(i => i.type === "note");
+  // 最近一次跟进（interactionRows 已按时间倒序，取第一条，不限类型）
+  const lastNoteRow = interactionRows[0];
   if (contact && lastNoteRow) {
     contact.lastFollowupAt = lastNoteRow.createdAt;
     contact.lastFollowupNote = lastNoteRow.bodyPreview || null;

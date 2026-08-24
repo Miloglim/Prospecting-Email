@@ -126,7 +126,6 @@ export function TemplateList() {
     { title: "主题", dataIndex: "subject", key: "subject" },
     { title: "分类", dataIndex: "category", key: "category", width: 100,
       render: (v: string | null) => v ? <Tag color="purple">{CATEGORY_LABELS[v] || v}</Tag> : "-" },
-    { title: "版本", dataIndex: "version", key: "version", width: 60 },
     {
       title: "操作", key: "actions", width: 140,
       render: (_: unknown, r: Template) => (
@@ -302,14 +301,14 @@ export function TemplateList() {
             <Form.Item name="name" label="名称" rules={[{ required: true }]}>
               <Input placeholder="模板名称" />
             </Form.Item>
-            <Form.Item name="language" label="语言" rules={[{ required: true }]}>
-              <Select options={LANGUAGES.map(l => ({ value: l, label: l }))} />
+            <Form.Item name="language" label="语言">
+              <Select options={[{ value: "", label: "通用" }, ...LANGUAGES.map(l => ({ value: l, label: l }))]} />
             </Form.Item>
             <Form.Item name="category" label="受众">
               <Select options={CATEGORIES.map(c => ({ value: c, label: CATEGORY_LABELS[c] || c }))} />
             </Form.Item>
             <Form.Item name="stage" label="阶段">
-              <Select allowClear options={Object.entries(STAGE_LABELS).map(([k, v]) => ({ value: k, label: v }))} />
+              <Select allowClear options={[{ value: "", label: "通用" }, ...Object.entries(STAGE_LABELS).map(([k, v]) => ({ value: k, label: v }))]} />
             </Form.Item>
           </div>
           <Form.Item name="subject" label="主题" rules={[{ required: true }]}>

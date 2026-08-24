@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { Button, Card, Checkbox, Tag, message, Progress, Modal, Popconfirm, Space, Tabs, Input } from "antd";
-import { PlayCircleOutlined, PauseCircleOutlined, EyeOutlined, SendOutlined, StopOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input } from "antd";
+import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -69,12 +69,6 @@ export function CampaignList() {
   const [sendMode, setSendMode] = useState<string>("mine");
   const [instantSubject, setInstantSubject] = useState("");
   const [instantBody, setInstantBody] = useState("");
-  const [recipientsOpen, setRecipientsOpen] = useState(false);
-  const [recipientsPreview, setRecipientsPreview] = useState<Array<{
-    id: string; companyName: string;
-    recipients: Array<{ contactId: number; email: string; name: string }>;
-    subject: string; accountId: number;
-  }> | null>(null);
   const qc = useQueryClient();
   const navigate = useNavigate();
 
@@ -164,31 +158,6 @@ export function CampaignList() {
     return off;
   }, [qc]);
 
-  // 收件人预览 → 确认发送
-  const handleRecipientPreview = async () => {
-    const payload: Record<string, unknown> = { keys: selectedBuckets };
-    if (sendMode === "mine") {
-      const allTpls = templates.map(t => ({ subject: t.subject, body: t.body, category: t.category, stage: t.stage, language: t.language }));
-      if (allTpls.length === 0) { message.warning("没有可用模板"); return; }
-      payload.templates = allTpls;
-    } else if (sendMode === "instant") {
-      if (!instantSubject.trim() || !instantBody.trim()) { message.warning("请填写主题和正文"); return; }
-      payload.templates = [{ subject: instantSubject, body: instantBody }];
-    }
-    const r = await window.api.invoke("send:preview", payload) as {
-      success: boolean; data?: Array<{
-        id: string; companyName: string; recipients: Array<{ contactId: number; email: string; name: string }>;
-        subject: string; accountId: number;
-      }>; error?: string;
-    };
-    if (r?.success && r.data) {
-      setRecipientsPreview(r.data);
-      setRecipientsOpen(true);
-    } else {
-      message.error(r?.error || "预览失败");
-    }
-  };
-
   const handleStart = async () => {
     const payload: Record<string, unknown> = { keys: selectedBuckets };
     if (sendMode === "mine") {
@@ -202,7 +171,7 @@ export function CampaignList() {
     if (r && typeof r === "object" && "success" in r) {
       const rr = r as { success: boolean; error?: string };
       rr.success
-        ? (message.success(`开始发送 ${selectedCount} 人`), setRecipientsOpen(false), navigate({ to: "/queue" }))
+        ? (message.success(`开始发送 ${selectedCount} 人`), navigate({ to: "/queue" }))
         : message.error(rr.error || "启动失败");
     }
   };
@@ -351,48 +320,15 @@ export function CampaignList() {
             })()}
           </div>
           <Space>
-            <Button size="small" icon={<EyeOutlined />}
-              disabled={selectedCount === 0}
-              onClick={handleRecipientPreview}>预览收件人</Button>
             <Button type="primary" size="small" icon={<SendOutlined />}
               disabled={selectedCount === 0 || isRunning}
-              onClick={handleRecipientPreview}>
+              onClick={handleStart}>
               发送 {selectedCount} 人
             </Button>
           </Space>
         </div>
       </Card>
 
-      {/* ── 收件人预览弹窗 ── */}
-      <Modal title="发送前预览" open={recipientsOpen} onCancel={() => setRecipientsOpen(false)} width={800}
-        footer={
-          <div className="flex justify-between items-center">
-            <span className="text-xs text-gray-400">
-              共 {recipientsPreview?.length || 0} 组、{recipientsPreview?.reduce((s, g) => s + g.recipients.length, 0) || 0} 人
-            </span>
-            <Space>
-              <Button size="small" onClick={() => setRecipientsOpen(false)}>取消</Button>
-              <Button type="primary" size="small" icon={<SendOutlined />}
-                loading={startMut.isPending} onClick={handleStart}>确认发送</Button>
-            </Space>
-          </div>
-        }
-      >
-        {recipientsPreview && (
-          <div className="space-y-1 max-h-[500px] overflow-y-auto">
-            {recipientsPreview.map(g => (
-              <div key={g.id} className="flex items-center gap-3 py-1.5 border-b border-gray-100 text-xs">
-                <span className="font-medium w-28 truncate">{g.companyName || "—"}</span>
-                <Tag className="text-[10px]">{g.recipients.length}人</Tag>
-                <span className="text-[10px] text-blue-500 font-mono">
-                  {accounts.find(a => a.id === g.accountId)?.email || `#${g.accountId}`}
-                </span>
-                <span className="text-[11px] text-gray-400 truncate flex-1">{g.subject}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }

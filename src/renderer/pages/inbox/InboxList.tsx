@@ -115,7 +115,7 @@ export function InboxList() {
 
   const [fetching, setFetching] = useState(false);
   // 多账号进度按 accountId 聚合，避免并行拉取时互相覆盖导致进度条跳变
-  const [fetchProgress, setFetchProgress] = useState<Record<string, { scanned: number; total: number }>>({});
+  const [fetchProgress, setFetchProgress] = useState<Record<string, { email?: string; scanned: number; total: number }>>({});
   const doFetch = async () => {
     setFetching(true);
     setFetchProgress({});
@@ -285,12 +285,23 @@ export function InboxList() {
     }
   }, [data]);
 
-  useEffect(() => { const off = window.api.on("inbox:newMail", () => qc.invalidateQueries({ queryKey: ["inbox"] })); return off; }, [qc]);
+  useEffect(() => {
+    const off = window.api.on("inbox:newMail", (p: unknown) => {
+      const pp = p as { count: number; byClass?: Record<string, number> };
+      if (pp?.count) {
+        const labels: Record<string, string> = { replied: "回复", bounce: "退信", autoreply: "自动回复", other: "其他", sent: "已发送" };
+        const detail = pp.byClass ? Object.entries(pp.byClass).map(([k, v]) => `${labels[k] || k} ${v}`).join("、") : "";
+        message.info(`拉取到 ${pp.count} 封新邮件${detail ? `：${detail}` : ""}`);
+      }
+      qc.invalidateQueries({ queryKey: ["inbox"] });
+    });
+    return off;
+  }, [qc]);
   useEffect(() => {
     const off = window.api.on("inbox:fetchProgress", (p: unknown) => {
-      const pp = p as { accountId: number; scanned: number; total: number };
+      const pp = p as { accountId: number; email?: string; scanned: number; total: number };
       if (pp && typeof pp.scanned === "number") {
-        setFetchProgress(prev => ({ ...prev, [String(pp.accountId ?? 0)]: { scanned: pp.scanned, total: pp.total || 0 } }));
+        setFetchProgress(prev => ({ ...prev, [String(pp.accountId ?? 0)]: { email: pp.email, scanned: pp.scanned, total: pp.total || 0 } }));
       }
     });
     return off;
@@ -372,20 +383,24 @@ export function InboxList() {
           {sel.size > 1 && <button onClick={batchRead} className="btn" style={{ padding: "5px 8px", fontSize: 10 }}>已读</button>}
           {sel.size > 1 && <button onClick={batchDel} className="btn" style={{ padding: "5px 8px", fontSize: 10, color: "#e5484d", borderColor: "#fecaca" }}>删({sel.size})</button>}
         </div>
-        {/* 拉取读条 — 多账号聚合进度，避免跳变 */}
-        {Object.keys(fetchProgress).length > 0 && (() => {
-          const scanned = Object.values(fetchProgress).reduce((s, x) => s + x.scanned, 0);
-          const total = Object.values(fetchProgress).reduce((s, x) => s + x.total, 0);
-          return (
-            <div style={{ padding: "0 14px 6px", flexShrink: 0 }}>
-              <Progress
-                percent={total > 0 ? Math.round((scanned / total) * 100) : 0}
-                size="small" status="active" strokeColor="#2563eb"
-                format={() => `${scanned}/${total}`}
-              />
-            </div>
-          );
-        })()}
+        {/* 拉取进度弹窗 — 分账号详细显示 */}
+        <Modal title="拉取邮件" open={fetching} footer={null} closable={false} width={420}>
+          <div className="space-y-3">
+            {Object.entries(fetchProgress).map(([aid, p]) => (
+              <div key={aid}>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span className="text-gray-600 font-mono">{p.email || `账号 #${aid}`}</span>
+                  <span className="text-gray-400">{p.scanned}/{p.total}</span>
+                </div>
+                <Progress percent={p.total > 0 ? Math.round((p.scanned / p.total) * 100) : 0}
+                  size="small" status="active" strokeColor="#2563eb" />
+              </div>
+            ))}
+            {Object.keys(fetchProgress).length === 0 && (
+              <div className="text-xs text-gray-400 text-center py-4">正在连接服务器...</div>
+            )}
+          </div>
+        </Modal>
 
         {/* 计数条 */}
         <div style={{ padding: "2px 14px 6px", fontSize: 10, color: "#bbb", display: "flex", gap: 8, flexShrink: 0 }}>

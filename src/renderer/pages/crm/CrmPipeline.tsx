@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip } from "antd";
+import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip, Checkbox } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HtmlText } from "../../components/RichTextEditor";
 import {
@@ -57,6 +57,19 @@ function daysAgo(d: string) {
   return `${delta} 天前`;
 }
 
+// 阶段内按跟进人 A-Z 分组（未分配归一组）
+function groupByAssignee(contacts: PipelineContact[]): Array<{ assignee: string; contacts: PipelineContact[] }> {
+  const groups = new Map<string, PipelineContact[]>();
+  for (const c of contacts) {
+    const key = (c.assignee || "").trim() || "未分配";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(c);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], "zh-CN"))
+    .map(([assignee, list]) => ({ assignee, contacts: list }));
+}
+
 // ══════════════════════════════════════════════════════════════
 // 主组件
 // ══════════════════════════════════════════════════════════════
@@ -68,6 +81,7 @@ export function CrmPipeline() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem("crm-stage-state") || "{}"); } catch { return {}; }
   });
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   // 从联系人页跳转来 → 记录待打开 ID
   const pendingDetailRef = useRef<number | null>(null);
@@ -262,6 +276,23 @@ export function CrmPipeline() {
     qc.invalidateQueries({ queryKey: ["crm"] }); // 刷新详情 + 看板「最近跟进」
   };
 
+  // 选取联系人（多选）+ 分行复制邮箱
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const copyEmails = async () => {
+    const emails = stages.flatMap(s => s.contacts).filter(c => selectedIds.has(c.id)).map(c => c.email);
+    if (emails.length === 0) { message.warning("未选中联系人"); return; }
+    try {
+      await navigator.clipboard.writeText(emails.join("\n"));
+      message.success(`已复制 ${emails.length} 个邮箱`);
+    } catch { message.error("复制失败"); }
+  };
+
   // 跟进记录编辑：保存并退出编辑态（onBlur 与按钮共用）
   const commitEditNote = async () => {
     if (!editingNoteId) return;
@@ -277,6 +308,13 @@ export function CrmPipeline() {
     <div className="flex gap-4 h-full" style={{ minHeight: "calc(100vh - 130px)" }}>
       {/* ═══ 左侧看板 ═══ */}
       <div className="flex-1 overflow-y-auto pb-4 space-y-1">
+        {selectedIds.size > 0 && (
+          <div className="sticky top-0 z-20 bg-white border-b border-gray-200 px-3 py-2 flex items-center gap-2">
+            <span className="text-xs text-gray-600">已选 {selectedIds.size} 人</span>
+            <Button size="small" type="primary" onClick={copyEmails}>复制邮箱</Button>
+            <Button size="small" onClick={() => setSelectedIds(new Set())}>清空</Button>
+          </div>
+        )}
         {isLoading ? <Card loading className="w-full" /> :
           stages.map(s => (
             <div key={s.key}>
@@ -292,35 +330,43 @@ export function CrmPipeline() {
               </div>
               {!collapsed[s.key] && (
                 <div>
-                  {s.contacts.map(c => (
-                    <div key={c.id}
-                      id={`crm-contact-${c.id}`}
-                      className={`flex items-center gap-2 px-4 py-2 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors text-xs ${detailId === c.id ? "bg-violet-50 border-l-2 border-l-violet-400" : ""}`}
-                      onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
-                    >
-                      <span className="font-medium flex-shrink-0 w-20 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
-                      <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
-                      <span className="flex items-center gap-2 flex-shrink-0">
-                        {c.lastFollowupAt ? (
-                          <span className="text-[10px] text-gray-400 flex items-center gap-1">
-                            <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
-                            <EditOutlined className="text-[9px] flex-shrink-0" />
-                            <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
+                  {groupByAssignee(s.contacts).map(g => (
+                    <div key={g.assignee}>
+                      {s.contacts.length > 1 && (
+                        <div className="px-4 py-1 text-[10px] text-gray-400 bg-gray-50/70 border-b border-gray-100 flex items-center gap-2">
+                          <span className="font-medium">{g.assignee}</span>
+                          <span className="text-gray-300">{g.contacts.length}</span>
+                        </div>
+                      )}
+                      {g.contacts.map(c => (
+                        <div key={c.id}
+                          id={`crm-contact-${c.id}`}
+                          className={`flex items-center gap-2 px-4 py-2 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors text-xs ${detailId === c.id ? "bg-violet-50 border-l-2 border-l-violet-400" : ""}`}
+                          onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
+                        >
+                          <span className="font-medium flex-shrink-0 w-20 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                          <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
+                          <span className="flex items-center gap-2 flex-shrink-0">
+                            {c.lastFollowupAt ? (
+                              <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                                <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
+                                <EditOutlined className="text-[9px] flex-shrink-0" />
+                                <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
+                              </span>
+                            ) : null}
+                            {c.reminderAt ? (
+                              <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
+                                <ClockCircleOutlined className="text-[9px]" />
+                                {new Date(c.reminderAt) < new Date() ? `逾期${daysAgo(c.reminderAt)}` : dayjs(c.reminderAt).format("MM/DD")}
+                              </span>
+                            ) : null}
+                            {c.assignee ? (
+                              <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5 flex-shrink-0">{c.assignee}</Tag>
+                            ) : null}
                           </span>
-                        ) : null}
-                        {c.reminderAt ? (
-                          <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
-                            <ClockCircleOutlined className="text-[9px]" />
-                            {new Date(c.reminderAt) < new Date() ? `逾期${daysAgo(c.reminderAt)}` : dayjs(c.reminderAt).format("MM/DD")}
-                          </span>
-                        ) : null}
-                        {c.assignee ? (
-                          <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5 flex-shrink-0">{c.assignee}</Tag>
-                        ) : null}
-                      </span>
-                      <SendOutlined className="text-[11px] text-gray-300 hover:text-blue-500 cursor-pointer"
-                        onClick={(e) => { e.stopPropagation(); setSendContact(c); setSendTemplateId(undefined); setSendAccountId(undefined); setSendPreview(null); }}
-                      />
+                          <Checkbox checked={selectedIds.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(c.id)} />
+                        </div>
+                      ))}
                     </div>
                   ))}
                   {s.contacts.length === 0 && <div className="text-center text-[11px] text-gray-300 py-4">暂无</div>}

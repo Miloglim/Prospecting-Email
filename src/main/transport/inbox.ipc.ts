@@ -217,6 +217,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
     const fetchCount = Math.min(total, 40);
     const startIdx = Math.max(1, total - fetchCount + 1);
     const parsed: InboxService.InboxMessageRow[] = [];
+    const bounceSeen = new Set<string>();
 
     for (let i = startIdx; i <= total; i++) {
       const uid = uidMap.get(i) || `pop3-${accountId}-${i}`;
@@ -240,6 +241,11 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
 
       const contact = InboxService.matchContact(msg.fromEmail);
       const classification = InboxService.classify(msg.subject, msg.fromEmail, msg.bodyText, !!contact, myRole === "cc");
+      if (classification === "bounce") {
+        const bkey = `${msg.subject}|${msg.fromEmail}|${msg.date}`;
+        if (bounceSeen.has(bkey)) continue;
+        bounceSeen.add(bkey);
+      }
       const relatedContactIds = InboxService.matchContactIds([...msg.to, ...msg.cc]);
 
       getDb().insert(inboxMessages).values({
@@ -337,6 +343,8 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         .filter((x): x is string => !!x)
     );
 
+    // 退信去重：退信服务同一秒批量发多封相同 subject/发件人/时间的退信（messageId 各不相同），只留一封
+    const bounceSeen = new Set<string>();
     const stream = client.fetch(uids, { uid: true, envelope: true }, { uid: true });
     for await (const msg of stream) {
       scanned++;
@@ -364,6 +372,11 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       // 元数据阶段：正文留空，正文懒加载时再补（避免每封拉 source 卡顿）
       const contact = InboxService.matchContact(fromEmail);
       const classification = InboxService.classify(subject, fromEmail, "", !!contact, myRole === "cc");
+      if (classification === "bounce") {
+        const bkey = `${subject}|${fromEmail}|${date}`;
+        if (bounceSeen.has(bkey)) continue;
+        bounceSeen.add(bkey);
+      }
       const relatedContactIds = InboxService.matchContactIds(
         [...toArr, ...ccArr].map(a => a.address || "").filter(Boolean),
       );
@@ -391,11 +404,11 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         createdAt: new Date().toISOString(),
       });
 
-      if (scanned % 25 === 0) pushProgress(accountId, scanned, uids.length);
+      if (scanned % 25 === 0) pushProgress(accountId, scanned, uids.length, account.email);
     }
 
     if (inserted > 0) saveDatabase();
-    pushProgress(accountId, scanned, uids.length);
+    pushProgress(accountId, scanned, uids.length, account.email);
     Log.info("inbox.imap", `${account.email}: 扫描 ${scanned} 封，新增 ${inserted} 封`);
 
     await client!.logout();
@@ -454,6 +467,12 @@ async function detectSent(accountId: number): Promise<number> {
       if (!msgId) continue;
       if (InboxService.isDeleted(`${accountId}|${msgId}`)) continue;
       if (existing.has(msgId)) continue;
+      // 额外查数据库防并发 detectSent 重复写入（内存 existing 只在 stream 前查一次）
+      const dup = getDb().select({ id: inboxMessages.id })
+        .from(inboxMessages)
+        .where(and(eq(inboxMessages.messageId, msgId), eq(inboxMessages.accountId, accountId)))
+        .get();
+      if (dup) continue;
       // 收件人：BCC 邮件的收件人在 bcc 不在 to，to+cc+bcc 全解析
       const toArr = (env.to as Array<{ address?: string; name?: string }>) || [];
       const ccArr = (env.cc as Array<{ address?: string; name?: string }>) || [];
@@ -537,8 +556,8 @@ function createPushFn() {
 
 let _pushToRenderer: ((channel: string, data: unknown) => void) | null = null;
 
-function pushProgress(accountId: number, scanned: number, total: number): void {
-  try { _pushToRenderer?.("inbox:fetchProgress", { accountId, scanned, total }); } catch { /* */ }
+function pushProgress(accountId: number, scanned: number, total: number, email?: string): void {
+  try { _pushToRenderer?.("inbox:fetchProgress", { accountId, email, scanned, total }); } catch { /* */ }
 }
 
 // 定位 Sent 文件夹：优先 specialUse=\Sent 标记，兜底常见名字（阿里邮箱中文名「已发送」）
@@ -588,13 +607,24 @@ async function fetchBody(accountId: number, messageId: string, classification?: 
       if (!raw) return failResult("正文解析失败");
       const html = raw.bodyHtml || raw.bodyText || "";
       // 正文落盘文件（不进库）；bodyPreview 截断保留在库用于列表预览
-      const target = getDb().select({ id: inboxMessages.id }).from(inboxMessages)
+      const target = getDb().select({
+        id: inboxMessages.id, subject: inboxMessages.subject,
+        fromEmail: inboxMessages.fromEmail, classification: inboxMessages.classification,
+        matchedContactId: inboxMessages.matchedContactId,
+      }).from(inboxMessages)
         .where(and(eq(inboxMessages.messageId, messageId), eq(inboxMessages.accountId, accountId)))
         .get();
       if (target) {
         await InboxService.writeBodyFile(target.id, html);
+        // 重新分类：正文拉到后，基于正文的退信/自动回复检测才准确（元数据阶段 bodyText 为空）；sent 邮件不重分
+        const reClass = target.classification !== "sent"
+          ? InboxService.classify(target.subject, target.fromEmail, raw.bodyText, !!target.matchedContactId)
+          : target.classification;
         getDb().update(inboxMessages)
-          .set({ bodyPreview: raw.bodyText.slice(0, 500) })
+          .set({
+            bodyPreview: raw.bodyText.slice(0, 500),
+            ...(reClass !== target.classification ? { classification: reClass } : {}),
+          })
           .where(eq(inboxMessages.id, target.id))
           .run();
         saveDatabase();

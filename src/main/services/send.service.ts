@@ -321,8 +321,8 @@ const STAGE_MAP: Record<string, string> = {
   cold: "initial", f1: "followup1", f2: "followup2", f3: "closing", f4: "reactivate",
 };
 
-// 已建立联系的人不能进开发信发送桶（跟进走客户跟进界面，避免给已触达客户发开发信）
-const EXCLUDED_STATUSES = ["reached", "replied", "autoreply", "bounced"];
+// 已触达的人不能进开发信发送桶（跟进走客户跟进界面，避免给已触达客户发开发信）
+const EXCLUDED_STATUSES = ["reached"];
 
 // ── 联系人 clientType → 模板 category 映射 ──
 function mapClientType(ct: string): string {
@@ -378,7 +378,7 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
   const selected = new Map<number, ContactRow>();
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
   for (const c of selectedRows) {
-    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达/已回复/退信/自动回复不进开发信
+    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达不进开发信
     selected.set(c.id, c);
   }
 
@@ -481,7 +481,7 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
   const selected = new Map<number, ContactRow>();
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
   for (const c of selectedRows) {
-    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达/已回复/退信/自动回复不进开发信
+    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达不进开发信
     selected.set(c.id, c);
   }
 

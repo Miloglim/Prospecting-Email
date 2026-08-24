@@ -539,9 +539,10 @@ export function SettingsPage() {
       }
       setActiveSection(bestId);
     };
-    window.addEventListener("scroll", handle, { passive: true });
+    // 滚动发生在 antd Content 容器（overflow:auto），scroll 不冒泡，需 capture 阶段捕获
+    document.addEventListener("scroll", handle, { capture: true, passive: true });
     handle(); // 初始执行
-    return () => window.removeEventListener("scroll", handle);
+    return () => document.removeEventListener("scroll", handle, { capture: true } as EventListenerOptions);
   }, []);
 
   const scrollTo = (id: string) => {
