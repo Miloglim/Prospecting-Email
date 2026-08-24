@@ -65,11 +65,12 @@ export function RichTextEditor({ value, onChange, placeholder, style, className 
   );
 }
 
-/** 渲染 HTML 或纯文本（模板/签名预览用） */
+/** 渲染 HTML 或纯文本（模板/签名预览用），内容可选中 */
 export function HtmlText({ html, className }: { html: string; className?: string }) {
   const isHtml = /<[a-z][\s\S]*>/i.test(html || "");
+  const cls = `selectable ${className || ""}`;
   if (isHtml) {
-    return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+    return <div className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
   }
-  return <div className={`${className || ""} whitespace-pre-wrap`}>{html}</div>;
+  return <div className={`${cls} whitespace-pre-wrap`}>{html}</div>;
 }

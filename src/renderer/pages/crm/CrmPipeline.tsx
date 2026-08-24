@@ -345,6 +345,9 @@ export function CrmPipeline() {
                           onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
                         >
                           <span className="font-medium flex-shrink-0 w-20 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                          {c.country ? (
+                            <span className="text-[9px] text-gray-400 flex-shrink-0 px-1 rounded bg-gray-50">{c.country}</span>
+                          ) : null}
                           <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
                           <span className="flex items-center gap-2 flex-shrink-0">
                             {c.lastFollowupAt ? (

@@ -58,6 +58,17 @@ export function QueuePage() {
   const isRunning = status?.isRunning ?? false;
   const isPaused = status?.isPaused ?? false;
 
+  // 等待倒计时：后端 delaySeconds 是固定总秒数，本地每秒递减
+  const [delayLeft, setDelayLeft] = useState(0);
+  useEffect(() => {
+    if (status?.delaySeconds && status.delaySeconds > 0) setDelayLeft(status.delaySeconds);
+  }, [status?.delaySeconds]);
+  useEffect(() => {
+    if (delayLeft <= 0) return;
+    const t = setTimeout(() => setDelayLeft(prev => Math.max(0, prev - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [delayLeft]);
+
   // 折叠已发送的组 + 多组时默认收起
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -108,8 +119,8 @@ export function QueuePage() {
             <span className="text-[11px] text-gray-500">
               {isPaused ? (
                 <><PauseCircleOutlined className="text-amber-500" /> 已暂停 — 等待恢复</>
-              ) : status.delaySeconds > 0 ? (
-                <><ClockCircleOutlined className="text-teal-500" /> 等待 {fmtDelay(status.delaySeconds)} 后继续</>
+              ) : delayLeft > 0 ? (
+                <><ClockCircleOutlined className="text-teal-500" /> 等待 {fmtDelay(delayLeft)} 后继续</>
               ) : (
                 <><LoadingOutlined className="text-blue-500" spin /> 正在发送...</>
               )}

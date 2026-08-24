@@ -476,8 +476,8 @@ export function InboxList() {
 
         {/* 退信删除 */}
         {filter === "bounce" && items.length > 0 && (
-          <button onClick={() => { Modal.confirm({ title: `确认删除 ${items.filter(i => i.classification === "bounce").length} 封退信？`, okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
-            style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>删除全部退信</button>
+          <button onClick={() => { Modal.confirm({ title: "删除所有退信匹配的联系人？（不删除邮件）", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
+            style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>删除退信匹配的联系人</button>
         )}
 
         {/* 列表 */}
@@ -682,6 +682,22 @@ export function InboxList() {
                             >{c.email}</span>
                             <span style={{ color: "#ccc" }}>→</span>
                             <b>{c.company || "未知公司"}</b>
+                            <DeleteOutlined
+                              style={{ fontSize: 11, color: "#ccc", cursor: "pointer", marginLeft: 4 }}
+                              title="删除该联系人"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                Modal.confirm({
+                                  title: `删除联系人 ${c.email}？`,
+                                  okText: "删除", okType: "danger", cancelText: "取消",
+                                  onOk: async () => {
+                                    const r = await window.api.invoke("contacts:delete", c.id) as { success: boolean; error?: string };
+                                    if (r?.success) { message.success("已删除"); qc.invalidateQueries({ queryKey: ["inbox"] }); qc.invalidateQueries({ queryKey: ["contacts"] }); }
+                                    else message.error(r?.error || "删除失败");
+                                  },
+                                });
+                              }}
+                            />
                           </div>
                         ))}
                       </div>

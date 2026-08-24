@@ -28,6 +28,7 @@ export interface SendItem {
   contactVars: TemplateVars;  // 首联系人渲染变量
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
+  seq?: number;  // 原始队列顺序（跨账号排序用）
 }
 
 export interface SendTemplate {
@@ -575,7 +576,7 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
     const aid = preferredAid || accounts[roundRobinIdx % accounts.length]!.id;
     if (!preferredAid) roundRobinIdx++;
     if (!queues.has(aid)) queues.set(aid, []);
-    queues.get(aid)!.push({ ...item, accountId: aid });
+    queues.get(aid)!.push({ ...item, accountId: aid, seq: i });
   }
 
   state = {
@@ -664,8 +665,8 @@ async function runAccountLoop(accountId: number) {
     while (state.isPaused && state.isRunning) await sleep(1000);
     if (!state.isRunning || abortFlags.get(accountId)) break;
 
-    // 时间窗口检查 — 窗口外等待，模拟人工只在工作时间发信
-    if (!inWindow(sched)) {
+    // 时间窗口检查 — 窗口外等待，模拟人工只在工作时间发信（测试模式跳过时段限制）
+    if (!loadConfig().test.enabled && !inWindow(sched)) {
       const waitMs = 60 * 1000; // 每分钟检查一次
       state.delaySeconds = Math.floor(waitMs / 1000);
       push(EVENTS.SEND_PROGRESS, state);
@@ -680,7 +681,14 @@ async function runAccountLoop(accountId: number) {
     state.currentItem = { ...item, status: "sending" };
     push(EVENTS.SEND_PROGRESS, state);
 
-    if (sendBccFn) {
+    if (loadConfig().test.dryRun) {
+      // 发信阻隔：流程完整但不实际发送（测试模式）
+      item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; fails = 0;
+      try { getDb().update(sendQueue).set({ status: "sent", sentAt: item.sentAt }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
+      const s = state.accountStats.find(x => x.accountId === accountId);
+      if (s) s.sent++;
+      Log.info("send.dryRun", `${item.companyName}: 测试模式，跳过真实发送`);
+    } else if (sendBccFn) {
       // 发送前按模板现场组装正文（随机词每组重新随机）
       const body = renderTemplate(item.tplBody, item.contactVars);
       const sendItem = { ...item, body };
@@ -794,6 +802,8 @@ export function getQueueItems(): Result<Array<SendItem & { accountEmail?: string
       items.push({ ...item, accountEmail: emailMap.get(aid) || `#${aid}` });
     }
   }
+  // 按原始队列顺序排序（跨账号交错，与发送顺序一致）
+  items.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   if (items.length > 0) return okResult(items);
 
   // DB 兜底（重启后）
