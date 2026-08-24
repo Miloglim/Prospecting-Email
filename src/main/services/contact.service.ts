@@ -453,7 +453,10 @@ export async function importContacts(params: {
       "退信": "bounced", "自动回复": "autoreply",
     };
     const CTYPE_XLATE: Record<string, string> = { "代理": "agent", "直客": "direct", "同行": "agent" };
-    if (fields.stage && STAGE_XLATE[fields.stage] !== undefined) fields.stage = STAGE_XLATE[fields.stage]!;
+    if (fields.stage) {
+      if (STAGE_XLATE[fields.stage] !== undefined) fields.stage = STAGE_XLATE[fields.stage]!;
+      else fields.stage = fields.stage.toLowerCase(); // 大小写归一化（F1→f1）
+    }
     if (fields.status !== undefined && STATUS_XLATE[fields.status] !== undefined) fields.status = STATUS_XLATE[fields.status]!;
     if (fields.clientType && CTYPE_XLATE[fields.clientType]) fields.clientType = CTYPE_XLATE[fields.clientType]!;
 

@@ -46,13 +46,14 @@ function BucketColumn({ title, buckets, selected, onToggle, disabled, loading }:
         ) : (
           buckets.map(b => {
             const sel = selected.includes(b.key);
+            const isReached = b.key === "reached"; // 已触达不可选（跟进走客户跟进界面）
             return (
               <label key={b.key}
                 className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors
                   ${sel ? "bg-blue-50" : "hover:bg-gray-50"}
-                  ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+                  ${disabled || isReached ? "opacity-50 pointer-events-none" : ""}`}
               >
-                <Checkbox checked={sel} onChange={() => onToggle(b.key)} disabled={disabled} />
+                <Checkbox checked={sel} onChange={() => onToggle(b.key)} disabled={disabled || isReached} />
                 <span className="flex-1 text-xs text-gray-700">{b.label}</span>
                 <span className="text-[11px] text-gray-400 tabular-nums">{b.count}</span>
               </label>
@@ -138,6 +139,7 @@ export function CampaignList() {
 
   // 合并三个维度的所有 key，取并集统计人数（去重由后端 buildQueue 处理）
   const toggleBucket = (key: string) => {
+    if (key === "reached") return; // 已触达不可选
     setSelectedBuckets(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   };
 

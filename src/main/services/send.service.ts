@@ -215,6 +215,7 @@ export function getStageBuckets(): Result<TimeBucket[]> {
   STAGE_BUCKET_DEFS.forEach(b => buckets.set(b.key, []));
 
   for (const c of allContacts) {
+    if (c.status === "reached") continue; // 已触达不进发送阶段桶
     const stage = c.stage || "cold";
     if (buckets.has(stage)) buckets.get(stage)!.push(c);
     else buckets.get("cold")!.push(c);
@@ -261,6 +262,7 @@ export function getSendTimeBuckets(): Result<TimeBucket[]> {
   SEND_TIME_BUCKET_DEFS.forEach(b => buckets.set(b.key, []));
 
   for (const c of allContacts) {
+    if (c.status === "reached") continue; // 已触达不进最后发送时间桶
     const ts = lastSent.get(c.id);
     if (!ts) continue; // 无发送记录 → 不显示（按客户状态的已触达已覆盖）
     const days = (now - ts) / 86400000;

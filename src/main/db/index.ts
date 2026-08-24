@@ -216,6 +216,16 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     }
   } catch { /* 忽略 */ }
 
+  // v4.x: stage 大小写归一化 — 历史数据 F1/F2/F3/F4（大写）→ f1/f2/f3/f4（小写）
+  try {
+    let n = 0;
+    for (const [from, to] of [["F1", "f1"], ["F2", "f2"], ["F3", "f3"], ["F4", "f4"]]) {
+      sqlJsDb.run(`UPDATE contacts SET stage = '${to}' WHERE stage = '${from}'`);
+      n += sqlJsDb.getRowsModified();
+    }
+    if (n > 0) Log.info("db.migrate", `stage 大小写归一化 ${n} 条`);
+  } catch { /* 忽略 */ }
+
   // v4.0: tags 收敛为固定 6 值分类（CRM 阶段）单选 — 丢弃自定义标签，只保留首个阶段 key
   try {
     const rows = sqlJsDb.exec("SELECT id, tags, status FROM contacts")[0]?.values || [];

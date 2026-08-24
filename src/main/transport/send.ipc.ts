@@ -21,6 +21,22 @@ function stripHtml(s: string): string {
 }
 const isHtml = (s: string) => /<[a-z][\s\S]*>/i.test(s);
 
+/** 把 HTML 里的 base64 内联图片转成 cid 附件（主流邮件客户端会过滤 base64 内联图，cid 附件才可靠） */
+function inlineImagesToCid(html: string): { html: string; attachments: Array<{ filename: string; content: Buffer; cid: string }> } {
+  const attachments: Array<{ filename: string; content: Buffer; cid: string }> = [];
+  let idx = 0;
+  const newHtml = html.replace(/<img\b[^>]*\bsrc="(data:image\/[^"]+)"/gi, (match, dataUrl: string) => {
+    const m = dataUrl.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!m || !m[1] || !m[2]) return match;
+    const ext = m[1] === "jpeg" ? "jpg" : m[1];
+    const cid = `img${idx}@prospector`;
+    attachments.push({ filename: `img${idx}.${ext}`, content: Buffer.from(m[2], "base64"), cid });
+    idx++;
+    return match.replace(dataUrl, `cid:${cid}`);
+  });
+  return { html: newHtml, attachments };
+}
+
 
 /** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
 async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<{ messageId: string | null }>> {
@@ -53,10 +69,12 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     if (isHtml(body) || isHtml(signature)) {
       const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
       const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
+      const { html, attachments } = inlineImagesToCid(bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""));
       info = await transporter.sendMail({
         from, bcc: emails, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
-        html: bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""),
+        html,
+        attachments,
       });
     } else {
       info = await transporter.sendMail({
