@@ -569,18 +569,9 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
 let queues: Map<number, SendItem[]> = new Map();
 let abortFlags: Map<number, boolean> = new Map();
 
-export async function startSend(bucketKeys: string[], templates?: SendTemplate[]): Promise<Result<string>> {
-  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0}`);
-
+/** 公共发送入口：账号分配 + 限额裁剪 + 持久化 + 启动发送循环 */
+async function startQueue(items: SendItem[]): Promise<Result<string>> {
   if (state.isRunning) return failResult("已有发送任务运行中");
-
-  // 自适应模式：无模板时用句库自动组装
-  const qr = templates && templates.length > 0
-    ? buildQueue(bucketKeys, templates)
-    : buildAdaptiveQueue(bucketKeys);
-  if (!qr.success) return failResult(qr.error);
-
-  const items = qr.data;
   if (items.length === 0) return failResult("没有待发送项");
 
   const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
@@ -595,7 +586,6 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
   const lastAccountMap = new Map<number, number>(); // contactId → accountId
   const allContactIds = items.flatMap(it => it.recipients.map(r => r.contactId));
   if (allContactIds.length > 0) {
-    // 批量查每个联系人的最后一次发送账号（一次查询 + 内存去重）
     const cidSet = new Set(allContactIds);
     const sentRows = getDb().select({ contactId: interactions.contactId, accountId: interactions.accountId })
       .from(interactions).where(eq(interactions.type, "sent"))
@@ -611,7 +601,6 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
   let roundRobinIdx = 0;
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    // 取组内第一个联系人的上次账号
     const firstCid = item.recipients[0]?.contactId;
     const preferredAid = firstCid ? lastAccountMap.get(firstCid) : undefined;
     const aid = preferredAid || accounts[roundRobinIdx % accounts.length]!.id;
@@ -629,14 +618,12 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
     }),
   };
 
-  // 全局限额裁剪：队列不超过剩余额度
   const qCheck = checkQuota();
   if (!qCheck.ok) return failResult(qCheck.reason || "已达全局发信限额");
   let quotaRemaining = qCheck.remaining;
   if (quotaRemaining > 0) {
     const totalNeeded = [...queues.values()].reduce((s, q) => s + q.length, 0);
     if (totalNeeded > quotaRemaining) {
-      // 从各账号队列尾部截断，保留前 quotaRemaining 组
       let keep = quotaRemaining;
       const newQueues = new Map<number, SendItem[]>();
       for (const [aid, q] of queues) {
@@ -650,7 +637,6 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
     }
   }
 
-  // 持久化：清除旧批次，分批批量写入（避免逐条 insert 卡顿）
   try {
     getDb().delete(sendQueue).run();
     const now = new Date().toISOString();
@@ -667,7 +653,6 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
         });
       }
     }
-    // 每批 200 行，避免单条 SQL 过长
     for (let i = 0; i < rows.length; i += 200) {
       getDb().insert(sendQueue).values(rows.slice(i, i + 200)).run();
     }
@@ -677,10 +662,71 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
   }
 
   Log.info("send.start", `批次 ${batchId}: ${items.length} 组, ${accounts.length} 账号`);
-
   for (const a of accounts) { abortFlags.set(a.id, false); runAccountLoop(a.id); }
-
   return okResult(batchId);
+}
+
+export async function startSend(bucketKeys: string[], templates?: SendTemplate[]): Promise<Result<string>> {
+  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0}`);
+  const qr = templates && templates.length > 0 ? buildQueue(bucketKeys, templates) : buildAdaptiveQueue(bucketKeys);
+  if (!qr.success) return failResult(qr.error);
+  return startQueue(qr.data);
+}
+
+/** 动态更新：按选中的客户跟进联系人 + 手动内容组装队列 */
+export function buildDynamicQueue(contactIds: number[], subject: string, body: string): Result<SendItem[]> {
+  const rows = getDb().select().from(contacts).where(inArray(contacts.id, contactIds)).all();
+  if (rows.length === 0) return failResult("没有选中的联系人");
+
+  const companyGroups = new Map<string, ContactRow[]>();
+  for (const c of rows) {
+    const k = `c_${c.companyId || 0}`;
+    if (!companyGroups.has(k)) companyGroups.set(k, []);
+    companyGroups.get(k)!.push(c);
+  }
+
+  const companyMap = new Map<number, string>();
+  for (const comp of getDb().select().from(companies).all()) companyMap.set(comp.id, comp.name);
+
+  const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
+  const items: SendItem[] = [];
+
+  const sortedCompanies = [...companyGroups.entries()].sort((a, b) => {
+    if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+    const nameA = companyMap.get(a[1][0]?.companyId || 0) || "";
+    const nameB = companyMap.get(b[1][0]?.companyId || 0) || "";
+    return nameA.localeCompare(nameB);
+  });
+
+  for (const [, group] of sortedCompanies) {
+    const sorted = [...group].sort((a, b) => {
+      const nameA = [a.firstName, a.lastName].filter(Boolean).join(" ").toLowerCase();
+      const nameB = [b.firstName, b.lastName].filter(Boolean).join(" ").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    const first = sorted[0]!;
+    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+
+    for (let s = 0; s < sorted.length; s += groupSize) {
+      const chunk = sorted.slice(s, s + groupSize);
+      items.push({
+        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+        companyId: first.companyId || 0,
+        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+        subject, tplBody: body,
+        contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
+        accountId: 0, status: "pending",
+      });
+    }
+  }
+  return okResult(items);
+}
+
+export async function startDynamicSend(contactIds: number[], subject: string, body: string): Promise<Result<string>> {
+  const qr = buildDynamicQueue(contactIds, subject, body);
+  if (!qr.success) return failResult(qr.error);
+  return startQueue(qr.data);
 }
 
 // 检查时间窗口（北京时间）

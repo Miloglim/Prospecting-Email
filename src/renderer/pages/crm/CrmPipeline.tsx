@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip, Checkbox } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HtmlText } from "../../components/RichTextEditor";
+import { COUNTRIES } from "../../components/ContactDetail";
 import {
   ClockCircleOutlined, CloseOutlined, MailOutlined, SearchOutlined,
   DownOutlined, RightOutlined, EditOutlined, SaveOutlined,
@@ -469,7 +470,7 @@ export function CrmPipeline() {
                   { label: "姓名", type: "double", field1: "firstName", field2: "lastName" },
                   { label: "邮箱", type: "text", field: "email" },
                   { label: "公司", type: "text", field: "companyName" },
-                  { label: "国家", type: "text", field: "country" },
+                  { label: "国家", type: "select", field: "country", options: COUNTRIES.map(c => ({ key: c.code, label: `${c.code} ${c.label}` })) },
                   { label: "语言", type: "select", field: "language", options: [
                     { key: "EN", label: "EN 英语", color: "#1565c0" },
                     { key: "ES", label: "ES 西班牙语", color: "#e65100" },
@@ -861,37 +862,50 @@ function StagePicker({ value, options, onChange }: {
   onChange: (v: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [kw, setKw] = useState("");
   const btnRef = useRef<HTMLDivElement>(null);
 
   const items = options.map(o =>
     typeof o === "string" ? { key: o, label: o, color: "#999" } : { key: o.key, label: o.label, color: o.color || "#999" }
   );
+  const filtered = kw
+    ? items.filter(i => (i.label || "").toLowerCase().includes(kw.toLowerCase()) || i.key.toLowerCase().includes(kw.toLowerCase()))
+    : items;
   const current = items.find(i => i.key === value);
   const color = current?.color || "#999";
+  const showSearch = items.length > 10;
 
   return (
     <div className="flex-1 relative">
       <div ref={btnRef}
         className="flex items-center gap-1.5 cursor-pointer text-[11px] px-1 py-0.5 hover:bg-gray-50 rounded"
-        onClick={() => setOpen(!open)}
+        onClick={() => { setOpen(!open); setKw(""); }}
       >
         <span>{current?.label || value || "—"}</span>
       </div>
       {open && (
         <div className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px] text-xs"
           style={{
-            left: Math.min((btnRef.current?.getBoundingClientRect().left || 0), window.innerWidth - 160),
+            left: Math.min((btnRef.current?.getBoundingClientRect().left || 0), window.innerWidth - 200),
             top: (btnRef.current?.getBoundingClientRect().bottom || 0) + 4,
           }}
         >
-          {items.map(item => (
-            <div key={item.key}
-              className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 ${item.key === value ? "font-semibold" : ""}`}
-              onClick={() => { onChange(item.key); setOpen(false); }}
-            >
-              {item.key === value ? "● " : ""}{item.label}
+          {showSearch && (
+            <div className="px-2 pb-1 mb-1 border-b border-gray-100">
+              <Input size="small" autoFocus placeholder="搜索..." value={kw}
+                onChange={e => setKw(e.target.value)} style={{ fontSize: 11 }} />
             </div>
-          ))}
+          )}
+          <div className="max-h-[260px] overflow-y-auto">
+            {filtered.map(item => (
+              <div key={item.key}
+                className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 ${item.key === value ? "font-semibold" : ""}`}
+                onClick={() => { onChange(item.key); setOpen(false); }}
+              >
+                {item.key === value ? "● " : ""}{item.label}
+              </div>
+            ))}
+          </div>
         </div>
       )}
       {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />}

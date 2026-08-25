@@ -226,6 +226,29 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     if (n > 0) Log.info("db.migrate", `stage 大小写归一化 ${n} 条`);
   } catch { /* 忽略 */ }
 
+  // v4.x: country 缩写归一化 — 历史数据 BR/UAE 等缩写 → 完整英文名
+  try {
+    let n = 0;
+    for (const [from, to] of [
+      ["BR", "Brazil"], ["MX", "Mexico"], ["AR", "Argentina"], ["CL", "Chile"],
+      ["PE", "Peru"], ["CO", "Colombia"], ["EC", "Ecuador"], ["UY", "Uruguay"],
+      ["PY", "Paraguay"], ["VE", "Venezuela"], ["PA", "Panama"], ["CR", "Costa Rica"],
+      ["US", "United States"], ["CA", "Canada"], ["CN", "China"], ["HK", "Hong Kong"],
+      ["TW", "Taiwan"], ["JP", "Japan"], ["KR", "South Korea"], ["SG", "Singapore"],
+      ["TH", "Thailand"], ["VN", "Vietnam"], ["ID", "Indonesia"], ["IN", "India"],
+      ["AE", "United Arab Emirates"], ["UAE", "United Arab Emirates"],
+      ["GB", "United Kingdom"], ["England", "United Kingdom"],
+      ["DE", "Germany"], ["FR", "France"], ["IT", "Italy"], ["ES", "Spain"],
+      ["PT", "Portugal"], ["NL", "Netherlands"], ["BE", "Belgium"],
+      ["PL", "Poland"], ["RU", "Russia"], ["AU", "Australia"], ["NZ", "New Zealand"],
+      ["ZA", "South Africa"], ["EG", "Egypt"],
+    ]) {
+      sqlJsDb.run(`UPDATE contacts SET country = '${to}' WHERE country = '${from}'`);
+      n += sqlJsDb.getRowsModified();
+    }
+    if (n > 0) Log.info("db.migrate", `country 缩写归一化 ${n} 条`);
+  } catch { /* 忽略 */ }
+
   // v4.0: tags 收敛为固定 6 值分类（CRM 阶段）单选 — 丢弃自定义标签，只保留首个阶段 key
   try {
     const rows = sqlJsDb.exec("SELECT id, tags, status FROM contacts")[0]?.values || [];

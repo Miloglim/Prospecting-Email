@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
-import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input } from "antd";
+import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select } from "antd";
 import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
+import { COUNTRIES } from "../../components/ContactDetail";
 
 const STAGE_LABELS: Record<string, string> = {
   initial: "初次", followup1: "跟进1", followup2: "跟进2", closing: "促单", reactivate: "激活",
@@ -13,6 +15,13 @@ interface TimeBucket {
   key: string; label: string; description: string;
   contacts: unknown[]; count: number;
 }
+
+interface PipelineContact {
+  id: number; email: string; firstName: string | null; lastName: string | null;
+  companyName: string | null; country: string | null; assignee: string | null;
+  lastFollowupAt: string | null; lastFollowupNote: string | null;
+}
+interface StageData { key: string; label: string; color: string; contacts: PipelineContact[]; }
 
 interface Template {
   id: number; name: string; language: string; subject: string; body: string;
@@ -66,12 +75,23 @@ function BucketColumn({ title, buckets, selected, onToggle, disabled, loading }:
 }
 
 export function CampaignList() {
-  const [selectedBuckets, setSelectedBuckets] = useState<string[]>(["never"]);
+  const [selectedBuckets, setSelectedBuckets] = useState<string[]>([]);
   const [sendMode, setSendMode] = useState<string>("mine");
   const [instantSubject, setInstantSubject] = useState("");
   const [instantBody, setInstantBody] = useState("");
+  const [dynCountries, setDynCountries] = useState<string[]>([]);
+  const [dynUnchecked, setDynUnchecked] = useState<Set<number>>(new Set());
+  const [dynSubject, setDynSubject] = useState("");
+  const [dynBody, setDynBody] = useState("");
   const qc = useQueryClient();
   const navigate = useNavigate();
+
+  // 动态更新：客户跟进（CRM reached）联系人
+  const { data: pipelineData } = useQuery({
+    queryKey: ["crm", "pipeline"],
+    queryFn: () => window.api.invoke("crm:listPipeline") as Promise<{ success: boolean; data?: StageData[] }>,
+    enabled: sendMode === "dynamic",
+  });
 
   const { data: statusBuckets, isLoading: sbLoading } = useQuery({
     queryKey: ["send", "statusBuckets"],
@@ -110,7 +130,8 @@ export function CampaignList() {
     queryFn: () => window.api.invoke("system:getConfig") as Promise<{
       success: boolean; data?: { schedule: { timeWindowEnabled: boolean; startHour: number; endHour: number;
         groupSize: number; groupDelayMinSeconds: number; groupDelayMaxSeconds: number; };
-        sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number } };
+        sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number };
+        signature?: string };
     }>,
   });
 
@@ -135,6 +156,26 @@ export function CampaignList() {
   const templates = templateData?.success ? templateData.data || [] : [];
   const accounts = accountsData?.success ? accountsData.data || [] : [];
   const sched = configData?.success ? configData.data?.schedule : null;
+  const signature = configData?.success ? (configData.data?.signature || "") : "";
+
+  // 动态更新：客户跟进联系人 + 国家去重
+  const pipelineContacts: PipelineContact[] = pipelineData?.success
+    ? (pipelineData.data || []).flatMap(s => s.contacts)
+    : [];
+  const dynAvailableCountries = [...new Set(pipelineContacts.map(c => c.country).filter((x): x is string => !!x))].sort();
+  const dynFilteredContacts = dynCountries.length === 0
+    ? []
+    : pipelineContacts.filter(c => c.country && dynCountries.includes(c.country));
+  const dynSelectedCount = dynFilteredContacts.filter(c => !dynUnchecked.has(c.id)).length;
+
+  const handleDynamicSend = async () => {
+    const ids = dynFilteredContacts.filter(c => !dynUnchecked.has(c.id)).map(c => c.id);
+    if (ids.length === 0) { message.warning("请选择联系人"); return; }
+    if (!dynSubject.trim()) { message.warning("请填写主题"); return; }
+    if (!dynBody.trim()) { message.warning("请填写正文"); return; }
+    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody }) as { success: boolean; error?: string };
+    r?.success ? (message.success(`开始发送 ${ids.length} 人`), navigate({ to: "/queue" })) : message.error(r?.error || "启动失败");
+  };
 
   // 合并三个维度的所有 key，取并集统计人数（去重由后端 buildQueue 处理）
   const toggleBucket = (key: string) => {
@@ -205,42 +246,7 @@ export function CampaignList() {
         </Card>
       )}
 
-      {/* ── ① 发送范围 — 三栏分选 ── */}
-      <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送范围</span>}>
-        <div className="flex gap-4">
-          <BucketColumn
-            title="按发送阶段"
-            buckets={gList}
-            selected={selectedBuckets}
-            onToggle={toggleBucket}
-            disabled={isRunning}
-            loading={gbLoading}
-          />
-          <div className="w-px bg-gray-200 flex-shrink-0" />
-          <BucketColumn
-            title="按客户状态"
-            buckets={sList}
-            selected={selectedBuckets}
-            onToggle={toggleBucket}
-            disabled={isRunning}
-            loading={sbLoading}
-          />
-          <div className="w-px bg-gray-200 flex-shrink-0" />
-          <BucketColumn
-            title="按最后发送"
-            buckets={tList}
-            selected={selectedBuckets}
-            onToggle={toggleBucket}
-            disabled={isRunning}
-            loading={tbLoading}
-          />
-        </div>
-        <div className="mt-3 pt-2 border-t border-gray-100 text-[11px] text-gray-400">
-          已选 <strong className="text-gray-700">{selectedCount}</strong> 人{rawCount > selectedCount ? <span className="text-amber-500">（限额上限，共{rawCount}人）</span> : "（三栏取并集）"}
-        </div>
-      </Card>
-
-      {/* ── ② 发送模式 ── */}
+      {/* ── ① 发送模式 ── */}
       <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送模式</span>}>
         <Tabs activeKey={sendMode} onChange={setSendMode} size="small"
           items={[
@@ -303,32 +309,115 @@ export function CampaignList() {
                 </div>
               ),
             },
+            {
+              key: "dynamic", label: "动态更新",
+              children: (
+                <div className="space-y-3 dynamic-enter">
+                  <Select mode="multiple" allowClear size="small" placeholder="选择国家（多选，来自客户跟进）"
+                    value={dynCountries} onChange={setDynCountries}
+                    options={dynAvailableCountries.map(c => ({ value: c, label: `${c} ${COUNTRIES.find(x => x.code === c)?.label || ""}` }))}
+                    style={{ width: "100%" }} />
+                  {dynCountries.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg max-h-[240px] overflow-y-auto">
+                      {dynFilteredContacts.length === 0 ? (
+                        <div className="text-[11px] text-gray-400 py-6 text-center">该国家下暂无客户跟进联系人</div>
+                      ) : (
+                        dynFilteredContacts.map(c => {
+                          const checked = !dynUnchecked.has(c.id);
+                          return (
+                            <div key={c.id} className="flex items-center gap-2 px-3 py-2 border-b border-gray-50 last:border-b-0 hover:bg-gray-50 text-xs">
+                              <Checkbox checked={checked} onChange={() => setDynUnchecked(prev => { const n = new Set(prev); checked ? n.add(c.id) : n.delete(c.id); return n; })} />
+                              <span className="font-medium w-24 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                              <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
+                              {c.country && <span className="text-[9px] text-gray-400 px-1 rounded bg-gray-50">{c.country}</span>}
+                              {c.assignee && <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5">{c.assignee}</Tag>}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                  <Input size="small" placeholder="主题" value={dynSubject} onChange={e => setDynSubject(e.target.value)} />
+                  <RichTextEditor value={dynBody} onChange={setDynBody} placeholder="正文（支持粘贴表格、图片）"
+                    style={{ minHeight: 200, border: "1px solid #d9d9d9", borderRadius: 6, padding: 8 }} />
+                  {signature && (
+                    <div className="border-t border-gray-100 pt-2">
+                      <div className="text-[10px] text-gray-400 mb-1">签名预览</div>
+                      <HtmlText html={signature} className="text-[11px] text-gray-600" />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-gray-400">已选 {dynSelectedCount} 人</span>
+                    <Button type="primary" size="small" icon={<SendOutlined />} onClick={handleDynamicSend}>发信</Button>
+                  </div>
+                </div>
+              ),
+            },
           ]}
         />
       </Card>
 
-      {/* ── ③ 发送规则 + 按钮 ── */}
-      <Card size="small">
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] text-gray-400 leading-relaxed">
-            {sched ? `${sched.timeWindowEnabled ? `${String(sched.startHour).padStart(2, "0")}:00–${String(sched.endHour).padStart(2, "0")}:00` : "不限时段"} · 每组${sched.groupSize}人 · 组间${sched.groupDelayMinSeconds}–${sched.groupDelayMaxSeconds}s` : ""}
-            {quotaData?.success && quotaData.data && (() => {
-              const q = quotaData.data;
-              if (q.remaining <= 0 && !q.ok) return <span className="text-red-500 ml-3">{q.reason}</span>;
-              if (q.remaining > 0) return <span className="ml-3">剩余配额: <strong className="text-gray-700">{q.remaining}</strong> 封</span>;
-              if (q.remaining < 0) return null; // 不限
-              return null;
-            })()}
+      {/* ── ② 发送范围 — 三栏分选（动态更新模式下隐藏） ── */}
+      {sendMode !== "dynamic" && (
+        <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送范围</span>}>
+          <div className="flex gap-4">
+            <BucketColumn
+              title="按发送阶段"
+              buckets={gList}
+              selected={selectedBuckets}
+              onToggle={toggleBucket}
+              disabled={isRunning}
+              loading={gbLoading}
+            />
+            <div className="w-px bg-gray-200 flex-shrink-0" />
+            <BucketColumn
+              title="按客户状态"
+              buckets={sList}
+              selected={selectedBuckets}
+              onToggle={toggleBucket}
+              disabled={isRunning}
+              loading={sbLoading}
+            />
+            <div className="w-px bg-gray-200 flex-shrink-0" />
+            <BucketColumn
+              title="按最后发送"
+              buckets={tList}
+              selected={selectedBuckets}
+              onToggle={toggleBucket}
+              disabled={isRunning}
+              loading={tbLoading}
+            />
           </div>
-          <Space>
-            <Button type="primary" size="small" icon={<SendOutlined />}
-              disabled={selectedCount === 0 || isRunning}
-              onClick={handleStart}>
-              发送 {selectedCount} 人
-            </Button>
-          </Space>
-        </div>
-      </Card>
+          <div className="mt-3 pt-2 border-t border-gray-100 text-[11px] text-gray-400">
+            已选 <strong className="text-gray-700">{selectedCount}</strong> 人{rawCount > selectedCount ? <span className="text-amber-500">（限额上限，共{rawCount}人）</span> : "（三栏取并集）"}
+          </div>
+        </Card>
+      )}
+
+      {/* ── ③ 发送规则 + 按钮（动态更新模式下隐藏） ── */}
+      {sendMode !== "dynamic" && (
+        <Card size="small">
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] text-gray-400 leading-relaxed">
+              {sched ? `${sched.timeWindowEnabled ? `${String(sched.startHour).padStart(2, "0")}:00–${String(sched.endHour).padStart(2, "0")}:00` : "不限时段"} · 每组${sched.groupSize}人 · 组间${sched.groupDelayMinSeconds}–${sched.groupDelayMaxSeconds}s` : ""}
+              {quotaData?.success && quotaData.data && (() => {
+                const q = quotaData.data;
+                if (q.remaining <= 0 && !q.ok) return <span className="text-red-500 ml-3">{q.reason}</span>;
+                if (q.remaining > 0) return <span className="ml-3">剩余配额: <strong className="text-gray-700">{q.remaining}</strong> 封</span>;
+                if (q.remaining < 0) return null; // 不限
+                return null;
+              })()}
+            </div>
+            <Space>
+              <Button type="primary" size="small" icon={<SendOutlined />}
+                disabled={selectedCount === 0 || isRunning}
+                onClick={handleStart}>
+                发送 {selectedCount} 人
+              </Button>
+            </Space>
+          </div>
+        </Card>
+      )}
 
     </div>
   );

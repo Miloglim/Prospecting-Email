@@ -32,6 +32,44 @@ export const CRM_STAGES: { key: string; label: string; color: string }[] = [
   { key: "lost", label: "已流失", color: "#b0b0b0" },
   { key: "other", label: "其他", color: "#333333" },
 ];
+
+/** 国家预设列表（英文全名，输入时搜索匹配，不允许自由键入） */
+export const COUNTRIES: { code: string; label: string }[] = [
+  { code: "Brazil", label: "巴西" }, { code: "Mexico", label: "墨西哥" },
+  { code: "Argentina", label: "阿根廷" }, { code: "Chile", label: "智利" },
+  { code: "Peru", label: "秘鲁" }, { code: "Colombia", label: "哥伦比亚" },
+  { code: "Ecuador", label: "厄瓜多尔" }, { code: "Uruguay", label: "乌拉圭" },
+  { code: "Paraguay", label: "巴拉圭" }, { code: "Bolivia", label: "玻利维亚" },
+  { code: "Venezuela", label: "委内瑞拉" }, { code: "Panama", label: "巴拿马" },
+  { code: "Costa Rica", label: "哥斯达黎加" }, { code: "El Salvador", label: "萨尔瓦多" },
+  { code: "Guatemala", label: "危地马拉" }, { code: "Honduras", label: "洪都拉斯" },
+  { code: "Nicaragua", label: "尼加拉瓜" }, { code: "Dominican Republic", label: "多米尼加" },
+  { code: "Cuba", label: "古巴" }, { code: "Puerto Rico", label: "波多黎各" },
+  { code: "United States", label: "美国" }, { code: "Canada", label: "加拿大" },
+  { code: "China", label: "中国" }, { code: "Hong Kong", label: "中国香港" },
+  { code: "Taiwan", label: "中国台湾" }, { code: "Japan", label: "日本" },
+  { code: "South Korea", label: "韩国" }, { code: "Singapore", label: "新加坡" },
+  { code: "Malaysia", label: "马来西亚" }, { code: "Thailand", label: "泰国" },
+  { code: "Vietnam", label: "越南" }, { code: "Indonesia", label: "印度尼西亚" },
+  { code: "Philippines", label: "菲律宾" }, { code: "India", label: "印度" },
+  { code: "Pakistan", label: "巴基斯坦" }, { code: "Bangladesh", label: "孟加拉国" },
+  { code: "United Arab Emirates", label: "阿联酋" }, { code: "Saudi Arabia", label: "沙特阿拉伯" },
+  { code: "Qatar", label: "卡塔尔" }, { code: "Kuwait", label: "科威特" },
+  { code: "Israel", label: "以色列" }, { code: "Turkey", label: "土耳其" },
+  { code: "United Kingdom", label: "英国" }, { code: "Germany", label: "德国" },
+  { code: "France", label: "法国" }, { code: "Italy", label: "意大利" },
+  { code: "Spain", label: "西班牙" }, { code: "Portugal", label: "葡萄牙" },
+  { code: "Netherlands", label: "荷兰" }, { code: "Belgium", label: "比利时" },
+  { code: "Switzerland", label: "瑞士" }, { code: "Poland", label: "波兰" },
+  { code: "Sweden", label: "瑞典" }, { code: "Norway", label: "挪威" },
+  { code: "Denmark", label: "丹麦" }, { code: "Finland", label: "芬兰" },
+  { code: "Greece", label: "希腊" }, { code: "Czech Republic", label: "捷克" },
+  { code: "Ukraine", label: "乌克兰" }, { code: "Russia", label: "俄罗斯" },
+  { code: "Australia", label: "澳大利亚" }, { code: "New Zealand", label: "新西兰" },
+  { code: "South Africa", label: "南非" }, { code: "Egypt", label: "埃及" },
+  { code: "Nigeria", label: "尼日利亚" }, { code: "Kenya", label: "肯尼亚" },
+  { code: "Morocco", label: "摩洛哥" }, { code: "Ghana", label: "加纳" },
+];
 const INTERACTION_COLORS: Record<string, string> = {
   sent: "#2563eb", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800",
 };
@@ -120,6 +158,7 @@ function EditSelect({ value, onSave, options, allowClear, readNode, disabled }: 
   return (
     <Select size="small" autoFocus defaultOpen className="w-full !text-xs"
       value={value || undefined} allowClear={allowClear} options={options}
+      showSearch optionFilterProp="label"
       popupMatchSelectWidth={false}
       onBlur={() => setEditing(false)}
       onChange={(v) => { onSave(v ?? null); setEditing(false); }}
@@ -148,7 +187,7 @@ function InfoTab({ contact, onSaveField }: {
       <FieldRow label="邮箱"><EditText value={contact.email} onSave={v => onSaveField("email", v)} /></FieldRow>
       <FieldRow label="电话"><EditText value={contact.phone} onSave={v => onSaveField("phone", v)} placeholder="含国家码" /></FieldRow>
       <FieldRow label="LinkedIn"><EditText value={contact.linkedinUrl} onSave={v => onSaveField("linkedinUrl", v)} placeholder="linkedin.com/in/..." /></FieldRow>
-      <FieldRow label="国家"><EditText value={contact.country} onSave={v => onSaveField("country", v)} placeholder="如 MX, BR" /></FieldRow>
+      <FieldRow label="国家"><EditSelect value={contact.country} onSave={v => onSaveField("country", v)} allowClear options={COUNTRIES.map(c => ({ value: c.code, label: `${c.code} ${c.label}` }))} /></FieldRow>
       <FieldRow label="语言">
         <EditSelect value={(contact as unknown as Record<string, string>).language || null} onSave={v => onSaveField("language", v)} allowClear
           options={[

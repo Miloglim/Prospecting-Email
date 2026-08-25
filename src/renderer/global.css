@@ -104,6 +104,13 @@ body {
 .settings-section:nth-child(3) { animation-delay: 0.12s; }
 .settings-section:nth-child(4) { animation-delay: 0.18s; }
 
+/* 动态更新面板 — 顺滑展开 */
+@keyframes dynamic-enter {
+  from { opacity: 0; transform: translateY(-10px); max-height: 0; }
+  to { opacity: 1; transform: translateY(0); max-height: 1200px; }
+}
+.dynamic-enter { animation: dynamic-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1); overflow: hidden; }
+
 .setting-card {
   transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
               box-shadow 0.25s cubic-bezier(0.22, 1, 0.36, 1),

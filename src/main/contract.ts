@@ -52,6 +52,7 @@ export const IPC = {
     GET_SEND_TIME_BUCKETS: chan(PREFIX.SEND, "getSendTimeBuckets"),
     PREVIEW:          chan(PREFIX.SEND, "preview"),
     GET_QUOTA:        chan(PREFIX.SEND, "getQuota"),
+    DYNAMIC:          chan(PREFIX.SEND, "dynamic"),
   },
   INBOX: {
     LIST:          chan(PREFIX.INBOX, "list"),

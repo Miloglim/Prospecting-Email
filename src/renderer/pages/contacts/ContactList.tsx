@@ -4,7 +4,7 @@ import { PlusOutlined, SearchOutlined, DeleteOutlined, SettingOutlined, ImportOu
 import type { TableColumnsType } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useContacts, useUpsertContact, useDeleteContact, type Contact } from "../../hooks/useContacts";
-import { ContactDetailDrawer, CLIENT_TYPE, STATUS_META, STAGE_META, CRM_STAGES } from "../../components/ContactDetail";
+import { ContactDetailDrawer, CLIENT_TYPE, STATUS_META, STAGE_META, CRM_STAGES, COUNTRIES } from "../../components/ContactDetail";
 import { ImportDrawer } from "../../components/ImportDrawer";
 
 /* ---------- 可配置列定义 ---------- */
@@ -361,7 +361,10 @@ export function ContactList() {
             <Form.Item name="linkedinUrl" label="LinkedIn"><Input size="small" /></Form.Item>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Form.Item name="country" label="国家"><Input size="small" placeholder="如 MX, BR" /></Form.Item>
+            <Form.Item name="country" label="国家">
+              <Select size="small" showSearch optionFilterProp="label" allowClear placeholder="搜索选择国家"
+                options={COUNTRIES.map(c => ({ value: c.code, label: `${c.code} ${c.label}` }))} />
+            </Form.Item>
             <Form.Item name="language" label="语言">
                 <Select size="small" allowClear placeholder="匹配发信模板"
                   options={[

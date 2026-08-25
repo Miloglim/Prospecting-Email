@@ -132,6 +132,13 @@ export function registerSendIPC() {
     return SendService.previewTemplate(payload);
   });
 
+  ipcMain.handle(IPC.SEND.DYNAMIC, async (_e, input: { contactIds: number[]; subject: string; body: string }) => {
+    if (!input?.contactIds || !Array.isArray(input.contactIds) || input.contactIds.length === 0) return failResult("请选择联系人");
+    if (!input?.subject?.trim()) return failResult("主题必填");
+    if (!input?.body?.trim()) return failResult("正文必填");
+    return SendService.startDynamicSend(input.contactIds, input.subject, input.body);
+  });
+
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {
     to: string; accountId: number; subject?: string; body?: string; contactId?: number;
   }) => {
