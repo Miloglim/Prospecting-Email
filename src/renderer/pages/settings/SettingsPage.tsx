@@ -17,10 +17,8 @@ interface EmailAccount {
 
 interface SendSchedule {
   timeWindowEnabled: boolean; startHour: number; endHour: number;
-  companyDelayMinMinutes: number; companyDelayMaxMinutes: number;
-  singleRecipDelayMinSeconds: number; singleRecipDelayMaxSeconds: number;
-  templateRotateGroups: number; batchSize: number;
-  batchPauseMinSeconds: number; batchPauseMaxSeconds: number;
+  groupSize: number;
+  groupDelayMinSeconds: number; groupDelayMaxSeconds: number;
 }
 
 interface RuntimeConfig {
@@ -675,27 +673,14 @@ export function SettingsPage() {
                 if (!isNaN(h) && h >= 0 && h <= 23) saveSched({ endHour: h });
               }} placeholder="北京时，次日结束如 08" hint="跨天" />
 
-            {/* 模板引擎 */}
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mt-3 mb-1">模板引擎</div>
-            <SettingRow label="组间轮换" value={sched?.templateRotateGroups ?? 3} type="number"
-              onSave={v => saveSched({ templateRotateGroups: Number(v) })} hint="组/换" />
-
             {/* 发送参数 */}
             <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mt-3 mb-1">发送参数</div>
-            <SettingRow label="每组人数" value={sched?.batchSize ?? 12} type="number"
-              onSave={v => saveSched({ batchSize: Number(v) })} hint="人/组" />
+            <SettingRow label="每组人数" value={sched?.groupSize ?? 20} type="number"
+              onSave={v => saveSched({ groupSize: Number(v) })} hint="人/组" />
             {sched && (
-              <>
-                <RangeRow label="公司组间隔" min={sched.companyDelayMinMinutes} max={sched.companyDelayMaxMinutes}
-                  onSaveMin={v => saveSched({ companyDelayMinMinutes: v })} onSaveMax={v => saveSched({ companyDelayMaxMinutes: v })}
-                  hint="分钟" />
-                <RangeRow label="单联系人" min={sched.singleRecipDelayMinSeconds} max={sched.singleRecipDelayMaxSeconds}
-                  onSaveMin={v => saveSched({ singleRecipDelayMinSeconds: v })} onSaveMax={v => saveSched({ singleRecipDelayMaxSeconds: v })}
-                  hint="秒" />
-                <RangeRow label="批间暂停" min={sched.batchPauseMinSeconds} max={sched.batchPauseMaxSeconds}
-                  onSaveMin={v => saveSched({ batchPauseMinSeconds: v })} onSaveMax={v => saveSched({ batchPauseMaxSeconds: v })}
-                  hint="秒" />
-              </>
+              <RangeRow label="组间暂停" min={sched.groupDelayMinSeconds} max={sched.groupDelayMaxSeconds}
+                onSaveMin={v => saveSched({ groupDelayMinSeconds: v })} onSaveMax={v => saveSched({ groupDelayMaxSeconds: v })}
+                hint="秒" />
             )}
           </SettingCard>
         </div>

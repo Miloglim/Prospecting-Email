@@ -5,7 +5,7 @@ import { HtmlText } from "../../components/RichTextEditor";
 import {
   ClockCircleOutlined, CloseOutlined, MailOutlined, SearchOutlined,
   DownOutlined, RightOutlined, EditOutlined, SaveOutlined,
-  DeleteOutlined, PlusOutlined, SendOutlined, EnvironmentOutlined,
+  DeleteOutlined, PlusOutlined, SendOutlined, EnvironmentOutlined, CopyOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 
@@ -293,6 +293,37 @@ export function CrmPipeline() {
     } catch { message.error("复制失败"); }
   };
 
+  // 复制联系人完整信息（分行），供分享给同事
+  const copyContactInfo = async () => {
+    if (!contact) return;
+    const extra = (contact as unknown as Record<string, unknown>).extra as Record<string, unknown> || {};
+    let ports = "";
+    try {
+      const p = JSON.parse(String(extra.preferredPorts || "[]"));
+      if (Array.isArray(p)) ports = p.map((x: { pol?: string; pod?: string }) => [x.pol, x.pod].filter(Boolean).join("→")).join("；");
+    } catch { /* 忽略 */ }
+    const CLIENT_LABEL: Record<string, string> = { agent: "代理", direct: "直客" };
+    const SEND_STAGE_LABEL: Record<string, string> = { cold: "新线索", f1: "第1轮", f2: "第2轮", f3: "第3轮", f4: "第4轮+" };
+    const lines = [
+      `姓名: ${[contact.firstName, contact.lastName].filter(Boolean).join(" ") || "—"}`,
+      `邮箱: ${contact.email}`,
+      `公司: ${contact.companyName || "—"}`,
+      `国家: ${contact.country || "—"}`,
+      `语言: ${contact.language || "—"}`,
+      `职位: ${contact.title || "—"}`,
+      `电话: ${contact.phone || "—"}`,
+      `领英: ${contact.linkedinUrl || "—"}`,
+      `客户类型: ${CLIENT_LABEL[contact.clientType || ""] || contact.clientType || "—"}`,
+      `阶段: ${SEND_STAGE_LABEL[contact.sendStage || ""] || contact.sendStage || "—"}`,
+      `偏好港口: ${ports || "—"}`,
+      `备注: ${extra.crmNote || extra.note || "—"}`,
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      message.success("已复制联系人信息");
+    } catch { message.error("复制失败"); }
+  };
+
   // 跟进记录编辑：保存并退出编辑态（onBlur 与按钮共用）
   const commitEditNote = async () => {
     if (!editingNoteId) return;
@@ -344,7 +375,7 @@ export function CrmPipeline() {
                           className={`flex items-center gap-2 px-4 py-2 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors text-xs ${detailId === c.id ? "bg-violet-50 border-l-2 border-l-violet-400" : ""}`}
                           onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
                         >
-                          <span className="font-medium flex-shrink-0 w-20 truncate">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                          <span className="font-medium flex-shrink-0 w-24 truncate" title={[c.firstName, c.lastName].filter(Boolean).join(" ") || undefined}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
                           {c.country ? (
                             <span className="text-[9px] text-gray-400 flex-shrink-0 px-1 rounded bg-gray-50">{c.country}</span>
                           ) : null}
@@ -403,6 +434,12 @@ export function CrmPipeline() {
                   onClick={() => {
                     if (contact?.email) window.location.hash = `#/inbox?search=${encodeURIComponent(contact.email)}`;
                   }}
+                />
+              </Tooltip>
+              <Tooltip title="复制联系人信息">
+                <CopyOutlined
+                  className="text-[11px] text-gray-400 hover:text-blue-500 cursor-pointer transition-colors"
+                  onClick={copyContactInfo}
                 />
               </Tooltip>
             </div>

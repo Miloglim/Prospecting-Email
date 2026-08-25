@@ -43,18 +43,11 @@ export interface SendSchedule {
   timeWindowEnabled: boolean;
   startHour: number;   // 北京时 9
   endHour: number;     // 北京时 8（次日）
-  /** 公司组之间间隔（分钟）— 模拟人工"一批一批发" */
-  companyDelayMinMinutes: number;
-  companyDelayMaxMinutes: number;
-  /** 单公司单联系人额外间隔（秒） */
-  singleRecipDelayMinSeconds: number;
-  singleRecipDelayMaxSeconds: number;
-  /** 每 N 组换模板（多模板轮换） */
-  templateRotateGroups: number;
-  /** 每批发送组数 + 批间暂停（模拟人工休息） */
-  batchSize: number;
-  batchPauseMinSeconds: number;
-  batchPauseMaxSeconds: number;
+  /** 每组人数上限（同公司超过 N 拆多组） */
+  groupSize: number;
+  /** 组间暂停区间（秒）— 模拟人工一批批发 */
+  groupDelayMinSeconds: number;
+  groupDelayMaxSeconds: number;
 }
 
 export interface RuntimeConfig {
@@ -93,14 +86,9 @@ export const DEFAULT_SCHEDULE: SendSchedule = {
   timeWindowEnabled: true,
   startHour: 9,
   endHour: 8,
-  companyDelayMinMinutes: 15,
-  companyDelayMaxMinutes: 20,
-  singleRecipDelayMinSeconds: 5,
-  singleRecipDelayMaxSeconds: 10,
-  templateRotateGroups: 3,
-  batchSize: 12,
-  batchPauseMinSeconds: 94,
-  batchPauseMaxSeconds: 167,
+  groupSize: 20,
+  groupDelayMinSeconds: 300,
+  groupDelayMaxSeconds: 600,
 };
 
 const DEFAULT_CONFIG: RuntimeConfig = {

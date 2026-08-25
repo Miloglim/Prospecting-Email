@@ -620,10 +620,21 @@ async function fetchBody(accountId: number, messageId: string, classification?: 
         const reClass = target.classification !== "sent"
           ? InboxService.classify(target.subject, target.fromEmail, raw.bodyText, !!target.matchedContactId)
           : target.classification;
+        // 正文匹配联系人：退信等 from 匹配不到（mailer-daemon）的情况，从正文提取被退/被抄送的联系人邮箱
+        let matchedId = target.matchedContactId;
+        if (matchedId == null) {
+          const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+          const emails = (raw.bodyText || "").match(EMAIL_RE) || [];
+          for (const em of emails) {
+            const c = InboxService.matchContact(em);
+            if (c) { matchedId = c.id; break; }
+          }
+        }
         getDb().update(inboxMessages)
           .set({
             bodyPreview: raw.bodyText.slice(0, 500),
             ...(reClass !== target.classification ? { classification: reClass } : {}),
+            ...(matchedId != null && matchedId !== target.matchedContactId ? { matchedContactId: matchedId } : {}),
           })
           .where(eq(inboxMessages.id, target.id))
           .run();

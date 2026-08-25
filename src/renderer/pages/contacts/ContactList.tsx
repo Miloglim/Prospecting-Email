@@ -1,7 +1,8 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Tooltip } from "antd";
+import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Tooltip, Modal } from "antd";
 import { PlusOutlined, SearchOutlined, DeleteOutlined, SettingOutlined, ImportOutlined, PartitionOutlined, MailOutlined } from "@ant-design/icons";
 import type { TableColumnsType } from "antd";
+import { useQueryClient } from "@tanstack/react-query";
 import { useContacts, useUpsertContact, useDeleteContact, type Contact } from "../../hooks/useContacts";
 import { ContactDetailDrawer, CLIENT_TYPE, STATUS_META, STAGE_META, CRM_STAGES } from "../../components/ContactDetail";
 import { ImportDrawer } from "../../components/ImportDrawer";
@@ -89,6 +90,7 @@ export function ContactList() {
   const [importOpen, setImportOpen] = useState(false);
   const [detailContact, setDetailContact] = useState<Contact | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [visibleCols, setVisibleCols] = useState<string[]>(() => {
     try {
       const s = localStorage.getItem(COLS_KEY);
@@ -100,6 +102,26 @@ export function ContactList() {
   const { data, isLoading, error } = useContacts({ search, page, ...filters });
   const upsertContact = useUpsertContact();
   const deleteContact = useDeleteContact();
+  const qc = useQueryClient();
+
+  // 批量删除选中联系人
+  const batchDelete = () => {
+    if (selectedRowKeys.length === 0) return;
+    Modal.confirm({
+      title: `删除 ${selectedRowKeys.length} 个联系人？`,
+      okText: "删除", okType: "danger", cancelText: "取消",
+      onOk: async () => {
+        let n = 0;
+        for (const id of selectedRowKeys) {
+          const r = await window.api.invoke("contacts:delete", id) as { success: boolean };
+          if (r?.success) n++;
+        }
+        setSelectedRowKeys([]);
+        message.success(`已删除 ${n} 个联系人`);
+        qc.invalidateQueries({ queryKey: ["contacts"] });
+      },
+    });
+  };
 
   const contacts = data?.success ? (data.data?.items || []) : [];
   const total = data?.success ? (data.data?.total || 0) : 0;
@@ -229,6 +251,10 @@ export function ContactList() {
           size="small" style={{ width: 260 }} allowClear />
         <Space size="small">
           <span className="text-xs text-gray-400">共 {total} 人</span>
+          {selectedRowKeys.length > 0 && (
+            <Button size="small" danger icon={<DeleteOutlined />}
+              onClick={batchDelete}>删除选中 ({selectedRowKeys.length})</Button>
+          )}
           <Popover trigger="click" placement="bottomRight" content={colsPanel}>
             <Button size="small" icon={<SettingOutlined />}>列设置</Button>
           </Popover>
@@ -292,8 +318,24 @@ export function ContactList() {
           size: "small", showSizeChanger: false,
           showTotal: t => `${t} 人`,
         }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
         onRow={(record) => ({
           onDoubleClick: () => setDetailContact(record),
+          onClick: (e: React.MouseEvent) => {
+            if (e.ctrlKey || e.metaKey) {
+              setSelectedRowKeys(prev => prev.includes(record.id) ? prev.filter(k => k !== record.id) : [...prev, record.id]);
+            } else if (e.shiftKey) {
+              const last = selectedRowKeys.length ? selectedRowKeys[selectedRowKeys.length - 1] : record.id;
+              const idxA = contacts.findIndex(c => c.id === last);
+              const idxB = contacts.findIndex(c => c.id === record.id);
+              const [lo, hi] = [Math.min(idxA, idxB), Math.max(idxA, idxB)];
+              const range = contacts.slice(lo, hi + 1).map(c => c.id);
+              setSelectedRowKeys(prev => [...new Set([...prev, ...range])]);
+            }
+          },
         })}
         rowClassName="cursor-pointer"
       />

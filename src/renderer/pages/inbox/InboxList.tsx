@@ -475,10 +475,13 @@ export function InboxList() {
         </div>
 
         {/* 退信删除 */}
-        {filter === "bounce" && items.length > 0 && (
-          <button onClick={() => { Modal.confirm({ title: "删除所有退信匹配的联系人？（不删除邮件）", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
-            style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>删除退信匹配的联系人</button>
-        )}
+        {filter === "bounce" && items.length > 0 && (() => {
+          const cnt = new Set(items.filter(i => i.matchedContactId != null).map(i => i.matchedContactId)).size;
+          return (
+            <button onClick={() => { Modal.confirm({ title: `删除 ${cnt} 个退信匹配的联系人？`, okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
+              style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>删除退信匹配的联系人</button>
+          );
+        })()}
 
         {/* 列表 */}
         <div ref={listRef} className="thin-scroll" style={{ flex: 1, overflow: "auto" }}

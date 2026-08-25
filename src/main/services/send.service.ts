@@ -419,10 +419,26 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
     }
   }
 
+  const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
   let roundRobinIdx = 0;
-  for (const [, group] of companyGroups) {
-    const first = group[0]!;
+
+  // 公司按人数降序（多的先发）、同人数按公司名 A-Z；公司内联系人按姓名 A-Z
+  const sortedCompanies = [...companyGroups.entries()].sort((a, b) => {
+    if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+    const nameA = companyMap.get(a[1][0]?.companyId || 0) || "";
+    const nameB = companyMap.get(b[1][0]?.companyId || 0) || "";
+    return nameA.localeCompare(nameB);
+  });
+
+  for (const [, group] of sortedCompanies) {
+    const sorted = [...group].sort((a, b) => {
+      const nameA = [a.firstName, a.lastName].filter(Boolean).join(" ").toLowerCase();
+      const nameB = [b.firstName, b.lastName].filter(Boolean).join(" ").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    const first = sorted[0]!;
     const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
     const t = pickTemplate(userTpls, first);
     const contactVars: TemplateVars = {
@@ -432,17 +448,22 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Re
     };
     const subj = renderTemplate(t.subject, contactVars);
 
-    const preferredAid = lastAccountMap.get(first.id);
-    const aid = preferredAid || activeAccounts[roundRobinIdx % activeAccounts.length]?.id || 0;
-    if (!preferredAid) roundRobinIdx++;
+    // 同公司超 groupSize 拆多组（BCC 每组上限 N 人）
+    for (let s = 0; s < sorted.length; s += groupSize) {
+      const chunk = sorted.slice(s, s + groupSize);
+      const firstInChunk = chunk[0]!;
+      const preferredAid = lastAccountMap.get(firstInChunk.id);
+      const aid = preferredAid || activeAccounts[roundRobinIdx % activeAccounts.length]?.id || 0;
+      if (!preferredAid) roundRobinIdx++;
 
-    items.push({
-      id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
-      companyId: first.companyId || 0,
-      recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-      subject: subj, tplBody: t.body, contactVars,
-      accountId: aid, status: "pending",
-    });
+      items.push({
+        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+        companyId: first.companyId || 0,
+        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+        subject: subj, tplBody: t.body, contactVars,
+        accountId: aid, status: "pending",
+      });
+    }
   }
   return okResult(items);
 }
@@ -498,9 +519,25 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
   const companyMap = new Map<number, string>();
   for (const comp of getDb().select().from(companies).all()) companyMap.set(comp.id, comp.name);
 
+  const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
-  for (const [, group] of companyGroups) {
-    const first = group[0]!;
+
+  // 公司按人数降序、同人数按公司名 A-Z；公司内联系人按姓名 A-Z
+  const sortedCompanies = [...companyGroups.entries()].sort((a, b) => {
+    if (b[1].length !== a[1].length) return b[1].length - a[1].length;
+    const nameA = companyMap.get(a[1][0]?.companyId || 0) || "";
+    const nameB = companyMap.get(b[1][0]?.companyId || 0) || "";
+    return nameA.localeCompare(nameB);
+  });
+
+  for (const [, group] of sortedCompanies) {
+    const sorted = [...group].sort((a, b) => {
+      const nameA = [a.firstName, a.lastName].filter(Boolean).join(" ").toLowerCase();
+      const nameB = [b.firstName, b.lastName].filter(Boolean).join(" ").toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+    const first = sorted[0]!;
     const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
     const l = normalizeLang(first.language);
     const ct = mapClientType(first.clientType || "") as ClientType;
@@ -511,14 +548,18 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
       includeCompany: !!companyName,
       subjectOverride: loadConfig().sentenceSubjects?.[`${ct}.${l}`] || undefined,
     });
-    items.push({
-      id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
-      companyId: first.companyId || 0,
-      recipients: group.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-      subject: assembled.subject, tplBody: assembled.body,
-      contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
-      accountId: 0, status: "pending",
-    });
+
+    for (let s = 0; s < sorted.length; s += groupSize) {
+      const chunk = sorted.slice(s, s + groupSize);
+      items.push({
+        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+        companyId: first.companyId || 0,
+        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+        subject: assembled.subject, tplBody: assembled.body,
+        contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
+        accountId: 0, status: "pending",
+      });
+    }
   }
   return okResult(items);
 }
@@ -716,7 +757,7 @@ async function runAccountLoop(accountId: number) {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
           }
         }
-        saveDatabase();
+        // 不每封写盘（64MB 库写盘 ~74ms，大量组会卡顿），依赖 main 进程 30s 自动保存
         const s = state.accountStats.find(x => x.accountId === accountId);
         if (s) s.sent++;
       } else {
@@ -734,19 +775,8 @@ async function runAccountLoop(accountId: number) {
     push(EVENTS.SEND_PROGRESS, state);
 
     if (i < q.length - 1 && state.isRunning && !state.isPaused) {
-      // 公司组之间：15-20 分钟随机间隔（模拟人工一批批处理）
-      let ms: number;
-      if (item.recipients.length <= 1) {
-        // 单联系人公司：短间隔 5-10 秒
-        ms = randBetween(sched.singleRecipDelayMinSeconds, sched.singleRecipDelayMaxSeconds);
-      } else {
-        // 多联系人公司（BCC 组）：15-20 分钟
-        ms = randBetween(sched.companyDelayMinMinutes * 60, sched.companyDelayMaxMinutes * 60);
-      }
-      // 批间暂停：每 batchSize 组额外休息，模拟人工处理完一批后停下喘口气
-      if ((i + 1) % sched.batchSize === 0) {
-        ms += randBetween(sched.batchPauseMinSeconds, sched.batchPauseMaxSeconds) * 1000;
-      }
+      // 组间暂停：随机取组间暂停区间的随机数
+      const ms = randBetween(sched.groupDelayMinSeconds, sched.groupDelayMaxSeconds);
       state.delaySeconds = Math.floor(ms / 1000);
       push(EVENTS.SEND_PROGRESS, state);
       const ok = await sleep(ms);

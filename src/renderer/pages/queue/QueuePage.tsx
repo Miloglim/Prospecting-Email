@@ -220,6 +220,7 @@ export function QueuePage() {
             const st = STATUS_TAG[item.status] ?? STATUS_TAG.pending!;
             return (
               <div key={item.id}
+                style={{ contentVisibility: "auto" as never, containIntrinsicSize: "auto 48px" }}
                 className={`border rounded-lg bg-white transition-shadow hover:shadow-sm ${
                   item.status === "sending" ? "border-blue-300 shadow-blue-50 shadow-sm" : "border-gray-200"
                 }`}

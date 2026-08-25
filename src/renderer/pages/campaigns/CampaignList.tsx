@@ -109,9 +109,8 @@ export function CampaignList() {
     queryKey: ["config"],
     queryFn: () => window.api.invoke("system:getConfig") as Promise<{
       success: boolean; data?: { schedule: { timeWindowEnabled: boolean; startHour: number; endHour: number;
-        companyDelayMinMinutes: number; companyDelayMaxMinutes: number;
-        singleRecipDelayMinSeconds: number; singleRecipDelayMaxSeconds: number;
-        templateRotateGroups: number; }; sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number } };
+        groupSize: number; groupDelayMinSeconds: number; groupDelayMaxSeconds: number; };
+        sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number } };
     }>,
   });
 
@@ -312,7 +311,7 @@ export function CampaignList() {
       <Card size="small">
         <div className="flex items-center justify-between">
           <div className="text-[10px] text-gray-400 leading-relaxed">
-            {sched ? `${sched.timeWindowEnabled ? `${String(sched.startHour).padStart(2, "0")}:00–${String(sched.endHour).padStart(2, "0")}:00` : "不限时段"} · ${sched.companyDelayMinMinutes}–${sched.companyDelayMaxMinutes}min · ${sched.singleRecipDelayMinSeconds}–${sched.singleRecipDelayMaxSeconds}s` : ""}
+            {sched ? `${sched.timeWindowEnabled ? `${String(sched.startHour).padStart(2, "0")}:00–${String(sched.endHour).padStart(2, "0")}:00` : "不限时段"} · 每组${sched.groupSize}人 · 组间${sched.groupDelayMinSeconds}–${sched.groupDelayMaxSeconds}s` : ""}
             {quotaData?.success && quotaData.data && (() => {
               const q = quotaData.data;
               if (q.remaining <= 0 && !q.ok) return <span className="text-red-500 ml-3">{q.reason}</span>;
