@@ -149,19 +149,20 @@ export function QueuePage() {
         </Space>
       </div>
 
-      {/* 恢复发送按钮 — 重启后有 pending 项但不运行时 */}
+      {/* 开始发送按钮 — 队列已就绪但未运行（新入队 or 重启后中断恢复，两种情况共用） */}
       {canResume && (
         <Card size="small" className="!bg-amber-50 !border-amber-200">
           <div className="flex items-center justify-between">
             <div className="text-xs text-amber-700">
-              有 {items.filter(i => i.status === "pending").length} 组待发送（批次可能被中断）
+              有 {items.filter(i => i.status === "pending").length} 组待发送
+              {(status?.sentCount ?? 0) > 0 ? "（批次被中断，可继续）" : " — 确认收件人无误后开始"}
             </div>
             <Button type="primary" size="small" icon={<PlayCircleOutlined />}
               onClick={async () => {
                 const r = await window.api.invoke("send:resumeQueue") as { success: boolean; error?: string };
-                r?.success ? message.success("已恢复发送") : message.error(r?.error || "恢复失败");
+                r?.success ? message.success("已开始发送") : message.error(r?.error || "启动失败");
                 qc.invalidateQueries({ queryKey: ["send"] });
-              }}>恢复发送</Button>
+              }}>开始发送</Button>
           </div>
         </Card>
       )}

@@ -154,6 +154,62 @@ export function matchContactIds(emails: string[]): string {
   return [...ids].join(",");
 }
 
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+
+/** 系统地址关键词 — 退信里必然出现但绝不是被退联系人 */
+const SYS_ADDR_KEYWORDS = ["no-reply", "noreply", "mailer-daemon", "postmaster", "mailadmin", "mailsupport", "aliyun.com"];
+
+/** 我方发信域名 — 退信正文里大量出现（原信头被引用），不排除会捞错 */
+function myDomains(): string[] {
+  return getDb().select({ email: emailAccounts.email }).from(emailAccounts).all()
+    .map(a => (a.email || "").toLowerCase().split("@")[1] || "")
+    .filter(Boolean);
+}
+
+/** 从退信原文提取"被退的那个地址"并匹配联系人，返回联系人 id。
+ *  移植自旧 PE extractBouncedAddress 的优先级链：DSN 标准头 → 中英文正文模式 → 全文兜底。
+ *  传完整 raw source 效果最好（DSN 段在里面）；只有 HTML 正文时自动降级走后两级。 */
+export function extractBouncedContact(text: string): number | null {
+  const excl = [...SYS_ADDR_KEYWORDS, ...myDomains()];
+  /** 清洗候选地址 → 排除系统/我方 → 匹配联系人 */
+  const pick = (addr: string | undefined): number | null => {
+    if (!addr) return null;
+    const e = addr.toLowerCase().trim().replace(/[;,<>'")\]]/g, "");
+    if (!e.includes("@") || excl.some(d => e.includes(d))) return null;
+    return matchContact(e)?.id ?? null;
+  };
+
+  // ① DSN 标准头 — 最可靠，退信服务按 RFC 3464 明确写出被退地址
+  for (const re of [
+    /X-Failed-Recipients:\s*(\S+@\S+)/i,
+    /Final-Recipient:\s*rfc822;\s*(\S+)/i,
+    /Original-Recipient:\s*rfc822;\s*(\S+)/i,
+  ]) {
+    const hit = pick(text.match(re)?.[1]);
+    if (hit != null) return hit;
+  }
+
+  // ② 正文模式 — 没有 DSN 段时，退信服务用自然语言写明被退地址
+  const flat = text.replace(/\s+/g, " ");
+  for (const re of [
+    /could not be delivered to\s+(\S+@\S+)/i,
+    /following recipients?[^:]*:\s*(\S+@\S+)/i,
+    /<(\S+@\S+)>[^<]{0,60}?(?:failed|rejected|bounced|undeliverable)/i,
+    /收(?:件|信)人?\s*(?:邮件)?地址[：:\s]*(\S+@\S+)/,
+    /(?:无法(?:送达|投递)|退信|拒收)[^@]{0,30}(\S+@\S+)/,
+  ]) {
+    const hit = pick(flat.match(re)?.[1]);
+    if (hit != null) return hit;
+  }
+
+  // ③ 兜底：全文扫邮箱，排除系统/我方域名后取第一个能匹配到联系人的
+  for (const em of text.match(EMAIL_RE) || []) {
+    const hit = pick(em);
+    if (hit != null) return hit;
+  }
+  return null;
+}
+
 // ── 抓取器状态 ──
 
 const SEEN_UIDS = new Set<string>();
@@ -427,6 +483,18 @@ export async function writeBodyForLastInsert(html: string): Promise<void> {
 
 // ── 获取邮件正文 ──
 
+/** 从正文捞联系人并回填 matchedContactId（幂等，已匹配直接跳过）。
+ *  不补的话：右侧详情靠前端扫正文能显示「已匹配」，左侧列表读的却是 DB 字段 → 标签永远不亮。 */
+function backfillMatchFromBody(id: number, current: number | null, text: string): void {
+  if (current != null) return;
+  const cid = extractBouncedContact(text);
+  if (cid == null) return;
+  getDb().update(inboxMessages).set({ matchedContactId: cid }).where(eq(inboxMessages.id, id)).run();
+  saveDatabase();
+  // 推空计数事件：前端监听里 count=0 不弹提示，只刷新列表 → 左侧标签立即亮
+  try { pushFn?.("inbox:newMail", { count: 0 }); } catch { /* 推送失败不影响正文返回 */ }
+}
+
 export async function getBody(id: number): Promise<Result<string>> {
   if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
   const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
@@ -434,7 +502,11 @@ export async function getBody(id: number): Promise<Result<string>> {
   // ① 正文已在磁盘文件 → 直接读（毫秒级，持久，重启后依然秒开）
   const file = bodyFilePath(id);
   if (fs.existsSync(file)) {
-    try { return okResult(await fs.promises.readFile(file, "utf-8")); }
+    try {
+      const html = await fs.promises.readFile(file, "utf-8");
+      backfillMatchFromBody(row.id, row.matchedContactId, html);
+      return okResult(html);
+    }
     catch (err) { Log.error("inbox.body", `正文文件读取失败 id=${id}`, err instanceof Error ? err.stack : undefined); }
   }
   // ② 懒加载：IMAP 拉单封（fetchBody 内部会落盘文件）
@@ -465,6 +537,64 @@ export async function prefetchRecentBodies(limit = 20): Promise<void> {
     } catch { /* 单封失败跳过 */ }
   }
   if (loaded > 0) Log.info("inbox.prefetch", `预加载 ${loaded}/${rows.length} 封正文`);
+}
+
+/** 退信原文到手后的落地处理：提取被退联系人 → 回填 matchedContactId → 正文落盘 → 标记联系人退信。
+ *  抓取阶段拿到 raw source 时调用（DSN 段只在原文里，mailparser 会把它归到 attachments）。
+ *  返回 true 表示本次新匹配到了联系人。 */
+export async function applyBounceSource(
+  messageId: string, accountId: number, rawSource: string, html: string, bodyText: string,
+): Promise<boolean> {
+  const row = getDb().select({ id: inboxMessages.id, matchedContactId: inboxMessages.matchedContactId })
+    .from(inboxMessages)
+    .where(sql`${inboxMessages.messageId} = ${messageId} AND ${inboxMessages.accountId} = ${accountId}`)
+    .get();
+  if (!row) return false;
+
+  if (html) {
+    try { await writeBodyFile(row.id, html); }
+    catch (err) { Log.error("inbox.bounce", `正文落盘失败 id=${row.id}`, err instanceof Error ? err.stack : undefined); }
+  }
+
+  const cid = row.matchedContactId ?? extractBouncedContact(rawSource);
+  const isNew = cid != null && row.matchedContactId == null;
+  getDb().update(inboxMessages).set({
+    bodyPreview: bodyText.slice(0, 500),
+    ...(isNew ? { matchedContactId: cid } : {}),
+  }).where(eq(inboxMessages.id, row.id)).run();
+
+  // 联系人标记退信 — 整条下游链（退信日志/CRM状态/一键删除）都挂在这一步上
+  if (isNew && cid != null) markAsBounced(cid);
+  return isNew;
+}
+
+/** 补匹配退信联系人（幂等）。
+ *  退信 from 是 mailer-daemon，抓取阶段必然匹配不到；被退的真实收件人只在正文里。
+ *  ponytail: 只扫本地已落盘的正文文件，零网络。缺正文的邮件等 prefetch/点开后落盘，下次拉取再补。 */
+export async function backfillBounceMatches(): Promise<number> {
+  const rows = getDb().select({ id: inboxMessages.id }).from(inboxMessages)
+    .where(sql`${inboxMessages.classification} = 'bounce' AND ${inboxMessages.matchedContactId} IS NULL`)
+    .all();
+
+  let filled = 0;
+  for (const r of rows) {
+    const file = bodyFilePath(r.id);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const cid = extractBouncedContact(await fs.promises.readFile(file, "utf-8"));
+      if (cid != null) {
+        getDb().update(inboxMessages).set({ matchedContactId: cid }).where(eq(inboxMessages.id, r.id)).run();
+        filled++;
+      }
+    } catch (err) {
+      Log.error("inbox.backfill", `正文读取失败 id=${r.id}`, err instanceof Error ? err.stack : undefined);
+    }
+  }
+  if (filled > 0) {
+    saveDatabase();
+    Log.info("inbox.backfill", `退信补匹配 ${filled}/${rows.length} 封`);
+  }
+  return filled;
 }
 
 /** 一次性迁移：存量 raw_source 正文导出到文件 + 删除列（幂等，启动时调用） */

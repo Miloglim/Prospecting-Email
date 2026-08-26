@@ -6,6 +6,9 @@
     "timeWindowEnabled": true,
     "startHour": 21,
     "endHour": 8,
+    "groupSize": 20,
+    "groupDelayMinSeconds": 300,
+    "groupDelayMaxSeconds": 600,
     "companyDelayMinMinutes": 15,
     "companyDelayMaxMinutes": 20,
     "singleRecipDelayMinSeconds": 5,
@@ -18,7 +21,7 @@
   "test": {
     "email": "",
     "company": "",
-    "enabled": false,
+    "enabled": true,
     "dryRun": true
   },
   "crm": {
@@ -38,5 +41,6 @@
   },
   "general": {
     "closeAction": "quit"
-  }
+  },
+  "sentenceSubjects": {}
 }

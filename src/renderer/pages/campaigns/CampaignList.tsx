@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select } from "antd";
+import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal } from "antd";
 import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -173,8 +173,9 @@ export function CampaignList() {
     if (ids.length === 0) { message.warning("请选择联系人"); return; }
     if (!dynSubject.trim()) { message.warning("请填写主题"); return; }
     if (!dynBody.trim()) { message.warning("请填写正文"); return; }
-    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody }) as { success: boolean; error?: string };
-    r?.success ? (message.success(`开始发送 ${ids.length} 人`), navigate({ to: "/queue" })) : message.error(r?.error || "启动失败");
+    if (!await confirmQueueOverwrite()) return;
+    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody, autoStart: false }) as { success: boolean; error?: string };
+    r?.success ? (message.success(`已加入队列 ${ids.length} 人，请在队列页点「开始发送」`), navigate({ to: "/queue" })) : message.error(r?.error || "入队失败");
   };
 
   // 合并三个维度的所有 key，取并集统计人数（去重由后端 buildQueue 处理）
@@ -200,7 +201,22 @@ export function CampaignList() {
     return off;
   }, [qc]);
 
+  /** 入队前确认 — 后端 startQueue 会清空整个队列表，已有待发送项必须让用户知道会被替换。
+   *  返回 false = 用户取消。 */
+  const confirmQueueOverwrite = async (): Promise<boolean> => {
+    const qr = await window.api.invoke("send:getQueue") as { success: boolean; data?: Array<{ status: string }> };
+    const pending = qr?.success ? (qr.data || []).filter(i => i.status === "pending").length : 0;
+    if (pending === 0) return true;
+    return new Promise<boolean>(resolve => Modal.confirm({
+      title: `队列中已有 ${pending} 组待发送`,
+      content: "继续将清空原队列，替换为本次选择的收件人。原队列未发送的部分会丢失。",
+      okText: "替换", okType: "danger", cancelText: "取消",
+      onOk: () => resolve(true), onCancel: () => resolve(false),
+    }));
+  };
+
   const handleStart = async () => {
+    if (!await confirmQueueOverwrite()) return;
     const payload: Record<string, unknown> = { keys: selectedBuckets };
     if (sendMode === "mine") {
       const allTpls = templates.map(t => ({ subject: t.subject, body: t.body, category: t.category, stage: t.stage, language: t.language }));
@@ -209,12 +225,14 @@ export function CampaignList() {
     } else if (sendMode === "instant") {
       payload.templates = [{ subject: instantSubject, body: instantBody }];
     }
+    // 只入队不发送 — 用户在队列页确认后再点「开始发送」（对齐旧 PE 两步式）
+    payload.autoStart = false;
     const r = await startMut.mutateAsync(payload as { keys: string[]; templates?: Array<{ subject: string; body: string }> });
     if (r && typeof r === "object" && "success" in r) {
       const rr = r as { success: boolean; error?: string };
       rr.success
-        ? (message.success(`开始发送 ${selectedCount} 人`), navigate({ to: "/queue" }))
-        : message.error(rr.error || "启动失败");
+        ? (message.success(`已加入队列 ${selectedCount} 人，请在队列页点「开始发送」`), navigate({ to: "/queue" }))
+        : message.error(rr.error || "入队失败");
     }
   };
 

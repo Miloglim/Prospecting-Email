@@ -566,11 +566,19 @@ export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
 
 // ── 多账号并行发送 ──
 
+/** 为一组邮件挑发信账号：亲和账号（该客户上次用的）未超载就用它，超了改投当前最闲的。
+ *  纯函数，无副作用 —— 防的是"历史集中在某账号的联系人把整批压给它 → 连续猛发被限流"。 */
+export function pickAccountId(preferredAid: number | undefined, load: Map<number, number>, cap: number): number {
+  if (preferredAid != null && (load.get(preferredAid) ?? 0) < cap) return preferredAid;
+  return [...load.entries()].reduce((min, e) => (e[1] < min[1] ? e : min))[0]!;
+}
+
 let queues: Map<number, SendItem[]> = new Map();
 let abortFlags: Map<number, boolean> = new Map();
 
-/** 公共发送入口：账号分配 + 限额裁剪 + 持久化 + 启动发送循环 */
-async function startQueue(items: SendItem[]): Promise<Result<string>> {
+/** 公共发送入口：账号分配 + 限额裁剪 + 持久化 + 启动发送循环。
+ *  autoStart=false 时只入队落库、不发一封（对齐旧 PE 两步式：加入队列 → 队列页手动开始）。 */
+async function startQueue(items: SendItem[], autoStart = true): Promise<Result<string>> {
   if (state.isRunning) return failResult("已有发送任务运行中");
   if (items.length === 0) return failResult("没有待发送项");
 
@@ -598,20 +606,24 @@ async function startQueue(items: SendItem[]): Promise<Result<string>> {
     }
   }
 
-  let roundRobinIdx = 0;
+  // 负载上限：亲和账号一旦装满均量就让位，否则历史集中在某账号的联系人会把整批压给它 → 连续猛发触发限流
+  // pickAccountId 见文件末尾（纯函数，有单测覆盖均衡性）
+  const load = new Map<number, number>(accounts.map(a => [a.id, 0]));
+  const cap = Math.ceil(items.length / accounts.length);
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
     const firstCid = item.recipients[0]?.contactId;
     const preferredAid = firstCid ? lastAccountMap.get(firstCid) : undefined;
-    const aid = preferredAid || accounts[roundRobinIdx % accounts.length]!.id;
-    if (!preferredAid) roundRobinIdx++;
+    const aid = pickAccountId(preferredAid, load, cap);
+    load.set(aid, (load.get(aid) ?? 0) + 1);
     if (!queues.has(aid)) queues.set(aid, []);
     queues.get(aid)!.push({ ...item, accountId: aid, seq: i });
   }
+  Log.info("send.alloc", [...load.entries()].map(([id, n]) => `#${id}:${n}组`).join(" "));
 
   state = {
     batchId, totalItems: items.length, sentCount: 0, failedCount: 0,
-    isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0,
+    isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0,
     accountStats: accounts.map(a => {
       const total = queues.get(a.id)?.length || 0;
       return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
@@ -661,16 +673,21 @@ async function startQueue(items: SendItem[]): Promise<Result<string>> {
     Log.warn("send.queuePersist", `写入发送队列表失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  if (!autoStart) {
+    Log.info("send.enqueue", `批次 ${batchId}: ${items.length} 组已入队，等待用户在队列页手动开始`);
+    return okResult(batchId);
+  }
+
   Log.info("send.start", `批次 ${batchId}: ${items.length} 组, ${accounts.length} 账号`);
   for (const a of accounts) { abortFlags.set(a.id, false); runAccountLoop(a.id); }
   return okResult(batchId);
 }
 
-export async function startSend(bucketKeys: string[], templates?: SendTemplate[]): Promise<Result<string>> {
-  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0}`);
+export async function startSend(bucketKeys: string[], templates?: SendTemplate[], autoStart = true): Promise<Result<string>> {
+  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0} autoStart=${autoStart}`);
   const qr = templates && templates.length > 0 ? buildQueue(bucketKeys, templates) : buildAdaptiveQueue(bucketKeys);
   if (!qr.success) return failResult(qr.error);
-  return startQueue(qr.data);
+  return startQueue(qr.data, autoStart);
 }
 
 /** 动态更新：按选中的客户跟进联系人 + 手动内容组装队列 */
@@ -723,10 +740,10 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
   return okResult(items);
 }
 
-export async function startDynamicSend(contactIds: number[], subject: string, body: string): Promise<Result<string>> {
+export async function startDynamicSend(contactIds: number[], subject: string, body: string, autoStart = true): Promise<Result<string>> {
   const qr = buildDynamicQueue(contactIds, subject, body);
   if (!qr.success) return failResult(qr.error);
-  return startQueue(qr.data);
+  return startQueue(qr.data, autoStart);
 }
 
 // 检查时间窗口（北京时间）

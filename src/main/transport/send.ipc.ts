@@ -100,9 +100,10 @@ export function registerSendIPC() {
   SendService.setPushFn(createPushFn());
   SendService.setSaveConfigFn((c) => { try { saveConfig(c); } catch { /* */ } });
 
-  ipcMain.handle(IPC.SEND.START, (_e, payload: { keys: string[]; templates?: SendService.SendTemplate[] }) => {
+  ipcMain.handle(IPC.SEND.START, (_e, payload: { keys: string[]; templates?: SendService.SendTemplate[]; autoStart?: boolean }) => {
     if (!payload?.keys || payload.keys.length === 0) return failResult("请选择至少一个时间桶");
-    return SendService.startSend(payload.keys, payload.templates);
+    // autoStart 缺省为 true 保持旧行为；前端传 false = 只入队，等队列页手动开始
+    return SendService.startSend(payload.keys, payload.templates, payload.autoStart !== false);
   });
   ipcMain.handle(IPC.SEND.PAUSE, () => SendService.pauseSend());
   ipcMain.handle(IPC.SEND.RESUME, () => SendService.resumeSend());
@@ -132,11 +133,11 @@ export function registerSendIPC() {
     return SendService.previewTemplate(payload);
   });
 
-  ipcMain.handle(IPC.SEND.DYNAMIC, async (_e, input: { contactIds: number[]; subject: string; body: string }) => {
+  ipcMain.handle(IPC.SEND.DYNAMIC, async (_e, input: { contactIds: number[]; subject: string; body: string; autoStart?: boolean }) => {
     if (!input?.contactIds || !Array.isArray(input.contactIds) || input.contactIds.length === 0) return failResult("请选择联系人");
     if (!input?.subject?.trim()) return failResult("主题必填");
     if (!input?.body?.trim()) return failResult("正文必填");
-    return SendService.startDynamicSend(input.contactIds, input.subject, input.body);
+    return SendService.startDynamicSend(input.contactIds, input.subject, input.body, input.autoStart !== false);
   });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {
@@ -144,6 +145,13 @@ export function registerSendIPC() {
   }) => {
     if (!input?.to) return failResult("收件人必填");
     if (!input?.accountId) return failResult("发件账号必填");
+
+    // 发信阻隔：带 contactId = CRM 快速发信，收件人是真实客户，必须挡。
+    // 设置页的「测试发信」不传 contactId，仍可发出去验证 SMTP 配置。
+    if (input.contactId && loadConfig().test.dryRun) {
+      Log.info("send.dryRun", `CRM 快速发信 → ${input.to}：测试模式，跳过真实发送`);
+      return okResult({ messageId: null });
+    }
 
     // 渲染：有 contactId → 用真实联系人数据；否则用虚拟数据
     let name = "Test User";

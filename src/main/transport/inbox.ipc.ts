@@ -9,7 +9,7 @@ import { getDb } from "../db";
 import { inboxMessages } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
 import { interactions } from "../db/schema/interactions";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { saveDatabase } from "../db";
 import { getDecryptedPassword } from "../services/account.service";
 import * as path from "path";
@@ -345,6 +345,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
 
     // 退信去重：退信服务同一秒批量发多封相同 subject/发件人/时间的退信（messageId 各不相同），只留一封
     const bounceSeen = new Set<string>();
+    const bounceUids: number[] = []; // 本轮新增的退信 uid，扫完后复用同一连接批量拉原文
     const stream = client.fetch(uids, { uid: true, envelope: true }, { uid: true });
     for await (const msg of stream) {
       scanned++;
@@ -376,6 +377,8 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         const bkey = `${subject}|${fromEmail}|${date}`;
         if (bounceSeen.has(bkey)) continue;
         bounceSeen.add(bkey);
+        // 退信必须拉原文才能知道退的是谁（from 是 mailer-daemon），先记 uid，扫完统一批量拉
+        if (msg.uid) bounceUids.push(msg.uid);
       }
       const relatedContactIds = InboxService.matchContactIds(
         [...toArr, ...ccArr].map(a => a.address || "").filter(Boolean),
@@ -411,6 +414,31 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     pushProgress(accountId, scanned, uids.length, account.email);
     Log.info("inbox.imap", `${account.email}: 扫描 ${scanned} 封，新增 ${inserted} 封`);
 
+    // ── 退信原文补全 ──
+    // 元数据阶段只拉了信封，而退信的 from 是 mailer-daemon，被退地址只在原文（含 DSN 段）里。
+    // 复用同一个连接批量拉一次 source，当场提取联系人并落正文，省掉事后逐封重连的开销。
+    if (bounceUids.length > 0) {
+      let matched = 0;
+      try {
+        const bStream = client.fetch(bounceUids, { uid: true, source: true, envelope: true }, { uid: true });
+        for await (const bm of bStream) {
+          const bMsgId = ((bm.envelope as Record<string, unknown>)?.messageId as string) || null;
+          if (!bMsgId || !bm.source) continue;
+          const raw = await parseRawEmail(bm.source as Buffer);
+          if (!raw) continue;
+          const hit = await InboxService.applyBounceSource(
+            bMsgId, accountId, bm.source.toString(),
+            raw.bodyHtml || raw.bodyText || "", raw.bodyText || "",
+          );
+          if (hit) matched++;
+        }
+        saveDatabase();
+        Log.info("inbox.bounce", `${account.email}: 退信 ${bounceUids.length} 封，匹配到联系人 ${matched} 封`);
+      } catch (err) {
+        Log.warn("inbox.bounce", `退信原文拉取失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     await client!.logout();
     client = null;
     return okResult(parsed);
@@ -419,6 +447,83 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     Log.error("inbox.imap", msg, err instanceof Error ? err.stack : undefined);
     if (client) { try { client.logout(); } catch { /* */ } }
     return failResult(msg);
+  }
+}
+
+// ── 存量退信深度补拉 ──
+
+/** 常规抓取只覆盖近 FETCH_DAYS 天，更早的存量退信匹配不到联系人只能靠这个补。
+ *  按待补退信的最早日期开窗 search，一个连接内建 messageId→uid 映射再批量拉原文。
+ *  限量 + 幂等：补上的下次不再进候选，多跑几次自然补完。 */
+async function backfillBounceDeep(accountId: number, limit = 100): Promise<number> {
+  const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, accountId)).get();
+  if (!account?.imapHost) return 0;
+  if (isPop3Port(account.imapPort || 993)) return 0; // POP3 抓取时已有全文，无需补
+
+  const targets = getDb().select({ messageId: inboxMessages.messageId, receivedAt: inboxMessages.receivedAt })
+    .from(inboxMessages)
+    .where(sql`${inboxMessages.classification} = 'bounce'
+               AND ${inboxMessages.matchedContactId} IS NULL
+               AND ${inboxMessages.accountId} = ${accountId}
+               AND ${inboxMessages.messageId} IS NOT NULL`)
+    .orderBy(sql`${inboxMessages.receivedAt} DESC`)
+    .limit(limit)
+    .all();
+  if (targets.length === 0) return 0;
+
+  const wanted = new Set<string>();
+  let earliest = targets[0]!.receivedAt;
+  for (const t of targets) {
+    if (t.messageId) wanted.add(t.messageId);
+    if (t.receivedAt < earliest) earliest = t.receivedAt;
+  }
+
+  const passRes = getDecryptedPassword(account.id);
+  if (!passRes.success) return 0;
+
+  let client: imapflow.ImapFlow | null = null;
+  try {
+    const port = account.imapPort || 993;
+    client = new imapflow.ImapFlow({
+      host: account.imapHost, port, secure: port === 993,
+      auth: { user: account.email, pass: passRes.data },
+      logger: false,
+    });
+    await client.connect();
+    await client.mailboxOpen("INBOX");
+
+    const since = new Date(new Date(earliest).getTime() - 86400_000); // 缓冲 1 天防时区差
+    const uids = (await client.search({ since }, { uid: true })) || [];
+    if (uids.length === 0) return 0;
+
+    // 先只拉信封定位目标（信封很轻，几千封也快），避免把整个窗口的正文都拖下来
+    const hitUids: number[] = [];
+    for await (const m of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+      const mid = ((m.envelope as Record<string, unknown>)?.messageId as string) || null;
+      if (mid && wanted.has(mid) && m.uid) hitUids.push(m.uid);
+    }
+    if (hitUids.length === 0) return 0;
+
+    let matched = 0;
+    for await (const bm of client.fetch(hitUids, { uid: true, source: true, envelope: true }, { uid: true })) {
+      const mid = ((bm.envelope as Record<string, unknown>)?.messageId as string) || null;
+      if (!mid || !bm.source) continue;
+      const raw = await parseRawEmail(bm.source as Buffer);
+      if (!raw) continue;
+      const hit = await InboxService.applyBounceSource(
+        mid, accountId, bm.source.toString(),
+        raw.bodyHtml || raw.bodyText || "", raw.bodyText || "",
+      );
+      if (hit) matched++;
+    }
+    saveDatabase();
+    Log.info("inbox.bounceDeep", `${account.email}: 待补 ${targets.length} 封，命中 ${hitUids.length} 封，新匹配 ${matched} 个联系人`);
+    return matched;
+  } catch (err: unknown) {
+    Log.warn("inbox.bounceDeep", `${account.email} 补拉失败: ${err instanceof Error ? err.message : String(err)}`);
+    return 0;
+  } finally {
+    if (client) { try { client.logout(); } catch { /* 已断开 */ } }
   }
 }
 
@@ -623,12 +728,10 @@ async function fetchBody(accountId: number, messageId: string, classification?: 
         // 正文匹配联系人：退信等 from 匹配不到（mailer-daemon）的情况，从正文提取被退/被抄送的联系人邮箱
         let matchedId = target.matchedContactId;
         if (matchedId == null) {
-          const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-          const emails = (raw.bodyText || "").match(EMAIL_RE) || [];
-          for (const em of emails) {
-            const c = InboxService.matchContact(em);
-            if (c) { matchedId = c.id; break; }
-          }
+          // 传 raw 原文：DSN 段（Final-Recipient 等）只在原文里，mailparser 会把它归到 attachments
+          matchedId = InboxService.extractBouncedContact(
+            `${msg.source?.toString() || ""}\n${raw.bodyText || ""}\n${html}`,
+          );
         }
         getDb().update(inboxMessages)
           .set({
@@ -667,6 +770,16 @@ export function registerInboxIPC() {
     InboxService.cleanupInbox();
     // 后台预加载前 20 封正文（不阻塞返回，读条结束后前端即可秒开前 20 封）
     void InboxService.prefetchRecentBodies(20);
+    // 后台补匹配退信联系人：先扫本地正文（免费），再对更早的存量走 IMAP 深度补拉。
+    // 串行执行，避免和 prefetch/detectSent 叠加过多 IMAP 连接。
+    void (async () => {
+      let n = await InboxService.backfillBounceMatches();
+      const targets = accountId
+        ? [accountId]
+        : getDb().select({ id: emailAccounts.id }).from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all().map(a => a.id);
+      for (const aid of targets) n += await backfillBounceDeep(aid);
+      if (n > 0) BrowserWindow.getAllWindows()[0]?.webContents.send("inbox:newMail", { count: 0 });
+    })().catch(err => Log.error("inbox.backfill", "退信补匹配失败", err instanceof Error ? err.stack : undefined));
     // 后台检测 Sent 文件夹（不阻塞返回，完成后推送通知刷新前端）
     const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
     const sentTargets = accounts.filter(a => !isPop3Port(a.imapPort || 993));

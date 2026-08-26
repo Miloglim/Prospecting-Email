@@ -138,8 +138,13 @@ export function InboxList() {
     mutationFn: () => window.api.invoke("inbox:deleteBounce"),
     onSuccess: (r: unknown) => {
       const rr = r as { success: boolean; data?: number; error?: string };
-      message[rr?.success ? "success" : "error"](rr?.success ? `已删除 ${rr.data} 封` : (rr?.error || "失败"));
-      setSid(null); setSel(new Set()); qc.invalidateQueries({ queryKey: ["inbox"] });
+      message[rr?.success ? "success" : "error"](rr?.success ? `已删除 ${rr.data} 个联系人` : (rr?.error || "失败"));
+      setSid(null); setSel(new Set());
+      qc.invalidateQueries({ queryKey: ["inbox"] });
+      // 联系人已删 → 匹配索引必须失效，否则右侧详情还拿旧缓存显示「已匹配」
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      qc.invalidateQueries({ queryKey: ["crm"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
 
@@ -169,6 +174,10 @@ export function InboxList() {
   // 发信人视图：选中某发信人则过滤
   if (view === "sender" && senderFilter) {
     items = items.filter(i => i.fromEmail === senderFilter);
+  }
+  // 退信页：已匹配联系人的排最前（能一键删除的先看到）。sort 是稳定的，组内仍按时间倒序
+  if (filter === "bounce") {
+    items = [...items].sort((a, b) => (b.matchedContactId ? 1 : 0) - (a.matchedContactId ? 1 : 0));
   }
   const sel_ = items.find(i => i.id === sid) || null;
 
@@ -475,11 +484,12 @@ export function InboxList() {
         </div>
 
         {/* 退信删除 */}
-        {filter === "bounce" && items.length > 0 && (() => {
+        {filter === "bounce" && (() => {
           const cnt = new Set(items.filter(i => i.matchedContactId != null).map(i => i.matchedContactId)).size;
+          if (cnt === 0) return null;
           return (
-            <button onClick={() => { Modal.confirm({ title: `删除 ${cnt} 个退信匹配的联系人？`, okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
-              style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>删除退信匹配的联系人</button>
+            <button onClick={() => { Modal.confirm({ title: `确定删除这 ${cnt} 个已匹配联系人？`, content: "联系人及其往来记录一并删除，退信邮件保留。此操作不可撤销。", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
+              style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>一键删除已匹配联系人 ({cnt})</button>
           );
         })()}
 
