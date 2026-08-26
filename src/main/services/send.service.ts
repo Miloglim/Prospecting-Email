@@ -206,11 +206,12 @@ export function getTimeBuckets(): Result<TimeBucket[]> {
 // ── 阶段桶（按 contacts.stage 分组）──
 
 const STAGE_BUCKET_DEFS = [
-  { key: "cold", label: "新线索", desc: "从未发送过邮件" },
-  { key: "f1", label: "第1轮", desc: "已发第1封开发信" },
-  { key: "f2", label: "第2轮", desc: "已发第2封跟进" },
-  { key: "f3", label: "第3轮", desc: "已发第3封跟进" },
-  { key: "f4", label: "第4轮+", desc: "已发4封及以上" },
+  // label 与 renderer 的 STAGE_META 保持一致（Cold/F1…），解释放 desc
+  { key: "cold", label: "Cold", desc: "从未发送过邮件" },
+  { key: "f1", label: "F1", desc: "已发第1封开发信" },
+  { key: "f2", label: "F2", desc: "已发第2封跟进" },
+  { key: "f3", label: "F3", desc: "已发第3封跟进" },
+  { key: "f4", label: "F4", desc: "已发4封及以上" },
 ];
 
 export function getStageBuckets(): Result<TimeBucket[]> {

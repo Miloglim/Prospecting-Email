@@ -16,12 +16,14 @@ export const STATUS_META: Record<string, { label: string; color: string }> = {
   bounced: { label: "退信", color: "red" },
   autoreply: { label: "自动回复", color: "orange" },
 };
+// 发送阶段标签 = key 本身（Cold/F1…），全项目唯一事实源。
+// 不做中文翻译：之前联系人页「冷启动」、发送页「新线索」、导出「跟进1」各写各的，同一个人三个叫法。
 export const STAGE_META: Record<string, { label: string; color: string }> = {
-  cold: { label: "冷启动", color: "default" },
-  f1: { label: "跟进 1", color: "blue" },
-  f2: { label: "跟进 2", color: "geekblue" },
-  f3: { label: "跟进 3", color: "purple" },
-  f4: { label: "跟进 4", color: "magenta" },
+  cold: { label: "Cold", color: "default" },
+  f1: { label: "F1", color: "blue" },
+  f2: { label: "F2", color: "geekblue" },
+  f3: { label: "F3", color: "purple" },
+  f4: { label: "F4", color: "magenta" },
 };
 /** CRM 标签（contacts.tags）— 固定 6 值单选，与后端 crm.service STAGES 同步 */
 export const CRM_STAGES: { key: string; label: string; color: string }[] = [

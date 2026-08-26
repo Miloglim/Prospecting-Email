@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip, Checkbox } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HtmlText } from "../../components/RichTextEditor";
-import { COUNTRIES } from "../../components/ContactDetail";
+import { COUNTRIES, STAGE_META } from "../../components/ContactDetail";
 import {
   ClockCircleOutlined, CloseOutlined, MailOutlined, SearchOutlined,
   DownOutlined, RightOutlined, EditOutlined, SaveOutlined,
@@ -304,7 +304,9 @@ export function CrmPipeline() {
       if (Array.isArray(p)) ports = p.map((x: { pol?: string; pod?: string }) => [x.pol, x.pod].filter(Boolean).join("→")).join("；");
     } catch { /* 忽略 */ }
     const CLIENT_LABEL: Record<string, string> = { agent: "代理", direct: "直客" };
-    const SEND_STAGE_LABEL: Record<string, string> = { cold: "新线索", f1: "第1轮", f2: "第2轮", f3: "第3轮", f4: "第4轮+" };
+    const SEND_STAGE_LABEL: Record<string, string> = Object.fromEntries(
+      Object.entries(STAGE_META).map(([k, m]) => [k, m.label]),
+    );
     const lines = [
       `姓名: ${[contact.firstName, contact.lastName].filter(Boolean).join(" ") || "—"}`,
       `邮箱: ${contact.email}`,
@@ -480,11 +482,12 @@ export function CrmPipeline() {
                   { label: "职位", type: "text", field: "title" },
                   { label: "负责人", type: "text", field: "assignee" },
                   { label: "发送阶段", type: "select", field: "sendStage", saveField: "stage", options: [
-                    { key: "cold", label: "新线索", color: "#1565c0" },
-                    { key: "f1", label: "第1轮", color: "#2e7d32" },
-                    { key: "f2", label: "第2轮", color: "#e65100" },
-                    { key: "f3", label: "第3轮", color: "#7b1fa2" },
-                    { key: "f4", label: "第4轮+", color: "#546e7a" },
+                    // label 对齐 STAGE_META（此处配色与之不同，故未整体复用）
+                    { key: "cold", label: "Cold", color: "#1565c0" },
+                    { key: "f1", label: "F1", color: "#2e7d32" },
+                    { key: "f2", label: "F2", color: "#e65100" },
+                    { key: "f3", label: "F3", color: "#7b1fa2" },
+                    { key: "f4", label: "F4", color: "#546e7a" },
                     { key: "", label: "未设置", color: "#999" },
                   ] },
                   { label: "电话", type: "text", field: "phone" },
