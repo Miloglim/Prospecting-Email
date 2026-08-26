@@ -29,6 +29,7 @@ export interface SendItem {
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
   seq?: number;  // 原始队列顺序（跨账号排序用）
+  cc?: string;   // 抄送地址，逗号分隔。收件人仍走 BCC 互不可见，抄送方在 CC 里对客户可见
 }
 
 export interface SendTemplate {
@@ -48,6 +49,9 @@ export interface SendStatus {
   batchId: string | null; totalItems: number; sentCount: number; failedCount: number;
   isPaused: boolean; isRunning: boolean;
   currentItem: SendItem | null; delaySeconds: number;
+  /** 本次等待的结束时刻（ISO）。delaySeconds 是固定总时长，前端离开页面后本地倒计时会丢，
+   *  必须用绝对时间戳才能算出真实剩余；无等待时为 null。 */
+  delayUntil: string | null;
   accountStats: Array<{
     accountId: number; email: string; sent: number; failed: number; total: number;
     remaining?: { hourly: number; daily: number };
@@ -67,7 +71,7 @@ const BUCKET_DEFS = [
 
 let state: SendStatus = {
   batchId: null, totalItems: 0, sentCount: 0, failedCount: 0,
-  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, accountStats: [],
+  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, accountStats: [],
 };
 
 // ── 全局发信限额（持久化到 config，24h 计时不可丢失）──
@@ -623,7 +627,7 @@ async function startQueue(items: SendItem[], autoStart = true): Promise<Result<s
 
   state = {
     batchId, totalItems: items.length, sentCount: 0, failedCount: 0,
-    isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0,
+    isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0, delayUntil: null,
     accountStats: accounts.map(a => {
       const total = queues.get(a.id)?.length || 0;
       return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
@@ -661,6 +665,7 @@ async function startQueue(items: SendItem[], autoStart = true): Promise<Result<s
           recipients: JSON.stringify(item.recipients),
           accountId: aid, accountEmail: acctEmail,
           subject: item.subject, tplBody: item.tplBody, contactVars: JSON.stringify(item.contactVars),
+          cc: item.cc || null,
           status: "pending", createdAt: now,
         });
       }
@@ -691,7 +696,7 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
 }
 
 /** 动态更新：按选中的客户跟进联系人 + 手动内容组装队列 */
-export function buildDynamicQueue(contactIds: number[], subject: string, body: string): Result<SendItem[]> {
+export function buildDynamicQueue(contactIds: number[], subject: string, body: string, cc?: string): Result<SendItem[]> {
   const rows = getDb().select().from(contacts).where(inArray(contacts.id, contactIds)).all();
   if (rows.length === 0) return failResult("没有选中的联系人");
 
@@ -734,14 +739,15 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
         subject, tplBody: body,
         contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
         accountId: 0, status: "pending",
+        ...(cc ? { cc } : {}),
       });
     }
   }
   return okResult(items);
 }
 
-export async function startDynamicSend(contactIds: number[], subject: string, body: string, autoStart = true): Promise<Result<string>> {
-  const qr = buildDynamicQueue(contactIds, subject, body);
+export async function startDynamicSend(contactIds: number[], subject: string, body: string, autoStart = true, cc?: string): Promise<Result<string>> {
+  const qr = buildDynamicQueue(contactIds, subject, body, cc);
   if (!qr.success) return failResult(qr.error);
   return startQueue(qr.data, autoStart);
 }
@@ -773,10 +779,12 @@ async function runAccountLoop(accountId: number) {
     if (!loadConfig().test.enabled && !inWindow(sched)) {
       const waitMs = 60 * 1000; // 每分钟检查一次
       state.delaySeconds = Math.floor(waitMs / 1000);
+      state.delayUntil = new Date(Date.now() + waitMs).toISOString();
       push(EVENTS.SEND_PROGRESS, state);
       await sleep(waitMs);
       if (!state.isRunning) break;
       state.delaySeconds = 0;
+      state.delayUntil = null;
       i--; // 不消耗队列项，继续等
       continue;
     }
@@ -841,9 +849,11 @@ async function runAccountLoop(accountId: number) {
       // 组间暂停：随机取组间暂停区间的随机数
       const ms = randBetween(sched.groupDelayMinSeconds, sched.groupDelayMaxSeconds);
       state.delaySeconds = Math.floor(ms / 1000);
+      state.delayUntil = new Date(Date.now() + ms).toISOString();
       push(EVENTS.SEND_PROGRESS, state);
       const ok = await sleep(ms);
       state.delaySeconds = 0;
+      state.delayUntil = null;
       if (!ok) break;
     }
   }
@@ -920,6 +930,7 @@ export function getQueueItems(): Result<Array<SendItem & { accountEmail?: string
       contactVars: (() => { try { return JSON.parse(r.contactVars || "{}"); } catch { return {}; } })(),
       status: r.status === "sending" ? "pending" : (r.status as SendItem["status"]),
       error: r.error || undefined, sentAt: r.sentAt || undefined,
+      cc: r.cc || undefined,
     }));
     return okResult(items);
   } catch (err) {
@@ -956,6 +967,7 @@ export function resumeQueue(): Result<string> {
         subject: r.subject || "", tplBody: r.tplBody || "", contactVars,
         status: "pending",
         error: r.error || undefined, sentAt: r.sentAt || undefined,
+        cc: r.cc || undefined,   // 恢复队列时必须带回，否则用户点「开始发送」抄送就没了
       };
       if (!queues.has(r.accountId)) queues.set(r.accountId, []);
       queues.get(r.accountId)!.push(item);
@@ -969,7 +981,7 @@ export function resumeQueue(): Result<string> {
     state = {
       batchId, totalItems: totalItems + sentCount + failedCount,
       sentCount, failedCount,
-      isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0,
+      isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0, delayUntil: null,
       accountStats: accounts.map(a => {
         const total = queues.get(a.id)?.length || 0;
         return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };

@@ -83,6 +83,8 @@ export function CampaignList() {
   const [dynUnchecked, setDynUnchecked] = useState<Set<number>>(new Set());
   const [dynSubject, setDynSubject] = useState("");
   const [dynBody, setDynBody] = useState("");
+  // 抄送地址在本机记住 —— 通常固定抄给同一个同事，每次重填很烦
+  const [dynCc, setDynCc] = useState(() => localStorage.getItem("dyn-cc") || "");
   const qc = useQueryClient();
   const navigate = useNavigate();
 
@@ -174,7 +176,7 @@ export function CampaignList() {
     if (!dynSubject.trim()) { message.warning("请填写主题"); return; }
     if (!dynBody.trim()) { message.warning("请填写正文"); return; }
     if (!await confirmQueueOverwrite()) return;
-    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody, autoStart: false }) as { success: boolean; error?: string };
+    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody, autoStart: false, cc: dynCc.trim() || undefined }) as { success: boolean; error?: string };
     r?.success ? (message.success(`已加入队列 ${ids.length} 人，请在队列页点「开始发送」`), navigate({ to: "/queue" })) : message.error(r?.error || "入队失败");
   };
 
@@ -356,6 +358,14 @@ export function CampaignList() {
                     </div>
                   )}
                   <Input size="small" placeholder="主题" value={dynSubject} onChange={e => setDynSubject(e.target.value)} />
+                  <Input size="small" placeholder="抄送（多个用逗号隔开，留空则不抄送）"
+                    value={dynCc}
+                    onChange={e => { setDynCc(e.target.value); localStorage.setItem("dyn-cc", e.target.value); }} />
+                  {dynCc.trim() && (
+                    <div className="text-[10px] text-amber-600">
+                      客户能看到抄送人（收件人之间仍互相不可见）
+                    </div>
+                  )}
                   <RichTextEditor value={dynBody} onChange={setDynBody} placeholder="正文（支持粘贴表格、图片）"
                     style={{ minHeight: 200, border: "1px solid #d9d9d9", borderRadius: 6, padding: 8 }} />
                   {signature && (

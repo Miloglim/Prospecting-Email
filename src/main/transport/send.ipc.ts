@@ -65,20 +65,24 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     const from = displayName ? `"${displayName}" <${account.email}>` : account.email;
     const subject = item.subject || "Regarding our logistics partnership";
 
+    // 抄送：收件人仍走 BCC 互不可见，抄送方放 CC（对客户可见，用于同事存档）
+    const ccList = (item.cc || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    const ccField = ccList.length > 0 ? { cc: ccList } : {};
+
     let info: { messageId?: string } | null = null;
     if (isHtml(body) || isHtml(signature)) {
       const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
       const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
       const { html, attachments } = inlineImagesToCid(bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""));
       info = await transporter.sendMail({
-        from, bcc: emails, subject,
+        from, bcc: emails, ...ccField, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
         html,
         attachments,
       });
     } else {
       info = await transporter.sendMail({
-        from, bcc: emails, subject,
+        from, bcc: emails, ...ccField, subject,
         text: body + (signature ? `\n\n${signature}` : ""),
       });
     }
@@ -133,11 +137,18 @@ export function registerSendIPC() {
     return SendService.previewTemplate(payload);
   });
 
-  ipcMain.handle(IPC.SEND.DYNAMIC, async (_e, input: { contactIds: number[]; subject: string; body: string; autoStart?: boolean }) => {
+  ipcMain.handle(IPC.SEND.DYNAMIC, async (_e, input: { contactIds: number[]; subject: string; body: string; autoStart?: boolean; cc?: string }) => {
     if (!input?.contactIds || !Array.isArray(input.contactIds) || input.contactIds.length === 0) return failResult("请选择联系人");
     if (!input?.subject?.trim()) return failResult("主题必填");
     if (!input?.body?.trim()) return failResult("正文必填");
-    return SendService.startDynamicSend(input.contactIds, input.subject, input.body, input.autoStart !== false);
+    const cc = (input.cc || "").trim();
+    // 邮箱格式校验 — 地址写错会导致整批 SMTP 拒收
+    if (cc) {
+      const bad = cc.split(/[,;]/).map(s => s.trim()).filter(Boolean)
+        .filter(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+      if (bad.length > 0) return failResult(`抄送邮箱格式错误: ${bad.join(", ")}`);
+    }
+    return SendService.startDynamicSend(input.contactIds, input.subject, input.body, input.autoStart !== false, cc || undefined);
   });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {

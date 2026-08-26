@@ -19,7 +19,7 @@ interface QueueItem {
 interface SendStatus {
   batchId: string | null; totalItems: number; sentCount: number; failedCount: number;
   isPaused: boolean; isRunning: boolean;
-  currentItem: QueueItem | null; delaySeconds: number;
+  currentItem: QueueItem | null; delaySeconds: number; delayUntil: string | null;
   accountStats: Array<{ accountId: number; email: string; sent: number; failed: number; total: number; isCircuitOpen: boolean }>;
 }
 
@@ -58,16 +58,17 @@ export function QueuePage() {
   const isRunning = status?.isRunning ?? false;
   const isPaused = status?.isPaused ?? false;
 
-  // 等待倒计时：后端 delaySeconds 是固定总秒数，本地每秒递减
+  // 等待倒计时：按后端给的结束时刻算剩余。
+  // 不能用本地递减 —— 离开页面组件卸载后 state 就没了，回来会从完整时长重新倒数（显示"还要等 8 分钟"，实际马上就发）
   const [delayLeft, setDelayLeft] = useState(0);
   useEffect(() => {
-    if (status?.delaySeconds && status.delaySeconds > 0) setDelayLeft(status.delaySeconds);
-  }, [status?.delaySeconds]);
-  useEffect(() => {
-    if (delayLeft <= 0) return;
-    const t = setTimeout(() => setDelayLeft(prev => Math.max(0, prev - 1)), 1000);
-    return () => clearTimeout(t);
-  }, [delayLeft]);
+    const until = status?.delayUntil;
+    if (!until) { setDelayLeft(0); return; }
+    const tick = () => setDelayLeft(Math.max(0, Math.ceil((new Date(until).getTime() - Date.now()) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [status?.delayUntil]);
 
   // 折叠已发送的组 + 多组时默认收起
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());

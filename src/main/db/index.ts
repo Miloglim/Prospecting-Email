@@ -195,7 +195,9 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     const qcols = (sqlJsDb.exec("PRAGMA table_info(send_queue)")[0]?.values || []).map(r => String(r[1]));
     if (!qcols.includes("tpl_body")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN tpl_body text;");
     if (!qcols.includes("contact_vars")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN contact_vars text;");
-    Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars 列");
+    // v4.4: cc 列 — 两步式发送下队列会在库里等用户点开始，抄送不落库就会丢
+    if (!qcols.includes("cc")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN cc text;");
+    Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars/cc 列");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.3: inbox_messages 补 cc + my_role 列（识别抄送，仅抄送不判已回复）

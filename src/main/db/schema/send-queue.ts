@@ -11,6 +11,7 @@ export const sendQueue = sqliteTable("send_queue", {
   subject: text("subject"),
   tplBody: text("tpl_body"),
   contactVars: text("contact_vars"), // JSON
+  cc: text("cc"),                    // 抄送地址，逗号分隔（同事存档用；收件人仍走 BCC）
   status: text("status").default("pending").notNull(), // pending | sending | sent | failed
   error: text("error"),
   sentAt: text("sent_at"),
