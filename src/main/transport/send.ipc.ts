@@ -145,7 +145,7 @@ export function registerSendIPC() {
     // 邮箱格式校验 — 地址写错会导致整批 SMTP 拒收
     if (cc) {
       const bad = cc.split(/[,;]/).map(s => s.trim()).filter(Boolean)
-        .filter(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+        .filter(e => !SendService.isValidEmail(e));
       if (bad.length > 0) return failResult(`抄送邮箱格式错误: ${bad.join(", ")}`);
     }
     return SendService.startDynamicSend(input.contactIds, input.subject, input.body, input.autoStart !== false, cc || undefined);

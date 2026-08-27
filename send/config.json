@@ -3,12 +3,12 @@
   "bodyName": "",
   "signature": "",
   "schedule": {
-    "timeWindowEnabled": true,
+    "timeWindowEnabled": false,
     "startHour": 21,
     "endHour": 8,
-    "groupSize": 20,
-    "groupDelayMinSeconds": 300,
-    "groupDelayMaxSeconds": 600,
+    "groupSize": 5,
+    "groupDelayMinSeconds": 1,
+    "groupDelayMaxSeconds": 10,
     "companyDelayMinMinutes": 15,
     "companyDelayMaxMinutes": 20,
     "singleRecipDelayMinSeconds": 5,
@@ -21,7 +21,7 @@
   "test": {
     "email": "",
     "company": "",
-    "enabled": true,
+    "enabled": false,
     "dryRun": true
   },
   "crm": {

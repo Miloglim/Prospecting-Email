@@ -42,6 +42,7 @@ const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   replied: { label: "已回复", color: "#22a644" },
   bounced: { label: "退信", color: "#d93025" },
   autoreply: { label: "自动回复", color: "#ff9800" },
+  cc: { label: "抄送", color: "#0891b2" },
   note: { label: "跟进", color: "#607d8b" },
 };
 
@@ -129,7 +130,8 @@ export function CrmPipeline() {
       success: boolean; data?: {
         contact: PipelineContact | null;
         interactions: Array<{ id?: number; type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-        emails: Array<{ id?: number; fromEmail: string; direction?: string; type?: string; subject: string | null; receivedAt: string; bodyPreview?: string | null }>;
+        emails: Array<{ id?: number; fromEmail: string; direction?: string; type?: string; classification?: string; subject: string | null; receivedAt: string; bodyPreview?: string | null }>;
+        timeline: Array<{ id?: number | null; type: string; direction?: string; fromEmail?: string | null; subject: string | null; bodyPreview: string | null; createdAt: string }>;
       };
     }>,
     enabled: !!detailId,
@@ -214,6 +216,26 @@ export function CrmPipeline() {
   const stages: StageData[] = data?.success ? data.data || [] : STAGES.map(s => ({ ...s, contacts: [] }));
   const contact = detail?.success ? detail.data?.contact : null;
   const detailData = detail?.success ? detail.data : null;
+
+  /** 打开邮件正文详情弹窗（邮件往来 Tab 与跟进时间线共用）：先占位再懒加载正文 */
+  const openEmailDetail = (email: { id?: number | null; fromEmail?: string | null; subject: string | null; receivedAt: string; bodyPreview?: string | null }) => {
+    setEmailPopup({
+      id: email.id ?? undefined,
+      fromEmail: email.fromEmail || "",
+      subject: email.subject,
+      receivedAt: email.receivedAt,
+      bodyPreview: email.bodyPreview ?? null,
+    });
+    setEmailBody(null);
+    setEmailBodyLoading(!!email.id);
+    if (email.id) {
+      window.api.invoke("inbox:getBody", email.id).then((res) => {
+        const r = res as { success: boolean; data?: string };
+        setEmailBody(r?.success ? (r.data || null) : null);
+        setEmailBodyLoading(false);
+      }).catch(() => setEmailBodyLoading(false));
+    }
+  };
 
   // 备注/港口草稿：contact 切换时同步 extra 到本地 state（含 ref，供 saveExtra 读最新值避免并发覆盖）
   useEffect(() => {
@@ -688,10 +710,15 @@ export function CrmPipeline() {
 
                 {/* 时间线 — 独立滚动，有边框 */}
                 <div className="flex-1 overflow-y-auto min-h-0 border border-gray-200 rounded-lg p-3 bg-white">
-                  <Timeline items={detailData.interactions.slice(0, 40).map(i => ({
+                  <Timeline items={detailData.timeline.slice(0, 40).map(i => {
+                  // sent/replied/cc 来自 inbox_messages 行（id=邮件id，可点开详情）；note/bounced/autoreply 来自 interactions，无邮件 id
+                  const isOpenable = !!i.id && (i.type === "sent" || i.type === "replied" || i.type === "cc");
+                  return {
                   color: TYPE_LABELS[i.type]?.color || "gray",
                   children: (
-                    <div className="text-[10px]">
+                    <div className={`text-[10px] ${isOpenable ? "cursor-pointer group" : ""}`}
+                      onClick={isOpenable ? () => openEmailDetail({ id: i.id, fromEmail: i.fromEmail, subject: i.subject, receivedAt: i.createdAt, bodyPreview: i.bodyPreview }) : undefined}
+                    >
                       <div className="flex items-center gap-1.5">
                         <Tag color={TYPE_LABELS[i.type]?.color} className="text-[9px] leading-none px-1">
                           {TYPE_LABELS[i.type]?.label || i.type}
@@ -733,14 +760,15 @@ export function CrmPipeline() {
                           {i.type === "note" ? (
                             i.bodyPreview && <div className="text-[11px] mt-0.5 text-gray-600 leading-relaxed">{i.bodyPreview}</div>
                           ) : (
-                            i.subject && <div className="text-[11px] mt-0.5 font-medium text-gray-700 truncate" title={i.subject}>{i.subject}</div>
+                            i.subject && <div className={`text-[11px] mt-0.5 font-medium truncate ${isOpenable ? "text-gray-700 group-hover:text-blue-600" : "text-gray-700"}`} title={i.subject}>{i.subject}</div>
                           )}
                         </>
                       )}
                     </div>
                   ),
-                }))} />
-                {!detailData.interactions.length && <Empty description="暂无跟进记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
+                  };
+                })} />
+                {!detailData.timeline.length && <Empty description="暂无跟进记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />}
                 </div>
               </div>
             )}
@@ -750,24 +778,7 @@ export function CrmPipeline() {
               <div className="space-y-1.5">
                 {detailData.emails.map((e, i) => (
                   <div key={i} className="border border-gray-100 rounded p-2 text-xs hover:border-gray-300 cursor-pointer"
-                    onClick={() => {
-                      setEmailPopup({
-                        id: e.id,
-                        fromEmail: e.fromEmail,
-                        subject: e.subject,
-                        receivedAt: e.receivedAt,
-                        bodyPreview: e.bodyPreview ?? null,
-                      });
-                      setEmailBody(null);
-                      setEmailBodyLoading(!!e.id);
-                      if (e.id) {
-                        window.api.invoke("inbox:getBody", e.id).then((res) => {
-                          const r = res as { success: boolean; data?: string };
-                          setEmailBody(r?.success ? (r.data || null) : null);
-                          setEmailBodyLoading(false);
-                        }).catch(() => setEmailBodyLoading(false));
-                      }
-                    }}
+                    onClick={() => openEmailDetail(e)}
                   >
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <MailOutlined className="text-[9px] text-gray-400" />

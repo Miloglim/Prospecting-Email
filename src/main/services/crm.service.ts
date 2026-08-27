@@ -212,7 +212,9 @@ export async function updateNote(interactionId: number, text: string): Promise<R
 export function getDetail(contactId: number): Result<{
   contact: PipelineContact | null;
   interactions: Array<{ type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string }>;
-  emails: Array<{ id: number | null; fromEmail: string; direction: "inbound" | "outbound"; type: "sent" | "replied" | "cc"; subject: string | null; receivedAt: string; bodyPreview: string | null }>;
+  emails: Array<{ id: number | null; fromEmail: string; direction: "inbound" | "outbound"; type: "sent" | "replied" | "cc"; classification: string; subject: string | null; receivedAt: string; bodyPreview: string | null }>;
+  /** 跟进记录时间线（读时合并）：便签/退信/自动回复事件 + 全部邮件（含抄送），与邮件往来同源 */
+  timeline: Array<{ id: number | null; type: string; direction: string; fromEmail: string | null; subject: string | null; bodyPreview: string | null; createdAt: string }>;
 }> {
   const db = getDb();
   const row = db.select({
@@ -276,12 +278,28 @@ export function getDetail(contactId: number): Result<{
         direction = "inbound"; type = "cc";
       }
       return {
-        id: e.id, fromEmail: e.fromEmail, direction, type,
+        id: e.id, fromEmail: e.fromEmail, direction, type, classification: e.classification || "other",
         subject: e.subject, receivedAt: e.receivedAt, bodyPreview: e.bodyPreview,
       };
     });
 
-  return okResult({ contact, interactions: interactionRows, emails: emailRows });
+  // ── 跟进记录时间线（读时合并）──
+  // 旧版时间线只读 interactions，而邮件类 interaction 只为"主联系人"（BCC 收件人/发件人）写入，
+  // 被抄送的联系人没有 interaction → 时间线与邮件往来（走 relatedContactIds）对不上。
+  // 合并规则：便签 + 退信/自动回复事件取 interactions；邮件全部取 inbox_messages（含抄送，与邮件往来同源）。
+  // sent/replied 类 interaction 不进时间线（对应邮件行已覆盖，避免双份）；退信/自动回复邮件行不重复进（由事件行表达）。
+  // 读时派生 ⇒ 历史数据立即同步，无需回填，不影响 dashboard/历史页的 interactions 计数口径。
+  const eventRows = interactionRows
+    .filter(r => r.type === "note" || r.type === "bounced" || r.type === "autoreply")
+    .map(r => ({ id: r.id ?? null, type: r.type, direction: r.direction, fromEmail: null as string | null, subject: r.subject ?? null, bodyPreview: r.bodyPreview ?? null, createdAt: r.createdAt }));
+  const emailEvents = emailRows
+    .filter(e => e.classification !== "bounce" && e.classification !== "autoreply")
+    .map(e => ({ id: e.id, type: e.type, direction: e.direction, fromEmail: e.fromEmail, subject: e.subject, bodyPreview: e.bodyPreview, createdAt: e.receivedAt }));
+  const timeline = [...eventRows, ...emailEvents]
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    .slice(0, 80);
+
+  return okResult({ contact, interactions: interactionRows, emails: emailRows, timeline });
 }
 
 // ── 提醒检查 ──

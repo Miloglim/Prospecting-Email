@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal } from "antd";
-import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined } from "@ant-design/icons";
+import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
@@ -144,7 +144,7 @@ export function CampaignList() {
   });
 
   const startMut = useMutation({
-    mutationFn: (payload: { keys: string[]; templates?: Array<{ subject: string; body: string }> }) =>
+    mutationFn: (payload: { keys: string[]; templates?: Array<{ name?: string; subject: string; body: string }> }) =>
       window.api.invoke("send:start", payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["send"] }),
   });
@@ -176,8 +176,16 @@ export function CampaignList() {
     if (!dynSubject.trim()) { message.warning("请填写主题"); return; }
     if (!dynBody.trim()) { message.warning("请填写正文"); return; }
     if (!await confirmQueueOverwrite()) return;
-    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody, autoStart: false, cc: dynCc.trim() || undefined }) as { success: boolean; error?: string };
-    r?.success ? (message.success(`已加入队列 ${ids.length} 人，请在队列页点「开始发送」`), navigate({ to: "/queue" })) : message.error(r?.error || "入队失败");
+    const r = await window.api.invoke("send:dynamic", { contactIds: ids, subject: dynSubject, body: dynBody, autoStart: false, cc: dynCc.trim() || undefined }) as { success: boolean; error?: string; data?: { queuedCount: number; dropped: number } };
+    if (r?.success) {
+      const d = r.data;
+      d && d.dropped > 0
+        ? message.warning(`已达今日限额：实际入队 ${d.queuedCount} 人（${d.dropped} 组被裁剪），请在队列页点「开始发送」`)
+        : message.success(`已加入队列 ${ids.length} 人，请在队列页点「开始发送」`);
+      navigate({ to: "/queue" });
+    } else {
+      message.error(r?.error || "入队失败");
+    }
   };
 
   // 合并三个维度的所有 key，取并集统计人数（去重由后端 buildQueue 处理）
@@ -221,25 +229,41 @@ export function CampaignList() {
     if (!await confirmQueueOverwrite()) return;
     const payload: Record<string, unknown> = { keys: selectedBuckets };
     if (sendMode === "mine") {
-      const allTpls = templates.map(t => ({ subject: t.subject, body: t.body, category: t.category, stage: t.stage, language: t.language }));
+      const allTpls = templates.map(t => ({ name: t.name, subject: t.subject, body: t.body, category: t.category, stage: t.stage, language: t.language }));
       if (allTpls.length === 0) { message.warning("没有可用模板"); return; }
       payload.templates = allTpls;
     } else if (sendMode === "instant") {
-      payload.templates = [{ subject: instantSubject, body: instantBody }];
+      payload.templates = [{ name: "即时撰写", subject: instantSubject, body: instantBody }];
     }
     // 只入队不发送 — 用户在队列页确认后再点「开始发送」（对齐旧 PE 两步式）
     payload.autoStart = false;
-    const r = await startMut.mutateAsync(payload as { keys: string[]; templates?: Array<{ subject: string; body: string }> });
+    const r = await startMut.mutateAsync(payload as { keys: string[]; templates?: Array<{ name?: string; subject: string; body: string }> });
     if (r && typeof r === "object" && "success" in r) {
-      const rr = r as { success: boolean; error?: string };
-      rr.success
-        ? (message.success(`已加入队列 ${selectedCount} 人，请在队列页点「开始发送」`), navigate({ to: "/queue" }))
-        : message.error(rr.error || "入队失败");
+      const rr = r as { success: boolean; error?: string; data?: { queued: number; queuedCount: number; dropped: number } };
+      if (rr.success) {
+        const d = rr.data;
+        // 配额裁剪时明确告知（否则用户以为全量入队，实际只发了部分）
+        d && d.dropped > 0
+          ? message.warning(`已达今日限额：实际入队 ${d.queuedCount} 人（${d.dropped} 组被裁剪），请在队列页点「开始发送」`)
+          : message.success(`已加入队列 ${selectedCount} 人，请在队列页点「开始发送」`);
+        navigate({ to: "/queue" });
+      } else {
+        message.error(rr.error || "入队失败");
+      }
     }
   };
 
   return (
     <div className="space-y-4">
+      {/* ── 页头 — 常驻队列入口（原「查看队列」只在发送中显示，平时没有入口） ── */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold text-gray-800 m-0">邮件发送</h2>
+        <Button size="small" icon={<UnorderedListOutlined />}
+          onClick={() => navigate({ to: "/queue" })}>
+          发送队列
+        </Button>
+      </div>
+
       {/* ── 发送状态条 ── */}
       {isRunning && (
         <Card size="small">

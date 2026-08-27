@@ -197,7 +197,12 @@ CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_a
     if (!qcols.includes("contact_vars")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN contact_vars text;");
     // v4.4: cc 列 — 两步式发送下队列会在库里等用户点开始，抄送不落库就会丢
     if (!qcols.includes("cc")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN cc text;");
-    Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars/cc 列");
+    // v4.4: tpl_name 列 — 队列卡片要显示该组实际采用的模板（pickTemplate 结果，名字而非快照）
+    if (!qcols.includes("tpl_name")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN tpl_name text;");
+    // v4.4: country/language 列 — 队列卡片显示公司国家/语言标签
+    if (!qcols.includes("country")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN country text;");
+    if (!qcols.includes("language")) sqlJsDb.run("ALTER TABLE send_queue ADD COLUMN language text;");
+    Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars/cc/tpl_name/country/language 列");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.3: inbox_messages 补 cc + my_role 列（识别抄送，仅抄送不判已回复）

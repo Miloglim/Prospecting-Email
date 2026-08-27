@@ -12,6 +12,9 @@ interface QueueItem {
   recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number; accountEmail?: string;
   subject: string;
+  tplName?: string;  // 该组采用的模板名（句库/即时/动态模式为来源标签）
+  country?: string;  // 公司国家（ISO 码，如 MX/BR）
+  language?: string; // 语言（EN/ES/PT）
   status: "pending" | "sending" | "sent" | "failed";
   error?: string; sentAt?: string;
 }
@@ -239,7 +242,20 @@ export function QueuePage() {
                   <span className="text-sm font-medium text-gray-800 flex-1 truncate">
                     {item.companyName}
                   </span>
+                  {item.country && (
+                    <Tag className="text-[10px] leading-none px-1 py-0.5" style={{ background: "#f5f5f4", borderColor: "#e7e5e4", color: "#78716c" }}>
+                      {item.country.toUpperCase()}
+                    </Tag>
+                  )}
+                  {item.language && (
+                    <Tag color="cyan" className="text-[10px] leading-none px-1 py-0.5">{item.language.toUpperCase()}</Tag>
+                  )}
                   <Tag className="text-[10px]">{item.recipients.length}人</Tag>
+                  {item.tplName && (
+                    <Tag color="purple" className="text-[10px] max-w-[140px] truncate" title={item.tplName}>
+                      {item.tplName}
+                    </Tag>
+                  )}
                   <Tag color={st.color} className="text-[10px]">{st.label}</Tag>
                   <span className="text-[10px] text-gray-400 font-mono w-32 text-right truncate">
                     {item.accountEmail || `#${item.accountId}`}
@@ -259,6 +275,11 @@ export function QueuePage() {
                     <div className="text-xs text-gray-600 truncate">
                       <span className="text-gray-400">主题: </span>{item.subject}
                     </div>
+                    {item.tplName && (
+                      <div className="text-xs text-gray-600 truncate">
+                        <span className="text-gray-400">采用模板: </span>{item.tplName}
+                      </div>
+                    )}
                     {item.error && (
                       <div className="text-[11px] text-red-500 truncate">
                         错误: {item.error}
