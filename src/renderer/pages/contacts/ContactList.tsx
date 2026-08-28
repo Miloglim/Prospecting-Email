@@ -104,20 +104,31 @@ export function ContactList() {
   const deleteContact = useDeleteContact();
   const qc = useQueryClient();
 
-  // 批量删除选中联系人
+  // 跨页全选：拉取当前 search/筛选下的全部 id（服务端分页时表头全选只能选当前页 50 条）
+  const selectAllMatched = async () => {
+    const r = await window.api.invoke("contacts:listIds", { search, ...filters }) as
+      { success: boolean; data?: { ids: number[] }; error?: string };
+    if (r?.success && r.data) {
+      setSelectedRowKeys(r.data.ids);
+      message.success(`已选中全部 ${r.data.ids.length} 个匹配联系人`);
+    } else message.error(r?.error || "选择失败");
+  };
+
+  // 批量删除选中联系人（一次级联 + 一次落盘，支持跨页全选）
   const batchDelete = () => {
     if (selectedRowKeys.length === 0) return;
+    const ids = selectedRowKeys.map(k => Number(k)).filter(n => Number.isInteger(n) && n > 0);
     Modal.confirm({
-      title: `删除 ${selectedRowKeys.length} 个联系人？`,
+      title: `删除 ${ids.length} 个联系人？`,
+      content: "将同时清除其跟进/发送记录并解除邮件关联，空壳公司一并回收。此操作不可撤销，建议先导出。",
       okText: "删除", okType: "danger", cancelText: "取消",
       onOk: async () => {
-        let n = 0;
-        for (const id of selectedRowKeys) {
-          const r = await window.api.invoke("contacts:delete", id) as { success: boolean };
-          if (r?.success) n++;
-        }
+        const r = await window.api.invoke("contacts:deleteBatch", ids) as
+          { success: boolean; data?: { deleted: number; companiesRemoved: number }; error?: string };
+        r?.success
+          ? message.success(`已删除 ${r.data?.deleted ?? ids.length} 个联系人`)
+          : message.error(r?.error || "删除失败");
         setSelectedRowKeys([]);
-        message.success(`已删除 ${n} 个联系人`);
         qc.invalidateQueries({ queryKey: ["contacts"] });
       },
     });
@@ -251,6 +262,10 @@ export function ContactList() {
           size="small" style={{ width: 260 }} allowClear />
         <Space size="small">
           <span className="text-xs text-gray-400">共 {total} 人</span>
+          {selectedRowKeys.length > 0 && selectedRowKeys.length < total && (
+            <Button size="small" type="link" style={{ padding: 0, height: "auto" }}
+              onClick={selectAllMatched}>选择全部 {total} 个匹配项</Button>
+          )}
           {selectedRowKeys.length > 0 && (
             <Button size="small" danger icon={<DeleteOutlined />}
               onClick={batchDelete}>删除选中 ({selectedRowKeys.length})</Button>
@@ -321,6 +336,7 @@ export function ContactList() {
         rowSelection={{
           selectedRowKeys,
           onChange: setSelectedRowKeys,
+          preserveSelectedRowKeys: true,
         }}
         onRow={(record) => ({
           onDoubleClick: () => setDetailContact(record),

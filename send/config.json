@@ -21,8 +21,8 @@
   "test": {
     "email": "",
     "company": "",
-    "enabled": false,
-    "dryRun": true
+    "enabled": true,
+    "dryRun": false
   },
   "crm": {
     "followupDays": {
@@ -37,7 +37,9 @@
     "autoArchiveDays": 30
   },
   "sendQuota": {
-    "dailyLimit": 1500
+    "dailyLimit": 1500,
+    "firstSendAt": "2026-08-27T09:42:48.896Z",
+    "sentToday": 1
   },
   "general": {
     "closeAction": "quit"

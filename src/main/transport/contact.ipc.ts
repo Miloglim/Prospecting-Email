@@ -33,6 +33,19 @@ export function registerContactIPC() {
     return svc.deleteContact(id);
   });
 
+  // 跨页"选择全部匹配项"：返回当前 search/筛选下的全部联系人 id（不分页）
+  ipcMain.handle(IPC.CONTACTS.LIST_IDS, async (_e, params?) => {
+    Log.debug("ipc.contact.listIds", JSON.stringify(params));
+    return svc.listContactIds(params || {});
+  });
+
+  // 批量删除：一次级联 + 一次落盘（替代前端循环调 DELETE 的 N 次落盘）
+  ipcMain.handle(IPC.CONTACTS.DELETE_BATCH, async (_e, ids: number[]) => {
+    Log.debug("ipc.contact.deleteBatch", `${Array.isArray(ids) ? ids.length : 0} 个`);
+    if (!Array.isArray(ids) || ids.length === 0) return failResult("参数错误: ids 不能为空");
+    return svc.deleteContactsBatch(ids);
+  });
+
   ipcMain.handle(IPC.CONTACTS.COUNT, async (_e, _params?) => {
     Log.debug("ipc.contact.count", "");
     const result = await svc.listContacts({ page: 1, pageSize: 1 });

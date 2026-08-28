@@ -104,10 +104,11 @@ export function registerSendIPC() {
   SendService.setPushFn(createPushFn());
   SendService.setSaveConfigFn((c) => { try { saveConfig(c); } catch { /* */ } });
 
-  ipcMain.handle(IPC.SEND.START, (_e, payload: { keys: string[]; templates?: SendService.SendTemplate[]; autoStart?: boolean }) => {
-    if (!payload?.keys || payload.keys.length === 0) return failResult("请选择至少一个时间桶");
-    // autoStart 缺省为 true 保持旧行为；前端传 false = 只入队，等队列页手动开始
-    return SendService.startSend(payload.keys, payload.templates, payload.autoStart !== false);
+  ipcMain.handle(IPC.SEND.START, (_e, payload: { keys: string[]; templates?: SendService.SendTemplate[]; autoStart?: boolean; contactIds?: number[] }) => {
+    const hasTargets = (payload?.keys && payload.keys.length > 0) || (payload?.contactIds && payload.contactIds.length > 0);
+    if (!hasTargets) return failResult("请选择发送对象");
+    // autoStart 缺省为 true 保持旧行为；前端传 false = 只入队，等队列页手动开始。contactIds 直选（新选人表格）优先于分桶 keys
+    return SendService.startSend(payload.keys || [], payload.templates, payload.autoStart !== false, payload.contactIds);
   });
   ipcMain.handle(IPC.SEND.PAUSE, () => SendService.pauseSend());
   ipcMain.handle(IPC.SEND.RESUME, () => SendService.resumeSend());

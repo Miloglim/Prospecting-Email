@@ -28,6 +28,8 @@ export const IPC = {
     IMPORT:    chan(PREFIX.CONTACTS, "import"),
     EXPORT:    chan(PREFIX.CONTACTS, "export"),
     COUNT:     chan(PREFIX.CONTACTS, "count"),
+    LIST_IDS:  chan(PREFIX.CONTACTS, "listIds"),
+    DELETE_BATCH: chan(PREFIX.CONTACTS, "deleteBatch"),
     INTERACTIONS: chan(PREFIX.CONTACTS, "interactions"),
     LIST_FOR_MATCH: chan(PREFIX.CONTACTS, "listForMatch"),
   },

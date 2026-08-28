@@ -97,21 +97,12 @@ export async function getContactById(id: number): Promise<Result<ContactRow>> {
   return okResult(row);
 }
 
-export async function listContacts(params?: {
-  page?: number; pageSize?: number; search?: string;
+/** 由 search + 各筛选项拼出 contacts 的 WHERE（分页查询与"取全部匹配 id"共用，避免条件漂移） */
+function buildContactWhere(params?: {
+  search?: string;
   stage?: string; status?: string; tags?: string; clientType?: string; country?: string;
-}): Promise<Result<{ items: (ContactRow & { companyName: string | null })[]; total: number }>> {
-  const page = params?.page || 1;
-  const pageSize = params?.pageSize || 50;
+}): SQL {
   const search = params?.search?.trim();
-  const filters = {
-    stage: params?.stage as string | undefined,
-    status: params?.status as string | undefined,
-    tags: params?.tags as string | undefined,
-    clientType: params?.clientType as string | undefined,
-    country: params?.country as string | undefined,
-  };
-  // 构建 where 条件（count 与分页查询复用）
   const conds: (SQL | undefined)[] = [];
   if (search) {
     const pattern = `%${search}%`;
@@ -123,12 +114,21 @@ export async function listContacts(params?: {
       like(companies.name, pattern),
     ));
   }
-  if (filters.stage) conds.push(eq(contacts.stage, filters.stage));
-  if (filters.status) conds.push(eq(contacts.status, filters.status));
-  if (filters.tags) conds.push(like(contacts.tags, `%${filters.tags}%`));
-  if (filters.clientType) conds.push(eq(contacts.clientType, filters.clientType));
-  if (filters.country) conds.push(eq(contacts.country, filters.country));
-  const where = (conds.length ? and(...conds) : dsql`1=1`) as SQL;
+  if (params?.stage) conds.push(eq(contacts.stage, params.stage));
+  if (params?.status) conds.push(eq(contacts.status, params.status));
+  if (params?.tags) conds.push(like(contacts.tags, `%${params.tags}%`));
+  if (params?.clientType) conds.push(eq(contacts.clientType, params.clientType));
+  if (params?.country) conds.push(eq(contacts.country, params.country));
+  return (conds.length ? and(...conds) : dsql`1=1`) as SQL;
+}
+
+export async function listContacts(params?: {
+  page?: number; pageSize?: number; search?: string;
+  stage?: string; status?: string; tags?: string; clientType?: string; country?: string;
+}): Promise<Result<{ items: (ContactRow & { companyName: string | null })[]; total: number }>> {
+  const page = params?.page || 1;
+  const pageSize = params?.pageSize || 50;
+  const where = buildContactWhere(params);
 
   // 总数：COUNT 一次，不查全表
   const total = Number(getDb().select({ n: count() })
@@ -169,6 +169,52 @@ export function listContactsForMatch(): Result<{ id: number; email: string; comp
 function parseTagsArr(s: string | null | undefined): string[] {
   if (!s) return [];
   try { const a = JSON.parse(s); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
+}
+
+/** 返回符合当前 search/筛选的**全部**联系人 id（不分页）。供前端"选择全部匹配项"跨页多选使用。 */
+export function listContactIds(params?: {
+  search?: string;
+  stage?: string; status?: string; tags?: string; clientType?: string; country?: string;
+}): Result<{ ids: number[]; total: number }> {
+  const where = buildContactWhere(params);
+  const rows = getDb().select({ id: contacts.id })
+    .from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+    .where(where).all();
+  const ids = rows.map(r => r.id);
+  return okResult({ ids, total: ids.length });
+}
+
+/** 批量删除联系人：逐条走级联清理 + 空壳公司回收，最后统一 saveDatabase 一次。
+ *  比前端循环调 deleteContact 快得多（后者每封都落盘一次）。 */
+export function deleteContactsBatch(rawIds: number[]): Result<{ deleted: number; companiesRemoved: number }> {
+  const ids = Array.isArray(rawIds) ? rawIds.filter((id): id is number => Number.isInteger(id) && id > 0) : [];
+  if (ids.length === 0) return failResult("没有有效的联系人 ID");
+  Log.debug("contact.deleteBatch", `${ids.length} 个`);
+
+  let deleted = 0;
+  let companiesRemoved = 0;
+  try {
+    for (const id of ids) {
+      const existing = getDb().select({ companyId: contacts.companyId }).from(contacts).where(eq(contacts.id, id)).get();
+      if (!existing) continue; // 不存在 → 跳过
+      deleteContactCascade(id);
+      deleted++;
+      // 公司无联系人时自动回收（与单条删除一致）
+      if (existing.companyId) {
+        const remaining = getDb().select({ id: contacts.id })
+          .from(contacts).where(eq(contacts.companyId, existing.companyId)).all();
+        if (remaining.length === 0) {
+          getDb().delete(companies).where(eq(companies.id, existing.companyId)).run();
+          companiesRemoved++;
+        }
+      }
+    }
+    saveDatabase();
+    return okResult({ deleted, companiesRemoved });
+  } catch (err) {
+    Log.error("contact.deleteBatch", `批量删除失败`, err instanceof Error ? err.stack : String(err));
+    return failResult(`批量删除失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export async function upsertContact(input: Partial<InsertContactRow> & { id?: number; email?: string }): Promise<Result<ContactRow>> {

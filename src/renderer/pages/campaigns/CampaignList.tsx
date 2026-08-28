@@ -1,20 +1,16 @@
 import { useState, useEffect } from "react";
-import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal } from "antd";
-import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal, Steps } from "antd";
+import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined, UnorderedListOutlined, LeftOutlined } from "@ant-design/icons";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
 import { COUNTRIES } from "../../components/ContactDetail";
+import { ContactPicker } from "./ContactPicker";
 
 const STAGE_LABELS: Record<string, string> = {
   initial: "初次", followup1: "跟进1", followup2: "跟进2", closing: "促单", reactivate: "激活",
 };
 const CAT_LABELS: Record<string, string> = { direct: "直客", peer: "同行", general: "通用" };
-
-interface TimeBucket {
-  key: string; label: string; description: string;
-  contacts: unknown[]; count: number;
-}
 
 interface PipelineContact {
   id: number; email: string; firstName: string | null; lastName: string | null;
@@ -35,47 +31,9 @@ interface SendStatus {
   accountStats: Array<{ accountId: number; email: string; sent: number; failed: number; isCircuitOpen: boolean }>;
 }
 
-// ── 分栏复选框组件 ──
-function BucketColumn({ title, buckets, selected, onToggle, disabled, loading }: {
-  title: string;
-  buckets: TimeBucket[];
-  selected: string[];
-  onToggle: (key: string) => void;
-  disabled: boolean;
-  loading?: boolean;
-}) {
-  return (
-    <div className="flex-1 min-w-[150px]">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">{title}</div>
-      <div className="space-y-0.5">
-        {loading ? (
-          <div className="text-[11px] text-gray-300 py-2">加载中…</div>
-        ) : buckets.length === 0 ? (
-          <div className="text-[11px] text-gray-300 py-2">暂无数据</div>
-        ) : (
-          buckets.map(b => {
-            const sel = selected.includes(b.key);
-            const isReached = b.key === "reached"; // 已触达不可选（跟进走客户跟进界面）
-            return (
-              <label key={b.key}
-                className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors
-                  ${sel ? "bg-blue-50" : "hover:bg-gray-50"}
-                  ${disabled || isReached ? "opacity-50 pointer-events-none" : ""}`}
-              >
-                <Checkbox checked={sel} onChange={() => onToggle(b.key)} disabled={disabled || isReached} />
-                <span className="flex-1 text-xs text-gray-700">{b.label}</span>
-                <span className="text-[11px] text-gray-400 tabular-nums">{b.count}</span>
-              </label>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function CampaignList() {
-  const [selectedBuckets, setSelectedBuckets] = useState<string[]>([]);
+  const [step, setStep] = useState(0);            // 0=选人表格 1=发送模式（第3步队列页由路由跳转承载）
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sendMode, setSendMode] = useState<string>("mine");
   const [instantSubject, setInstantSubject] = useState("");
   const [instantBody, setInstantBody] = useState("");
@@ -93,22 +51,6 @@ export function CampaignList() {
     queryKey: ["crm", "pipeline"],
     queryFn: () => window.api.invoke("crm:listPipeline") as Promise<{ success: boolean; data?: StageData[] }>,
     enabled: sendMode === "dynamic",
-  });
-
-  const { data: statusBuckets, isLoading: sbLoading } = useQuery({
-    queryKey: ["send", "statusBuckets"],
-    queryFn: () => window.api.invoke("send:getTimeBuckets") as Promise<{ success: boolean; data?: TimeBucket[] }>,
-    staleTime: 60_000,
-  });
-  const { data: stageBuckets, isLoading: gbLoading } = useQuery({
-    queryKey: ["send", "stageBuckets"],
-    queryFn: () => window.api.invoke("send:getStageBuckets") as Promise<{ success: boolean; data?: TimeBucket[] }>,
-    staleTime: 60_000,
-  });
-  const { data: sendTimeBuckets, isLoading: tbLoading } = useQuery({
-    queryKey: ["send", "sendTimeBuckets"],
-    queryFn: () => window.api.invoke("send:getSendTimeBuckets") as Promise<{ success: boolean; data?: TimeBucket[] }>,
-    staleTime: 60_000,
   });
 
   const { data: templateData } = useQuery({
@@ -152,9 +94,6 @@ export function CampaignList() {
   const status = statusData?.success ? statusData.data : null;
   const isRunning = status?.isRunning || false;
   const isPaused = status?.isPaused || false;
-  const sList = statusBuckets?.success ? statusBuckets.data || [] : [];
-  const gList = stageBuckets?.success ? stageBuckets.data || [] : [];
-  const tList = sendTimeBuckets?.success ? sendTimeBuckets.data || [] : [];
   const templates = templateData?.success ? templateData.data || [] : [];
   const accounts = accountsData?.success ? accountsData.data || [] : [];
   const sched = configData?.success ? configData.data?.schedule : null;
@@ -188,21 +127,8 @@ export function CampaignList() {
     }
   };
 
-  // 合并三个维度的所有 key，取并集统计人数（去重由后端 buildQueue 处理）
-  const toggleBucket = (key: string) => {
-    if (key === "reached") return; // 已触达不可选
-    setSelectedBuckets(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
-  };
-
-  // 估算选中人数：三个维度中匹配的 contact ids 取并集，受限于配额
-  const allBuckets = [...sList, ...gList, ...tList];
-  const allSelectedContacts = new Set<number>();
-  for (const b of allBuckets) {
-    if (selectedBuckets.includes(b.key)) {
-      for (const c of b.contacts as Array<{ id: number }>) allSelectedContacts.add(c.id);
-    }
-  }
-  const rawCount = allSelectedContacts.size;
+  // 选人统计：第一步高密度表格的多选结果（取代旧三栏分桶），受限于配额
+  const rawCount = selectedIds.length;
   const quotaRemaining = quotaData?.success ? quotaData.data?.remaining ?? -1 : -1;
   const selectedCount = quotaRemaining >= 0 ? Math.min(rawCount, quotaRemaining) : rawCount;
 
@@ -226,8 +152,9 @@ export function CampaignList() {
   };
 
   const handleStart = async () => {
+    if (selectedIds.length === 0) { message.warning("请先在上一步选择联系人"); setStep(0); return; }
     if (!await confirmQueueOverwrite()) return;
-    const payload: Record<string, unknown> = { keys: selectedBuckets };
+    const payload: Record<string, unknown> = { keys: [], contactIds: selectedIds };
     if (sendMode === "mine") {
       const allTpls = templates.map(t => ({ name: t.name, subject: t.subject, body: t.body, category: t.category, stage: t.stage, language: t.language }));
       if (allTpls.length === 0) { message.warning("没有可用模板"); return; }
@@ -237,7 +164,7 @@ export function CampaignList() {
     }
     // 只入队不发送 — 用户在队列页确认后再点「开始发送」（对齐旧 PE 两步式）
     payload.autoStart = false;
-    const r = await startMut.mutateAsync(payload as { keys: string[]; templates?: Array<{ name?: string; subject: string; body: string }> });
+    const r = await startMut.mutateAsync(payload as { keys: string[]; contactIds?: number[]; templates?: Array<{ name?: string; subject: string; body: string }> });
     if (r && typeof r === "object" && "success" in r) {
       const rr = r as { success: boolean; error?: string; data?: { queued: number; queuedCount: number; dropped: number } };
       if (rr.success) {
@@ -290,6 +217,14 @@ export function CampaignList() {
         </Card>
       )}
 
+      {/* ── 三步向导：选联系人 → 发送模式 → 发送队列（队列页由入队后跳转承载） ── */}
+      <Steps size="small" current={step} className="!max-w-xl"
+        items={[{ title: "选择联系人" }, { title: "发送模式" }, { title: "发送队列" }]} />
+
+      {step === 0 ? (
+        <ContactPicker value={selectedIds} onChange={setSelectedIds} onNext={() => setStep(1)} />
+      ) : (
+        <>
       {/* ── ① 发送模式 ── */}
       <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送模式</span>}>
         <Tabs activeKey={sendMode} onChange={setSendMode} size="small"
@@ -409,39 +344,15 @@ export function CampaignList() {
         />
       </Card>
 
-      {/* ── ② 发送范围 — 三栏分选（动态更新模式下隐藏） ── */}
+      {/* ── ② 发送对象摘要 — 取代旧三栏分桶（动态更新模式下隐藏） ── */}
       {sendMode !== "dynamic" && (
-        <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送范围</span>}>
-          <div className="flex gap-4">
-            <BucketColumn
-              title="按发送阶段"
-              buckets={gList}
-              selected={selectedBuckets}
-              onToggle={toggleBucket}
-              disabled={isRunning}
-              loading={gbLoading}
-            />
-            <div className="w-px bg-gray-200 flex-shrink-0" />
-            <BucketColumn
-              title="按客户状态"
-              buckets={sList}
-              selected={selectedBuckets}
-              onToggle={toggleBucket}
-              disabled={isRunning}
-              loading={sbLoading}
-            />
-            <div className="w-px bg-gray-200 flex-shrink-0" />
-            <BucketColumn
-              title="按最后发送"
-              buckets={tList}
-              selected={selectedBuckets}
-              onToggle={toggleBucket}
-              disabled={isRunning}
-              loading={tbLoading}
-            />
-          </div>
-          <div className="mt-3 pt-2 border-t border-gray-100 text-[11px] text-gray-400">
-            已选 <strong className="text-gray-700">{selectedCount}</strong> 人{rawCount > selectedCount ? <span className="text-amber-500">（限额上限，共{rawCount}人）</span> : "（三栏取并集）"}
+        <Card size="small" title={<span className="text-xs font-semibold text-gray-600">发送对象</span>}
+          extra={<Button size="small" icon={<LeftOutlined />} onClick={() => setStep(0)}>重新选择</Button>}>
+          <div className="text-[11px] text-gray-500">
+            已选 <strong className="text-gray-800">{rawCount}</strong> 人
+            {quotaRemaining >= 0 && quotaRemaining < rawCount
+              ? <span className="text-amber-500">（今日剩余配额 {quotaRemaining} 封，超出部分入队时自动裁剪）</span>
+              : <span className="text-gray-400"> · 同公司自动合并 BCC 分组、账号轮换分配</span>}
           </div>
         </Card>
       )}
@@ -461,14 +372,17 @@ export function CampaignList() {
               })()}
             </div>
             <Space>
+              <Button size="small" icon={<LeftOutlined />} onClick={() => setStep(0)}>上一步</Button>
               <Button type="primary" size="small" icon={<SendOutlined />}
                 disabled={selectedCount === 0 || isRunning}
                 onClick={handleStart}>
-                发送 {selectedCount} 人
+                发送到队列（{selectedCount} 人）
               </Button>
             </Space>
           </div>
         </Card>
+      )}
+        </>
       )}
 
     </div>

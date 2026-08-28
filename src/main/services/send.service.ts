@@ -386,15 +386,22 @@ function pickTemplate(tpls: SendTemplate[], contact: ContactRow): SendTemplate {
 
 // ── 构建队列（按公司合并 BCC + 渲染模板，每组随机选模板）──
 
-export function buildQueue(bucketKeys: string[], templates?: SendTemplate[]): Result<SendItem[]> {
-  // 三个维度（状态/阶段/发送时间）收集选中联系人 id —— 桶查询只返回 id，避免传输完整联系人
-  const selectedIds = new Set<number>();
+/** 解析本次发信的联系人 id 集合：contactIds 直选优先（新选人表格路径），否则按分桶 key 展开（兼容旧路径） */
+function resolveSelectedIds(bucketKeys: string[], contactIds?: number[]): Set<number> {
+  if (contactIds && contactIds.length > 0) return new Set(contactIds);
+  const ids = new Set<number>();
   for (const br of [getTimeBuckets(), getStageBuckets(), getSendTimeBuckets()]) {
     if (!br.success) continue;
     for (const b of br.data) {
-      if (bucketKeys.includes(b.key)) for (const c of b.contacts) selectedIds.add(c.id);
+      if (bucketKeys.includes(b.key)) for (const c of b.contacts) ids.add(c.id);
     }
   }
+  return ids;
+}
+
+export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], contactIds?: number[]): Result<SendItem[]> {
+  // 三个维度（状态/阶段/发送时间）收集选中联系人 id —— 桶查询只返回 id，避免传输完整联系人；contactIds 直选时跳过桶展开
+  const selectedIds = resolveSelectedIds(bucketKeys, contactIds);
   if (selectedIds.size === 0) return failResult("没有选中的联系人");
 
   // 用 id 一次查完整联系人（供模板渲染）
@@ -504,14 +511,8 @@ export function previewSentence(lang: string, clientType: string, stage: string)
 }
 
 /** 自适应模式：无模板时用组件句库组装（按公司 BCC 分组，每组随机组装） */
-export function buildAdaptiveQueue(bucketKeys: string[]): Result<SendItem[]> {
-  const selectedIds = new Set<number>();
-  for (const br of [getTimeBuckets(), getStageBuckets(), getSendTimeBuckets()]) {
-    if (!br.success) continue;
-    for (const b of br.data) {
-      if (bucketKeys.includes(b.key)) for (const c of b.contacts) selectedIds.add(c.id);
-    }
-  }
+export function buildAdaptiveQueue(bucketKeys: string[], contactIds?: number[]): Result<SendItem[]> {
+  const selectedIds = resolveSelectedIds(bucketKeys, contactIds);
   if (selectedIds.size === 0) return failResult("没有选中的联系人");
 
   const selected = new Map<number, ContactRow>();
@@ -720,9 +721,9 @@ export interface EnqueueResult {
   dropped: number;     // 因限额被整组丢弃的组数
 }
 
-export async function startSend(bucketKeys: string[], templates?: SendTemplate[], autoStart = true): Promise<Result<EnqueueResult>> {
-  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0} autoStart=${autoStart}`);
-  const qr = templates && templates.length > 0 ? buildQueue(bucketKeys, templates) : buildAdaptiveQueue(bucketKeys);
+export async function startSend(bucketKeys: string[], templates?: SendTemplate[], autoStart = true, contactIds?: number[]): Promise<Result<EnqueueResult>> {
+  Log.debug("send.start", `buckets=${bucketKeys.join(",")} templates=${templates?.length || 0} autoStart=${autoStart} directIds=${contactIds?.length || 0}`);
+  const qr = templates && templates.length > 0 ? buildQueue(bucketKeys, templates, contactIds) : buildAdaptiveQueue(bucketKeys, contactIds);
   if (!qr.success) return failResult(qr.error);
   return startQueue(qr.data, autoStart);
 }
@@ -820,6 +821,7 @@ let loopGen = 0; // 循环代数：每次 runBatchLoop 占用新一代，旧循�
 
 async function runBatchLoop(): Promise<void> {
   const myGen = ++loopGen; // 覆盖「取消→立刻恢复」竞态：旧循环可能还在 SMTP 发送中/睡眠中，唤醒后让位
+  try {
   const sched = loadConfig().schedule || DEFAULT_SCHEDULE;
   const plan = [...queues.values()].flat().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   const acctEmails = new Map(getDb().select().from(emailAccounts).all().map(a => [a.id, a.email]));
@@ -942,6 +944,15 @@ async function runBatchLoop(): Promise<void> {
     state.isRunning = false;
     Log.info("send.done", `${state.sentCount}/${state.totalItems}`);
     push(EVENTS.SEND_PROGRESS, state);
+  }
+  } catch (err: unknown) {
+    // 兜底：循环意外抛错若不管，会让 isRunning 永远卡 true、批次静默死亡（表现为"倒计时结束后不再发送"）
+    Log.error("send.loop", err instanceof Error ? (err.stack || err.message) : String(err));
+    if (loopGen === myGen) {
+      state.isRunning = false; state.isPaused = false;
+      state.currentItem = null; state.delaySeconds = 0; state.delayUntil = null;
+      push(EVENTS.SEND_PROGRESS, state);
+    }
   }
 }
 
