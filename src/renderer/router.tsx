@@ -6,7 +6,6 @@ import { CrmPipeline } from "./pages/crm/CrmPipeline";
 import { InboxList } from "./pages/inbox/InboxList";
 import { CampaignList } from "./pages/campaigns/CampaignList";
 import { TemplateList } from "./pages/templates/TemplateList";
-import { ImportPage } from "./pages/import/ImportPage";
 import { HistoryPage } from "./pages/history/HistoryPage";
 import { CompanyPage } from "./pages/companies/CompanyPage";
 import { QueuePage } from "./pages/queue/QueuePage";
@@ -52,12 +51,6 @@ const templatesRoute = createRoute({
   component: TemplateList,
 });
 
-const importRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/import",
-  component: ImportPage,
-});
-
 const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/history",
@@ -89,7 +82,6 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   campaignsRoute,
   templatesRoute,
-  importRoute,
   historyRoute,
   queueRoute,
   companiesRoute,

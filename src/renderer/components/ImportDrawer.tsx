@@ -7,6 +7,25 @@ import type { ColumnsType } from "antd/es/table";
 const { TextArea } = Input;
 const { Dragger } = Upload;
 
+// 字段别名指南 — 匹配旧 PE 的 guide-alias-grid（自 ImportPage 移植，两处合一）
+const FIELD_ALIASES: { field: string; icon: string; codes: string[] }[] = [
+  { field: "邮箱", icon: "✉️", codes: ["邮箱", "邮箱地址", "邮件", "收件人", "email", "e-mail", "to"] },
+  { field: "公司名", icon: "🏢", codes: ["公司", "公司名称", "公司全称", "公司名", "客户名称", "客户", "company"] },
+  { field: "联系人", icon: "👤", codes: ["姓名", "姓名 | 职位", "姓名职位", "联系人", "contact"] },
+  { field: "名", icon: "👤", codes: ["名", "firstname", "first_name"] },
+  { field: "姓", icon: "👤", codes: ["姓", "lastname", "last_name"] },
+  { field: "职位", icon: "💼", codes: ["职位", "职务", "title", "position"] },
+  { field: "电话", icon: "📞", codes: ["电话", "手机", "phone", "tel", "mobile"] },
+  { field: "国家", icon: "🌐", codes: ["国家", "country"] },
+  { field: "品类", icon: "🏷️", codes: ["品类", "行业", "分类", "category", "industry"] },
+  { field: "网站", icon: "🔗", codes: ["网站", "网址", "官网", "website", "url"] },
+  { field: "LinkedIn", icon: "🔗", codes: ["linkedin", "领英"] },
+  { field: "跟进人", icon: "✅", codes: ["跟进人", "负责人", "assignee", "owner"] },
+  { field: "对接人", icon: "👥", codes: ["对接人", "contact_person"] },
+  { field: "阶段", icon: "🚩", codes: ["阶段", "stage"] },
+  { field: "客户类型", icon: "🚩", codes: ["客户类型", "类型", "type", "client_type", "clienttype"] },
+];
+
 const FIELD_OPTIONS = [
   { value: "", label: "— 忽略 —" },
   { value: "email", label: "邮箱" },
@@ -193,10 +212,11 @@ export function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => 
 
   return (
     <Drawer title="导入联系人" open={open} onClose={handleClose}
-      width={step === "input" ? 480 : Math.max(800, (preview?.headers.length || 5) * 130 + 48)}
+      width={step === "input" ? 560 : Math.max(800, (preview?.headers.length || 5) * 130 + 48)}
     >
       {step === "input" && (
-        <Tabs activeKey={inputTab} onChange={setInputTab} size="small"
+        <div className="space-y-4">
+          <Tabs activeKey={inputTab} onChange={setInputTab} size="small"
           items={[
             {
               key: "file",
@@ -237,6 +257,26 @@ export function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => 
             },
           ]}
         />
+
+        {/* 字段识别指南（自 ImportPage 移植） */}
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <p className="text-xs font-semibold text-gray-500 mb-3">字段识别说明</p>
+          <p className="text-[11px] text-gray-400 mb-4">
+            程序读取 Excel/CSV 的<strong>第一行作为表头</strong>，通过匹配列名自动识别字段。中英文列名均可，忽略大小写与空格。
+            未匹配的列保留在「额外信息」中。
+          </p>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            {FIELD_ALIASES.map((fa) => (
+              <div key={fa.field} className="flex items-start gap-2 text-[11px]">
+                <span className="text-gray-500 whitespace-nowrap min-w-[56px]">{fa.icon} {fa.field}</span>
+                <span className="text-gray-400">
+                  {fa.codes.map(c => <code key={c} className="text-[10px] bg-gray-100 px-1 py-0.5 rounded mr-1">{c}</code>)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+        </div>
       )}
 
       {step === "preview" && preview && (
