@@ -14,24 +14,12 @@ interface NavItem {
   dot?: boolean;
 }
 
-const navGroups: { items: NavItem[] }[] = [
-  {
-    items: [
-      { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
-    ],
-  },
-  {
-    items: [
-      { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
-      { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
-    ],
-  },
-  {
-    items: [
-      { key: "/campaigns", icon: <SendOutlined />, label: "发送中心" },
-      { key: "/templates", icon: <FileTextOutlined />, label: "素材库" },
-    ],
-  },
+const navItems: NavItem[] = [
+  { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
+  { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
+  { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
+  { key: "/campaigns", icon: <SendOutlined />, label: "发送中心" },
+  { key: "/templates", icon: <FileTextOutlined />, label: "素材库" },
 ];
 
 const bottomItems: NavItem[] = [
@@ -153,24 +141,13 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Nav — 匹配旧 PE: 分组 + 底部设置 */}
+      {/* Nav — 平铺列表 + 底部设置 */}
       <nav style={{ flex: 1, overflow: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ flexShrink: 0 }}>
-          {navGroups.map((group, gi) => (
-            <ul
-              key={gi}
-              style={{
-                listStyle: "none", padding: 0,
-                marginBottom: gi === 0 ? 12 : 18,
-                marginTop: 0,
-              }}
-            >
-              {group.items.map(renderItem)}
-            </ul>
-          ))}
-        </div>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, flexShrink: 0 }}>
+          {navItems.map(renderItem)}
+        </ul>
 
-        {/* 设置 — 横线分隔，匹配旧 PE nav-bottom */}
+        {/* 设置 — 横线分隔，贴底 */}
         <ul style={{
           listStyle: "none", padding: 0, margin: 0,
           borderTop: "1px solid rgba(255,255,255,0.12)",
