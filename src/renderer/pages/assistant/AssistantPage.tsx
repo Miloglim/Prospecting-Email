@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Space, Tag } from "antd";
+import { Alert, Avatar, Skeleton, Space, Tag } from "antd";
 import { RobotOutlined, UserOutlined } from "@ant-design/icons";
 import { Bubble, Sender, Prompts } from "@ant-design/x";
 import Markdown from "react-markdown";
@@ -44,9 +44,11 @@ function readConvFromHash(): string | undefined {
 export function AssistantPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [sending, setSending] = useState(false);
+  const [convLoading, setConvLoading] = useState(false);
   const [mode, setMode] = useState<"mock" | "live">("mock");
   const [model, setModel] = useState("");
   const convIdRef = useRef<string | undefined>(undefined);
+  const loadTokenRef = useRef(0);
 
   // 模式横幅
   useEffect(() => {
@@ -60,15 +62,20 @@ export function AssistantPage() {
    *  （用 ref 而非闭包 sending 判断：hashchange 回调捕获的是首帧闭包，state 已过期；
    *    agent:stop 对无进行中回合幂等成功，多调无害） */
   const loadConversation = async (id: string | undefined) => {
+    const token = ++loadTokenRef.current;
     if (convIdRef.current) void window.api.invoke("agent:stop", convIdRef.current);
     convIdRef.current = id;
     setSending(false);
-    if (!id) { setMessages([]); return; }
+    setMessages([]);        // 立即清空，避免旧会话内容滞留
+    if (!id) { setConvLoading(false); return; }
+    setConvLoading(true);
     const r = await window.api.invoke("agent:getConversation", id) as
       IpcResult<Array<{ role: string; content: string }>>;
+    if (token !== loadTokenRef.current) return;  // 已切去更新的会话 → 丢弃过期响应
     setMessages(r?.success && r.data
       ? r.data.map(m => ({ key: nextKey(), role: m.role === "user" ? "user" as const : "ai" as const, content: m.content }))
       : []);
+    setConvLoading(false);
   };
 
   // 首屏 + hash 变更（导航栏点击会话）
@@ -166,9 +173,28 @@ export function AssistantPage() {
         />
       )}
 
-      {/* 消息流 */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-        {messages.length === 0 ? (
+      {/* 消息流 — selectable 豁免全局 user-select:none，允许复制 AI 回复 */}
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 selectable">
+        {convLoading ? (
+          /* 会话切换骨架屏：模拟气泡布局 */
+          <div className="space-y-5 pt-2 animate-pulse">
+            {[
+              { me: false, w: "58%", rows: 3 },
+              { me: true, w: "34%", rows: 1 },
+              { me: false, w: "64%", rows: 2 },
+            ].map((r, i) => (
+              <div key={i} className={`flex gap-2.5 ${r.me ? "flex-row-reverse" : ""}`}>
+                <Avatar
+                  icon={r.me ? <UserOutlined /> : <RobotOutlined />}
+                  style={{ background: r.me ? "#1a1a1a" : "#e6fffb", color: r.me ? "#fff" : "#00897b", flexShrink: 0 }}
+                />
+                <div style={{ width: r.w }}>
+                  <Skeleton active title={false} paragraph={{ rows: r.rows, width: "100%" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-6">
             <div className="text-center">
               <RobotOutlined style={{ fontSize: 42, color: "#00bfa5" }} />
