@@ -127,12 +127,20 @@ async function streamLive(
   cfg: ProviderConfig, history: ChatMsg[], push: PushFn, sessionId: string, signal: AbortSignal,
 ): Promise<string> {
   const client = new OpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey, timeout: 90_000, maxRetries: 1 });
+  // ponytail: chat_template_kwargs.enable_thinking=false 是 agnes 端点的扩展字段
+  // （官方文档"Thinking"章节）— agnes-2.0-flash 默认先思考再答，聊天场景首字延迟
+  // 高达数十秒；关闭后实测 reasoning_tokens 归零、首字时间大幅提前。
+  // SDK 类型不含该字段，走 options.body 合并进请求体（官方推荐的扩展字段注入方式）。
   const stream = await client.chat.completions.create({
     model: cfg.model,
     messages: history,
     stream: true,
     temperature: 0.3,
-  }, { signal });
+    max_tokens: 2000,
+  }, {
+    signal,
+    body: { chat_template_kwargs: { enable_thinking: false } },
+  });
 
   let full = "";
   for await (const part of stream) {

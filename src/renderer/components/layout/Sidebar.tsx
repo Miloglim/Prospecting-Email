@@ -257,7 +257,6 @@ export function Sidebar() {
     pathname === key || (key !== "/" && pathname.startsWith(key));
 
   const width = sidebarCollapsed ? 64 : 210;
-  const onAssistant = pathname === "/assistant";
 
   const renderItem = (item: NavItem) => (
     <li
@@ -338,18 +337,14 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Nav — 平铺列表；AI 助手页在导航项下方嵌会话历史（豆包式） */}
+      {/* Nav — 平铺列表；会话历史常驻导航项下方（豆包式：任何页面都可直切会话） */}
       <nav style={{ flex: 1, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
         <ul style={{ listStyle: "none", padding: 0, margin: 0, flexShrink: 0 }}>
           {navItems.map(renderItem)}
         </ul>
 
-        {onAssistant && (
-          <>
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "8px 12px 0", flexShrink: 0 }} />
-            <ConversationsPanel collapsed={sidebarCollapsed} />
-          </>
-        )}
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "8px 12px 0", flexShrink: 0 }} />
+        <ConversationsPanel collapsed={sidebarCollapsed} />
 
         {/* 设置 — 横线分隔，贴底 */}
         <ul style={{
