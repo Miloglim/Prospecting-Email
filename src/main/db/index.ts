@@ -160,9 +160,22 @@ CREATE TABLE IF NOT EXISTS send_queue (
   error text, sent_at text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_conversations (
+  id text PRIMARY KEY NOT NULL,
+  title text DEFAULT '新对话' NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  conversation_id text NOT NULL REFERENCES agent_conversations(id),
+  role text NOT NULL, content text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
 CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_conv ON agent_messages(conversation_id);
 `.trim();
 
   const statements = SCHEMA_SQL.split(";")

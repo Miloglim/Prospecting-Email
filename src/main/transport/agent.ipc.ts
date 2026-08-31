@@ -24,4 +24,16 @@ export function registerAgentIPC() {
 
   // provider 配置状态（mock/live）
   ipcMain.handle(IPC.AGENT.STATUS, () => Agent.status());
+
+  // 会话管理（左侧历史列表）
+  ipcMain.handle(IPC.AGENT.LIST_CONVERSATIONS, () => Agent.listConversations());
+
+  ipcMain.handle(IPC.AGENT.GET_CONVERSATION, (_e, conversationId: string) => Agent.getMessages(conversationId));
+
+  ipcMain.handle(IPC.AGENT.RENAME_CONVERSATION,
+    (_e, input: { conversationId?: string; title?: string }) =>
+      Agent.renameConversation(input?.conversationId ?? "", input?.title ?? ""));
+
+  ipcMain.handle(IPC.AGENT.DELETE_CONVERSATION, (_e, conversationId: string) =>
+    Agent.deleteConversation(conversationId));
 }

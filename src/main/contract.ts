@@ -119,6 +119,12 @@ export const IPC = {
     STOP:   chan(PREFIX.AGENT, "stop"),
     /** provider 配置状态（mock/live），供 UI 显示模式横幅 */
     STATUS: chan(PREFIX.AGENT, "status"),
+    /** 会话列表（按更新时间倒序） */
+    LIST_CONVERSATIONS:  chan(PREFIX.AGENT, "listConversations"),
+    /** 单会话的全部消息 */
+    GET_CONVERSATION:    chan(PREFIX.AGENT, "getConversation"),
+    RENAME_CONVERSATION: chan(PREFIX.AGENT, "renameConversation"),
+    DELETE_CONVERSATION: chan(PREFIX.AGENT, "deleteConversation"),
   },
   SYSTEM: {
     GET_CONFIG:       chan(PREFIX.SYSTEM, "getConfig"),
