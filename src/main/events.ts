@@ -10,6 +10,12 @@ export const EVENTS = {
   UPDATE_AVAILABLE: "system:updateAvailable",
   /** 熔断器状态变化 */
   CIRCUIT_CHANGED: "accounts:circuitChanged",
+  /** Agent 流式文字增量 */
+  AGENT_CHUNK: "agent:chunk",
+  /** Agent 一轮生成完成 */
+  AGENT_DONE: "agent:done",
+  /** Agent 生成失败 */
+  AGENT_ERROR: "agent:error",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];

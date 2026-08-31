@@ -11,6 +11,7 @@ const PREFIX = {
   HISTORY:   "history",
   BOUNCE:    "bounce",
   AI:        "ai",
+  AGENT:     "agent",
   SYSTEM:    "system",
   UPDATE:    "update",
 } as const;
@@ -110,6 +111,14 @@ export const IPC = {
     BACKCHECK:      chan(PREFIX.AI, "backcheck"),
     GENERATE_DRAFT: chan(PREFIX.AI, "generateDraft"),
     SUMMARIZE_EMAIL: chan(PREFIX.AI, "summarizeEmail"),
+  },
+  AGENT: {
+    /** 发起一轮对话（立即返回 conversationId/messageId，内容走 agent:chunk 事件流） */
+    CHAT:   chan(PREFIX.AGENT, "chat"),
+    /** 中断当前生成 */
+    STOP:   chan(PREFIX.AGENT, "stop"),
+    /** provider 配置状态（mock/live），供 UI 显示模式横幅 */
+    STATUS: chan(PREFIX.AGENT, "status"),
   },
   SYSTEM: {
     GET_CONFIG:       chan(PREFIX.SYSTEM, "getConfig"),

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
-  InboxOutlined, FileTextOutlined,
+  InboxOutlined, FileTextOutlined, RobotOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { useAppContext } from "../../AppContext";
@@ -15,6 +15,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { key: "/assistant", icon: <RobotOutlined />, label: "AI 助手" },
   { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
   { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
   { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },

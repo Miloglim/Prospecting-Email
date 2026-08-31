@@ -1,6 +1,7 @@
 import { createRootRoute, createRoute, createRouter, createHashHistory, Outlet } from "@tanstack/react-router";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/dashboard/Dashboard";
+import { AssistantPage } from "./pages/assistant/AssistantPage";
 import { CustomersPage } from "./pages/customers/CustomersPage";
 import { InboxList } from "./pages/inbox/InboxList";
 import { SendCenter } from "./pages/campaigns/SendCenter";
@@ -15,6 +16,12 @@ const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Dashboard,
+});
+
+const assistantRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/assistant",
+  component: AssistantPage,
 });
 
 const customersRoute = createRoute({
@@ -49,6 +56,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
+  assistantRoute,
   customersRoute,
   inboxRoute,
   campaignsRoute,
