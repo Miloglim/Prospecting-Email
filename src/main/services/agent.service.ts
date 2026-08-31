@@ -130,17 +130,18 @@ async function streamLive(
   // ponytail: chat_template_kwargs.enable_thinking=false 是 agnes 端点的扩展字段
   // （官方文档"Thinking"章节）— agnes-2.0-flash 默认先思考再答，聊天场景首字延迟
   // 高达数十秒；关闭后实测 reasoning_tokens 归零、首字时间大幅提前。
-  // SDK 类型不含该字段，走 options.body 合并进请求体（官方推荐的扩展字段注入方式）。
+  // ⚠ 必须放在请求体里：SDK 源码 create() 为 post(path, { body, ...options })，
+  //   options.body 会整体替换请求体（曾误用导致 400 model name empty）。
+  //   SDK 类型不含该字段；经 Record<string,unknown> 变量展开原样透传序列化。
+  const providerExtras: Record<string, unknown> = { chat_template_kwargs: { enable_thinking: false } };
   const stream = await client.chat.completions.create({
     model: cfg.model,
     messages: history,
     stream: true,
     temperature: 0.3,
     max_tokens: 2000,
-  }, {
-    signal,
-    body: { chat_template_kwargs: { enable_thinking: false } },
-  });
+    ...providerExtras,
+  }, { signal });
 
   let full = "";
   for await (const part of stream) {
