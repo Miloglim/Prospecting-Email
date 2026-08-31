@@ -488,7 +488,7 @@ export function CrmPipeline() {
                 <SearchOutlined
                   className="text-[11px] text-gray-400 hover:text-blue-500 cursor-pointer transition-colors"
                   onClick={() => {
-                    if (contact?.id) window.location.hash = `#/contacts?detail=${contact.id}`;
+                    if (contact?.id) window.location.hash = `#/customers?view=table&detail=${contact.id}`;
                   }}
                 />
               </Tooltip>

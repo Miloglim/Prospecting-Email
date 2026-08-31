@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
-  InboxOutlined, PartitionOutlined, FileTextOutlined, BankOutlined,
+  InboxOutlined, FileTextOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { useAppContext } from "../../AppContext";
@@ -23,9 +23,7 @@ const navGroups: { items: NavItem[] }[] = [
   {
     items: [
       { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
-      { key: "/contacts", icon: <UserOutlined />, label: "联系人" },
-      { key: "/companies", icon: <BankOutlined />, label: "公司" },
-      { key: "/crm", icon: <PartitionOutlined />, label: "客户跟进", dot: true },
+      { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
     ],
   },
   {

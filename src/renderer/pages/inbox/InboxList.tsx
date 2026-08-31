@@ -644,7 +644,7 @@ export function InboxList() {
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: "50%" }}>
                     <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>关联</span>
                     <span
-                      onClick={() => { window.location.hash = `#/contacts?detail=${senderContact.id}`; }}
+                      onClick={() => { window.location.hash = `#/customers?view=table&detail=${senderContact.id}`; }}
                       style={{ color: "#1565c0", fontWeight: 500, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: "2px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title="点击打开联系人详情"
                     >{senderContact.company || "已匹配联系人"}</span>
@@ -689,7 +689,7 @@ export function InboxList() {
                         {matchedContacts.map((c, i) => (
                           <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 0", fontSize: 11 }}>
                             <span
-                              onClick={() => { window.location.hash = `#/contacts?detail=${c.id}`; }}
+                              onClick={() => { window.location.hash = `#/customers?view=table&detail=${c.id}`; }}
                               style={{ color: "#1565c0", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: "2px" }}
                               title="点击打开联系人详情"
                             >{c.email}</span>
@@ -727,12 +727,13 @@ export function InboxList() {
                                 <span
                                   onClick={() => {
                                     const params = new URLSearchParams();
+                                    params.set("view", "table");
                                     params.set("add", "1");
                                     params.set("email", e);
                                     if (company) params.set("company", company);
                                     if (name.firstName) params.set("firstName", name.firstName);
                                     if (name.lastName) params.set("lastName", name.lastName);
-                                    window.location.hash = `#/contacts?${params.toString()}`;
+                                    window.location.hash = `#/customers?${params.toString()}`;
                                   }}
                                   style={{
                                     fontSize: 10, background: "#e8f4fd", padding: "1px 8px",

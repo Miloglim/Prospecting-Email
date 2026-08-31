@@ -1,12 +1,10 @@
 import { createRootRoute, createRoute, createRouter, createHashHistory, Outlet } from "@tanstack/react-router";
 import { AppLayout } from "./components/layout/AppLayout";
 import { Dashboard } from "./pages/dashboard/Dashboard";
-import { ContactList } from "./pages/contacts/ContactList";
-import { CrmPipeline } from "./pages/crm/CrmPipeline";
+import { CustomersPage } from "./pages/customers/CustomersPage";
 import { InboxList } from "./pages/inbox/InboxList";
 import { SendCenter } from "./pages/campaigns/SendCenter";
 import { TemplateList } from "./pages/templates/TemplateList";
-import { CompanyPage } from "./pages/companies/CompanyPage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 
 const rootRoute = createRootRoute({
@@ -19,16 +17,10 @@ const dashboardRoute = createRoute({
   component: Dashboard,
 });
 
-const contactsRoute = createRoute({
+const customersRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/contacts",
-  component: ContactList,
-});
-
-const crmRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/crm",
-  component: CrmPipeline,
+  path: "/customers",
+  component: CustomersPage,
 });
 
 const inboxRoute = createRoute({
@@ -49,12 +41,6 @@ const templatesRoute = createRoute({
   component: TemplateList,
 });
 
-const companiesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/companies",
-  component: CompanyPage,
-});
-
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -63,12 +49,10 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
-  contactsRoute,
-  crmRoute,
+  customersRoute,
   inboxRoute,
   campaignsRoute,
   templatesRoute,
-  companiesRoute,
   settingsRoute,
 ]);
 

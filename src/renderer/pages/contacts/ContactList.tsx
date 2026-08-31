@@ -168,7 +168,7 @@ export function ContactList() {
 
   // 从收件箱跳转来的预填/详情（读 hash 路由的 search 部分）
   useEffect(() => {
-    const rawHash = window.location.hash; // 如 "#/contacts?add=1&email=..." 或 "#/contacts?detail=123"
+    const rawHash = window.location.hash; // 如 "#/customers?view=table&add=1&email=..." 或 "#/customers?view=table&detail=123"
     const qs = rawHash.includes("?") ? rawHash.split("?")[1] : "";
     if (!qs) return;
     const sp = new URLSearchParams(qs);
@@ -235,7 +235,7 @@ export function ContactList() {
               onClick={(e) => {
                 e.stopPropagation();
                 if (r.status !== "reached") return;
-                window.location.hash = `#/crm?detail=${r.id}`;
+                window.location.hash = `#/customers?view=board&detail=${r.id}`;
               }}
             />
           </Tooltip>

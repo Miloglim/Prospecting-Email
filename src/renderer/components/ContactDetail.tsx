@@ -345,7 +345,7 @@ export function ContactDetailDrawer({ contact, open, onClose, onUpdated }: {
               <Button type="text" size="small" icon={<PartitionOutlined />}
                 disabled={contact.status !== "reached"}
                 className="btn-hover-color" style={{ color: contact.status === "reached" ? "#bbb" : "#d9d9d9", padding: 0, minWidth: 20, height: 20 }}
-                onClick={() => { window.location.hash = `#/crm?detail=${contact.id}`; }}
+                onClick={() => { window.location.hash = `#/customers?view=board&detail=${contact.id}`; }}
               />
             </Tooltip>
           </div>
