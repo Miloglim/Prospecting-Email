@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
   InboxOutlined, FileTextOutlined, RobotOutlined,
-  SettingOutlined, PlusOutlined, MoreOutlined,
+  SettingOutlined, MoreOutlined,
 } from "@ant-design/icons";
 import { Dropdown, Input, Modal } from "antd";
 import { useAppContext } from "../../AppContext";
@@ -16,7 +16,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { key: "/assistant", icon: <RobotOutlined />, label: "AI 助手" },
+  { key: "/assistant", icon: <RobotOutlined />, label: "新对话" },
   { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
   { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
   { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
@@ -116,22 +116,8 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
     });
   };
 
-  if (collapsed) {
-    return (
-      <div style={{ padding: "2px 0 6px", textAlign: "center", flexShrink: 0 }}>
-        <button
-          title="新会话"
-          onClick={() => gotoConversation(undefined)}
-          style={{
-            width: 26, height: 26, borderRadius: 5, border: "1px solid rgba(255,255,255,0.2)",
-            background: "transparent", color: "#00bfa5", cursor: "pointer",
-          }}
-        >
-          <PlusOutlined style={{ fontSize: 11 }} />
-        </button>
-      </div>
-    );
-  }
+  // 折叠态太窄放不下会话列表；新对话入口由导航项「新对话」承载
+  if (collapsed) return null;
 
   // 服务端已按 updatedAt 倒序，按出现顺序聚组即为从新到旧
   const groups: { name: string; items: ConvMeta[] }[] = [];
@@ -144,20 +130,6 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      <div style={{ padding: "3px 10px 5px", flexShrink: 0 }}>
-        <button
-          onClick={() => gotoConversation(undefined)}
-          style={{
-            width: "100%", padding: "4px 0", borderRadius: 5,
-            border: "1px solid rgba(255,255,255,0.22)", background: "transparent",
-            color: "#fff", fontSize: 12, cursor: "pointer", display: "flex",
-            alignItems: "center", justifyContent: "center", gap: 5,
-          }}
-        >
-          <PlusOutlined style={{ fontSize: 10, color: "#00bfa5" }} /> 新会话
-        </button>
-      </div>
-
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 6px" }}>
         {groups.length === 0 && (
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", textAlign: "center", paddingTop: 12 }}>
@@ -261,7 +233,11 @@ export function Sidebar() {
   const renderItem = (item: NavItem) => (
     <li
       key={item.key}
-      onClick={() => navigate({ to: item.key })}
+      onClick={() => {
+        // 「新对话」= 清掉会话参数进入空白态；已在该页时 hash 变化仍会触发页面重置
+        if (item.key === "/assistant") gotoConversation(undefined);
+        else navigate({ to: item.key });
+      }}
       style={navItemStyle(isActive(item.key))}
       onMouseEnter={(e) => {
         if (!isActive(item.key))
