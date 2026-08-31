@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip, Checkbox } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HtmlText } from "../../components/RichTextEditor";
@@ -59,18 +59,15 @@ function daysAgo(d: string) {
   return `${delta} 天前`;
 }
 
-// 阶段内按跟进人 A-Z 分组（未分配归一组）
-function groupByAssignee(contacts: PipelineContact[]): Array<{ assignee: string; contacts: PipelineContact[] }> {
-  const groups = new Map<string, PipelineContact[]>();
-  for (const c of contacts) {
-    const key = (c.assignee || "").trim() || "未分配";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(c);
-  }
-  return [...groups.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0], "zh-CN"))
-    .map(([assignee, list]) => ({ assignee, contacts: list }));
+/** 最近跟进超期预警色：>5 天红、>3 天橙、其余灰 */
+function followAgeClass(d: string): string {
+  const days = (Date.now() - new Date(d).getTime()) / 86400000;
+  if (days > 5) return "text-red-500 font-medium";
+  if (days > 3) return "text-orange-500 font-medium";
+  return "text-gray-400";
 }
+
+// 阶段内排序：最近跟进倒序（见渲染处 sort；旧按跟进人分组已废弃 — 筛选栏有专门的跟进人筛选）
 
 // ══════════════════════════════════════════════════════════════
 // 主组件
@@ -214,6 +211,26 @@ export function CrmPipeline() {
   };
 
   const stages: StageData[] = data?.success ? data.data || [] : STAGES.map(s => ({ ...s, contacts: [] }));
+
+  // 分类筛选 — 国家 / 跟进人（下拉多选；选项按联系人数量降序，选中的并集匹配）
+  const [fCountries, setFCountries] = useState<string[]>([]);
+  const [fAssignees, setFAssignees] = useState<string[]>([]);
+  const allPipelineContacts = useMemo(() => stages.flatMap(s => s.contacts), [stages]);
+  const optionCounts = (get: (c: PipelineContact) => string | null) => {
+    const m = new Map<string, number>();
+    for (const c of allPipelineContacts) {
+      const k = get(c);
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  };
+  const countryOptions = useMemo(() => optionCounts(c => c.country), [allPipelineContacts]);   // [value, count][]
+  const assigneeOptions = useMemo(() => optionCounts(c => (c.assignee || "").trim() || null), [allPipelineContacts]);
+  const visibleOf = useCallback((list: PipelineContact[]) =>
+    list.filter(c =>
+      (fCountries.length === 0 || (c.country && fCountries.includes(c.country)))
+      && (fAssignees.length === 0 || fAssignees.includes((c.assignee || "").trim()))),
+    [fCountries, fAssignees]);
   const contact = detail?.success ? detail.data?.contact : null;
   const detailData = detail?.success ? detail.data : null;
 
@@ -364,15 +381,33 @@ export function CrmPipeline() {
     <div className="flex gap-4 h-full" style={{ minHeight: "calc(100vh - 130px)" }}>
       {/* ═══ 左侧看板 ═══ */}
       <div className="flex-1 overflow-y-auto pb-4 space-y-1">
+        {/* 分类筛选 — 国家 / 跟进人：下拉多选（选项再多也只占一行） */}
+        <div className="sticky top-0 z-30 bg-white border-b border-gray-200 px-3 py-1.5 flex items-center gap-2">
+          <span className="text-[10px] text-gray-400 flex-shrink-0">筛选</span>
+          <Select mode="multiple" size="small" allowClear placeholder="全部国家" showSearch value={fCountries}
+            onChange={v => setFCountries(v as string[])} style={{ minWidth: 150, maxWidth: 300 }} maxTagCount="responsive"
+            popupMatchSelectWidth={false}
+            options={countryOptions.map(([v, n]) => ({ value: v, label: `${v} (${n})` }))} />
+          <Select mode="multiple" size="small" allowClear placeholder="全部跟进人" showSearch value={fAssignees}
+            onChange={v => setFAssignees(v as string[])} style={{ minWidth: 150, maxWidth: 300 }} maxTagCount="responsive"
+            popupMatchSelectWidth={false}
+            options={assigneeOptions.map(([v, n]) => ({ value: v, label: `${v} (${n})` }))} />
+          {(fCountries.length > 0 || fAssignees.length > 0) && (
+            <Button size="small" type="text" className="!text-[10px] !px-1"
+              onClick={() => { setFCountries([]); setFAssignees([]); }}>重置</Button>
+          )}
+        </div>
         {selectedIds.size > 0 && (
-          <div className="sticky top-0 z-20 bg-white border-b border-gray-200 px-3 py-2 flex items-center gap-2">
+          <div className="sticky top-[34px] z-20 bg-white border-b border-gray-200 px-3 py-2 flex items-center gap-2">
             <span className="text-xs text-gray-600">已选 {selectedIds.size} 人</span>
             <Button size="small" type="primary" onClick={copyEmails}>复制邮箱</Button>
             <Button size="small" onClick={() => setSelectedIds(new Set())}>清空</Button>
           </div>
         )}
         {isLoading ? <Card loading className="w-full" /> :
-          stages.map(s => (
+          stages.map(s => {
+            const visible = visibleOf(s.contacts);
+            return (
             <div key={s.key}>
               <div
                 className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none sticky top-0 z-10 bg-gray-50"
@@ -382,57 +417,61 @@ export function CrmPipeline() {
                 {collapsed[s.key] ? <RightOutlined className="text-[10px] text-gray-400" /> : <DownOutlined className="text-[10px] text-gray-400" />}
                 <span className="w-2 h-2 rounded-full" style={{ background: s.color }} />
                 <span className="font-semibold text-xs">{s.label}</span>
-                <span className="text-[11px] text-gray-400 ml-auto">{s.contacts.length}</span>
+                <span className="text-[11px] text-gray-400 ml-auto">
+                  {visible.length}{visible.length !== s.contacts.length ? <span className="text-gray-300">/{s.contacts.length}</span> : ""}
+                </span>
               </div>
               {!collapsed[s.key] && (
                 <div>
-                  {groupByAssignee(s.contacts).map(g => (
-                    <div key={g.assignee}>
-                      {s.contacts.length > 1 && (
-                        <div className="px-4 py-1 text-[10px] text-gray-400 bg-gray-50/70 border-b border-gray-100 flex items-center gap-2">
-                          <span className="font-medium">{g.assignee}</span>
-                          <span className="text-gray-300">{g.contacts.length}</span>
-                        </div>
-                      )}
-                      {g.contacts.map(c => (
-                        <div key={c.id}
-                          id={`crm-contact-${c.id}`}
-                          className={`flex items-center gap-2 px-4 py-2 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors text-xs ${detailId === c.id ? "bg-violet-50 border-l-2 border-l-violet-400" : ""}`}
-                          onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
-                        >
-                          <span className="font-medium flex-shrink-0 w-24 truncate" title={[c.firstName, c.lastName].filter(Boolean).join(" ") || undefined}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
-                          {c.country ? (
-                            <span className="text-[9px] text-gray-400 flex-shrink-0 px-1 rounded bg-gray-50">{c.country}</span>
+                  {[...visible]
+                    .sort((a, b) => {
+                      // 最近跟进倒序（最新在最上）；无跟进记录的沉底（按创建时间新旧再排）
+                      const ta = a.lastFollowupAt ? new Date(a.lastFollowupAt).getTime() : 0;
+                      const tb = b.lastFollowupAt ? new Date(b.lastFollowupAt).getTime() : 0;
+                      return tb - ta;
+                    })
+                    .map(c => (
+                      <div key={c.id}
+                        id={`crm-contact-${c.id}`}
+                        className={`flex items-center gap-2 px-4 py-2 cursor-pointer border-b border-gray-50 hover:bg-gray-50 transition-colors text-xs ${detailId === c.id ? "bg-violet-50 border-l-2 border-l-violet-400" : ""}`}
+                        onClick={() => { setDetailId(c.id); setCurrentTab("info"); }}
+                      >
+                        <span className="font-medium flex-shrink-0 w-24 truncate" title={[c.firstName, c.lastName].filter(Boolean).join(" ") || undefined}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                        {c.country ? (
+                          <span className="text-[9px] text-gray-400 flex-shrink-0 px-1 rounded bg-gray-50">{c.country}</span>
+                        ) : null}
+                        <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
+                        <span className="flex items-center gap-2 flex-shrink-0">
+                          {c.lastFollowupAt ? (
+                            <span className={`text-[10px] flex items-center gap-1 ${followAgeClass(c.lastFollowupAt)}`}>
+                              <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
+                              <EditOutlined className="text-[9px] flex-shrink-0" />
+                              <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
+                            </span>
                           ) : null}
-                          <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
-                          <span className="flex items-center gap-2 flex-shrink-0">
-                            {c.lastFollowupAt ? (
-                              <span className="text-[10px] text-gray-400 flex items-center gap-1">
-                                <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
-                                <EditOutlined className="text-[9px] flex-shrink-0" />
-                                <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
-                              </span>
-                            ) : null}
-                            {c.reminderAt ? (
-                              <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
-                                <ClockCircleOutlined className="text-[9px]" />
-                                {new Date(c.reminderAt) < new Date() ? `逾期${daysAgo(c.reminderAt)}` : dayjs(c.reminderAt).format("MM/DD")}
-                              </span>
-                            ) : null}
-                            {c.assignee ? (
-                              <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5 flex-shrink-0">{c.assignee}</Tag>
-                            ) : null}
-                          </span>
-                          <Checkbox checked={selectedIds.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(c.id)} />
-                        </div>
-                      ))}
+                          {c.reminderAt ? (
+                            <span className={`text-[10px] flex items-center gap-0.5 ${new Date(c.reminderAt) < new Date() ? "text-red-500 font-semibold" : "text-amber-500"}`}>
+                              <ClockCircleOutlined className="text-[9px]" />
+                              {new Date(c.reminderAt) < new Date() ? `逾期${daysAgo(c.reminderAt)}` : dayjs(c.reminderAt).format("MM/DD")}
+                            </span>
+                          ) : null}
+                          {c.assignee ? (
+                            <Tag color="geekblue" className="text-[10px] my-0 leading-none py-0.5 px-1.5 flex-shrink-0">{c.assignee}</Tag>
+                          ) : null}
+                        </span>
+                        <Checkbox checked={selectedIds.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelect(c.id)} />
+                      </div>
+                    ))}
+                  {visible.length === 0 && (
+                    <div className="text-center text-[11px] text-gray-300 py-4">
+                      {s.contacts.length === 0 ? "暂无" : "无符合筛选的联系人"}
                     </div>
-                  ))}
-                  {s.contacts.length === 0 && <div className="text-center text-[11px] text-gray-300 py-4">暂无</div>}
+                  )}
                 </div>
               )}
             </div>
-          ))
+            );
+          })
         }
       </div>
 

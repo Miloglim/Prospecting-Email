@@ -474,6 +474,58 @@ function UpdateChecker() {
 }
 
 // ── 设置页主组件 ──
+// ── 发信时间预估（设置页展示用，纯函数推导，不落库不参与发送）──
+const SEND_OVERHEAD_SEC = 2; // 每组 SMTP 处理耗时近似值
+
+interface SendPlanInput {
+  count: number; groupSize: number; delayMin: number; delayMax: number;
+  winEnabled: boolean; startHour: number; endHour: number;
+}
+
+/** 由发信参数推算：组数/平均速率(封/小时)/窗口小时/纯节奏耗时/预计完成时刻 */
+function estimateSendPlan(o: SendPlanInput, now: Date) {
+  const groupSize = Math.max(1, Math.floor(o.groupSize) || 1);
+  const delayMin = Math.max(0, o.delayMin || 0), delayMax = Math.max(delayMin, o.delayMax || 0);
+  const cadence = (delayMin + delayMax) / 2 + SEND_OVERHEAD_SEC; // 相邻两组的平均间隔(秒)
+  const groups = Math.ceil(Math.max(0, o.count) / groupSize);
+  const activeSec = Math.round(groups * cadence);
+  const ratePerHour = cadence > 0 ? (3600 / cadence) * groupSize : 0;
+  const rawWin = o.startHour < o.endHour ? o.endHour - o.startHour : 24 - o.startHour + o.endHour;
+  const winHours = o.winEnabled && rawWin > 0 ? rawWin : 24;
+  const win = o.winEnabled && rawWin > 0;
+  const finish = win
+    ? advanceWithinWindows(now, activeSec, o.startHour, o.endHour)
+    : new Date(now.getTime() + activeSec * 1000);
+  return { groups, cadenceSec: cadence, ratePerHour, activeSec, winHours, finish };
+}
+
+/** 从 now 起、只在发信窗口内消耗所需时长，推算完成时刻（本机时区=北京时） */
+function advanceWithinWindows(from: Date, needSec: number, startH: number, endH: number): Date {
+  const cross = startH >= endH; // 跨天窗口（如 21 → 8）
+  const inWin = (h: number) => cross ? (h >= startH || h < endH) : (h >= startH && h < endH);
+  const secToBoundary = (d: Date) => {
+    const elapsed = d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;
+    const h = d.getHours();
+    const target = inWin(h) ? (endH <= h && cross ? 24 : endH) : startH; // 目标钟点
+    return Math.max(1, (((target * 3600 - elapsed) - h * 3600) % 86400 + 86400) % 86400); // 顺推至该钟点的秒数
+  };
+  let need = needSec;
+  let cur = new Date(from.getTime());
+  for (let guard = 0; need > 0 && guard < 2000; guard++) {
+    const seg = Math.min(need, secToBoundary(cur));
+    cur = new Date(cur.getTime() + seg * 1000);
+    need -= seg;
+  }
+  return cur;
+}
+
+const fmtDur = (s: number) => {
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h > 0 ? `${h} 小时${m > 0 ? ` ${m} 分` : ""}` : `${Math.max(1, m)} 分钟`;
+};
+const fmtFinish = (d: Date) =>
+  d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit" });
+
 export function SettingsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null);
@@ -512,6 +564,9 @@ export function SettingsPage() {
   const saveSched = (patch: Partial<SendSchedule>) => {
     saveConfigMut.mutate({ schedule: { ...sched, ...patch } });
   };
+
+  // 发送预估的"预计发送 N 封"输入（空 = 默认取日限额，无限额则 1000）
+  const [estCount, setEstCount] = useState<number | null>(null);
 
   // 账号熔断状态变化 → 即时刷新账号列表
   useEffect(() => {
@@ -682,6 +737,42 @@ export function SettingsPage() {
                 onSaveMin={v => saveSched({ groupDelayMinSeconds: v })} onSaveMax={v => saveSched({ groupDelayMaxSeconds: v })}
                 hint="秒" />
             )}
+
+            {/* 发送预估 — 由上方参数纯推导，仅供参考（不参与实际发送逻辑） */}
+            {sched && (() => {
+              const quota = Number((config as unknown as { sendQuota?: { dailyLimit?: number } })?.sendQuota?.dailyLimit) || 0;
+              const n = Math.max(1, Math.floor(estCount ?? (quota > 0 ? quota : 1000)));
+              const p = estimateSendPlan({
+                count: n, groupSize: sched.groupSize,
+                delayMin: sched.groupDelayMinSeconds, delayMax: sched.groupDelayMaxSeconds,
+                winEnabled: sched.timeWindowEnabled, startHour: sched.startHour, endHour: sched.endHour,
+              }, new Date());
+              const windowCap = p.ratePerHour * p.winHours;
+              const perDay = quota > 0 ? Math.min(windowCap, quota) : windowCap;
+              const days = perDay > 0 ? n / perDay : 0;
+              return (
+                <div className="mt-3 pt-2.5 border-t border-gray-100">
+                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">发送预估</span>
+                    <span>平均约 <b className="text-gray-800">{Math.round(p.ratePerHour)}</b> 封/小时</span>
+                    <span className="text-gray-300">·</span>
+                    <span>发信窗口 {p.winHours} 小时/天，日产能约 <b className="text-gray-800">{Math.round(perDay)}</b> 封{quota > 0 && quota < windowCap ? "（受日限额封顶）" : ""}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <span className="text-[11px] text-gray-400">预计发送</span>
+                    <InputNumber size="small" min={1} max={999999} controls={false} style={{ width: 92 }}
+                      value={estCount ?? (quota > 0 ? quota : 1000)}
+                      onChange={v => setEstCount(typeof v === "number" ? v : null)} />
+                    <span className="text-[11px] text-gray-500">封 · 分 <b className="text-gray-800">{p.groups}</b> 组</span>
+                    <span className="text-gray-300">·</span>
+                    <span className="text-[11px] text-gray-500">耗时约 <b className="text-gray-800">{fmtDur(p.activeSec)}</b></span>
+                    <span className="text-gray-300">·</span>
+                    <span className="text-[11px] text-gray-500">预计 <b className="text-gray-800">{fmtFinish(p.finish)}</b> 完成{days > 1.5 ? `（约 ${Math.ceil(days)} 天）` : ""}</span>
+                  </div>
+                  <div className="text-[10px] text-gray-300 mt-1.5">按组间暂停均值、每组约 2s 处理耗时、仅在发信窗口内推进推算；实际受网络与服务商响应影响</div>
+                </div>
+              );
+            })()}
           </SettingCard>
         </div>
 

@@ -23,6 +23,7 @@ interface SendStatus {
   batchId: string | null; totalItems: number; sentCount: number; failedCount: number;
   isPaused: boolean; isRunning: boolean;
   currentItem: QueueItem | null; delaySeconds: number; delayUntil: string | null;
+  delayReason?: "group" | "window" | null; // window=未到发送时段（显示提示而非倒计时）
   accountStats: Array<{ accountId: number; email: string; sent: number; failed: number; total: number; isCircuitOpen: boolean }>;
 }
 
@@ -53,7 +54,8 @@ export function QueuePage() {
   const { data: queueData } = useQuery({
     queryKey: ["send", "queue"],
     queryFn: () => window.api.invoke("send:getQueue") as Promise<{ success: boolean; data?: QueueItem[] }>,
-    refetchInterval: 3000,
+    // 队列项变化由 send:progress 事件 invalidate 驱动，轮询只作兜底 → 低频即可（原 3s 全量拉取是进页卡顿元凶之一）
+    refetchInterval: 15000,
   });
 
   const status = statusData?.success ? statusData.data : null;
@@ -123,6 +125,8 @@ export function QueuePage() {
             <span className="text-[11px] text-gray-500">
               {isPaused ? (
                 <><PauseCircleOutlined className="text-amber-500" /> 已暂停 — 等待恢复</>
+              ) : status.delayReason === "window" ? (
+                <><ClockCircleOutlined className="text-teal-500" /> 未到发送时段 — 到点后自动开始</>
               ) : delayLeft > 0 ? (
                 <><ClockCircleOutlined className="text-teal-500" /> 等待 {fmtDelay(delayLeft)} 后继续</>
               ) : (

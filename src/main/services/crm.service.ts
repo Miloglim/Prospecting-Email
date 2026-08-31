@@ -59,13 +59,23 @@ export function listPipeline(): Result<StageData[]> {
     .where(eq(contacts.status, "reached"))
     .all();
 
-  // 最近一次跟进：一次查询全量 interactions，按联系人取最新一条（不限类型，跟进取所有互动最新）
+  // 最近一次跟进：interactions ∪ inbox 邮件（读时合并，与详情时间线同口径）。
+  // 抄送/回复邮件只落 inbox_messages 不写 interactions —— 不合并的话收到抄送后"最近跟进"不更新
   const noteRows = db.select({
     contactId: interactions.contactId, bodyPreview: interactions.bodyPreview, createdAt: interactions.createdAt,
   }).from(interactions).orderBy(desc(interactions.createdAt)).all();
   const lastNote = new Map<number, { at: string; note: string }>();
   for (const n of noteRows) {
     if (!lastNote.has(n.contactId)) lastNote.set(n.contactId, { at: n.createdAt, note: n.bodyPreview || "" });
+  }
+  const mailRows = db.select({
+    contactId: inboxMessages.matchedContactId, subject: inboxMessages.subject, receivedAt: inboxMessages.receivedAt,
+  }).from(inboxMessages)
+    .where(dsql`${inboxMessages.matchedContactId} IS NOT NULL`)
+    .orderBy(desc(inboxMessages.receivedAt)).all();
+  const lastMail = new Map<number, { at: string; subject: string | null }>();
+  for (const m of mailRows) {
+    if (m.contactId != null && !lastMail.has(m.contactId)) lastMail.set(m.contactId, { at: m.receivedAt, subject: m.subject });
   }
 
   const grouped = new Map<string, PipelineContact[]>();
@@ -74,7 +84,13 @@ export function listPipeline(): Result<StageData[]> {
     const extra = parseJSON(r.extra || "{}");
     const reminder = extra.crmReminder as Record<string, string> | undefined;
     const stage: string = PIPE_KEYS.find(k => tags.includes(k)) || "reaching";
+    // 最近跟进 = interactions 与 inbox 邮件中较新的一方（邮件显示主题）
     const ln = lastNote.get(r.id);
+    const lm = lastMail.get(r.id);
+    let followAt: string | null = null;
+    let followNote: string | null = null;
+    if (ln && (!lm || ln.at >= lm.at)) { followAt = ln.at; followNote = ln.note; }
+    else if (lm) { followAt = lm.at; followNote = lm.subject ? `邮件: ${lm.subject}` : "邮件往来"; }
 
     const c: PipelineContact = {
       ...r, tags, extra,
@@ -83,8 +99,8 @@ export function listPipeline(): Result<StageData[]> {
       status: r.status || "",
       companyName: r.companyName || null,
       reminderAt: reminder?.nextFollowupAt || null,
-      lastFollowupAt: ln?.at || null,
-      lastFollowupNote: ln?.note || null,
+      lastFollowupAt: followAt,
+      lastFollowupNote: followNote,
       stageChangedAt: extra.stageChangedAt as string || null,
     };
 

@@ -38,8 +38,8 @@
   },
   "sendQuota": {
     "dailyLimit": 1500,
-    "firstSendAt": "2026-08-27T09:42:48.896Z",
-    "sentToday": 1
+    "firstSendAt": null,
+    "sentToday": 0
   },
   "general": {
     "closeAction": "quit"

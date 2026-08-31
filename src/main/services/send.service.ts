@@ -56,6 +56,8 @@ export interface SendStatus {
   /** 本次等待的结束时刻（ISO）。delaySeconds 是固定总时长，前端离开页面后本地倒计时会丢，
    *  必须用绝对时间戳才能算出真实剩余；无等待时为 null。 */
   delayUntil: string | null;
+  /** 等待原因：group=组间暂停（正常倒计时）；window=未到发送时段（前端应显示"未到发送时段"而非倒计时） */
+  delayReason: "group" | "window" | null;
   accountStats: Array<{
     accountId: number; email: string; sent: number; failed: number; total: number;
     remaining?: { hourly: number; daily: number };
@@ -75,7 +77,7 @@ const BUCKET_DEFS = [
 
 let state: SendStatus = {
   batchId: null, totalItems: 0, sentCount: 0, failedCount: 0,
-  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, accountStats: [],
+  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null, accountStats: [],
 };
 
 // ── 全局发信限额（持久化到 config，24h 计时不可丢失）──
@@ -626,6 +628,45 @@ export function rotateAccountId(index: number, accountIds: number[]): number {
   return accountIds[((index % accountIds.length) + accountIds.length) % accountIds.length]!;
 }
 
+/** 按公司交错打乱队列（保持账号轮换不变的前提下避免同公司连发）：
+ *  将组按 companyId 分桶，每轮从「非上一家公司」中选**剩余组数最多**的一家出一组
+ *  （平局随机打破）—— 贪心最大剩余优先可证明：只要某公司组数 ≤ 其余公司总和+1，
+ *  同公司两组必不相邻；超过时连发不可避免（数学下界），但间隔仍被最大化摊开。
+ *  随机性体现在平局打破与各组入桶顺序，原队列的公司排序被打散。纯函数，可单测。 */
+export function interleaveCompanies<T extends { companyId: number }>(items: T[]): T[] {
+  if (items.length <= 2) return [...items];
+  const buckets = new Map<number, T[]>();
+  for (const it of items) {
+    const k = it.companyId || 0;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k)!.push(it);
+  }
+  const out: T[] = [];
+  let lastKey: number | null = null;
+  while (out.length < items.length) {
+    // 候选 = 还有剩余且非上一家的公司；全空（只剩上一家）才允许连发
+    let cands = [...buckets.entries()].filter(([k, v]) => v.length > 0 && k !== lastKey);
+    if (cands.length === 0) cands = [...buckets.entries()].filter(([, v]) => v.length > 0);
+    if (cands.length === 0) break;
+    // 剩余最多者优先；平局随机
+    const maxN = Math.max(...cands.map(([, v]) => v.length));
+    const top = cands.filter(([, v]) => v.length === maxN);
+    const pick = top[Math.floor(Math.random() * top.length)]!;
+    out.push(pick[1].pop()!);
+    lastKey = pick[0];
+  }
+  return out;
+}
+
+/** 发送阶段推进：真实发送成功后 cold→f1→f2→f3→f4（f4 封顶不再进）。
+ *  空值/未知值视为 cold，推进到 f1。纯函数，可单测。 */
+export function nextStage(stage: string | null | undefined): string {
+  const ORDER = ["cold", "f1", "f2", "f3", "f4"];
+  const i = ORDER.indexOf((stage || "cold").toLowerCase());
+  const cur = i < 0 ? 0 : i; // 未知值视为 cold
+  return ORDER[Math.min(cur + 1, ORDER.length - 1)]!;
+}
+
 let queues: Map<number, SendItem[]> = new Map();
 let abortFlag = false; // 串行模型：单一批次中断标志（旧 per-account abortFlags map 已废弃）
 
@@ -645,18 +686,20 @@ async function startQueue(items: SendItem[], autoStart = true): Promise<Result<{
 
   const batchId = nanoid();
 
-  // ② 账号轮换：第 i 组 → 第 i%N 个活跃账号。串行调度按 seq 逐组发，相邻两组必是不同账号，
-  // 整批负载也天然均匀。旧"联系人亲和"（历史谁发就一直谁发）已按用户要求废弃。
+  // ② 账号轮换 + 公司交错：先按公司交错打乱（同公司相邻组被拉开，避免连续长时间对同一公司发信），
+  //    再按新顺序 i%N 轮换账号 — 轮换不变量（相邻组不同账号）与打乱无关，天然保持。
+  //    旧"联系人亲和"（历史谁发就一直谁发）已按用户要求废弃。
   queues = new Map();
   abortFlag = false;
   const activeIds = accounts.map(a => a.id);
+  const shuffled = interleaveCompanies(items);
   const ordered: Array<SendItem & { seq: number }> = [];
-  for (let i = 0; i < items.length; i++) {
-    ordered.push({ ...items[i]!, accountId: rotateAccountId(i, activeIds), seq: i });
+  for (let i = 0; i < shuffled.length; i++) {
+    ordered.push({ ...shuffled[i]!, accountId: rotateAccountId(i, activeIds), seq: i });
   }
   const rotLoad = new Map<number, number>();
   for (const it of ordered) rotLoad.set(it.accountId, (rotLoad.get(it.accountId) ?? 0) + 1);
-  Log.info("send.alloc", `轮换: ${activeIds.length} 账号 → ` + [...rotLoad.entries()].map(([id, n]) => `#${id}:${n}组`).join(" "));
+  Log.info("send.alloc", `轮换+公司交错: ${activeIds.length} 账号 → ` + [...rotLoad.entries()].map(([id, n]) => `#${id}:${n}组`).join(" "));
 
   // ③ 限额裁剪（按封数，整组保留）— 在写 state 之前，totalItems 才与实际发送数一致，进度条才能到 100%
   const { kept, keptCount, dropped } = trimByBudget(ordered, qCheck.remaining);
@@ -669,7 +712,7 @@ async function startQueue(items: SendItem[], autoStart = true): Promise<Result<{
   // ④ 写 state — 基于裁剪后的数据
   state = {
     batchId, totalItems: kept.length, sentCount: 0, failedCount: 0,
-    isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0, delayUntil: null,
+    isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
     accountStats: accounts.map(a => {
       const total = queues.get(a.id)?.length || 0;
       return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
@@ -857,12 +900,14 @@ async function runBatchLoop(): Promise<void> {
       const waitMs = 60 * 1000; // 每分钟检查一次
       state.delaySeconds = Math.floor(waitMs / 1000);
       state.delayUntil = new Date(Date.now() + waitMs).toISOString();
+      state.delayReason = "window"; // 前端据此显示"未到发送时段"而非 60 秒倒计时
       push(EVENTS.SEND_PROGRESS, state);
       await sleep(waitMs);
       if (loopGen !== myGen) return; // 已被新批次接管
       if (!state.isRunning) break;
       state.delaySeconds = 0;
       state.delayUntil = null;
+      state.delayReason = null;
       i--; // 不消耗队列项，继续等
       continue;
     }
@@ -886,6 +931,7 @@ async function runBatchLoop(): Promise<void> {
         const messageId = r.data?.messageId || null;
         item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; failsByAccount.set(accountId, 0);
         recordQuotaSend(item.recipients.length);
+        let stageAdvanced = 0; // 本组阶段推进人数（日志可观测）
         try { getDb().update(sendQueue).set({ status: "sent", sentAt: item.sentAt }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
         const now = new Date().toISOString();
         for (const rc of item.recipients) {
@@ -900,12 +946,24 @@ async function runBatchLoop(): Promise<void> {
               isRead: 1, receivedAt: now,
             }).run();
             await writeBodyForLastInsert(body); // 正文落盘文件
+            // v4.4: 发送阶段推进 — SMTP 确认成功后才推进（cold→f1→…→f4 封顶），失败/阻隔不动 stage
+            try {
+              const cRow = getDb().select({ stage: contacts.stage }).from(contacts).where(eq(contacts.id, rc.contactId)).get();
+              if (cRow) {
+                const ns = nextStage(cRow.stage);
+                if (ns !== (cRow.stage || "cold")) {
+                  getDb().update(contacts).set({ stage: ns, updatedAt: now }).where(eq(contacts.id, rc.contactId)).run();
+                  stageAdvanced++;
+                }
+              }
+            } catch { /* 推进失败不影响发送记录 */ }
             // v4.0: 发信不再自动标已触达 — reached 只能用户手动设置/改标签触发
           } catch (err) {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
           }
         }
         // 不每封写盘（64MB 库写盘 ~74ms，大量组会卡顿），依赖 main 进程 30s 自动保存
+        if (stageAdvanced > 0) Log.info("send.stage", `${item.companyName}: ${stageAdvanced}/${item.recipients.length} 人阶段已推进`);
         const s = state.accountStats.find(x => x.accountId === accountId);
         if (s) s.sent++;
       } else {
@@ -929,11 +987,13 @@ async function runBatchLoop(): Promise<void> {
       const ms = randBetween(sched.groupDelayMinSeconds, sched.groupDelayMaxSeconds);
       state.delaySeconds = Math.floor(ms / 1000);
       state.delayUntil = new Date(Date.now() + ms).toISOString();
+      state.delayReason = "group";
       push(EVENTS.SEND_PROGRESS, state);
       const ok = await sleep(ms);
       if (loopGen !== myGen) return; // 已被新批次接管：delayUntil 归新循环，别去清它
       state.delaySeconds = 0;
       state.delayUntil = null;
+      state.delayReason = null;
       if (!ok) break;
     }
   }
@@ -950,7 +1010,7 @@ async function runBatchLoop(): Promise<void> {
     Log.error("send.loop", err instanceof Error ? (err.stack || err.message) : String(err));
     if (loopGen === myGen) {
       state.isRunning = false; state.isPaused = false;
-      state.currentItem = null; state.delaySeconds = 0; state.delayUntil = null;
+      state.currentItem = null; state.delaySeconds = 0; state.delayUntil = null; state.delayReason = null;
       push(EVENTS.SEND_PROGRESS, state);
     }
   }
@@ -984,15 +1044,25 @@ export function previewTemplate(template: SendTemplate): Result<{ subject: strin
 
 export function getSendStatus(): Result<SendStatus> { return okResult({ ...state }); }
 
-/** 返回所有队列项，内存优先 → DB 兜底（重启后恢复） */
-export function getQueueItems(): Result<Array<SendItem & { accountEmail?: string }>> {
+/** 返回所有队列项（展示用精简投影），内存优先 → DB 兜底（重启后恢复）。
+ *  刻意剔除 tplBody/contactVars：正文模板每组数 KB，队列页不显示它 ——
+ *  123 组全量每 3s 走一遍 IPC 会让队列页进卡、滚动掉帧（发送用的正文引擎内部自持，不走这里）。 */
+export function getQueueItems(): Result<Array<Omit<SendItem, "tplBody" | "contactVars"> & { accountEmail?: string }>> {
   // 内存优先
-  let items: Array<SendItem & { accountEmail?: string }> = [];
+  let items: Array<Omit<SendItem, "tplBody" | "contactVars"> & { accountEmail?: string }> = [];
   const accounts = getDb().select().from(emailAccounts).all();
   const emailMap = new Map(accounts.map(a => [a.id, a.email]));
   for (const [aid, q] of queues) {
     for (const item of q) {
-      items.push({ ...item, accountEmail: emailMap.get(aid) || `#${aid}` });
+      items.push({
+        id: item.id, companyName: item.companyName, companyId: item.companyId,
+        recipients: item.recipients, accountId: item.accountId,
+        subject: item.subject, tplName: item.tplName,
+        country: item.country, language: item.language,
+        status: item.status, error: item.error, sentAt: item.sentAt,
+        seq: item.seq, cc: item.cc,
+        accountEmail: emailMap.get(aid) || `#${aid}`,
+      });
     }
   }
   // 按原始队列顺序排序（跨账号交错，与发送顺序一致）
@@ -1016,8 +1086,6 @@ export function getQueueItems(): Result<Array<SendItem & { accountEmail?: string
       recipients: (() => { try { return JSON.parse(r.recipients); } catch { return []; } })(),
       accountId: r.accountId, accountEmail: r.accountEmail || emailMap.get(r.accountId) || "",
       subject: r.subject || "",
-      tplBody: r.tplBody || "",
-      contactVars: (() => { try { return JSON.parse(r.contactVars || "{}"); } catch { return {}; } })(),
       tplName: r.tplName || undefined,
       country: r.country || undefined, language: r.language || undefined,
       status: r.status === "sending" ? "pending" : (r.status as SendItem["status"]),
@@ -1051,7 +1119,6 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
     if (!qCheck.ok) return failResult(qCheck.reason || "已达全局发信限额");
 
     const batchId = rows[0]!.batchId || nanoid();
-    const activeIds = new Set(accounts.map(a => a.id));
 
     const items: SendItem[] = [];
     for (const r of rows) {
@@ -1069,22 +1136,20 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
       });
     }
 
-    // 停用账号的组重新分配到活跃账号 — 否则永远 pending，批次卡死（历史亲和已失效，均分给活着的账号）
-    const load = new Map<number, number>(accounts.map(a => [a.id, 0]));
-    const cap = Math.ceil(items.length / accounts.length);
-    for (const it of items) {
-      if (!activeIds.has(it.accountId)) {
-        it.accountId = pickAccountId(undefined, load, cap);
-      }
-      load.set(it.accountId, (load.get(it.accountId) ?? 0) + 1);
-    }
+    // 排序重建：落库是按账号分桶写入的，直接按落库顺序恢复会退化成"账号1连发完→账号2"。
+    // 与 startQueue 同一套纪律：公司交错打乱 + 按新顺序轮换账号（停用账号的组在轮换中自然改派）。
+    const shuffled = interleaveCompanies(items);
+    const rotIds = accounts.map(a => a.id);
+    const rebuilt: Array<SendItem & { seq: number }> = shuffled.map((it, i) => ({
+      ...it, accountId: rotIds.length > 0 ? rotateAccountId(i, rotIds) : it.accountId, seq: i,
+    }));
 
     // 限额裁剪（按封数，整组保留，createdAt 顺序）
-    const { kept, keptCount, dropped } = trimByBudget(items, qCheck.remaining);
+    const { kept, keptCount, dropped } = trimByBudget(rebuilt, qCheck.remaining);
     if (dropped > 0) {
-      Log.warn("send.quota", `恢复批次裁剪: ${items.length} 组 → ${kept.length} 组`);
+      Log.warn("send.quota", `恢复批次裁剪: ${rebuilt.length} 组 → ${kept.length} 组`);
       const keptIds = new Set(kept.map(k => k.id));
-      for (const it of items) {
+      for (const it of rebuilt) {
         if (!keptIds.has(it.id)) {
           it.status = "failed"; it.error = "已达今日限额，本组未恢复";
           try { getDb().update(sendQueue).set({ status: "failed", error: it.error }).where(eq(sendQueue.id, it.id)).run(); } catch { /* */ }
@@ -1107,7 +1172,7 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
     state = {
       batchId, totalItems: totalItems + sentCount + failedCount,
       sentCount, failedCount,
-      isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0, delayUntil: null,
+      isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
       accountStats: accounts.map(a => {
         const total = queues.get(a.id)?.length || 0;
         return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
