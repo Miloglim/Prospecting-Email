@@ -232,6 +232,12 @@ export function AssistantPage() {
               ai: {
                 placement: "start",
                 avatar: { icon: <RobotOutlined />, style: { background: "#e6fffb", color: "#00897b" } },
+                // 等待首包期间（端点延迟可达数秒）用骨架屏代替默认小圆点，观感与会话切换一致
+                loadingRender: () => (
+                  <div style={{ minWidth: 240, padding: "4px 0" }}>
+                    <Skeleton active title={false} paragraph={{ rows: 2, width: ["82%", "56%"] }} />
+                  </div>
+                ),
                 messageRender: (content: string) => (
                   <div className="text-[13px] leading-relaxed">
                     <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
