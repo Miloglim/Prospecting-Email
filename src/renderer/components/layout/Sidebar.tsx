@@ -59,13 +59,14 @@ function groupOf(iso: string): string {
 }
 
 const convRowStyle = (active: boolean): React.CSSProperties => ({
-  padding: "8px 6px 8px 12px",
+  padding: "4px 4px 4px 10px",
   cursor: "pointer",
-  fontSize: 13,
+  fontSize: 12,
+  lineHeight: "18px",
   display: "flex",
   alignItems: "center",
-  gap: 4,
-  borderRadius: 6,
+  gap: 2,
+  borderRadius: 5,
   color: active ? "#fff" : "rgba(255,255,255,0.72)",
   background: active ? "rgba(255,255,255,0.12)" : "transparent",
   transition: "background 0.12s",
@@ -117,16 +118,16 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
 
   if (collapsed) {
     return (
-      <div style={{ padding: "4px 0 8px", textAlign: "center", flexShrink: 0 }}>
+      <div style={{ padding: "2px 0 6px", textAlign: "center", flexShrink: 0 }}>
         <button
           title="新会话"
           onClick={() => gotoConversation(undefined)}
           style={{
-            width: 28, height: 28, borderRadius: 6, border: "1px solid rgba(255,255,255,0.2)",
+            width: 26, height: 26, borderRadius: 5, border: "1px solid rgba(255,255,255,0.2)",
             background: "transparent", color: "#00bfa5", cursor: "pointer",
           }}
         >
-          <PlusOutlined style={{ fontSize: 12 }} />
+          <PlusOutlined style={{ fontSize: 11 }} />
         </button>
       </div>
     );
@@ -143,31 +144,31 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      <div style={{ padding: "6px 12px 8px", flexShrink: 0 }}>
+      <div style={{ padding: "3px 10px 5px", flexShrink: 0 }}>
         <button
           onClick={() => gotoConversation(undefined)}
           style={{
-            width: "100%", padding: "7px 0", borderRadius: 6,
+            width: "100%", padding: "4px 0", borderRadius: 5,
             border: "1px solid rgba(255,255,255,0.22)", background: "transparent",
-            color: "#fff", fontSize: 13, cursor: "pointer", display: "flex",
-            alignItems: "center", justifyContent: "center", gap: 6,
+            color: "#fff", fontSize: 12, cursor: "pointer", display: "flex",
+            alignItems: "center", justifyContent: "center", gap: 5,
           }}
         >
-          <PlusOutlined style={{ fontSize: 11, color: "#00bfa5" }} /> 新会话
+          <PlusOutlined style={{ fontSize: 10, color: "#00bfa5" }} /> 新会话
         </button>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 8px" }}>
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 6px" }}>
         {groups.length === 0 && (
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", textAlign: "center", paddingTop: 16 }}>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", textAlign: "center", paddingTop: 12 }}>
             还没有会话，开始第一段对话吧
           </div>
         )}
         {groups.map(g => (
           <div key={g.name}>
             <div style={{
-              fontSize: 10, color: "rgba(255,255,255,0.35)", fontWeight: 600,
-              padding: "10px 6px 4px", letterSpacing: 0.5,
+              fontSize: 9, color: "rgba(255,255,255,0.35)", fontWeight: 600,
+              padding: "8px 6px 2px", letterSpacing: 0.5,
             }}>{g.name}</div>
             {g.items.map(c => (
               <div
@@ -197,12 +198,12 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
                   <button
                     onClick={e => e.stopPropagation()}
                     style={{
-                      width: 20, height: 20, border: "none", background: "transparent",
+                      width: 18, height: 18, border: "none", background: "transparent",
                       color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0,
                       display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 4,
                     }}
                   >
-                    <MoreOutlined style={{ fontSize: 13 }} />
+                    <MoreOutlined style={{ fontSize: 12 }} />
                   </button>
                 </Dropdown>
               </div>
@@ -345,7 +346,7 @@ export function Sidebar() {
 
         {onAssistant && (
           <>
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "10px 12px 2px", flexShrink: 0 }} />
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "8px 12px 0", flexShrink: 0 }} />
             <ConversationsPanel collapsed={sidebarCollapsed} />
           </>
         )}

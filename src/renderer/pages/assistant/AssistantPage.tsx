@@ -162,7 +162,7 @@ export function AssistantPage() {
         <Alert
           type="warning" showIcon closable className="mb-2"
           message="模型接口未配置，当前为 Mock 流"
-          description="在项目根目录 .env 配置 AGENT_API_BASE_URL / AGENT_API_KEY / AGENT_MODEL（OpenAI 兼容端点）后重启即可切换真实模型。"
+          description="在项目根目录 .env 配置 AGENT_API_BASE_URL / AGENT_API_KEY / AGENT_MODEL（OpenAI 兼容端点）。已配置却仍显示 Mock？.env 只在应用启动时读取 — 请完全退出并重启应用（开发模式下即重启 npm run dev）。"
         />
       )}
 

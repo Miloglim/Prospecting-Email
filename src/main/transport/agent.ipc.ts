@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from "electron";
 import { IPC } from "../contract";
 import * as Agent from "../services/agent.service";
 import { failResult } from "../errors";
+import { Log } from "../logger";
 
 /** 渲染进程事件推送器 — 与 send.ipc/inbox.ipc 同模式，service 层不接触 electron */
 function makePush() {
@@ -12,6 +13,13 @@ function makePush() {
 
 export function registerAgentIPC() {
   const push = makePush();
+
+  // 启动时记录 provider 模式 — 排查「还在 Mock」类问题的第一现场
+  const st = Agent.status();
+  if (st.success) {
+    const d = st.data as { mode: string; model: string };
+    Log.info("agent.init", `provider=${d.mode} model=${d.mode === "mock" ? "-" : d.model}${d.mode === "mock" ? "（.env 未配置 AGENT_API_*，或改动后未重启应用）" : ""}`);
+  }
 
   // 发起一轮对话（立即返回 ID，正文走 agent:chunk 事件流）
   ipcMain.handle(IPC.AGENT.CHAT, (_e, input: Agent.ChatInput) => Agent.chat(push, input));
