@@ -1,6 +1,6 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Tooltip, Modal } from "antd";
-import { PlusOutlined, SearchOutlined, DeleteOutlined, SettingOutlined, ImportOutlined, PartitionOutlined, MailOutlined } from "@ant-design/icons";
+import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Tooltip, Modal, Dropdown } from "antd";
+import { PlusOutlined, SearchOutlined, DeleteOutlined, SettingOutlined, ImportOutlined, PartitionOutlined, MailOutlined, ExportOutlined } from "@ant-design/icons";
 import type { TableColumnsType } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useContacts, useUpsertContact, useDeleteContact, type Contact } from "../../hooks/useContacts";
@@ -136,6 +136,35 @@ export function ContactList() {
 
   const contacts = data?.success ? (data.data?.items || []) : [];
   const total = data?.success ? (data.data?.total || 0) : 0;
+
+  // ── 导出（原独立导出页功能并入：联系人 CSV / 跟进记录 CSV）──
+  const [exporting, setExporting] = useState(false);
+  const downloadCsv = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const handleExport = async (kind: "contacts" | "notes") => {
+    setExporting(true);
+    try {
+      const result = kind === "contacts"
+        ? await window.api.invoke("export:contactsToExcel", { search })
+        : await window.api.invoke("export:notesToCsv");
+      const r = result as { success: boolean; data?: string; error?: string };
+      if (!r?.success) { message.error(r?.error || "导出失败"); return; }
+      const name = kind === "contacts" ? "contacts" : "跟进记录";
+      downloadCsv(r.data || "", `${name}_${new Date().toISOString().slice(0, 10)}.csv`);
+      message.success("导出完成");
+    } catch {
+      message.error("导出失败");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // 从收件箱跳转来的预填/详情（读 hash 路由的 search 部分）
   useEffect(() => {
@@ -273,6 +302,15 @@ export function ContactList() {
           <Popover trigger="click" placement="bottomRight" content={colsPanel}>
             <Button size="small" icon={<SettingOutlined />}>列设置</Button>
           </Popover>
+          <Dropdown menu={{
+            items: [
+              { key: "contacts", label: "导出联系人 CSV" },
+              { key: "notes", label: "导出跟进记录 CSV" },
+            ],
+            onClick: (e) => handleExport(e.key as "contacts" | "notes"),
+          }}>
+            <Button size="small" icon={<ExportOutlined />} loading={exporting}>导出</Button>
+          </Dropdown>
           <Button size="small" icon={<ImportOutlined />}
             onClick={() => setImportOpen(true)}>导入</Button>
           <Button type="primary" size="small" icon={<PlusOutlined />}
