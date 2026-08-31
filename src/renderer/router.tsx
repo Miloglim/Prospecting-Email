@@ -4,11 +4,9 @@ import { Dashboard } from "./pages/dashboard/Dashboard";
 import { ContactList } from "./pages/contacts/ContactList";
 import { CrmPipeline } from "./pages/crm/CrmPipeline";
 import { InboxList } from "./pages/inbox/InboxList";
-import { CampaignList } from "./pages/campaigns/CampaignList";
+import { SendCenter } from "./pages/campaigns/SendCenter";
 import { TemplateList } from "./pages/templates/TemplateList";
-import { HistoryPage } from "./pages/history/HistoryPage";
 import { CompanyPage } from "./pages/companies/CompanyPage";
-import { QueuePage } from "./pages/queue/QueuePage";
 import { SettingsPage } from "./pages/settings/SettingsPage";
 
 const rootRoute = createRootRoute({
@@ -42,25 +40,13 @@ const inboxRoute = createRoute({
 const campaignsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/campaigns",
-  component: CampaignList,
+  component: SendCenter,
 });
 
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/templates",
   component: TemplateList,
-});
-
-const historyRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/history",
-  component: HistoryPage,
-});
-
-const queueRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/queue",
-  component: QueuePage,
 });
 
 const companiesRoute = createRoute({
@@ -82,8 +68,6 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   campaignsRoute,
   templatesRoute,
-  historyRoute,
-  queueRoute,
   companiesRoute,
   settingsRoute,
 ]);

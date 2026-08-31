@@ -2,10 +2,9 @@ import { useState, useEffect } from "react";
 import { Button, Card, Progress, Tag, Popconfirm, Space, Empty, message } from "antd";
 import {
   PauseCircleOutlined, PlayCircleOutlined, StopOutlined,
-  ArrowLeftOutlined, ClockCircleOutlined, SendOutlined, LoadingOutlined,
+  ClockCircleOutlined, LoadingOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 
 interface QueueItem {
   id: string; companyName: string; companyId: number;
@@ -43,7 +42,6 @@ function fmtDelay(s: number): string {
 
 export function QueuePage() {
   const qc = useQueryClient();
-  const navigate = useNavigate();
 
   const { data: statusData } = useQuery({
     queryKey: ["send", "status"],
@@ -110,8 +108,6 @@ export function QueuePage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Button size="small" icon={<ArrowLeftOutlined />}
-            onClick={() => navigate({ to: "/campaigns" })}>返回发信</Button>
           <h2 className="text-lg font-bold text-gray-800 m-0">发送队列</h2>
           {status && (
             <span className="text-xs text-gray-400">

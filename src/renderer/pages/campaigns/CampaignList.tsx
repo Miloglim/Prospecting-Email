@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal, Steps } from "antd";
-import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, ReloadOutlined, UnorderedListOutlined, LeftOutlined } from "@ant-design/icons";
-import { useNavigate } from "@tanstack/react-router";
+import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, UnorderedListOutlined, LeftOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
 import { COUNTRIES } from "../../components/ContactDetail";
@@ -31,8 +30,8 @@ interface SendStatus {
   accountStats: Array<{ accountId: number; email: string; sent: number; failed: number; isCircuitOpen: boolean }>;
 }
 
-export function CampaignList() {
-  const [step, setStep] = useState(0);            // 0=选人表格 1=发送模式（第3步队列页由路由跳转承载）
+export function CampaignList({ goToQueue }: { goToQueue: () => void }) {
+  const [step, setStep] = useState(0);            // 0=选人表格 1=发送模式（第3步=发送中心内切到队列 tab）
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sendMode, setSendMode] = useState<string>("mine");
   const [instantSubject, setInstantSubject] = useState("");
@@ -44,7 +43,6 @@ export function CampaignList() {
   // 抄送地址在本机记住 —— 通常固定抄给同一个同事，每次重填很烦
   const [dynCc, setDynCc] = useState(() => localStorage.getItem("dyn-cc") || "");
   const qc = useQueryClient();
-  const navigate = useNavigate();
 
   // 动态更新：客户跟进（CRM reached）联系人
   const { data: pipelineData } = useQuery({
@@ -121,7 +119,7 @@ export function CampaignList() {
       d && d.dropped > 0
         ? message.warning(`已达今日限额：实际入队 ${d.queuedCount} 人（${d.dropped} 组被裁剪），请在队列页点「开始发送」`)
         : message.success(`已加入队列 ${ids.length} 人，请在队列页点「开始发送」`);
-      navigate({ to: "/queue" });
+      goToQueue();
     } else {
       message.error(r?.error || "入队失败");
     }
@@ -173,7 +171,7 @@ export function CampaignList() {
         d && d.dropped > 0
           ? message.warning(`已达今日限额：实际入队 ${d.queuedCount} 人（${d.dropped} 组被裁剪），请在队列页点「开始发送」`)
           : message.success(`已加入队列 ${selectedCount} 人，请在队列页点「开始发送」`);
-        navigate({ to: "/queue" });
+        goToQueue();
       } else {
         message.error(rr.error || "入队失败");
       }
@@ -182,11 +180,11 @@ export function CampaignList() {
 
   return (
     <div className="space-y-4">
-      {/* ── 页头 — 常驻队列入口（原「查看队列」只在发送中显示，平时没有入口） ── */}
+      {/* ── 页头 — 常驻队列入口（发送中心内切 tab，不再跳路由） ── */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-gray-800 m-0">邮件发送</h2>
         <Button size="small" icon={<UnorderedListOutlined />}
-          onClick={() => navigate({ to: "/queue" })}>
+          onClick={goToQueue}>
           发送队列
         </Button>
       </div>
@@ -211,7 +209,7 @@ export function CampaignList() {
               }}>
                 <Button size="small" danger icon={<StopOutlined />}>取消</Button>
               </Popconfirm>
-              <Button size="small" type="link" onClick={() => navigate({ to: "/queue" })}>查看队列 →</Button>
+              <Button size="small" type="link" onClick={goToQueue}>查看队列 →</Button>
             </Space>
           </div>
         </Card>
