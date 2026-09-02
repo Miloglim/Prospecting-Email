@@ -6,7 +6,8 @@ import { interactions } from "../db/schema/interactions";
 import { eq, desc, sql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
-import { saveDatabase, getSqlJsDb } from "../db";
+import { EVENTS } from "../events";
+import { saveDatabase, getRawDb } from "../db";
 import { updateContactStatus, markAsBounced, deleteContactCascade } from "./contact.service";
 import * as path from "path";
 import * as fs from "fs";
@@ -249,20 +250,37 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
 
   const allNew: InboxMessageRow[] = [];
 
-  // ponytail: 并行抓取所有账号
+  // ponytail: 并行抓取所有账号；单账号异常也收敛为失败结果（保证健康度能对上账号）
   const results = await Promise.allSettled(
-    accounts.map(acc => imapFetchFn!(acc.id).then(
-      r => ({ account: acc, result: r }),
-    ))
+    accounts.map(async acc => {
+      try {
+        return { account: acc, result: await imapFetchFn!(acc.id) };
+      } catch (err: unknown) {
+        return { account: acc, result: failResult(err instanceof Error ? err.message : String(err)) };
+      }
+    })
   );
+
+  // 收信健康度：逐账号落库（fetch_fail_count / last_fetch_error），本轮结束统一推送
+  const health: Array<{ accountId: number; email: string; ok: boolean; error?: string }> = [];
+  const now = new Date().toISOString();
+  const db = getDb();
 
   for (const r of results) {
     if (r.status === "rejected") { Log.warn("inbox.fetch", "账号抓取异常"); continue; }
     const { account, result } = r.value;
     if (!result.success) {
+      db.update(emailAccounts)
+        .set({ fetchFailCount: sql`${emailAccounts.fetchFailCount} + 1`, lastFetchError: (result.error || "抓取失败").slice(0, 300), lastFetchAt: now })
+        .where(eq(emailAccounts.id, account.id)).run();
+      health.push({ accountId: account.id, email: account.email, ok: false, error: result.error });
       Log.warn("inbox.fetch", `账号 ${account.email} 抓取失败: ${result.error}`);
       continue;
     }
+    db.update(emailAccounts)
+      .set({ fetchFailCount: 0, lastFetchError: null, lastFetchAt: now })
+      .where(eq(emailAccounts.id, account.id)).run();
+    health.push({ accountId: account.id, email: account.email, ok: true });
 
     // 去重 UID
     const newItems = result.data.filter(m => !SEEN_UIDS.has(m.messageId || ""));
@@ -298,6 +316,12 @@ export async function fetchInbox(accountId?: number): Promise<Result<InboxMessag
     }
   }
 
+  // 收信健康度落库并推送（前端设置页状态列 / 账号列表据此点亮异常）
+  if (health.length > 0) {
+    saveDatabase();
+    try { pushFn?.(EVENTS.INBOX_HEALTH, health); } catch { /* 静默 */ }
+  }
+
   // 推送新邮件通知（含详细分类数目）
   if (allNew.length > 0 && pushFn) {
     try {
@@ -331,7 +355,7 @@ export function cleanupInbox(): void {
 
   // 退信去重：同 subject+发件人+时间 的重复退信只保留最小 id（退信服务批量发的重复退信）
   try {
-    getSqlJsDb().run(`
+    const deleted = getRawDb().prepare(`
       DELETE FROM inbox_messages
       WHERE classification = 'bounce'
         AND id NOT IN (
@@ -339,8 +363,7 @@ export function cleanupInbox(): void {
           WHERE classification = 'bounce'
           GROUP BY subject, from_email, received_at
         )
-    `);
-    const deleted = getSqlJsDb().getRowsModified();
+    `).run().changes;
     if (deleted > 0) {
       Log.info("inbox.cleanup", `退信去重删除 ${deleted} 封`);
       saveDatabase();
@@ -349,7 +372,7 @@ export function cleanupInbox(): void {
 
   // messageId 去重：相同 messageId 多行只保留最小 id（detectSent 并发导致的重复）
   try {
-    getSqlJsDb().run(`
+    const deleted2 = getRawDb().prepare(`
       DELETE FROM inbox_messages
       WHERE message_id IS NOT NULL AND message_id != ''
         AND id NOT IN (
@@ -357,8 +380,7 @@ export function cleanupInbox(): void {
           WHERE message_id IS NOT NULL AND message_id != ''
           GROUP BY message_id
         )
-    `);
-    const deleted2 = getSqlJsDb().getRowsModified();
+    `).run().changes;
     if (deleted2 > 0) {
       Log.info("inbox.cleanup", `messageId 去重删除 ${deleted2} 封`);
       saveDatabase();
@@ -476,8 +498,8 @@ export async function writeBodyFile(id: number, html: string): Promise<void> {
 /** insert 后立即调用：把正文写入刚插入的邮件（用 last_insert_rowid 拿自增 id） */
 export async function writeBodyForLastInsert(html: string): Promise<void> {
   if (!html) return;
-  const res = getSqlJsDb().exec("SELECT last_insert_rowid() as id");
-  const id = res[0]?.values?.[0]?.[0];
+  const row = getRawDb().prepare("SELECT last_insert_rowid() AS id").get() as { id: number } | undefined;
+  const id = row?.id;
   if (typeof id === "number" && id > 0) await writeBodyFile(id, html);
 }
 
@@ -599,19 +621,20 @@ export async function backfillBounceMatches(): Promise<number> {
 
 /** 一次性迁移：存量 raw_source 正文导出到文件 + 删除列（幂等，启动时调用） */
 export async function migrateBodiesOut(): Promise<void> {
-  const js = getSqlJsDb();
-  const cols = (js.exec("PRAGMA table_info(inbox_messages)")[0]?.values || []).map(r => String(r[1]));
+  const raw = getRawDb();
+  const cols = (raw.prepare("PRAGMA table_info(inbox_messages)").all() as Array<{ name: string }>).map(r => r.name);
   if (!cols.includes("raw_source")) return; // 已迁移过
-  const rows = js.exec("SELECT id, raw_source FROM inbox_messages WHERE raw_source IS NOT NULL AND raw_source != ''")[0]?.values || [];
+  const rows = raw.prepare("SELECT id, raw_source FROM inbox_messages WHERE raw_source IS NOT NULL AND raw_source != ''").all() as
+    Array<{ id: number; raw_source: string | null }>;
   let n = 0;
   for (const r of rows) {
-    const id = Number(r[0]);
-    const html = String(r[1] || "");
+    const id = Number(r.id);
+    const html = String(r.raw_source || "");
     if (!id || !html) continue;
     try { await writeBodyFile(id, html); n++; }
     catch (err) { Log.error("inbox.migrate", `正文导出失败 id=${id}`, err instanceof Error ? err.stack : undefined); }
   }
-  js.run("ALTER TABLE inbox_messages DROP COLUMN raw_source;");
+  raw.exec("ALTER TABLE inbox_messages DROP COLUMN raw_source;");
   saveDatabase();
   Log.info("inbox.migrate", `正文出库 ${n} 封 → ${BODY_DIR}，库已瘦身`);
 }
@@ -718,10 +741,19 @@ export function deleteAllBounce(): Result<number> {
 export function startAutoFetch(intervalMs = 5 * 60 * 1000) {
   if (fetchInterval) clearInterval(fetchInterval);
   Log.info("inbox.auto", `每 ${intervalMs / 1000}s 自动抓取`);
+  // P1-4: 轮询防重入 — 上一轮没跑完（如超大积压/慢连接）时跳过本轮，避免并发抓取同账号
+  let autoRunning = false;
   fetchInterval = setInterval(() => {
-    fetchInbox().catch(err => {
-      Log.error("inbox.auto", "自动抓取失败", err instanceof Error ? err.stack : undefined);
-    });
+    if (autoRunning) {
+      Log.warn("inbox.auto", "上一轮抓取未结束，本轮跳过");
+      return;
+    }
+    autoRunning = true;
+    fetchInbox()
+      .catch(err => {
+        Log.error("inbox.auto", "自动抓取失败", err instanceof Error ? err.stack : undefined);
+      })
+      .finally(() => { autoRunning = false; });
   }, intervalMs);
 }
 

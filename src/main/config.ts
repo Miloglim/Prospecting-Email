@@ -1,5 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
+import { z } from "zod";
+import { Log } from "./logger";
 
 // ponytail: process.resourcesPath 是 Electron 扩展，Node 类型不含它
 
@@ -104,18 +106,52 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   },
 };
 
+// P1-5: 引擎关键数值的 zod 校验 — 垃圾值（类型错/越界）整体回默认，不进发送引擎
+const ScheduleSchema = z.object({
+  timeWindowEnabled: z.boolean(),
+  startHour: z.number().int().min(0).max(23),
+  endHour: z.number().int().min(0).max(23),
+  groupSize: z.number().int().min(1).max(500),
+  groupDelayMinSeconds: z.number().int().min(0).max(86_400),
+  groupDelayMaxSeconds: z.number().int().min(0).max(86_400),
+}).partial();
+
+const TestSchema = z.object({
+  email: z.string(),
+  company: z.string(),
+  enabled: z.boolean(),
+  dryRun: z.boolean(),
+}).partial();
+
+function defaults(): RuntimeConfig {
+  return { ...DEFAULT_CONFIG, schedule: { ...DEFAULT_SCHEDULE }, test: { ...DEFAULT_CONFIG.test } };
+}
+
 export function loadConfig(): RuntimeConfig {
+  // P1-5: 首启落盘默认配置（用户可见、可手改），不再只存在于内存
   if (!fs.existsSync(CONFIG_PATH)) {
-    // ponytail: 首次运行返回默认配置，不抛异常
-    return { ...DEFAULT_CONFIG, schedule: { ...DEFAULT_SCHEDULE }, test: { ...DEFAULT_CONFIG.test } };
+    const def = defaults();
+    try { saveConfig(def); } catch { /* 只读环境忽略 */ }
+    return def;
   }
-  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) as Partial<RuntimeConfig>;
-  // 兼容旧 config.json：缺失的新字段补默认值，避免 UI 读到 undefined
+  let raw: Partial<RuntimeConfig>;
+  try {
+    raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) as Partial<RuntimeConfig>;
+  } catch (err) {
+    // P1-5: 损坏配置 → 备份后回默认（原行为是抛错，靠每个调用方各自兜底）
+    try { fs.renameSync(CONFIG_PATH, `${CONFIG_PATH}.corrupt.bak`); } catch { /* 重命名失败也继续 */ }
+    Log.error("config", `config.json 解析失败，已备份并回退默认配置: ${err instanceof Error ? err.message : String(err)}`);
+    const def = defaults();
+    try { saveConfig(def); } catch { /* 只读环境忽略 */ }
+    return def;
+  }
+  const sched = ScheduleSchema.safeParse(raw.schedule);
+  const test = TestSchema.safeParse(raw.test);
   return {
     ...DEFAULT_CONFIG,
     ...raw,
-    schedule: { ...DEFAULT_SCHEDULE, ...(raw.schedule || {}) },
-    test: { ...DEFAULT_CONFIG.test, ...(raw.test || {}) },
+    schedule: sched.success ? { ...DEFAULT_SCHEDULE, ...sched.data } : DEFAULT_SCHEDULE,
+    test: test.success ? { ...DEFAULT_CONFIG.test, ...test.data } : DEFAULT_CONFIG.test,
     crm: { ...DEFAULT_CONFIG.crm, ...(raw.crm || {}), followupDays: { ...DEFAULT_CONFIG.crm.followupDays, ...(raw.crm?.followupDays || {}) } },
   };
 }

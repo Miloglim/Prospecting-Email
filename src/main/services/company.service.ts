@@ -1,4 +1,4 @@
-import { getDb, getSqlJsDb } from "../db";
+import { getDb, getRawDb } from "../db";
 import { companies, type CompanyRow, type InsertCompanyRow } from "../db/schema/companies";
 import { contacts } from "../db/schema/contacts";
 import { interactions } from "../db/schema/interactions";
@@ -85,13 +85,11 @@ export function listCompaniesWithCounts(search?: string, page = 1, pageSize = 10
   const offset = (safePage - 1) * safeSize;
 
   // 用 SQL 子查询一次性拿到每个公司的统计，避免 O(n) 次 DB 查询
-  const sdb = getSqlJsDb();
+  const sdb = getRawDb();
   const searchTerm = search?.trim() ? `%${search.trim()}%` : null;
 
-  const dataParams = (searchTerm
-    ? [searchTerm, searchTerm, safeSize, offset]
-    : [safeSize, offset]) as import("sql.js").BindParams;
-  const stmt = sdb.prepare(`
+  const dataParams = searchTerm ? [searchTerm, searchTerm, safeSize, offset] : [safeSize, offset];
+  const rows = sdb.prepare(`
     SELECT
       c.id, c.name, c.domain, c.industry, c.country, c.size,
       c.created_at AS createdAt, c.updated_at AS updatedAt,
@@ -106,24 +104,16 @@ export function listCompaniesWithCounts(search?: string, page = 1, pageSize = 10
     HAVING contactCount > 0
     ORDER BY c.updated_at DESC
     LIMIT ? OFFSET ?
-  `);
-  stmt.bind(dataParams);
-  const rows: Array<Record<string, unknown>> = [];
-  while (stmt.step()) rows.push(stmt.getAsObject());
-  stmt.free();
+  `).all(...dataParams) as Array<Record<string, unknown>>;
 
   // 总数
-  const countParams = (searchTerm ? [searchTerm, searchTerm] : []) as import("sql.js").BindParams;
-  const countStmt = sdb.prepare(`
+  const countParams = searchTerm ? [searchTerm, searchTerm] : [];
+  const cntObj = sdb.prepare(`
     SELECT COUNT(DISTINCT c.id) AS cnt
     FROM companies c
     INNER JOIN contacts co ON co.company_id = c.id
     ${searchTerm ? `WHERE (c.name LIKE ? OR c.domain LIKE ?)` : ""}
-  `);
-  countStmt.bind(countParams);
-  countStmt.step();
-  const cntObj = countStmt.getAsObject();
-  countStmt.free();
+  `).get(...countParams) as { cnt: number } | undefined;
 
   const items: CompanyWithCounts[] = rows.map(r => ({
     id: Number(r.id), name: String(r.name || ""), domain: r.domain as string | null,
@@ -134,7 +124,7 @@ export function listCompaniesWithCounts(search?: string, page = 1, pageSize = 10
     createdAt: String(r.createdAt || ""), updatedAt: String(r.updatedAt || ""),
   }));
 
-  return okResult({ items, total: Number(cntObj.cnt) || 0 });
+  return okResult({ items, total: Number(cntObj?.cnt) || 0 });
 }
 
 export interface CompanyDetail {

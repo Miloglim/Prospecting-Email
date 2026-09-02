@@ -12,6 +12,8 @@ const PREFIX = {
   BOUNCE:    "bounce",
   AI:        "ai",
   AGENT:     "agent",
+  RATES:     "rates",
+  KB:        "kb",
   SYSTEM:    "system",
   UPDATE:    "update",
 } as const;
@@ -111,6 +113,17 @@ export const IPC = {
     BACKCHECK:      chan(PREFIX.AI, "backcheck"),
     GENERATE_DRAFT: chan(PREFIX.AI, "generateDraft"),
     SUMMARIZE_EMAIL: chan(PREFIX.AI, "summarizeEmail"),
+    /** 模型端点：生效状态 / 列表 / 增删改 / 密钥 / 激活 / 思考 / 连通性测试 */
+    ENDPOINT_STATUS: chan(PREFIX.AI, "endpointStatus"),
+    PROFILES:        chan(PREFIX.AI, "profiles"),
+    PROFILE_UPSERT:  chan(PREFIX.AI, "profileUpsert"),
+    PROFILE_DELETE:  chan(PREFIX.AI, "profileDelete"),
+    PROFILE_KEY:     chan(PREFIX.AI, "profileKey"),
+    PROFILE_ACTIVATE: chan(PREFIX.AI, "profileActivate"),
+    PROFILE_THINKING: chan(PREFIX.AI, "profileThinking"),
+    PROFILE_TEST:    chan(PREFIX.AI, "profileTest"),
+    /** 出网代理自动检测结果（只读；无需用户配置） */
+    PROXY_INFO:      chan(PREFIX.AI, "proxyInfo"),
   },
   AGENT: {
     /** 发起一轮对话（立即返回 conversationId/messageId，内容走 agent:chunk 事件流） */
@@ -125,6 +138,32 @@ export const IPC = {
     GET_CONVERSATION:    chan(PREFIX.AGENT, "getConversation"),
     RENAME_CONVERSATION: chan(PREFIX.AGENT, "renameConversation"),
     DELETE_CONVERSATION: chan(PREFIX.AGENT, "deleteConversation"),
+    /** 写操作审批结论回填（approved → 恢复执行；rejected → 模型收到拒绝消息） */
+    RESOLVE_APPROVAL: chan(PREFIX.AGENT, "resolveApproval"),
+    /** AI 活动审计：最近 N 条工具调用记录（设置页展示） */
+    TOOL_CALLS: chan(PREFIX.AGENT, "toolCalls"),
+    /** 执行结果卡上的「写入类」动作（动作闭包留在主进程注册表，渲染端只传 id） */
+    RUN_ACTION: chan(PREFIX.AGENT, "runAction"),
+  },
+  RATES: {
+    /** 从快照文件全量刷新本地运价镜像 */
+    SYNC:   chan(PREFIX.RATES, "sync"),
+    /** 条件查价（航线/船司/目的港/柜型） */
+    LIST:   chan(PREFIX.RATES, "list"),
+    /** 镜像统计（总数/有效数/最近同步/快照新鲜度） */
+    STATUS: chan(PREFIX.RATES, "status"),
+  },
+  KB: {
+    /** 读取 KB 中转配置（baseUrl/令牌是否已配/生效端点，不含明文令牌） */
+    CONFIG_GET: chan(PREFIX.KB, "getConfig"),
+    /** 写入/清除 KB 中转配置（落到 .env） */
+    CONFIG_SET: chan(PREFIX.KB, "setConfig"),
+    /** 离线预览：返回将发出的真实请求（令牌脱敏），验证两层鉴权不串位 */
+    PREVIEW:    chan(PREFIX.KB, "preview"),
+    /** 连通性 + 鉴权探针：无需真实业务接口即可判断 KB 是否可达、令牌是否有效 */
+    TEST_CONNECTION: chan(PREFIX.KB, "testConnection"),
+    /** 实际发起一次 http-dispatch 中转调用 */
+    DISPATCH:   chan(PREFIX.KB, "dispatch"),
   },
   SYSTEM: {
     GET_CONFIG:       chan(PREFIX.SYSTEM, "getConfig"),

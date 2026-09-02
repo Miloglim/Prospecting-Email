@@ -1,0 +1,317 @@
+// ── Agent Harness 调度层 ──────────────────────────────────────────
+// 基于 @openai/agents（OpenAI Agents SDK）的执行器：
+//   · L0 输入层 —— 系统提示词强制"事实必须来自工具返回"，无源即拒答；
+//   · L2 行动层 —— write 工具 needsApproval → SDK 中断流 → 渲染端 Modal 人工确认 → 恢复执行；
+//   · L3 审计层 —— 工具 execute 内落 agent_tool_calls；tracing 全局禁用（数据不出本机）。
+// 审批中的 RunState 存内存（重启清零 = 未确认的写操作自动作废，符合安全语义）。
+import * as crypto from "crypto";
+import OpenAI from "openai";
+import {
+  Agent, run, setTracingDisabled, OpenAIChatCompletionsModel,
+  type RunState,
+} from "@openai/agents";
+import { Log } from "../../logger";
+import { EVENTS } from "../../events";
+import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.service";
+import { netFetch } from "../../net-proxy";
+import { buildHarnessTools, auditRejected, type ToolCtx } from "./tools";
+
+/** 主进程 → 渲染进程事件推送器（由 transport 层注入，service 不 import electron） */
+export type PushFn = (channel: string, data: unknown) => void;
+
+export interface ChatMsg { role: "system" | "user" | "assistant"; content: string; }
+
+/** L0 规则：事实走工具，无源即拒答；写操作人工确认；发信类动作不在能力清单内 */
+export const AGENT_INSTRUCTIONS = [
+  "你是 Prospector 桌面客户端里的 AI 业务助手，服务对象是国际货代/外贸行业的销售。",
+  "身份（严格）：你对外一律自称「Prospector 助手」。无论底层接入哪个模型或网关，都不得自称、臆造或暗示任何底座模型名/版本/厂商（例如 Agnes、Gemini、Sapiens 等一律不提）；" +
+    "被问到「你是什么模型 / 谁开发的 / 用的哪家 API」时，只回答「我是 Prospector 助手」，不透露底座，也不要编造。",
+  "你已接入本地数据工具：",
+  "· search_contacts 检索联系人；quote_search 查询海运运价镜像；inbox_search 检索收件箱邮件；",
+  "· email_summarize 总结单封邮件并给下一步建议（先 inbox_search 拿 id）；",
+  "· reminders_due 到期/逾期跟进提醒（「今天该跟进谁」必查）；queue_status 发信队列进度；accounts_status 发信账号健康；",
+  "· company_backcheck 公司网络背调（外部搜索，需已配置搜索密钥）；generate_draft 撰写开发信草稿（只出文本）；",
+  "· record_followup 记录跟进（写，需确认）；send_queue_add 把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）。",
+  "L0 规则：涉及客户、联系人、跟进状态、收件箱邮件的事实性问题，必须先调用工具，仅基于工具返回的数据回答；",
+  "运价/舱位价格问题必须调用 quote_search，且提醒用户镜像价为参考价、以船司实时报价为准；工具无数据时明确说「镜像库暂无该航线报价」，不得编造价格。",
+  "宁查勿问（重要）：用户问题缺少筛选条件（没说是哪条航线/柜型/船司）时，一律视为不限——" +
+    "就用已给出的关键词直接调用工具，把查到的结果按船司/柜型/港口汇总出来回答，禁止先反问等用户补齐条件；" +
+    "只有查询结果为空或明显有歧义时，才在给出已有结果后顺带追问。",
+  "示例：用户问「santos的价格怎么样」→ 立即调用 quote_search(pod=\"SANTOS\")，" +
+    "把返回结果按 船司+柜型 汇总成价格区间直接回答（附有效期与参考价提醒），这一步不需要任何澄清提问。",
+  "工具未返回、不可用或用户问的是库外信息（如某公司背景且背调不可用）时，明确说「我无法核实该信息」，不得编造任何公司、数字或状态。",
+  "写操作（record_followup / send_queue_add）执行前系统会自动弹出人工确认框——那一步就是征求同意，" +
+    "所以用户明确说「给 X 记跟进」「把邮件发给 X」时直接调用工具，不要在对话里再多问一遍要不要发；" +
+    "被拒绝时放弃该操作并如实告知用户。",
+  "工具返回里的 actions / companyInDb 是给界面渲染用的，不要复述其内容：结果含 companyInDb 时，" +
+    "告诉用户这家公司已在客户库里、可点结果卡下方按钮把背调结论写进档案；" +
+    "调用 generate_draft 时若已知收件人 id（来自 search_contacts），务必带上 contactId，否则入队按钮不会出现。",
+  "排版要求：工具查到的数据列表会由界面自动渲染成表格卡，正文禁止再手写 Markdown 表格或逐行罗列——" +
+    "正文只做结论：最低/最高价、条目数、关键提醒（**粗体**标关键值）；单条结论用一句话即可。",
+  "回答风格：简洁、专业、中文优先（涉及邮件文案时按用户要求语言输出）。",
+].join("\n");
+
+export interface HarnessOptions {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  history: ChatMsg[];
+  conversationId: string;
+  push: PushFn;
+  signal: AbortSignal;
+  /** 页面上下文 chip（如「联系人 #12 王经理 / ACME Logistics」），注入系统指令供模型锚定 */
+  contextNote?: string;
+}
+
+export interface TurnOutcome {
+  kind: "done" | "approval";
+  text: string;
+  conversationId: string;
+  approvalId?: string;
+}
+
+interface PendingApproval {
+  state: RunState<any, any>;
+  agent: Agent<any, any>;
+  ctx: ToolCtx;
+}
+
+const pendingApprovals = new Map<string, PendingApproval>();
+
+let tracingOff = false;
+function disableTracingOnce(): void {
+  if (tracingOff) return;
+  setTracingDisabled(true);   // 隐私红线：trace 不外发，审计走本地 agent_tool_calls
+  tracingOff = true;
+}
+
+/** OpenAI 兼容客户端。思考/推理开关按端点族注入正确方言（见 endpoint.service）：
+ *  vLLM/agnes 认 chat_template_kwargs，Ollama 认 chat_template_kwargs.thinking，
+ *  Gemini 认 google.thinking_config，OpenAI 认 reasoning_effort。
+ *  开关来源：设置页「模型与端点」的思考拨杆（落在 .env 的 AGENT_THINKING），切换即时生效。 */
+function makeClient(baseUrl: string, apiKey: string): OpenAI {
+  const extras = thinkingExtras(endpointFamily(baseUrl), readActiveEndpoint().thinking);
+  const fetchImpl: typeof fetch = async (url, init) => {
+    if (init?.method === "POST" && typeof init.body === "string") {
+      try {
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        if (Array.isArray(body.messages)) {
+          Object.assign(body, extras);
+          init = { ...init, body: JSON.stringify(body) };
+        }
+      } catch { /* 非 JSON 请求体原样透传 */ }
+    }
+    // 走 netFetch：设置里配了代理就经它出去（海外端点在这类网络下必须经代理）
+    return netFetch(url as string, init as RequestInit);
+  };
+  return new OpenAI({ baseURL: baseUrl, apiKey, timeout: 90_000, maxRetries: 2, fetch: fetchImpl });
+}
+
+/** 用户停止/切换会话时作废该会话的待审批写操作（未确认即丢弃） */
+export function rejectPendingFor(conversationId: string): void {
+  for (const [id, p] of [...pendingApprovals]) {
+    if (p.ctx.conversationId !== conversationId) continue;
+    pendingApprovals.delete(id);
+    Log.info("agent.harness", `会话 ${conversationId.slice(0, 8)} 停止，作废待审批 ${id.slice(0, 8)}`);
+  }
+}
+
+export function hasPending(approvalId: string): boolean {
+  return pendingApprovals.has(approvalId);
+}
+
+/** 发起一轮带工具的流式执行；遇 write 工具中断时返回 approval 态，等 resolveApproval 续跑 */
+export async function runHarnessTurn(o: HarnessOptions): Promise<TurnOutcome> {
+  disableTracingOnce();
+  const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
+  const ctx: ToolCtx = { conversationId: o.conversationId, counts: new Map() };
+  const tools = buildHarnessTools(ctx);
+  const instructions = o.contextNote
+    ? `${AGENT_INSTRUCTIONS}\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`
+    : AGENT_INSTRUCTIONS;
+  const agent = new Agent<any, any>({
+    name: "prospector-assistant",
+    instructions,
+    tools,
+    model,
+  });
+  return streamRun(agent, ctx, o, undefined);
+}
+
+/** 人工审批结论回填 → 恢复执行（拒绝时模型会收到 reject 消息并据此回复） */
+export async function resolveApproval(
+  approvalId: string, approved: boolean, o: HarnessOptions,
+): Promise<TurnOutcome> {
+  const p = pendingApprovals.get(approvalId);
+  if (!p) return { kind: "done", text: "", conversationId: o.conversationId };
+  pendingApprovals.delete(approvalId);
+  const state = p.state as unknown as {
+    getInterruptions(): Array<Record<string, unknown>>;
+    approve(item: unknown): void;
+    reject(item: unknown, opts?: { message?: string }): void;
+  };
+  const bound: HarnessOptions = { ...o, conversationId: p.ctx.conversationId };
+  for (const item of state.getInterruptions()) {
+    if (approved) {
+      state.approve(item);
+    } else {
+      state.reject(item, { message: "用户拒绝了这次写操作，请放弃并告知用户" });
+      auditRejected(p.ctx, String(item.name ?? "unknown"), typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments));
+    }
+  }
+  return streamRun(p.agent, p.ctx, bound, p.state);
+}
+
+/** 推给前端的结果 JSON 上限：太小会让长草稿把 actions 截掉（JSON 不完整 → 整张卡消失） */
+const RESULT_CAP = 24_000;
+
+type RunItemLite = {
+  type?: string; name?: string; callId?: string; arguments?: string;
+  output?: unknown; content?: Array<{ text?: string }>;
+};
+interface RunResultLite {
+  output?: RunItemLite[];
+  finalOutput?: unknown;
+  state: { getInterruptions(): Array<Record<string, unknown>> };
+}
+
+/**
+ * 非流式回合的结果转事件：工具过程逐条补推（calling/done），正文一次性推出。
+ * 前端契约与流式路径完全一致，只是没有逐字效果。
+ */
+async function collectRunResult(
+  r: RunResultLite, agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
+): Promise<TurnOutcome> {
+  const items = r.output ?? [];
+  const callName = new Map<string, string>();
+  let text = "";
+  for (const it of items) {
+    if (it.type === "function_call") {
+      if (it.callId && it.name) callName.set(it.callId, it.name);
+      o.push(EVENTS.AGENT_TOOL_CALL, {
+        conversationId: o.conversationId, tool: it.name, status: "calling",
+        args: (it.arguments ?? "").slice(0, 200),
+      });
+    } else if (it.type === "function_call_output") {
+      const out = typeof it.output === "string" ? it.output : JSON.stringify(it.output ?? "");
+      o.push(EVENTS.AGENT_TOOL_CALL, {
+        conversationId: o.conversationId,
+        tool: (it.callId && callName.get(it.callId)) || it.name || "",
+        status: "done", result: out.slice(0, RESULT_CAP),
+      });
+    } else if (it.type === "message") {
+      const t = (it.content ?? []).map(c => c.text ?? "").join("");
+      if (t) text += t;
+    }
+  }
+  if (!text) text = String(r.finalOutput ?? "");
+
+  const interruptions = r.state.getInterruptions();
+  if (interruptions.length > 0) {
+    const approvalId = crypto.randomUUID();
+    pendingApprovals.set(approvalId, { state: r.state as unknown as RunState<any, any>, agent, ctx });
+    o.push(EVENTS.AGENT_APPROVAL, {
+      conversationId: o.conversationId, approvalId,
+      items: interruptions.map(i => ({ tool: String(i.name ?? "unknown"), args: i.arguments })),
+    });
+    Log.info("agent.harness", `（非流式）写操作待审批 ${approvalId.slice(0, 8)}`);
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId };
+  }
+
+  if (text) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: text });
+  return { kind: "done", text, conversationId: o.conversationId };
+}
+
+async function streamRun(
+  agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
+  resumeState: RunState<any, any> | undefined,
+): Promise<TurnOutcome> {
+  // Gemini 的 OpenAI 兼容层要求回放 function call 时带回 extra_content.google.thought_signature，
+  // 而 SDK 的流式分支只累积 name/arguments/callId（把签名丢了 → 第 2 轮直接 400）；
+  // 非流式分支会把整条 tool_call 存进 providerData 并原样 spread 回去。故对 google 族走非流式。
+  const family = endpointFamily(o.baseUrl);
+  const streaming = family !== "google";
+
+  if (!streaming) {
+    const r = await run(agent, (resumeState ?? o.history) as never, {
+      stream: false, signal: o.signal, maxTurns: 6,
+    }) as unknown as RunResultLite;
+    return collectRunResult(r, agent, ctx, o);
+  }
+
+  const raw = await run(agent, (resumeState ?? o.history) as never, {
+    stream: true, signal: o.signal, maxTurns: 6,
+  });
+  const result = raw as unknown as AsyncIterable<unknown> & {
+    state: RunState<any, any>; finalOutput?: unknown;
+  };
+
+  /**
+   * @openai/agents SDK 真实事件流（对照 dist/events.d.ts 与 openaiChatCompletionsStreaming.js）：
+   *  · raw_model_stream_event.data → chat-completions 适配器产出 {type:'output_text_delta', delta}
+   *  · run_item_stream_event.name  → tool_called / tool_output / reasoning_item_created / message_output_created
+   *    tool_called 的 rawItem = {type:'function_call', callId, name, arguments}
+   *    tool_output 的 rawItem = {type:'function_call_output', callId, output}（无 name → 用 callId 映射）
+   *  旧实现按 'raw_response_event'/'run_item_streamed' 匹配，SDK 从无这些类型 → 事件全部静默丢失。
+   */
+  const callName = new Map<string, string>();
+  let text = "";
+  for await (const unknownEv of result) {
+    const e = unknownEv as {
+      type?: string; data?: { type?: string; delta?: unknown; choices?: Array<{ delta?: { content?: string } }> };
+      name?: string;
+      item?: { rawItem?: { type?: string; name?: string; callId?: string; arguments?: string; output?: unknown; rawContent?: Array<{ text?: string }> } };
+    };
+    if (e.type === "raw_model_stream_event") {
+      const d = e.data;
+      const delta = d?.type === "output_text_delta" && typeof d.delta === "string" ? d.delta
+        : d?.choices?.[0]?.delta?.content;
+      if (delta) {
+        text += delta;
+        o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta });
+      }
+    } else if (e.type === "run_item_stream_event") {
+      const ri = e.item?.rawItem;
+      if (e.name === "tool_called" && ri) {
+        if (ri.callId && ri.name) callName.set(ri.callId, ri.name);
+        o.push(EVENTS.AGENT_TOOL_CALL, {
+          conversationId: o.conversationId, tool: ri.name, status: "calling",
+          args: (ri.arguments ?? "").slice(0, 200),
+        });
+      } else if (e.name === "tool_output" && ri) {
+        const name = (ri.callId && callName.get(ri.callId)) || ri.name || "";
+        const out = typeof ri.output === "string" ? ri.output : JSON.stringify(ri.output ?? "");
+        // result 供前端渲染「数据表格卡 + 动作卡」（模型上下文走 SDK 内部通道，与此无关）。
+        // 上限要够大：截断会让 JSON 不合法 → 整张卡消失；actions 又在末尾，长草稿会被切掉。
+        o.push(EVENTS.AGENT_TOOL_CALL, {
+          conversationId: o.conversationId, tool: name, status: "done",
+          result: out.slice(0, RESULT_CAP),
+        });
+      } else if (e.name === "reasoning_item_created" && ri) {
+        const think = (ri.rawContent ?? []).map(c => c.text ?? "").join("\n").trim();
+        if (think) o.push(EVENTS.AGENT_TOOL_CALL, { conversationId: o.conversationId, tool: "reasoning", status: "reasoning", result: think.slice(0, 1500) });
+      }
+    }
+  }
+
+  // ⚠ v0.17 的 RunState 暴露 getInterruptions() 方法而非 interruptions 属性——
+  //   曾按属性读取恒为 undefined → 审批网关整体失效（写工具静默执行，评测 fu-* 卡暴露）
+  const state = result.state as unknown as { getInterruptions(): Array<Record<string, unknown>> };
+  const interruptions = state.getInterruptions();
+  if (interruptions.length > 0) {
+    const approvalId = crypto.randomUUID();
+    pendingApprovals.set(approvalId, { state: result.state, agent, ctx });
+    o.push(EVENTS.AGENT_APPROVAL, {
+      conversationId: o.conversationId,
+      approvalId,
+      items: interruptions.map(i => ({ tool: String(i.name ?? "unknown"), args: i.arguments })),
+    });
+    Log.info("agent.harness", `写操作待审批 ${approvalId.slice(0, 8)}（${interruptions.length} 项）`);
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId };
+  }
+
+  const finalText = text || String((result as { finalOutput?: unknown }).finalOutput ?? "");
+  // 兜底：本轮一个字都没流出来但拿到了完整最终文本（模型/端点差异）→ 整段补推，前端不留空骨架
+  if (!text && finalText) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: finalText });
+  return { kind: "done", text: finalText, conversationId: o.conversationId };
+}

@@ -1,24 +1,20 @@
 import * as crypto from "crypto";
-import { getDb } from "../db";
+import { getDb, saveDatabase } from "../db";
 import { emailAccounts, type EmailAccountRow, type InsertEmailAccountRow } from "../db/schema/accounts";
 import { eq } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
-import { saveDatabase } from "../db";
+import { getMasterKey } from "../secret-store";
 
-// ── 密钥管理 ──
-
-/** 从环境变量读取加密密钥。ponytail: 未设置时抛异常，强制配置 */
-function getSecretKey(): Buffer {
-  const key = process.env.APP_SECRET_KEY || "prospector-dev-key-32chars!!"; // 32 bytes
-  return Buffer.from(key.padEnd(32, "!").slice(0, 32), "utf-8");
-}
+// ── 密钥管理（P0-1）────────────────────────────────────────────
+// 主密钥来自 secret-store（safeStorage/DPAPI 或机器指纹派生），不再硬编码。
+// LEGACY_KEY 仅用于一次性迁移旧密文 —— 迁移完成后旧密钥对已重封装的数据不再有效，
+// 即便随 asar 泄露也解不出迁移后的密文。
+const LEGACY_KEY = Buffer.from("prospector-dev-key-32chars!!".padEnd(32, "!").slice(0, 32), "utf-8");
 
 const ALGORITHM = "aes-256-gcm";
 
-/** 加密密码 — 每次加密用随机 IV */
-export function encryptPassword(plaintext: string): string {
-  const key = getSecretKey();
+function encryptWith(key: Buffer, plaintext: string): string {
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf-8"), cipher.final()]);
@@ -27,9 +23,7 @@ export function encryptPassword(plaintext: string): string {
   return `${iv.toString("hex")}:${tag.toString("hex")}:${encrypted.toString("hex")}`;
 }
 
-/** 解密密码 */
-function decryptPassword(encrypted: string): string {
-  const key = getSecretKey();
+function decryptWith(key: Buffer, encrypted: string): string {
   const parts = encrypted.split(":");
   if (parts.length !== 3) throw new Error("无效的加密格式");
   const [ivHex, tagHex, dataHex] = parts as [string, string, string];
@@ -39,6 +33,47 @@ function decryptPassword(encrypted: string): string {
   const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf-8");
+}
+
+/** 加密密码 — 主密钥（safeStorage 保护）+ 随机 IV */
+export function encryptPassword(plaintext: string): string {
+  return encryptWith(getMasterKey(), plaintext);
+}
+
+/** 解密密码 — 主密钥优先，失败回落旧密钥（迁移前的存量密文） */
+function decryptPassword(encrypted: string): string {
+  try {
+    return decryptWith(getMasterKey(), encrypted);
+  } catch {
+    return decryptWith(LEGACY_KEY, encrypted);
+  }
+}
+
+/** 启动迁移：把旧密钥加密的存量密文重封装为主密钥（幂等，调用一次即可） */
+export function migrateAccountPasswords(): void {
+  const rows = getDb().select().from(emailAccounts).all();
+  let migrated = 0;
+  for (const r of rows) {
+    const raw = r.encryptedPass;
+    if (!raw || !raw.includes(":")) continue; // 明文旧行由 getDecryptedPassword 兼容读取
+    try {
+      decryptWith(getMasterKey(), raw);
+      continue; // 已是新密钥
+    } catch { /* 需要迁移 */ }
+    try {
+      const plain = decryptWith(LEGACY_KEY, raw);
+      getDb().update(emailAccounts)
+        .set({ encryptedPass: encryptWith(getMasterKey(), plain) })
+        .where(eq(emailAccounts.id, r.id)).run();
+      migrated++;
+    } catch {
+      Log.error("account.migrate", `账号 ${r.email} 密文既非本机密钥也非旧密钥，无法迁移`);
+    }
+  }
+  if (migrated > 0) {
+    saveDatabase();
+    Log.info("account.migrate", `${migrated} 个账号密文已迁移至 safeStorage 主密钥`);
+  }
 }
 
 // ── 验证器 ──
@@ -55,76 +90,80 @@ interface ValidateResult {
   imapOk: boolean; imapError?: string;
 }
 
-/** 验证 SMTP 连接 */
-async function validateSmtp(host: string, port: number, email: string, password: string): Promise<{ ok: boolean; error?: string }> {
-  // ponytail: 使用简单 TCP 握手验证，不依赖 nodemailer
-  return new Promise((resolve) => {
-    try {
-      const tls = require("tls") as typeof import("tls");
-      const net = require("net") as typeof import("net");
-
-      const isSecure = port === 465;
-      const socket = isSecure
-        ? tls.connect({ host, port, rejectUnauthorized: false, timeout: 10000 })
-        : net.connect({ host, port, timeout: 10000 });
-
-      socket.on("error", (err: Error) => {
-        socket.destroy();
-        resolve({ ok: false, error: err.message });
-      });
-
-      socket.on("timeout", () => {
-        socket.destroy();
-        resolve({ ok: false, error: "连接超时" });
-      });
-
-      socket.on("connect", () => {
-        socket.destroy();
-        resolve({ ok: true });
-      });
-    } catch (err: unknown) {
-      resolve({ ok: false, error: err instanceof Error ? err.message : "连接失败" });
-    }
-  });
+/** 把 nodemailer / imapflow 的原始报错归类成人话，重点区分"认证失败(授权码错)" */
+function classifyMailError(err: unknown): string {
+  const e = err as { code?: string; responseCode?: string | number; hostname?: string; message?: string };
+  const msg = e?.message || String(err);
+  const code = e?.code || "";
+  // 认证失败：nodemailer EAUTH / imapflow AuthenticationFailed / SMTP 535
+  if (code === "EAUTH" || /authenticat|invalid\s+(login|credentials?)|AUTHENTICATIONFAILED|password|\b535\b|LOGIN failed|\[ALERT\].*login/i.test(msg)) {
+    return "认证失败：密码或第三方客户端授权码不正确/已失效";
+  }
+  if (code === "ETIMEDOUT" || /timeout|timed out/i.test(msg)) return "连接超时";
+  if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|getaddrinfo|EAI_AGAIN|socket hang up/i.test(msg + code)) {
+    return `无法连接服务器${e?.hostname ? `（${e.hostname}）` : ""}`;
+  }
+  if (/certificate|self-signed|unable to verify|SSL|TLS|handshake/i.test(msg)) {
+    return `加密握手失败：${msg}`;
+  }
+  return msg;
 }
 
-/** 验证 IMAP 连接 */
+/** 验证 SMTP：真实建立连接并 AUTH LOGIN 认证（不只是 TCP 握手） */
+async function validateSmtp(host: string, port: number, email: string, password: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const nodemailer = require("nodemailer") as typeof import("nodemailer");
+    const transporter = nodemailer.createTransport({
+      host, port,
+      secure: port === 465,
+      requireTLS: port !== 465,        // 587/25 强制 STARTTLS
+      auth: { user: email, pass: password },
+      connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 20000,
+      tls: { rejectUnauthorized: true }, // P0-3：证书校验开启
+    });
+    await transporter.verify();         // 完整 EHLO + AUTH 流程，凭据错即抛
+    transporter.close();
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: classifyMailError(err) };
+  }
+}
+
+/** 验证 IMAP：真实 LOGIN（不只是 TLS 握手） */
 async function validateImap(host: string, port: number, email: string, password: string): Promise<{ ok: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    try {
-      const tls = require("tls") as typeof import("tls");
-      const socket = tls.connect({ host, port, rejectUnauthorized: false, timeout: 10000 });
-
-      socket.on("error", (err: Error) => {
-        socket.destroy();
-        resolve({ ok: false, error: err.message });
-      });
-
-      socket.on("timeout", () => {
-        socket.destroy();
-        resolve({ ok: false, error: "连接超时" });
-      });
-
-      socket.on("secureConnect", () => {
-        socket.destroy();
-        resolve({ ok: true });
-      });
-    } catch (err: unknown) {
-      resolve({ ok: false, error: err instanceof Error ? err.message : "连接失败" });
-    }
-  });
+  let client: import("imapflow").ImapFlow | null = null;
+  try {
+    const imapflow = require("imapflow") as typeof import("imapflow");
+    client = new imapflow.ImapFlow({
+      host, port, secure: (port || 993) === 993,
+      auth: { user: email, pass: password },
+      logger: false,
+      connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 20000,
+      tls: { rejectUnauthorized: true }, // P0-3：证书校验开启
+    });
+    await client.connect();              // 触发 IMAP LOGIN，认证失败即抛
+    await client.logout();
+    return { ok: true };
+  } catch (err: unknown) {
+    return { ok: false, error: classifyMailError(err) };
+  } finally {
+    try { client?.close(); } catch { /* 已关闭 */ }
+  }
 }
 
 // ── CRUD ──
 
-export async function listAccounts(): Promise<Result<EmailAccountRow[]>> {
+export type AccountProjection = Omit<EmailAccountRow, "encryptedPass">;
+
+/** 账号列表（P0-1 投影：密文不出主进程） */
+export async function listAccounts(): Promise<Result<AccountProjection[]>> {
   const rows = getDb().select().from(emailAccounts).all();
-  return okResult(rows);
+  return okResult(rows.map(({ encryptedPass: _omit, ...rest }) => rest));
 }
 
 export async function upsertAccount(
   input: InsertEmailAccountRow & { password?: string; id?: number }
-): Promise<Result<EmailAccountRow>> {
+): Promise<Result<AccountProjection>> {
   const isEdit = !!input.id;
   Log.debug("account.upsert", `email=${input.email} isEdit=${isEdit}`);
 
@@ -164,7 +203,8 @@ export async function upsertAccount(
     const updated = getDb().select().from(emailAccounts)
       .where(eq(emailAccounts.id, existing.id)).get()!;
     Log.info("account.upsert", `${input.email} 已更新`);
-    return okResult(updated);
+    const { encryptedPass: _u, ...updatedRest } = updated;
+    return okResult(updatedRest);
   }
 
   getDb().insert(emailAccounts).values({
@@ -177,7 +217,8 @@ export async function upsertAccount(
   const created = getDb().select().from(emailAccounts)
     .where(eq(emailAccounts.email, input.email)).get()!;
   Log.info("account.upsert", `${input.email} 已创建`);
-  return okResult(created);
+  const { encryptedPass: _c, ...createdRest } = created;
+  return okResult(createdRest);
 }
 
 export async function deleteAccount(id: number): Promise<Result<void>> {

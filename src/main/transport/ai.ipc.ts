@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import { IPC } from "../contract";
 import * as Ai from "../services/ai.service";
+import * as Provider from "../services/provider.service";
+import * as NetProxy from "../net-proxy";
 import { saveBackcheck } from "../services/company.service";
 import { classifyClientType } from "../services/client-type.service";
 import { failResult } from "../errors";
@@ -67,4 +69,30 @@ export function registerAiIPC() {
     if (!input?.subject && !input?.bodyPreview) return failResult("邮件内容为空");
     return Ai.summarizeEmail(input);
   });
+
+  // ── 模型端点管理：密钥只进 .env；激活即写生效参数，本次运行立即生效（无需重启）──
+  ipcMain.handle(IPC.AI.ENDPOINT_STATUS, () => Provider.getEndpointStatus());
+  ipcMain.handle(IPC.AI.PROFILES, () => Provider.listProfiles());
+  ipcMain.handle(IPC.AI.PROFILE_UPSERT, (_e, input: Provider.ProfileInput) => Provider.upsertProfile(input));
+  ipcMain.handle(IPC.AI.PROFILE_DELETE, (_e, id: string) => Provider.deleteProfile(id));
+  ipcMain.handle(IPC.AI.PROFILE_KEY, (_e, input: { id?: string; value?: string }) => {
+    if (!input?.id) return failResult("缺少端点 id");
+    return Provider.setProfileKey(input.id, input.value ?? "");
+  });
+  ipcMain.handle(IPC.AI.PROFILE_ACTIVATE, (_e, id: string) => {
+    if (!id) return failResult("缺少端点 id");
+    return Provider.activateProfile(id);
+  });
+  ipcMain.handle(IPC.AI.PROFILE_THINKING, (_e, input: { id?: string; thinking?: boolean }) => {
+    if (!input?.id) return failResult("缺少端点 id");
+    return Provider.setProfileThinking(input.id, !!input.thinking);
+  });
+  ipcMain.handle(IPC.AI.PROFILE_TEST, async (_e, id: string) => {
+    if (!id) return failResult("缺少端点 id");
+    Log.debug("ai.profileTest", id);
+    return await Provider.testProfile(id);
+  });
+
+  // 出网代理自动检测（只读展示；实际生效在 netFetch 里，无需用户配置）
+  ipcMain.handle(IPC.AI.PROXY_INFO, () => NetProxy.proxyInfo());
 }

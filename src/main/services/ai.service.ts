@@ -1,8 +1,10 @@
 import * as path from "path";
-import * as fs from "fs";
 import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
+import { upsertEnv } from "../env-store";
+import { readActiveEndpoint, endpointFamily, thinkingExtras } from "./endpoint.service";
+import { netFetch } from "../net-proxy";
 
 // ── .env 加载（dotenv：Node 不内置 .env 解析）──────────
 // 密钥不落代码、不进对话，只从 .env 读。
@@ -17,7 +19,7 @@ export function getApiKey(name: "DEEPSEEK_API_KEY" | "EXA_API_KEY" | "TAVILY_API
 }
 
 export function isAiConfigured(): boolean {
-  return !!getApiKey("DEEPSEEK_API_KEY");
+  return resolveLlmEndpoint() != null;
 }
 
 export const API_KEY_NAMES = ["DEEPSEEK_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY"] as const;
@@ -32,31 +34,11 @@ export function getApiKeyStatus(): Result<Record<ApiKeyName, boolean>> {
   });
 }
 
-/** 写入 API 密钥到 .env。空值=清除。写后更新 process.env（本次会话立即生效）。 */
+/** 写入 API 密钥到 .env。空值=清除。写后同步 process.env（本次运行立即生效，无需重启）。 */
 export function setApiKey(name: ApiKeyName, value: string): Result<void> {
   if (!API_KEY_NAMES.includes(name)) return failResult(`未知密钥名: ${name}`);
-  const envPath = path.join(APP_ROOT, ".env");
   try {
-    let lines: string[] = [];
-    if (fs.existsSync(envPath)) {
-      lines = fs.readFileSync(envPath, "utf-8").split(/\r?\n/);
-    }
-    const key = String(name);
-    const idx = lines.findIndex(l => l.startsWith(`${key}=`));
-    const newLine = value.trim() ? `${key}=${value.trim()}` : "";
-    if (idx >= 0) {
-      if (newLine) lines[idx] = newLine;
-      else lines.splice(idx, 1);
-    } else if (newLine) {
-      lines.push(newLine);
-    }
-    // 保证文件存在
-    const dir = path.dirname(envPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(envPath, lines.filter(l => l.trim() !== "").join("\n") + "\n", "utf-8");
-    // 更新 process.env 让本次会话立即生效
-    if (value.trim()) process.env[key] = value.trim();
-    else delete process.env[key];
+    upsertEnv(name, value);
     Log.info("ai.setKey", `${name} 已${value.trim() ? "更新" : "清除"}`);
     return okResult(undefined);
   } catch (err: unknown) {
@@ -65,7 +47,10 @@ export function setApiKey(name: ApiKeyName, value: string): Result<void> {
   }
 }
 
-// ── LLM 调用（DeepSeek，OpenAI 兼容）────────────────────
+// ── LLM 调用（端点归一：与 agent 会话共用 AGENT_API_*，未配置时回落 DeepSeek）──
+// 归一理由：能力调用（背调/开发信/总结）与 agent 会话此前各自维护端点，密钥配置两套、
+// 行为不一致。现在统一从 AGENT_API_BASE_URL/KEY/MODEL 读取；仅当未配置时才回落旧
+// DeepSeek 专用密钥，保证老用户零改动可用。
 
 const DEEPSEEK_ENDPOINT = "https://api.deepseek.com/v1/chat/completions";
 const DEEPSEEK_MODEL = "deepseek-chat";
@@ -75,54 +60,71 @@ interface ChatMessage {
   content: string;
 }
 
-/** 调用 DeepSeek，返回纯文本。超时 60s。 */
+/** 能力调用的端点解析：与 agent 会话同源（读同一份生效端点），未配置时回落 DeepSeek */
+function resolveLlmEndpoint(): { url: string; model: string; key: string; label: string } | null {
+  const e = readActiveEndpoint();
+  // 模型名必须显式配置：猜一个默认名只会在异族网关上换来一句看不懂的 400/404
+  if (e.baseUrl && e.apiKey && e.model) {
+    const url = e.baseUrl.endsWith("/chat/completions") ? e.baseUrl : `${e.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    return { url, model: e.model, key: e.apiKey, label: "agent" };
+  }
+  const deepKey = process.env.DEEPSEEK_API_KEY?.trim();
+  if (deepKey) return { url: DEEPSEEK_ENDPOINT, model: DEEPSEEK_MODEL, key: deepKey, label: "deepseek" };
+  return null;
+}
+
+/** 调用 LLM，返回纯文本。超时 60s。 */
 async function chat(system: string, user: string): Promise<Result<string>> {
-  const key = getApiKey("DEEPSEEK_API_KEY");
-  if (!key) return failResult("DeepSeek API Key 未配置，请在 .env 中设置 DEEPSEEK_API_KEY");
+  const ep = resolveLlmEndpoint();
+  if (!ep) return failResult("模型端点未配置：请到「设置 → 模型与端点」填好 Base URL / 密钥 / 模型名并启用（或在 .env 配 DEEPSEEK_API_KEY 作回落）");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
 
   try {
-    const res = await fetch(DEEPSEEK_ENDPOINT, {
+    // 这些是「一次性出全文」的调用，推理模式只会拖慢它 —— 按端点族关掉思考；
+    // 注入必须走方言（给 Gemini 塞 chat_template_kwargs 有 400 风险）
+    const payload = {
+      model: ep.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature: 0.7,
+      ...thinkingExtras(endpointFamily(ep.url), false),
+    };
+    const res = await netFetch(ep.url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.7,
-      }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ep.key}` },
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      Log.error("ai.chat", `HTTP ${res.status}`, body.slice(0, 500));
-      return failResult(`DeepSeek 调用失败 (${res.status})`);
+      Log.error("ai.chat", `HTTP ${res.status} (${ep.label})`, body.slice(0, 500));
+      return failResult(`模型调用失败 (${res.status})`);
     }
 
     const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = json.choices?.[0]?.message?.content?.trim();
-    if (!content) return failResult("DeepSeek 返回为空");
+    if (!content) return failResult("模型返回为空");
     return okResult(content);
   } catch (err: unknown) {
     const aborted = (err as { name?: string })?.name === "AbortError";
     Log.error("ai.chat", aborted ? "超时" : "网络错误", err instanceof Error ? err.stack : String(err));
-    return failResult(aborted ? "DeepSeek 请求超时（60s）" : "DeepSeek 网络错误");
+    return failResult(aborted ? "模型请求超时（60s）" : "模型网络错误");
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** 调 DeepSeek 并要求返回 JSON，解析失败时给 fail */
+/** 调 LLM 并要求返回 JSON，解析失败时给 fail */
 async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
   const r = await chat(system, user);
   if (!r.success) return r;
   try {
-    // 兼容 DeepSeek 偶尔在 JSON 外包裹 ```json ... ``` 的情况
+    // 兼容端点偶尔在 JSON 外包裹 ```json ... ``` 的情况
     const cleaned = r.data.replace(/```json|```/g, "").trim();
     return okResult(JSON.parse(cleaned) as T);
   } catch {
@@ -150,7 +152,7 @@ async function searchExa(query: string): Promise<Result<SearchHit[]>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const res = await fetch(EXA_ENDPOINT, {
+    const res = await netFetch(EXA_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key },
       body: JSON.stringify({ query, numResults: 8, contents: { text: { maxCharacters: 800 } } }),
@@ -175,7 +177,7 @@ async function searchTavily(query: string): Promise<Result<SearchHit[]>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const res = await fetch(TAVILY_ENDPOINT, {
+    const res = await netFetch(TAVILY_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_key: key, query, max_results: 8 }),
@@ -238,7 +240,7 @@ export async function generateEmailDraft(input: EmailDraftInput): Promise<Result
   const lang = input.language === "ES" ? "西班牙语" : input.language === "PT" ? "葡萄牙语" : "英语";
   const system = `你是货代销售文案专家。用${lang}写一封给潜在客户的开发信，语气专业但不生硬，3-4 段，带主题行（用 SUBJECT: 开头）和正文。不要多余解释。`;
   const back = input.backcheck
-    ? `\n背调要点：${input.backcheck.summary}；契合点：${input.backcheck.logisticsFit}`
+    ? `\n背调要点：${input.backcheck.summary ?? ""}${input.backcheck.logisticsFit ? `；契合点：${input.backcheck.logisticsFit}` : ""}`
     : "";
   const user = `公司：${input.companyName}\n联系人：${input.contactName}\n${back}\n\n请写开发信。`;
   return chat(system, user);

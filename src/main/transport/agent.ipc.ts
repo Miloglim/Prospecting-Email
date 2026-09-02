@@ -30,6 +30,10 @@ export function registerAgentIPC() {
     return Agent.stop(conversationId);
   });
 
+  // 写操作审批结论回填（harness 中断流的人工确认环节）
+  ipcMain.handle(IPC.AGENT.RESOLVE_APPROVAL, (_e, input: Agent.ApprovalInput) =>
+    Agent.resolveApprovalRequest(push, input ?? {}));
+
   // provider 配置状态（mock/live）
   ipcMain.handle(IPC.AGENT.STATUS, () => Agent.status());
 
@@ -44,4 +48,10 @@ export function registerAgentIPC() {
 
   ipcMain.handle(IPC.AGENT.DELETE_CONVERSATION, (_e, conversationId: string) =>
     Agent.deleteConversation(conversationId));
+
+  // AI 活动审计：最近工具调用记录（设置页）
+  ipcMain.handle(IPC.AGENT.TOOL_CALLS, (_e, limit?: number) => Agent.listToolCalls(limit));
+
+  // 结果卡「写入类」动作：用户点击后执行主进程留存的闭包（过期/重启即失效）
+  ipcMain.handle(IPC.AGENT.RUN_ACTION, (_e, actionId: string) => Agent.runAction(actionId));
 }

@@ -51,6 +51,7 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     host: account.smtpHost || "",
     port,
     secure: port === 465,
+    requireTLS: true, // P0-3: 587/25 等端口强制 STARTTLS，拒绝明文发信（465 隐式 TLS 不受影响）
     auth: { user: account.email, pass: passRes.data },
     connectionTimeout: 15000, socketTimeout: 15000,
   });

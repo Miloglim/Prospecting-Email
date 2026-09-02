@@ -3,7 +3,6 @@ import { IPC } from "../contract";
 import * as svc from "../services/contact.service";
 import { Log } from "../logger";
 import { failResult } from "../errors";
-import { readFileSync } from "fs";
 
 export function registerContactIPC() {
   ipcMain.handle(IPC.CONTACTS.GET_BY_ID, async (_e, id: number) => {
@@ -58,24 +57,20 @@ export function registerContactIPC() {
     return svc.getContactInteractions(id);
   });
 
-  // 解析 data：优先 filePath（直接读文件→快），fallback data（粘贴/小文件）
-  function resolveData(p: { type?: string; data?: string; filePath?: string }) {
-    let { type, data } = p;
-    if (p.filePath && !data) {
-      const buf = readFileSync(p.filePath);
-      type = type || (p.filePath.endsWith(".csv") ? "csv" : "xlsx");
-      data = type === "csv" ? buf.toString("utf8") : buf.toString("base64");
-    }
+  // 解析 data（P0-4: 不再接受渲染端 filePath —— 主进程按任意路径读文件等于渲染端可读全盘；
+  // 前端一律经 File API 读内容后传 data，路径只能由用户的文件选择动作产生）
+  function resolveData(p: { type?: string; data?: string }) {
+    const { type, data } = p;
     if (type !== "csv" && type !== "xlsx" && type !== "tsv") return { type: undefined, data: undefined };
     return { type, data };
   }
 
   ipcMain.handle(IPC.CONTACTS.IMPORT, async (_e, params) => {
-    Log.debug("ipc.contact.import", `mode=${params?.mode}, filePath=${!!params?.filePath}, data=${!!params?.data}`);
+    Log.debug("ipc.contact.import", `mode=${params?.mode}, data=${!!params?.data}`);
     if (!params?.mode || !["preview", "execute"].includes(params.mode))
       return failResult("参数错误: mode 必填 (preview | execute)");
     const resolved = resolveData(params);
-    if (!resolved.type || !resolved.data) return failResult("参数错误: type 和 data 必填（或提供 filePath）");
+    if (!resolved.type || !resolved.data) return failResult("参数错误: type 和 data 必填");
     const type = resolved.type as "csv" | "xlsx" | "tsv";
     if (params.mode === "preview") {
       return svc.importContacts({ mode: "preview", type, data: resolved.data });

@@ -15,12 +15,20 @@ function resolveLogFile(): string | null {
   }
 }
 
+const MAX_LOG_BYTES = 5 * 1024 * 1024; // P1-5: 单文件 5MB 上限
+
 function appendLogFile(line: string): void {
   try {
     const file = resolveLogFile();
     if (!file) return;
     const dir = path.dirname(file);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // P1-5: 简单轮转 — 超 5MB 转存 .1（覆盖更旧的备份），当前文件重新起；轮转失败不影响写入
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).size > MAX_LOG_BYTES) {
+        fs.renameSync(file, `${file}.1`);
+      }
+    } catch { /* .1 被占用等场景：放弃轮转继续追加 */ }
     fs.appendFileSync(file, line + "\n");
   } catch { /* 写日志失败静默，避免日志影响业务 */ }
 }

@@ -69,7 +69,8 @@ type Pop3Socket = tls.TLSSocket | net.Socket;
 
 function pop3Connect(host: string, port: number): Promise<Pop3Socket> {
   return new Promise((resolve, reject) => {
-    const sock = tls.connect({ host, port, rejectUnauthorized: false }, () => resolve(sock));
+    // P0-3: 恢复证书校验（默认 rejectUnauthorized=true）
+    const sock = tls.connect({ host, port }, () => resolve(sock));
     sock.on("error", reject);
     setTimeout(() => { sock.destroy(); reject(new Error("连接超时")); }, 15000);
   });
@@ -314,6 +315,10 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       secure: (account.imapPort || 993) === 993,
       auth: { user: account.email, pass: passRes.data },
       logger: false,
+      // P1-4: 连接/问候/读超时 — 无超时的 IMAP 连接会挂死整轮抓取
+      greetingTimeout: 15_000,
+      connectionTimeout: 15_000,
+      socketTimeout: 60_000,
     });
     await client.connect();
     await client.mailboxOpen("INBOX");
@@ -321,8 +326,14 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     // 拉近 FETCH_DAYS 天：SEARCH SINCE 按时间窗口，替代 uid 增量（+1 天缓冲时区差）
     const since = new Date(Date.now() - (FETCH_DAYS + 1) * 86400_000);
     const uids = (await client.search({ since }, { uid: true })) || [];
+    // P1-4: 单轮抓取封顶 — 积压大时分多轮消化（下轮 search 重复返回，existing 集去重后只插新信）
+    const MAX_FETCH_PER_ROUND = 500;
+    const scanUids = uids.length > MAX_FETCH_PER_ROUND ? uids.slice(0, MAX_FETCH_PER_ROUND) : uids;
+    if (uids.length > MAX_FETCH_PER_ROUND) {
+      Log.warn("inbox.imap", `${account.email}: 待抓 ${uids.length} 封超单轮上限，本轮处理最早的 ${MAX_FETCH_PER_ROUND} 封，其余下轮继续`);
+    }
     Log.info("inbox.imap", `${account.email}: 近 ${FETCH_DAYS} 天共 ${uids.length} 封`);
-    if (uids.length === 0) {
+    if (scanUids.length === 0) {
       await client!.logout();
       client = null;
       return okResult([]);
@@ -346,7 +357,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     // 退信去重：退信服务同一秒批量发多封相同 subject/发件人/时间的退信（messageId 各不相同），只留一封
     const bounceSeen = new Set<string>();
     const bounceUids: number[] = []; // 本轮新增的退信 uid，扫完后复用同一连接批量拉原文
-    const stream = client.fetch(uids, { uid: true, envelope: true }, { uid: true });
+    const stream = client.fetch(scanUids, { uid: true, envelope: true }, { uid: true });
     for await (const msg of stream) {
       scanned++;
 
@@ -407,11 +418,11 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         createdAt: new Date().toISOString(),
       });
 
-      if (scanned % 25 === 0) pushProgress(accountId, scanned, uids.length, account.email);
+      if (scanned % 25 === 0) pushProgress(accountId, scanned, scanUids.length, account.email);
     }
 
     if (inserted > 0) saveDatabase();
-    pushProgress(accountId, scanned, uids.length, account.email);
+    pushProgress(accountId, scanned, scanUids.length, account.email);
     Log.info("inbox.imap", `${account.email}: 扫描 ${scanned} 封，新增 ${inserted} 封`);
 
     // ── 退信原文补全 ──

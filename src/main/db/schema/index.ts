@@ -6,4 +6,5 @@ export { emailAccounts, type EmailAccountRow, type InsertEmailAccountRow } from 
 export { inboxMessages, type InboxMessageRow, type InsertInboxMessageRow } from "./inbox";
 export { templates, type TemplateRow, type InsertTemplateRow } from "./templates";
 export { sendQueue, type SendQueueRow, type InsertSendQueueRow } from "./send-queue";
-export { agentConversations, agentMessages, type AgentConversationRow, type AgentMessageRow } from "./agent";
+export { agentConversations, agentMessages, agentToolCalls, type AgentConversationRow, type AgentMessageRow, type AgentToolCallRow } from "./agent";
+export { rateQuotes, type RateQuoteRow, type InsertRateQuoteRow } from "./rates";

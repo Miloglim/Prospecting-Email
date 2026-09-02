@@ -153,6 +153,15 @@ let delayResolve: ((ok: boolean) => void) | null = null;
 let delayStarted = 0;
 let delayRemaining = 0;
 
+/** SMTP 错误分类（P1-2）：瞬态错误可安全重试，其余按永久失败处理。
+ *  瞬态 = 网络栈错误码（超时/连接重置/DNS 抖动）或服务端临时拒绝（421/450/451/452、灰名单、过载）。 */
+export function classifySmtpError(msg: string): "transient" | "permanent" {
+  const s = (msg || "").toLowerCase();
+  if (/(etimedout|econnreset|econnrefused|eai_again|esocket|epipe|ehostunreach|enetunreach)/.test(s)) return "transient";
+  if (/(temporar|try again|too many|busy|overload|greylist|graylist|unavailable|421|450|451|452)/.test(s)) return "transient";
+  return "permanent";
+}
+
 function sleep(ms: number): Promise<boolean> {
   return new Promise(resolve => {
     delayRemaining = ms; delayStarted = Date.now();
@@ -815,6 +824,13 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
 
     const first = sorted[0]!;
     const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+    // 动态发信 subject 也要按联系人变量渲染（模板模式在 buildQueue 已渲染；
+    // 此处曾漏渲染 → 生产会把「跟进 {{company}}」原样发出去，沙箱演练 S5 捕获）
+    const dynVars: TemplateVars = {
+      firstName: first.firstName, lastName: first.lastName, company: companyName,
+      email: first.email, title: first.title, phone: first.phone,
+    };
+    const subj = renderTemplate(subject, dynVars);
 
     for (let s = 0; s < sorted.length; s += groupSize) {
       const chunk = sorted.slice(s, s + groupSize);
@@ -822,8 +838,8 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
         id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
         companyId: first.companyId || 0,
         recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-        subject, tplBody: body,
-        contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
+        subject: subj, tplBody: body,
+        contactVars: dynVars,
         tplName: "动态更新",
         country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
         language: first.language || undefined,
@@ -869,6 +885,7 @@ async function runBatchLoop(): Promise<void> {
   const plan = [...queues.values()].flat().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   const acctEmails = new Map(getDb().select().from(emailAccounts).all().map(a => [a.id, a.email]));
   const failsByAccount = new Map<number, number>();
+  const sendAttempts = new Map<string, number>(); // P1-2: 每组瞬态重试次数（组 id → 已重试数）
 
   /** 账号熔断：把该账号剩余 pending 组标 failed（其他账号继续发 — 串行模型无需中断整批） */
   const tripAccount = (aid: number, fromIdx: number) => {
@@ -930,6 +947,8 @@ async function runBatchLoop(): Promise<void> {
       if (r.success) {
         const messageId = r.data?.messageId || null;
         item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; failsByAccount.set(accountId, 0);
+        // P1-2: 成功即清零持久化熔断计数
+        try { getDb().update(emailAccounts).set({ consecutiveFails: 0, circuitOpenAt: null }).where(eq(emailAccounts.id, accountId)).run(); } catch { /* */ }
         recordQuotaSend(item.recipients.length);
         let stageAdvanced = 0; // 本组阶段推进人数（日志可观测）
         try { getDb().update(sendQueue).set({ status: "sent", sentAt: item.sentAt }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
@@ -962,17 +981,42 @@ async function runBatchLoop(): Promise<void> {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
           }
         }
-        // 不每封写盘（64MB 库写盘 ~74ms，大量组会卡顿），依赖 main 进程 30s 自动保存
+        // P0-2: 每组即时落盘 —— 30s 窗口内崩溃会重发已触达客户，74ms/组的写盘成本可接受
+        saveDatabase();
         if (stageAdvanced > 0) Log.info("send.stage", `${item.companyName}: ${stageAdvanced}/${item.recipients.length} 人阶段已推进`);
         const s = state.accountStats.find(x => x.accountId === accountId);
         if (s) s.sent++;
       } else {
+        // P1-2: 瞬态错误有界重试（≤2 次，间隔 5s）——重试期间不计熔断、不落 failed
+        const attempt = (sendAttempts.get(item.id) ?? 0) + 1;
+        sendAttempts.set(item.id, attempt);
+        if (classifySmtpError(r.error || "") === "transient" && attempt <= 2) {
+          Log.warn("send.retry", `${item.companyName}: 瞬态错误，第 ${attempt}/2 次重试（${(r.error || "").slice(0, 120)}）`);
+          state.currentItem = null;
+          state.delaySeconds = 5;
+          state.delayUntil = new Date(Date.now() + 5000).toISOString();
+          state.delayReason = "group";
+          push(EVENTS.SEND_PROGRESS, state);
+          const ok = await sleep(5000);
+          if (loopGen !== myGen) return; // 已被新批次接管
+          state.delaySeconds = 0; state.delayUntil = null; state.delayReason = null;
+          if (!ok) break;
+          i--; // 同组重试
+          continue;
+        }
         item.status = "failed"; item.error = r.error; state.failedCount++;
         try { getDb().update(sendQueue).set({ status: "failed", error: r.error }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
+        saveDatabase(); // P0-2: 失败态同样即时落盘，崩溃恢复不会重发已判定失败的组
         const s = state.accountStats.find(x => x.accountId === accountId);
         if (s) s.failed++;
         const n = (failsByAccount.get(accountId) ?? 0) + 1;
         failsByAccount.set(accountId, n);
+        // P1-2: 熔断计数持久化（激活 accounts 表既有死字段，重启后熔断状态可见）
+        try {
+          getDb().update(emailAccounts)
+            .set({ consecutiveFails: n, circuitOpenAt: n >= 3 ? new Date().toISOString() : null })
+            .where(eq(emailAccounts.id, accountId)).run();
+        } catch { /* 统计失败不影响发送 */ }
         if (n >= 3) tripAccount(accountId, i + 1); // 连续失败阈值：只摘除该账号剩余组，批次继续
       }
     } else {
