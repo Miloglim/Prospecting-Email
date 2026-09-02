@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS agent_tool_calls (
   approval text NOT NULL, error text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_gaps (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  wanted text NOT NULL, scene text, workaround text,
+  hits integer DEFAULT 1 NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  last_seen_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
 CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at);

@@ -35,4 +35,17 @@ export const agentToolCalls = sqliteTable("agent_tool_calls", {
 });
 
 export type AgentToolCallRow = typeof agentToolCalls.$inferSelect;
+/** 能力缺口台账（开发期需求探针）：agent 碰到工具清单外的诉求时登记；同义 wanted 合并累加 hits，按被抱怨次数定优先级 */
+export const agentGaps = sqliteTable("agent_gaps", {
+  id:         integer("id").primaryKey({ autoIncrement: true }),
+  wanted:     text("wanted").notNull(),        // 想做什么做不到
+  scene:      text("scene"),                   // 当时在办的事
+  workaround: text("workaround"),              // 模型给的绕行办法
+  hits:       integer("hits").notNull().default(1),
+  createdAt:  text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lastSeenAt: text("last_seen_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentGapRow = typeof agentGaps.$inferSelect;
+
 export type InsertAgentToolCallRow = typeof agentToolCalls.$inferInsert;

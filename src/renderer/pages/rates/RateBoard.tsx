@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Checkbox, Input, Select, Space, Table, Tag, Tooltip, App as AntApp } from "antd";
-import { SearchOutlined, SyncOutlined, DollarOutlined, RobotOutlined } from "@ant-design/icons";
+import { SearchOutlined, SyncOutlined, DollarOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { askAssistant } from "../../lib/ask-ai";
+import { DiamondLogo } from "../../components/DiamondLogo";
 
 interface RateStatus {
   total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
@@ -49,7 +50,7 @@ export function RateBoard() {
     return () => clearTimeout(t);
   }, [podInput]);
 
-  const filters = useMemo(() => ({ lane, carrier, container, pod, includeExpired, limit: 200 }),
+  const filters = useMemo(() => ({ lane, carrier, container, pod, includeExpired, limit: 5000 }),
     [lane, carrier, container, pod, includeExpired]);
 
   const { data, isLoading } = useQuery({
@@ -92,7 +93,7 @@ export function RateBoard() {
         </Space>
         <Space>
           <Tooltip title="把当前筛选条件带进对话，AI 直接按这批条件查价并给结论">
-            <Button size="small" icon={<RobotOutlined />}
+            <Button size="small" icon={<DiamondLogo size={14} state="static" />}
               onClick={() => askAssistant({
                 question: (() => {
                   const parts = [lane && `${lane}航线`, container, carrier && `${carrier}船司`, pod && `到 ${pod}`].filter(Boolean);
@@ -126,8 +127,8 @@ export function RateBoard() {
         <Checkbox checked={includeExpired} onChange={e => setIncludeExpired(e.target.checked)}>
           <span className="text-[11px] text-gray-500">含已过期</span>
         </Checkbox>
-        {rows.length === 200 && (
-          <span className="text-[10px] text-amber-600">按价格升序仅显示前 200 条，请细化筛选</span>
+        {rows.length >= 5000 && (
+          <span className="text-[10px] text-amber-600">命中过多，按价格升序仅显示前 5000 条，请细化筛选</span>
         )}
       </div>
 

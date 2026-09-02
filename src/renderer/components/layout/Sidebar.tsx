@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
-  InboxOutlined, FileTextOutlined, RobotOutlined,
-  SettingOutlined, MoreOutlined, DollarOutlined,
+  InboxOutlined, FileTextOutlined,
+  SettingOutlined, MoreOutlined, DollarOutlined, UpOutlined,
 } from "@ant-design/icons";
 import { Dropdown, Input, Modal } from "antd";
 import { useAppContext } from "../../AppContext";
+import { DiamondLogo } from "../DiamondLogo";
 
 interface NavItem {
   key: string;
@@ -16,18 +17,19 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { key: "/assistant", icon: <RobotOutlined />, label: "新对话" },
+  { key: "/assistant", icon: <DiamondLogo size={15} state="idle" />, label: "新对话" },
   { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
   { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
   { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
+];
+
+// 豆包式空间让位：会话历史溢出时，这三行折叠进底栏图标，列表向上增高
+const collapsibleItems: NavItem[] = [
   { key: "/rates", icon: <DollarOutlined />, label: "运价库" },
   { key: "/campaigns", icon: <SendOutlined />, label: "发送中心" },
   { key: "/templates", icon: <FileTextOutlined />, label: "素材库" },
 ];
-
-const bottomItems: NavItem[] = [
-  { key: "/settings", icon: <SettingOutlined />, label: "设置" },
-];
+const NAV_ROWS_H = 138; // 三行导航 ≈46px/行，折叠↔恢复的滞回阈值
 
 // ── 会话历史面板（豆包式：嵌在全局导航栏内，仅 AI 助手页显示） ──
 
@@ -73,9 +75,16 @@ const convRowStyle = (active: boolean): React.CSSProperties => ({
   transition: "background 0.12s",
 });
 
-function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
+function ConversationsPanel({ collapsed, onMetrics, onTuck }: {
+  collapsed: boolean; onMetrics: (scroll: number, view: number) => void; onTuck: (down: boolean) => void;
+}) {
   const [convs, setConvs] = useState<ConvMeta[]>([]);
-  const [activeId, setActiveId] = useState<string | undefined>(() => readActiveConv());
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const lastTopRef = useRef(0);
+  // 当前会话由 router state 派生：navigate()（pushState）不触发 hashchange，读旧 URL 会亮错行；
+  // 这里跟随 router 状态重算，切去设置/仪表盘时 c 自然消失，高亮即灭
+  const cParam = useRouterState({ select: s => (s.location.search as { c?: unknown }).c });
+  const activeId = typeof cParam === "string" && cParam ? cParam : undefined;
   const [renaming, setRenaming] = useState<ConvMeta | null>(null);
   const [renameVal, setRenameVal] = useState("");
 
@@ -87,15 +96,21 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
 
   useEffect(() => {
     void refresh();
-    const sync = () => setActiveId(readActiveConv());
     const onChanged = () => void refresh();
-    window.addEventListener("hashchange", sync);
     window.addEventListener(CONVS_CHANGED, onChanged);
-    return () => {
-      window.removeEventListener("hashchange", sync);
-      window.removeEventListener(CONVS_CHANGED, onChanged);
-    };
+    return () => window.removeEventListener(CONVS_CHANGED, onChanged);
   }, [refresh]);
+
+  // 溢出探测：容器尺寸变化（RO）与会话数变化都上报内容高/可视高，父级做折叠滞回
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const report = () => onMetrics(el.scrollHeight, el.clientHeight);
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    report();
+    return () => ro.disconnect();
+  }, [onMetrics, convs]);
 
   const doRename = async () => {
     if (!renaming || !renameVal.trim()) return;
@@ -131,7 +146,14 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 6px" }}>
+      <div ref={scrollRef} onScroll={() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const t = el.scrollTop;
+        if (t - lastTopRef.current > 6) onTuck(true);          // 向下翻记录 → 让位
+        else if (t <= 4) onTuck(false);                        // 滚回顶 → 导航回来
+        lastTopRef.current = t;
+      }} style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 6px" }}>
         {groups.length === 0 && (
           <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", textAlign: "center", paddingTop: 12 }}>
             还没有会话，开始第一段对话吧
@@ -146,10 +168,9 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
             {g.items.map(c => (
               <div
                 key={c.id}
+                className={activeId === c.id ? "conv-row active" : "conv-row"}
                 style={convRowStyle(activeId === c.id)}
                 onClick={() => gotoConversation(c.id)}
-                onMouseEnter={e => { if (activeId !== c.id) e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-                onMouseLeave={e => { if (activeId !== c.id) e.currentTarget.style.background = "transparent"; }}
               >
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {c.title}
@@ -169,10 +190,11 @@ function ConversationsPanel({ collapsed }: { collapsed: boolean }) {
                   }}
                 >
                   <button
+                    className="conv-more"
                     onClick={e => e.stopPropagation()}
                     style={{
                       width: 18, height: 18, border: "none", background: "transparent",
-                      color: "rgba(255,255,255,0.4)", cursor: "pointer", flexShrink: 0,
+                      color: "rgba(255,255,255,0.6)", cursor: "pointer", flexShrink: 0,
                       display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 4,
                     }}
                   >
@@ -215,6 +237,29 @@ export function Sidebar() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: s => s.location.pathname });
   const [version, setVersion] = useState("");
+  /** 是否已在某个具体会话里——是则「新对话」不高亮（高亮交给会话列表那一行）；
+   *  与列表同源：从 router state 派生而非监听 hashchange（navigate() 不触发后者） */
+  const cParam = useRouterState({ select: s => (s.location.search as { c?: unknown }).c });
+  const activeConv = typeof cParam === "string" && cParam ? cParam : undefined;
+  // agent 输出中：「新对话」导航菱形从呼吸切到旋转（任意页面的全局状态灯）
+  const [agentBusy, setAgentBusy] = useState(false);
+
+  useEffect(() => {
+    const offChunk = window.api.on("agent:chunk", () => setAgentBusy(true));
+    const offDone = window.api.on("agent:done", () => setAgentBusy(false));
+    const offErr = window.api.on("agent:error", () => setAgentBusy(false));
+    return () => { offChunk(); offDone(); offErr(); };
+  }, []);
+
+  // 豆包式空间让位（双条件）：会话列表确实溢出 且 用户开始向下翻记录 → 运价库/发送中心/素材库
+  // 折叠进底栏图标，列表向上增高；滚回顶部或空间恢复则自动还原。溢出侧保留滞回防抖。
+  const [overflows, setOverflows] = useState(false);
+  const [tucked, setTucked] = useState(false);
+  const navHidden = overflows && tucked && !sidebarCollapsed;
+  const handleMetrics = useCallback((scroll: number, view: number) => {
+    setOverflows(prev => (prev ? scroll > view - NAV_ROWS_H - 8 : scroll > view + 4));
+  }, []);
+  const handleTuck = useCallback((down: boolean) => setTucked(down), []);
 
   useEffect(() => {
     window.api.invoke("system:appVersion").then((r) => {
@@ -226,8 +271,11 @@ export function Sidebar() {
     });
   }, []);
 
-  const isActive = (key: string) =>
-    pathname === key || (key !== "/" && pathname.startsWith(key));
+  const isActive = (key: string) => {
+    // 「新对话」只代表空态入口：已经在某个会话里就不高亮（高亮交给会话列表那一行）
+    if (key === "/assistant") return pathname === "/assistant" && !activeConv;
+    return pathname === key || (key !== "/" && pathname.startsWith(key));
+  };
 
   const width = sidebarCollapsed ? 64 : 210;
 
@@ -254,7 +302,9 @@ export function Sidebar() {
         flexShrink: 0, display: "inline-flex",
         alignItems: "center", justifyContent: "center",
       }}>
-        {item.icon}
+        {item.key === "/assistant"
+          ? <DiamondLogo size={15} state={agentBusy ? "running" : "idle"} />
+          : item.icon}
       </span>
       {!sidebarCollapsed && (
         <>
@@ -318,32 +368,86 @@ export function Sidebar() {
       <nav style={{ flex: 1, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
         <ul style={{ listStyle: "none", padding: 0, margin: 0, flexShrink: 0 }}>
           {navItems.map(renderItem)}
+          {/* 折叠让位只发生在展开态；rail 模式没有会话列表，三项常驻防入口丢失 */}
+          {!navHidden && collapsibleItems.map(renderItem)}
         </ul>
 
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "8px 12px 0", flexShrink: 0 }} />
-        <ConversationsPanel collapsed={sidebarCollapsed} />
-
-        {/* 设置 — 横线分隔，贴底 */}
-        <ul style={{
-          listStyle: "none", padding: 0, margin: 0,
-          borderTop: "1px solid rgba(255,255,255,0.12)",
-          marginTop: "auto", flexShrink: 0,
-        }}>
-          {bottomItems.map(renderItem)}
-        </ul>
+        <ConversationsPanel collapsed={sidebarCollapsed} onMetrics={handleMetrics} onTuck={handleTuck} />
       </nav>
 
-      {/* 版本号 — 固定在侧边栏底部 */}
-      {!sidebarCollapsed && (
-        <div style={{
-          padding: "10px 20px 10px 20px",
-          borderTop: "1px solid rgba(255,255,255,0.12)",
-          fontSize: 11, color: "rgba(255,255,255,0.45)",
-          flexShrink: 0,
-        }}>
-          v{version || "4.0"}
+      {/* 底栏 — 折叠态图标组 + 设置（轻量图标）+ 版本号；Shift+点版本号重开新手向导（沿用旧 PE 调试入口） */}
+      <div style={{
+        borderTop: "1px solid rgba(255,255,255,0.12)",
+        padding: sidebarCollapsed ? "8px 0" : "8px 14px",
+        display: "flex", alignItems: "center",
+        justifyContent: sidebarCollapsed ? "center" : "space-between",
+        flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          {navHidden && (
+            <>
+              <span
+                title="已收起 3 个入口 · 点击展开（列表滚回顶部也会自动展开）"
+                onClick={() => setTucked(false)}
+                style={{
+                  width: 26, height: 26, borderRadius: 6, fontSize: 13,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer", color: "rgba(255,255,255,0.55)",
+                  transition: "background 0.15s, color 0.15s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#fff"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,255,255,0.55)"; }}
+              >
+                <UpOutlined />
+              </span>
+              {collapsibleItems.map(it => (
+                <FootIcon key={it.key} icon={it.icon} label={it.label}
+                  active={isActive(it.key)} onClick={() => navigate({ to: it.key })} />
+              ))}
+              <span style={{ width: 1, height: 16, background: "rgba(255,255,255,0.12)", margin: "0 4px 0 2px" }} />
+            </>
+          )}
+          <FootIcon icon={<SettingOutlined />} label="设置"
+            active={isActive("/settings")} onClick={() => navigate({ to: "/settings" })} />
         </div>
-      )}
+        {!sidebarCollapsed && (
+          <span
+            title="Shift+点击：重开新手向导"
+            onClick={(e) => { if (e.shiftKey) window.dispatchEvent(new Event("open-onboarding")); }}
+            style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", cursor: "pointer", userSelect: "none" }}
+          >
+            v{version || "4.0"}
+          </span>
+        )}
+      </div>
     </aside>
+  );
+}
+
+/** 底栏轻量图标按钮（设置 / 折叠进来的导航项共用） */
+function FootIcon({ icon, label, active, onClick }: {
+  icon: React.ReactNode; label: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <span
+      title={label}
+      onClick={onClick}
+      style={{
+        width: 26, height: 26, borderRadius: 6, fontSize: 14,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        cursor: "pointer",
+        color: active ? "#fff" : "rgba(255,255,255,0.45)",
+        background: active ? "rgba(255,255,255,0.12)" : "transparent",
+        transition: "background 0.15s, color 0.15s",
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.color = "#fff"; }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = active ? "rgba(255,255,255,0.12)" : "transparent";
+        e.currentTarget.style.color = active ? "#fff" : "rgba(255,255,255,0.45)";
+      }}
+    >
+      {icon}
+    </span>
   );
 }

@@ -93,6 +93,11 @@ export function registerAiIPC() {
     return await Provider.testProfile(id);
   });
 
+  // AI 追问建议：基于一轮问答产出 2-3 条下一步可问的短问题（失败回空由前端兜底）
+  ipcMain.handle(IPC.AI.FOLLOW_UPS, async (_e, input: { userText?: string; aiText?: string }) => {
+    return await Ai.suggestFollowUps({ userText: input?.userText ?? "", aiText: input?.aiText ?? "" });
+  });
+
   // 出网代理自动检测（只读展示；实际生效在 netFetch 里，无需用户配置）
   ipcMain.handle(IPC.AI.PROXY_INFO, () => NetProxy.proxyInfo());
 }

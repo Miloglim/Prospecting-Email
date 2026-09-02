@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Avatar, Button, Modal, Skeleton, Space, Table, Tag, Tooltip } from "antd";
+import type { ReactNode } from "react";
+import { Alert, Avatar, Button, Checkbox, Modal, Skeleton, Space, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import {
-  RobotOutlined, UserOutlined, LoadingOutlined, CheckCircleOutlined,
-  BulbOutlined, DownOutlined, RightOutlined,
+  UserOutlined, LoadingOutlined, CheckCircleOutlined,
+  BulbOutlined, DownOutlined, RightOutlined, FileTextOutlined, CloseCircleOutlined, CopyOutlined,
 } from "@ant-design/icons";
-import { Bubble, Sender } from "@ant-design/x";
+import { Bubble, Sender, ThoughtChain } from "@ant-design/x";
+import type { ThoughtChainItem } from "@ant-design/x";
 import Markdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github.css";
 import remarkGfm from "remark-gfm";
+import { DiamondLogo } from "../../components/DiamondLogo";
 import { CONVS_CHANGED, gotoConversation } from "../../components/layout/Sidebar";
 
 /** IPC 返回的统一包裹形态（结构同 main/errors 的 Result，渲染层本地声明避免跨层 import） */
@@ -22,17 +27,30 @@ interface Msg {
   /** 正在流式接收 */
   streaming?: boolean;
   error?: boolean;
+  /** 产生时刻（过程行折叠后据此算「用时 Xs」；历史消息可缺省） */
+  ts?: number;
   /** 过程卡结构化字段（role=tool 时） */
   chip?: {
     kind: "calling" | "done" | "reasoning";
     tool?: string;
+    /** 工具调用 id：calling → done 原地升级按它配对，同名连发不会错配 */
+    callId?: string;
     args?: string;
     detail?: string;   // 参数摘要 / 结果摘要 / 思考全文
     brief?: string;    // done 卡的「N 条结果」小尾巴
   };
+  /** 任务清单快照（role=tool，由 agent:plan 全量覆盖、原地刷新） */
+  plan?: PlanStep[];
+  /** 后台任务卡引用（工具结果里的 task 字段，进度走 agent:task 事件） */
+  task?: { taskId: string };
+  /** 本轮 token 结算（挂在收尾的 AI 气泡上；端点没回 usage 就不显示） */
+  usage?: { requests?: number; input?: number; output?: number; cached?: number };
   /** 动作执行后的回执行（role=tool 无 chip 时），带可选跳转 */
   link?: { label: string; href: string };
 }
+
+/** 任务清单里的一步（与主进程 update_plan 归一后的形状一致） */
+interface PlanStep { text: string; state: "pending" | "doing" | "done" }
 
 /** 工具 → 人话名（过程卡展示用） */
 const TOOL_LABELS: Record<string, string> = {
@@ -47,6 +65,11 @@ const TOOL_LABELS: Record<string, string> = {
   reminders_due: "查询到期提醒",
   accounts_status: "查询账号健康",
   send_queue_add: "加入发信队列",
+  update_plan: "更新任务清单",
+  export_artifact: "导出文件",
+  start_batch_task: "启动后台任务",
+  report_gap: "登记能力缺口",
+  reasoning: "思考",
 };
 const toolLabel = (name?: string) => (name && TOOL_LABELS[name]) || name || "工具";
 
@@ -63,6 +86,9 @@ function resultBrief(r?: string): string {
   try {
     const o = JSON.parse(r) as unknown;
     if (Array.isArray(o)) return `${o.length} 条结果`;
+    const p2 = o as { artifact?: { name?: unknown }; task?: { total?: unknown } };
+    if (p2.artifact && typeof p2.artifact.name === "string") return `已生成 ${p2.artifact.name}`;
+    if (p2.task && typeof p2.task.total === "number") return `共 ${p2.task.total} 家`;
     const obj = o as {
       total?: number; count?: number; quotes?: unknown; data?: { length?: number };
       results?: unknown[]; dueCount?: number; overdueCount?: number; pendingGroups?: number; healthy?: number; enabled?: number;
@@ -152,8 +178,16 @@ interface ActionDto {
   href?: string;
 }
 
-/** 工具结果 JSON → 动作列表 / 草稿（generate_draft 的唯一形态：subject+body+actions） */
-function parseResult(detail?: string): { actions: ActionDto[]; draft?: { subject: string; body: string } } | null {
+/** 导出文件卡（export_artifact 的唯一形态：主进程落盘后回传元信息） */
+interface ArtifactDto { name: string; path: string; sizeBytes?: number; format?: string }
+
+/** 工具结果 JSON → 动作列表 / 草稿 / 文件卡 / 后台任务卡引用 */
+function parseResult(detail?: string): {
+  actions: ActionDto[];
+  draft?: { subject: string; body: string };
+  artifact?: ArtifactDto;
+  task?: { taskId: string };
+} | null {
   if (!detail) return null;
   try {
     const o = JSON.parse(detail) as Record<string, unknown>;
@@ -161,8 +195,14 @@ function parseResult(detail?: string): { actions: ActionDto[]; draft?: { subject
     const draft = typeof o.body === "string" && typeof o.subject === "string"
       ? { subject: o.subject, body: o.body }
       : undefined;
-    if (!actions.length && !draft) return null;
-    return { actions, ...(draft ? { draft } : {}) };
+    const rawArt = o.artifact as { name?: unknown; path?: unknown; sizeBytes?: unknown; format?: unknown } | undefined;
+    const artifact = rawArt && typeof rawArt.path === "string" && typeof rawArt.name === "string"
+      ? { name: rawArt.name, path: rawArt.path, sizeBytes: typeof rawArt.sizeBytes === "number" ? rawArt.sizeBytes : undefined, format: typeof rawArt.format === "string" ? rawArt.format : undefined }
+      : undefined;
+    const rawTask = o.task as { taskId?: unknown } | undefined;
+    const task = rawTask && typeof rawTask.taskId === "string" ? { taskId: rawTask.taskId } : undefined;
+    if (!actions.length && !draft && !artifact && !task) return null;
+    return { actions, ...(draft ? { draft } : {}), ...(artifact ? { artifact } : {}), ...(task ? { task } : {}) };
   } catch { return null; }
 }
 
@@ -226,6 +266,136 @@ function DraftCard({ subject, body }: { subject: string; body: string }) {
   );
 }
 
+/** 导出文件卡：文件名 + 格式/大小 + 打开位置/复制路径 */
+function FileCard({ artifact }: { artifact: ArtifactDto }) {
+  const [copied, setCopied] = useState(false);
+  const [openErr, setOpenErr] = useState("");
+  const size = artifact.sizeBytes != null
+    ? (artifact.sizeBytes >= 1024 ? `${(artifact.sizeBytes / 1024).toFixed(1)} KB` : `${artifact.sizeBytes} B`)
+    : "";
+  return (
+    <div className="border border-gray-200 rounded-lg bg-white max-w-[520px] px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <FileTextOutlined style={{ fontSize: 18, color: "#00897b" }} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12.5px] font-medium text-gray-800 truncate" title={artifact.path}>{artifact.name}</div>
+          <div className="text-[11px] text-gray-400">
+            {(artifact.format ?? "").toUpperCase()}{size && ` · ${size}`}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2">
+        <Button type="primary" ghost size="small" style={{ fontSize: 12 }}
+          onClick={async () => {
+            const r = await window.api.invoke("agent:openPath", { path: artifact.path }) as IpcResult<void>;
+            setOpenErr(r?.success ? "" : (r?.error || "打开失败"));
+          }}>
+          打开位置
+        </Button>
+        <Button size="small" style={{ fontSize: 12 }}
+          onClick={async () => {
+            try {
+              await window.navigator.clipboard.writeText(artifact.path);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1600);
+            } catch { /* 剪贴板不可用时静默 */ }
+          }}>
+          {copied ? "已复制" : "复制路径"}
+        </Button>
+        {openErr && <span className="text-[11px] text-red-400">{openErr}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** 后台任务快照（与主进程 bg-task.service 同形，渲染层本地声明避免跨层 import） */
+interface TaskSnapshot {
+  id: string;
+  title: string;
+  state: "running" | "done" | "failed" | "cancelled";
+  items: Array<{ label: string; state: "pending" | "running" | "done" | "failed"; note?: string }>;
+  artifact?: ArtifactDto;
+}
+
+/** 后台任务卡：挂载取快照 + 订阅 agent:task 原地刷新；可取消，完成后产物一键打开 */
+function TaskCard({ taskId }: { taskId: string }) {
+  const [task, setTask] = useState<TaskSnapshot | null>(null);
+  const [gone, setGone] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const r = await window.api.invoke("agent:getTask", { taskId }) as IpcResult<TaskSnapshot>;
+      if (!alive) return;
+      if (r?.success && r.data) setTask(r.data); else setGone(true);
+    })();
+    const off = window.api.on("agent:task", (data) => {
+      const d = data as { taskId?: string; task?: TaskSnapshot };
+      if (d.taskId === taskId && d.task) setTask(d.task);
+    });
+    return () => { alive = false; off(); };
+  }, [taskId]);
+
+  if (gone) return <div className="text-[12px] text-gray-400 py-1">后台任务已中断（应用重启后失效）</div>;
+  if (!task) {
+    return (
+      <div className="text-[12px] text-gray-400 py-1">
+        <LoadingOutlined spin className="mr-1" />正在读取任务进度…
+      </div>
+    );
+  }
+
+  const done = task.items.filter(i => i.state === "done").length;
+  const failed = task.items.filter(i => i.state === "failed").length;
+  const running = task.state === "running";
+  return (
+    <div className="my-1.5 max-w-[600px] border border-gray-200 rounded-lg bg-white px-3 py-2.5">
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[12px] font-medium text-gray-700">
+          {running && <LoadingOutlined spin style={{ color: "#00bfa5" }} className="mr-1.5" />}
+          {task.title}
+        </span>
+        <span className="text-[11px] text-gray-400 shrink-0 ml-2">
+          {done}{failed ? ` + ${failed} 失败` : ""}/{task.items.length}
+        </span>
+      </div>
+      <ol className="m-0 p-0 list-none space-y-1">
+        {task.items.map((s, i) => (
+          <li key={i} className="flex items-start gap-2 text-[12.5px] leading-snug">
+            <span className="mt-0.5 shrink-0 w-3.5 text-center">
+              {s.state === "done"
+                ? <CheckCircleOutlined style={{ fontSize: 12, color: "#52c41a" }} />
+                : s.state === "running"
+                  ? <LoadingOutlined spin style={{ fontSize: 12, color: "#00bfa5" }} />
+                  : s.state === "failed"
+                    ? <CloseCircleOutlined style={{ fontSize: 12, color: "#ff4d4f" }} />
+                    : <span className="inline-block w-2 h-2 rounded-full border border-gray-300" />}
+            </span>
+            <span className={s.state === "failed" ? "text-red-400" : s.state === "running" ? "text-gray-800" : "text-gray-500"}>
+              {s.label}{s.state === "failed" && s.note ? ` · ${s.note}` : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className="flex items-center gap-2 mt-2">
+        {running && (
+          <Button size="small" style={{ fontSize: 12 }}
+            onClick={() => { void window.api.invoke("agent:cancelTask", { taskId }); }}>
+            取消
+          </Button>
+        )}
+        {!running && task.artifact && <FileCard artifact={task.artifact} />}
+        {task.state === "cancelled" && (
+          <span className="text-[11px] text-gray-400">已取消 · 完成 {done} 项</span>
+        )}
+        {task.state === "failed" && !task.artifact && (
+          <span className="text-[11px] text-gray-400">没有一家成功，未生成汇总文件</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Markdown 表格容错：GFM 要求表格块前后必须空行，模型常漏——渲染前自动补 */
 function mdFixTables(src: string): string {
   if (!src.includes("|")) return src;
@@ -246,49 +416,104 @@ function mdFixTables(src: string): string {
   return out.join("\n");
 }
 
-/** 过程行（无气泡、无边框，灰字细行，豆包/ChatGPT 过程区同款语言）；长内容可展开；结果可带动作卡 */
-function ProcessLine({ chip, done, onAction }: {
-  chip: NonNullable<Msg["chip"]>;
-  done?: Record<string, string>;
-  onAction?: (a: ActionDto) => void;
+/** 表格右上角复制按钮（绝对定位，父级需 relative）：整表以 TSV 进剪贴板，可直接粘进 Excel / 谷歌表格 */
+function CopyTableButton({ rows, cols }: {
+  rows: Record<string, unknown>[];
+  cols: Array<{ key: string; label: string }>;
 }) {
-  const [open, setOpen] = useState(false);
-  const full = chip.detail || "";
-  const expandable = full.length > 80;
+  const [copied, setCopied] = useState(false);
+  // 制表符/换行会破坏列对齐，压成空格；对象值序列化，空值给空串（比 "—" 更适合粘贴）
+  const clean = (v: unknown) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v))
+    .replace(/[\t\r\n]+/g, " ");
+  return (
+    <Tooltip title={rows.length > 10 ? `复制全部 ${rows.length} 行` : "复制表格"}>
+      <Button size="small"
+        className="!absolute top-1.5 right-1.5 z-10"
+        style={{ fontSize: 12, background: "rgba(255, 255, 255, 0.92)" }}
+        icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
+        onClick={async () => {
+          const tsv = [
+            cols.map(c => clean(c.label)).join("\t"),
+            ...rows.map(r => cols.map(c => clean(r[c.key])).join("\t")),
+          ].join("\n");
+          try {
+            await window.navigator.clipboard.writeText(tsv);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1600);
+          } catch { /* 剪贴板不可用时静默 */ }
+        }}>
+        {copied ? "已复制" : "复制"}
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** 正文 Markdown 表格的产品化：套同款白底灰线+阴影卡片，右上角浮动复制按钮（点按时从 DOM 提取 TSV） */
+function MDTableBlock({ children }: { children?: ReactNode }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  return (
+    <div ref={boxRef} className="chat-table-card relative">
+      <Tooltip title="复制表格">
+        <Button size="small"
+          className="!absolute top-1.5 right-1.5 z-10"
+          style={{ fontSize: 12, background: "rgba(255, 255, 255, 0.92)" }}
+          icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
+          onClick={async () => {
+            const trs = Array.from(boxRef.current?.querySelectorAll("tr") ?? []);
+            const tsv = trs
+              .map(tr => Array.from(tr.querySelectorAll("th,td"))
+                .map(c => (c.textContent ?? "").replace(/\s+/g, " ").trim()).join("\t"))
+              .join("\n");
+            try {
+              await window.navigator.clipboard.writeText(tsv);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1600);
+            } catch { /* 剪贴板不可用时静默 */ }
+          }}>
+          {copied ? "已复制" : "复制"}
+        </Button>
+      </Tooltip>
+      {children}
+    </div>
+  );
+}
+
+/** 产物卡：done 过程行里带数据表格 / 草稿 / 动作时独立摊开（不参与折叠）；纯状态行交给 ProcessChain */
+function ArtifactBlock({ chip, done, onAction }: {
+  chip: NonNullable<Msg["chip"]>;
+  done: Record<string, string>;
+  onAction: (a: ActionDto) => void;
+}) {
   const parsed = parseResult(chip.detail);
   const actions = parsed?.actions ?? [];
-
-  if (chip.kind === "reasoning") {
-    return (
-      <div className="text-[12px] text-gray-400 max-w-[600px] py-0.5">
-        <span
-          className={`inline-flex items-center gap-1.5 ${expandable ? "cursor-pointer" : ""}`}
-          onClick={() => expandable && setOpen(o => !o)}
-        >
-          <BulbOutlined style={{ color: "#bfbfbf" }} />
-          <span>已完成思考</span>
-          {expandable && (open ? <DownOutlined style={{ fontSize: 8 }} /> : <RightOutlined style={{ fontSize: 8 }} />)}
-        </span>
-        {open && (
-          <div className="mt-1 ml-4 pl-2 border-l border-gray-200 whitespace-pre-wrap leading-relaxed">
-            {full}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (chip.kind === "calling") {
-    return (
-      <div className="text-[12px] text-gray-400 inline-flex items-center gap-1.5 py-0.5 max-w-[600px]">
-        <LoadingOutlined spin style={{ fontSize: 11 }} />
-        <span>正在{toolLabel(chip.tool)}{chip.args ? <span className="text-gray-300"> · {chip.args}</span> : ""}…</span>
-      </div>
-    );
-  }
-
-  // done：有结构化数据 → 数据表格卡；否则灰字结果行
   const rows = asRows(chip.detail);
+  const brief = chip.brief || (rows ? `${rows.length} 条结果` : "");
+  const header = (
+    <div className="inline-flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5">
+      <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 11 }} />
+      <span>已{toolLabel(chip.tool)}{brief && <span className="text-gray-400"> · {brief}</span>}</span>
+    </div>
+  );
+
+  if (parsed?.artifact) {
+    return (
+      <div className="py-1">
+        {header}
+        <FileCard artifact={parsed.artifact} />
+      </div>
+    );
+  }
+
+  if (parsed?.task) {
+    return (
+      <div className="py-1">
+        {header}
+        <TaskCard taskId={parsed.task.taskId} />
+      </div>
+    );
+  }
+
   if (rows) {
     const cols: TableColumnsType<Record<string, unknown>> = Object.keys(rows[0]!).slice(0, 7).map(k => ({
       title: COL_LABELS[k] || k,
@@ -311,84 +536,211 @@ function ProcessLine({ chip, done, onAction }: {
         },
       });
     }
+    const copyCols = Object.keys(rows[0]!).slice(0, 7).map(k => ({ key: k, label: COL_LABELS[k] || k }));
     return (
       <div className="py-1 max-w-[720px]">
-        <div className="inline-flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5">
-          <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 11 }} />
-          <span>已{toolLabel(chip.tool)} · {chip.brief || `${rows.length} 条结果`}</span>
+        {header}
+        <div className="chat-table-card relative">
+          <CopyTableButton rows={rows} cols={copyCols} />
+          <Table
+            dataSource={rows.slice(0, 10).map((r, i) => ({ ...r, __k: i }))}
+            rowKey="__k"
+            columns={cols}
+            size="small"
+            bordered
+            pagination={false}
+            scroll={{ x: "max-content" }}
+          />
         </div>
-        <Table
-          dataSource={rows.slice(0, 10).map((r, i) => ({ ...r, __k: i }))}
-          rowKey="__k"
-          columns={cols}
-          size="small"
-          bordered
-          pagination={false}
-          scroll={{ x: "max-content" }}
-        />
         {rows.length > 10 && (
           <div className="text-[11px] text-gray-300 mt-1">仅展示前 10 条，完整 {rows.length} 条可追问细化</div>
         )}
-        {actions.length > 0 && onAction && (
-          <ActionRow actions={actions.slice(0, 2)} done={done ?? {}} onAction={onAction} />
-        )}
+        {actions.length > 0 && <ActionRow actions={actions.slice(0, 2)} done={done} onAction={onAction} />}
       </div>
     );
   }
-  // 草稿类结果（generate_draft）→ 专用草稿卡
-  if (parsed?.draft && !rows) {
+
+  if (parsed?.draft) {
     return (
       <div className="py-1">
-        <div className="inline-flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5">
-          <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 11 }} />
-          <span>已{toolLabel(chip.tool)}</span>
-        </div>
+        {header}
         <DraftCard subject={parsed.draft.subject} body={parsed.draft.body} />
-        {actions.length > 0 && onAction && (
-          <ActionRow actions={actions.slice(0, 2)} done={done ?? {}} onAction={onAction} />
-        )}
+        {actions.length > 0 && <ActionRow actions={actions.slice(0, 2)} done={done} onAction={onAction} />}
       </div>
     );
   }
+
+  if (actions.length) {
+    return (
+      <div className="py-1 max-w-[720px]">
+        {header}
+        <ActionRow actions={actions.slice(0, 2)} done={done} onAction={onAction} />
+      </div>
+    );
+  }
+  return null;
+}
+
+/** done 过程行是否承载「产物」（数据表格 / 草稿 / 动作卡 / 文件卡 / 任务卡）：产物不折，纯状态行才折进过程里 */
+function chipHasArtifact(chip: NonNullable<Msg["chip"]>): boolean {
+  if (chip.kind !== "done") return false;
+  const parsed = parseResult(chip.detail);
+  return !!asRows(chip.detail) || !!parsed?.draft || !!parsed?.actions?.length
+    || !!parsed?.artifact || !!parsed?.task;
+}
+
+/** 消息流 → 渲染段：一整轮的纯过程行折成一段（停在首条位置），产物/清单/气泡各自独立 */
+type Segment =
+  | { type: "msg"; key: string; m: Msg }
+  | { type: "chain"; key: string; items: Msg[] };
+
+function segmentMessages(list: Msg[]): Segment[] {
+  const segs: Segment[] = [];
+  let open: { type: "chain"; key: string; items: Msg[] } | null = null;
+  for (const m of list) {
+    if (m.role === "user") { open = null; segs.push({ type: "msg", key: m.key, m }); continue; }
+    if (m.role === "tool" && m.chip && !chipHasArtifact(m.chip)) {
+      if (!open) { open = { type: "chain", key: m.key, items: [] }; segs.push(open); }
+      open.items.push(m);
+      continue;
+    }
+    segs.push({ type: "msg", key: m.key, m });
+  }
+  return segs;
+}
+
+/** 秒数 → 「12s」/「2分05秒」；无时间戳时返回空串（历史消息不参与计时） */
+function fmtSec(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}分${String(s % 60).padStart(2, "0")}秒`;
+}
+/** token 数 → 1.2k（够读即可，不做小数位考究） */
+const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n));
+
+/**
+ * 过程折叠：跑的时候摊开（ThoughtChain 逐步点亮，耗时每秒一跳），回合一结束收成一行
+ * 「已处理 N 步 · 用时 Xs」。想回看细节点开头部即可 —— 答案不再被过程挤出屏幕。
+ */
+function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: number }) {
+  const [open, setOpen] = useState(false);
+  const toolSteps = items.filter(m => m.chip?.kind !== "reasoning").length;
+  const thinkSteps = items.length - toolSteps;
+  const start = items[0]?.ts;
+  const end = live ? now : items.reduce((n, m) => Math.max(n, m.ts ?? 0), 0);
+  const spent = start ? fmtSec(end - start) : "";
+  const expanded = live || open;
+
+  const label = toolSteps === 0
+    ? (thinkSteps ? `已思考 ${spent}`.trim() : "已完成一步")
+    : `${live ? "正在处理" : "已处理"} ${toolSteps} 步${spent ? ` · ${spent}` : ""}${thinkSteps ? ` · 含 ${thinkSteps} 次思考` : ""}`;
+
+  const chainItems: ThoughtChainItem[] = items.map(m => {
+    const c = m.chip!;
+    const brief = (s?: string, n = 90) => (s && s.length > n ? `${s.slice(0, n)}…` : s) ?? "";
+    if (c.kind === "reasoning") {
+      return {
+        key: m.key, icon: <BulbOutlined style={{ fontSize: 10, color: "#bfbfbf" }} />,
+        title: <span className="text-[12px] text-gray-500">思考</span>,
+        content: (
+          <div className="text-[12px] text-gray-400 pl-2 border-l border-gray-200 whitespace-pre-wrap leading-relaxed">
+            {brief(c.detail, 400)}
+          </div>
+        ),
+        status: "success",
+      };
+    }
+    if (c.kind === "calling") {
+      return {
+        key: m.key, icon: <LoadingOutlined spin style={{ fontSize: 10, color: "#8c8c8c" }} />,
+        title: <span className="text-[12px] text-gray-500">正在{toolLabel(c.tool)}</span>,
+        description: c.args ? <span className="text-[11px]">{brief(c.args, 60)}</span> : undefined,
+        status: "pending",
+      };
+    }
+    return {
+      key: m.key, icon: <CheckCircleOutlined style={{ fontSize: 10, color: "#52c41a" }} />,
+      title: <span className="text-[12px] text-gray-500">已{toolLabel(c.tool)}</span>,
+      description: (c.brief || c.args)
+        ? <span className="text-[11px]">{brief(c.brief || c.args, 60)}</span>
+        : undefined,
+      footer: c.detail
+        ? (
+          <div className="text-[11px] text-gray-300 whitespace-pre-wrap break-all">
+            {brief(c.detail, 240)}
+          </div>
+        )
+        : undefined,
+      status: "success",
+    };
+  });
+
   return (
-    <div className="text-[12px] text-gray-400 py-0.5 max-w-[600px]">
-      <span
-        className={`inline-flex items-center gap-1.5 ${expandable ? "cursor-pointer" : ""}`}
-        onClick={() => expandable && setOpen(o => !o)}
+    <div className="py-0.5 max-w-[720px]">
+      <div
+        className={`inline-flex items-center gap-1.5 text-[12px] text-gray-400 ${live ? "" : "cursor-pointer select-none"}`}
+        onClick={() => !live && setOpen(o => !o)}
       >
-        <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 11 }} />
-        <span>
-          已{toolLabel(chip.tool)}
-          {chip.brief && <span className="text-gray-400"> · {chip.brief}</span>}
-        </span>
-        {expandable && (open ? <DownOutlined style={{ fontSize: 8 }} /> : <RightOutlined style={{ fontSize: 8 }} />)}
-      </span>
-      {open && (
-        <div className="mt-0.5 ml-5 pl-2 border-l border-gray-200 text-gray-300 whitespace-pre-wrap break-all">
-          {full}
+        {live ? <LoadingOutlined spin style={{ fontSize: 11 }} /> : <CheckCircleOutlined style={{ fontSize: 11, color: "#52c41a" }} />}
+        <span>{label}</span>
+        {!live && (open ? <DownOutlined style={{ fontSize: 8 }} /> : <RightOutlined style={{ fontSize: 8 }} />)}
+      </div>
+      {expanded && (
+        <div className="agent-chain mt-1 ml-0.5">
+          <ThoughtChain size="small" items={chainItems} />
         </div>
       )}
-      {actions.length > 0 && onAction && (
-        <ActionRow actions={actions.slice(0, 2)} done={done ?? {}} onAction={onAction} />
-      )}
+    </div>
+  );
+}
+
+/** 任务清单卡：多步任务的进度可视化，随 update_plan 全量快照原地刷新 */
+function PlanCard({ items }: { items: PlanStep[] }) {
+  const done = items.filter(i => i.state === "done").length;
+  return (
+    <div className="my-1.5 max-w-[600px] border border-gray-200 rounded-lg bg-white px-3 py-2.5">
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[12px] font-medium text-gray-700">任务清单</span>
+        <span className="text-[11px] text-gray-400">{done}/{items.length}</span>
+      </div>
+      <ol className="m-0 p-0 list-none space-y-1">
+        {items.map((s, i) => (
+          <li key={i} className="flex items-start gap-2 text-[12.5px] leading-snug">
+            <span className="mt-0.5 shrink-0 w-3.5 text-center">
+              {s.state === "done"
+                ? <CheckCircleOutlined style={{ fontSize: 12, color: "#52c41a" }} />
+                : s.state === "doing"
+                  ? <LoadingOutlined spin style={{ fontSize: 12, color: "#00bfa5" }} />
+                  : <span className="inline-block w-2 h-2 rounded-full border border-gray-300" />}
+            </span>
+            <span className={s.state === "done" ? "text-gray-400 line-through" : s.state === "doing" ? "text-gray-800" : "text-gray-500"}>
+              {s.text}
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
 
 /** 过程卡插入在「正在流式的 AI 气泡」之前，保证回答气泡恒在列表末尾（豆包式过程在上、答案在下） */
 function insertBeforeStreamingBubble(prev: Msg[], chip: Msg): Msg[] {
+  const stamped = { ...chip, ts: chip.ts ?? Date.now() };
   for (let i = prev.length - 1; i >= 0; i--) {
     const m = prev[i]!;
     if (m.role === "ai" && m.streaming) {
-      return [...prev.slice(0, i), chip, ...prev.slice(i)];
+      return [...prev.slice(0, i), stamped, ...prev.slice(i)];
     }
   }
-  return [...prev, chip];
+  return [...prev, stamped];
 }
 
 interface ApprovalReq {
   approvalId: string;
-  items: Array<{ tool?: string; args?: unknown }>;
+  conversationId?: string;
+  /** autoApprovable 由主进程按 policy 下发：只有低风险写工具才允许「本会话内不再询问」 */
+  items: Array<{ tool?: string; args?: unknown; autoApprovable?: boolean }>;
 }
 
 let seq = 0;
@@ -405,7 +757,7 @@ const CAPABILITIES: Array<{ title: string; cap: string; items: string[] }> = [
   },
   {
     title: "管邮件", cap: "检索收件箱 + 逐封总结并给下一步建议",
-    items: ["我今天有哪些未读邮件", "总结一下 juan@acme.com 发来的询盘邮件"],
+    items: ["我今天有哪些未读邮件", "总结一下 juan@acme.com 发来的询盘邮件", "把未读邮件都总结一下，导出成文件"],
   },
   {
     title: "跟进客户", cap: "联系人检索 + 今日到期提醒 + 记跟进（写操作需确认）",
@@ -417,7 +769,7 @@ const CAPABILITIES: Array<{ title: string; cap: string; items: string[] }> = [
   },
   {
     title: "账号与公司", cap: "发信账号健康检查 + 公司网络背调",
-    items: ["我现在有几个发信账号能用", "给 ACME 这家公司做个背调"],
+    items: ["我现在有几个发信账号能用", "给 ACME 这家公司做个背调", "把 Acme、Beta、Gamma 这三家都背调一遍"],
   },
 ];
 
@@ -432,6 +784,8 @@ const FOLLOW_UPS: Record<string, string[]> = {
   accounts_status: ["异常的那个账号怎么修", "现在队列里还有多少没发出去"],
   company_backcheck: ["根据背调写一封开发信", "把这个公司的人从客户库里找出来"],
   send_queue_add: ["发送队列现在什么状态", "再给下一家也准备一封"],
+  export_artifact: ["把刚才的内容再导出一份 csv", "继续总结剩下的未读邮件"],
+  start_batch_task: ["等结果出来后，给评级最高的那家写封开发信", "发送队列现在什么状态"],
 };
 
 function readConvFromHash(): string | undefined {
@@ -464,6 +818,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/进度", desc: "发信队列进度：/进度", noArg: true, template: () => "发送队列现在什么状态，还有多少没发出去" },
   { cmd: "/背调", desc: "公司网络背调，如「/背调 Acme Ltd」", template: a => `帮我背调「${a}」这家公司的背景、进口活跃度和货代契合点` },
   { cmd: "/新对话", desc: "开一个新会话：/新对话" },
+  { cmd: "/缺口", desc: "查看助手登记过的能力缺口：/缺口" },
   { cmd: "/help", desc: "查看可用命令：/help" },
 ];
 const SLASH_HELP = `可用命令：\n${SLASH_COMMANDS.map(c => `${c.cmd} — ${c.desc}`).join("\n")}`;
@@ -483,11 +838,25 @@ export function AssistantPage() {
   const [thinking, setThinking] = useState(false);
   const [inputVal, setInputVal] = useState("");
   const [approval, setApproval] = useState<ApprovalReq | null>(null);
+  /** 审批卡上的「本会话内不再询问」勾选（仅低风险写工具可选，外发类永不出现该勾选项） */
+  const [rememberApproval, setRememberApproval] = useState(false);
+  /** 本会话累计 token（端点回了 usage 才计；没回就整块不显示，不显示 0） */
+  const [sessionUsage, setSessionUsage] = useState<{ input: number; output: number } | null>(null);
+  /** 回合进行中每秒跳一次，让折叠头的「正在处理 · Xs」动起 */
+  const [, setTick] = useState(0);
+  /** 排队输入（单槽）：运行中敲的下一条，等本轮 done 后自动发出 */
+  const [queued, setQueued] = useState<string | null>(null);
+  const queuedRef = useRef<string | null>(null);
+  /** 自动发送的竞态守卫：停止/切会话自增，120ms 兑现时发现代数变了就放弃 */
+  const flushGenRef = useRef(0);
   /** 页面上下文锚点（#/assistant?ctx=contact:12）：发给模型前由主进程解析成人话注记 */
   const [ctx, setCtx] = useState<string | undefined>(() => readHashParam("ctx"));
   /** 本轮调用过的工具 → 回答结束后生成「接下来可以问」引导 */
   const turnToolsRef = useRef<string[]>([]);
   const [followUps, setFollowUps] = useState<string[]>([]);
+  const turnUserRef = useRef("");
+  const turnTextRef = useRef("");
+  const followGenRef = useRef(0);
   /** 动作卡：已执行过的（actionId → 回执短语）+ 待确认的写入动作 */
   const [doneActions, setDoneActions] = useState<Record<string, string>>({});
   const [pendingWrite, setPendingWrite] = useState<ActionDto | null>(null);
@@ -499,6 +868,49 @@ export function AssistantPage() {
   /** hashchange 回调拿不到最新闭包里的 handleSend，用 ref 转发 */
   const sendRef = useRef<((text: string) => void) | null>(null);
 
+  // ── 上翻时给「回到底部」按钮（流式回答期间不打断阅读）──
+  /** 真正的滚动元素（Bubble.List 内部列表，也可能是外层容器），谁先报 scroll 就用谁 */
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  /** 停在上方期间又有新内容长出来 → 按钮加个「新内容」提醒点 */
+  const [pendingBelow, setPendingBelow] = useState(false);
+  const contentLenRef = useRef(0);
+
+  const trackScroll = (el: HTMLElement | null) => {
+    if (!el) return;
+    scrollerRef.current = el;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const bottom = distance <= 24;
+    setAtBottom(bottom);
+    if (bottom) setPendingBelow(false);
+  };
+
+  /** 回答在长、但用户不在底部 → 标记有新内容在下方 */
+  useEffect(() => {
+    const len = messages.reduce((n, m) => n + m.content.length, 0);
+    if (!atBottom && len > contentLenRef.current) setPendingBelow(true);
+    contentLenRef.current = len;
+  }, [messages, atBottom]);
+
+  /** 输入区高度会变（上下文 chip、引导条、命令菜单），按钮位置跟着让位 */
+  const inputBoxRef = useRef<HTMLDivElement | null>(null);
+  const [jumpBottom, setJumpBottom] = useState(96);
+  useEffect(() => {
+    const el = inputBoxRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setJumpBottom(el.offsetHeight + 12));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const jumpToBottom = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setAtBottom(true);
+    setPendingBelow(false);
+  };
+
   // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次
   const refreshStatus = async () => {
     const r = await window.api.invoke("agent:status") as
@@ -506,6 +918,13 @@ export function AssistantPage() {
     if (r?.success && r.data) { setMode(r.data.mode); setModel(r.data.model); setThinking(!!r.data.thinking); }
   };
   useEffect(() => { void refreshStatus(); }, []);
+
+  // 心跳只在回合进行中挂着：折叠头的「正在处理 · Xs」靠它一秒一跳
+  useEffect(() => {
+    if (!sending) return;
+    const t = setInterval(() => setTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [sending]);
 
   /** 加载指定会话（undefined = 新会话空态）；切换时中断进行中的生成
    *  （用 ref 而非闭包 sending 判断：hashchange 回调捕获的是首帧闭包，state 已过期；
@@ -518,18 +937,39 @@ export function AssistantPage() {
     setApproval(null);
     setCtx(readHashParam("ctx"));   // 会话切换时同步页面上下文 chip（hash 携带才保留）
     setInputVal("");       // 切会话清空未发送的输入，避免串会话
+    queuedRef.current = null;   // 排队消息属于上一会话
+    setQueued(null);
+    flushGenRef.current++;      // 作废可能仍在倒计时的自动发送
     setFollowUps([]);      // 引导条属于上一轮，切会话即失效
     setDoneActions({});    // 动作卡状态不跨会话
+    setSessionUsage(null); // token 累计按会话算，切走即清零
+    setRememberApproval(false);
     setPendingWrite(null);
     setMessages([]);        // 立即清空，避免旧会话内容滞留
     void refreshStatus();    // 期间可能在设置页换了端点
     if (!id) { setConvLoading(false); return; }
     setConvLoading(true);
     const r = await window.api.invoke("agent:getConversation", id) as
-      IpcResult<Array<{ role: string; content: string }>>;
+      IpcResult<Array<{ role: string; content: string; toolName?: string; argsJson?: string; resultJson?: string; createdAt?: string }>>;
     if (token !== loadTokenRef.current) return;  // 已切去更新的会话 → 丢弃过期响应
     setMessages(r?.success && r.data
-      ? r.data.map(m => ({ key: nextKey(), role: m.role === "user" ? "user" as const : "ai" as const, content: m.content }))
+      ? r.data.map(m => {
+          if (m.role === "user") return { key: nextKey(), role: "user" as const, content: m.content };
+          if (m.role === "error") return { key: nextKey(), role: "ai" as const, content: m.content, error: true };
+          if (m.role === "tool") {
+            // 审计回放：重建为已完成的工具过程卡（产物/表格/草稿卡由 detail 复活）
+            return {
+              key: nextKey(), role: "tool" as const, content: "",
+              ts: m.createdAt ? Date.parse(m.createdAt.includes("T") ? m.createdAt : `${m.createdAt.replace(" ", "T")}Z`) : undefined,
+              chip: {
+                kind: "done" as const, tool: m.toolName,
+                args: fmtChipArgs(m.argsJson), brief: resultBrief(m.resultJson),
+                detail: m.resultJson,
+              },
+            };
+          }
+          return { key: nextKey(), role: "ai" as const, content: m.content };
+        })
       : []);
     setConvLoading(false);
   };
@@ -559,6 +999,7 @@ export function AssistantPage() {
   useEffect(() => {
     const offChunk = window.api.on("agent:chunk", (data) => {
       const d = data as { delta?: string };
+      turnTextRef.current += (d.delta ?? "");
       setMessages(prev => {
         const next = [...prev];
         for (let i = next.length - 1; i >= 0; i--) {
@@ -571,18 +1012,51 @@ export function AssistantPage() {
         return next;
       });
     });
-    const offDone = window.api.on("agent:done", () => {
+    const offDone = window.api.on("agent:done", (data) => {
+      const u = (data as { usage?: Msg["usage"] } | undefined)?.usage;
       setMessages(prev => {
         const next = prev.map(m => m.streaming ? { ...m, streaming: false, loading: false } : m);
+        if (u) {
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i]!.role === "ai") { next[i] = { ...next[i]!, usage: u }; break; }
+          }
+        }
         return next;
       });
+      if (u) {
+        setSessionUsage(p => ({
+          input: (p?.input ?? 0) + (u.input ?? 0),
+          output: (p?.output ?? 0) + (u.output ?? 0),
+        }));
+      }
       setSending(false);
-      // 用本轮真实调用过的工具生成下一步引导（能力连续可感）
+      // 排队输入：本轮收尾后立即发出下一条（走 sendRef 复用完整入口，稍等 sending 落定）
+      const q = queuedRef.current;
+      if (q) {
+        queuedRef.current = null;
+        setQueued(null);
+        const gen = flushGenRef.current;
+        setTimeout(() => {
+          if (gen !== flushGenRef.current) return;   // 期间停止/切会话 → 放弃
+          sendRef.current?.(q);
+        }, 120);
+      }
+      // 用本轮真实调用过的工具生成下一步引导（能力连续可感）——规则兜底先出，不空窗
       const used = [...new Set(turnToolsRef.current)];
       setFollowUps(used.length === 0
         ? ["我今天该跟进谁", "总结一下我的未读邮件"]
         : used.slice(0, 2).flatMap(t => FOLLOW_UPS[t] ?? []).slice(0, 3));
       turnToolsRef.current = [];
+      // 再异步用 AI 生成「追问」覆盖规则建议（带代数守卫，迟到结果不盖新一轮）
+      const gen = followGenRef.current;
+      const uText = turnUserRef.current, aText = turnTextRef.current;
+      void (async () => {
+        if (!aText.trim()) return;
+        const r = await window.api.invoke("ai:followUps", { userText: uText, aiText: aText }) as
+          { success: boolean; data?: string[] };
+        if (gen !== followGenRef.current) return;
+        if (r?.success && Array.isArray(r.data) && r.data.length) setFollowUps(r.data.slice(0, 3));
+      })();
       window.dispatchEvent(new Event(CONVS_CHANGED));
     });
     const offError = window.api.on("agent:error", (data) => {
@@ -599,49 +1073,89 @@ export function AssistantPage() {
         return next;
       });
       setSending(false);
+      // 出错不自动发排队消息：让用户看到错误后自己决定下一步
+      queuedRef.current = null;
+      setQueued(null);
     });
-    // 过程行（结构化数据，渲染交给 ProcessLine）：calling 插入 → done 原地升级；始终插在流式气泡之前
+    // 过程行（结构化数据，纯状态行折进 ProcessChain，产物留在 ArtifactBlock）：calling 插入 → done 原地升级
     const offTool = window.api.on("agent:toolCall", (data) => {
-      const d = data as { tool?: string; status?: string; args?: string; result?: string };
+      const d = data as { tool?: string; status?: string; args?: string; result?: string; callId?: string };
       setMessages(prev => {
         if (d.status === "reasoning") {
           return insertBeforeStreamingBubble(prev, {
             key: nextKey(), role: "tool", content: "",
-            chip: { kind: "reasoning", tool: d.tool, detail: d.result },
+            chip: { kind: "reasoning", tool: d.tool, callId: d.callId, detail: d.result },
           });
         }
         if (d.status === "calling") {
           if (d.tool) turnToolsRef.current.push(d.tool);
           return insertBeforeStreamingBubble(prev, {
             key: nextKey(), role: "tool", content: "",
-            chip: { kind: "calling", tool: d.tool, args: fmtChipArgs(d.args) },
+            chip: { kind: "calling", tool: d.tool, callId: d.callId, args: fmtChipArgs(d.args) },
           });
         }
-        // done：找同名 calling 过程行原地升级为结果行
+        // done：先按 callId 精确配对（同名连发/并行不会错配），端点没给 callId 时退回同名倒找
         const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i]!;
-          if (m.role === "tool" && m.chip?.kind === "calling" && m.chip.tool === d.tool) {
-            next[i] = { ...m, chip: { kind: "done", tool: d.tool, args: m.chip.args, brief: resultBrief(d.result), detail: d.result } };
-            break;
+        let idx = d.callId
+          ? next.findIndex(m => m.role === "tool" && m.chip?.kind === "calling" && m.chip.callId === d.callId)
+          : -1;
+        if (idx < 0) {
+          for (let i = next.length - 1; i >= 0; i--) {
+            const m = next[i]!;
+            if (m.role === "tool" && m.chip?.kind === "calling" && m.chip.tool === d.tool) { idx = i; break; }
           }
+        }
+        if (idx >= 0) {
+          const prevChip = next[idx]!.chip!;
+          next[idx] = {
+            ...next[idx]!, ts: Date.now(),
+            chip: { kind: "done", tool: d.tool, callId: d.callId ?? prevChip.callId, args: prevChip.args, brief: resultBrief(d.result), detail: d.result },
+          };
         }
         return next;
       });
     });
-    // 写操作审批：弹确认框 + 开一条续跑气泡（续跑增量落到它上面）
+    // 任务清单快照：一整轮只有一张卡，原地覆盖（切到新一轮才另起一张）
+    const offPlan = window.api.on("agent:plan", (data) => {
+      const items = (data as { items?: PlanStep[] } | undefined)?.items;
+      const steps = Array.isArray(items) ? items : [];
+      setMessages(prev => {
+        let turnStart = 0;
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]!.role === "user") { turnStart = i + 1; break; }
+        }
+        let idx = -1;
+        for (let i = prev.length - 1; i >= turnStart; i--) {
+          if (prev[i]!.plan) { idx = i; break; }
+        }
+        if (idx < 0) {
+          return steps.length
+            ? insertBeforeStreamingBubble(prev, { key: nextKey(), role: "tool", content: "", plan: steps })
+            : prev;
+        }
+        if (!steps.length) return prev.filter((_, i) => i !== idx);   // 空快照 → 清单收起
+        const next = [...prev];
+        next[idx] = { ...next[idx]!, plan: steps };
+        return next;
+      });
+    });
+    // 写操作审批：出就地确认卡 + 开一条续跑气泡（续跑增量落到它上面）
     const offApproval = window.api.on("agent:approval", (data) => {
-      const d = data as { approvalId?: string; items?: ApprovalReq["items"] };
-      setApproval({ approvalId: d.approvalId ?? "", items: d.items ?? [] });
+      const d = data as { approvalId?: string; conversationId?: string; items?: ApprovalReq["items"] };
+      setApproval({ approvalId: d.approvalId ?? "", conversationId: d.conversationId, items: d.items ?? [] });
+      setRememberApproval(false);
       setMessages(prev => [...prev, { key: nextKey(), role: "ai" as const, content: "", loading: true, streaming: true }]);
     });
-    return () => { offChunk(); offDone(); offError(); offTool(); offApproval(); };
+    return () => { offChunk(); offDone(); offError(); offTool(); offPlan(); offApproval(); };
   }, []);
 
   /** 实际发起一轮对话（正文 + ctx 锚点） */
   const doSend = async (text: string) => {
     setSending(true);
     setFollowUps([]);
+    turnUserRef.current = text;
+    turnTextRef.current = "";
+    followGenRef.current++;
     turnToolsRef.current = [];
     const aiKey = nextKey();
     setMessages(prev => [...prev, { key: nextKey(), role: "user", content: text }, { key: aiKey, role: "ai", content: "", loading: true, streaming: true }]);
@@ -659,10 +1173,20 @@ export function AssistantPage() {
     window.dispatchEvent(new Event(CONVS_CHANGED)); // 新会话立即可见（标题已在主进程生成）
   };
 
-  /** 入口：斜杠命令本地解析（/help、/新对话 就地处理，不发起请求） */
-  const handleSend = (raw: string) => {
+  /** 入口：斜杠命令本地解析（/help、/新对话、/缺口 就地处理，不发起请求） */
+  const handleSend = async (raw: string): Promise<void> => {
     const t = raw.trim();
-    if (!t || sending) return;
+    if (!t) return;
+    if (sending) {
+      // 排队输入：斜杠命令不排队（语义依赖空闲输入），普通问题单槽排队等本轮结束
+      if (t.startsWith("/")) {
+        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: "等这轮回答结束后再使用快捷命令。" }]);
+        return;
+      }
+      queuedRef.current = t;
+      setQueued(t);
+      return;
+    }
     if (t.startsWith("/")) {
       const hit = SLASH_COMMANDS.find(c => t === c.cmd || t.startsWith(`${c.cmd} `));
       if (!hit) {
@@ -677,6 +1201,22 @@ export function AssistantPage() {
       if (hit.cmd === "/新对话") {
         window.location.hash = "#/assistant";
         void loadConversation(undefined);
+        return;
+      }
+      if (hit.cmd === "/缺口") {
+        const r = await window.api.invoke("agent:listGaps", 20) as IpcResult<
+          Array<{ wanted: string; workaround?: string | null; hits: number; lastSeenAt: string }>
+        >;
+        if (!r?.success) {
+          setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `读取能力缺口失败：${r?.error || "未知错误"}`, error: true }]);
+          return;
+        }
+        const gaps = r.data ?? [];
+        const text = gaps.length === 0
+          ? "还没有登记过能力缺口 —— 助手碰到做不到的诉求时会自动记在这里，被提到越多的越该优先补。"
+          : "已登记的能力缺口（按被抱怨次数）：\n"
+            + gaps.map((g, i) => `${i + 1}. ${g.wanted}  ×${g.hits}  ${g.workaround ? `（绕行：${g.workaround}）` : ""}`).join("\n");
+        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: text }]);
         return;
       }
       const arg = t.slice(hit.cmd.length).trim();
@@ -699,6 +1239,9 @@ export function AssistantPage() {
 
   const handleStop = () => {
     setApproval(null);
+    setRememberApproval(false);
+    queuedRef.current = null;
+    setQueued(null);
     if (convIdRef.current) void window.api.invoke("agent:stop", convIdRef.current);
   };
 
@@ -707,7 +1250,13 @@ export function AssistantPage() {
     if (!approval) return;
     const a = approval;
     setApproval(null);
-    const r = await window.api.invoke("agent:resolveApproval", { approvalId: a.approvalId, approved }) as
+    // 「不再询问」只在整批同工具且 policy 允许豁免时生效（外发类永不满足条件）
+    const tools = [...new Set(a.items.map(i => i.tool ?? ""))];
+    const rememberTool = approved && rememberApproval
+      && tools.length === 1 && !!tools[0] && a.items.every(i => i.autoApprovable)
+      ? tools[0] : undefined;
+    setRememberApproval(false);
+    const r = await window.api.invoke("agent:resolveApproval", { approvalId: a.approvalId, approved, rememberTool }) as
       IpcResult<{ resumed: boolean }>;
     if (!r?.success) {
       setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `审批失败：${r?.error || "未知错误"}` }]);
@@ -743,8 +1292,90 @@ export function AssistantPage() {
     }]);
   };
 
+  // ── 渲染派生数据：消息流 → 段（过程折一段、产物与清单各自独立）──────
+  const segs = segmentMessages(messages);
+  const now = Date.now();
+  let lastUserSeg = -1;
+  segs.forEach((s, i) => { if (s.type === "msg" && s.m.role === "user") lastUserSeg = i; });
+  let liveChainKey: string | null = null;
+  if (sending) {
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const s = segs[i]!;
+      if (s.type === "chain" && i > lastUserSeg) { liveChainKey = s.key; break; }
+    }
+  }
+  // 菱形头像只出现在最后一条 AI 消息上（流式期间即正在输出的那条），历史气泡一律无头像
+  const tailSeg = segs[segs.length - 1];
+  const lastAiKey = tailSeg && tailSeg.type === "msg" && tailSeg.m.role === "ai" ? tailSeg.key : null;
+
+  // 「本会话内不再询问」只对低风险写工具开放（判据由主进程随审批事件下发，前端不复制白名单）
+  const approvalTools = [...new Set((approval?.items ?? []).map(i => i.tool ?? ""))];
+  const rememberToolName = approvalTools.length === 1 ? approvalTools[0] ?? "" : "";
+  const canRememberApproval = !!approval && approval.items.length > 0
+    && !!rememberToolName && approval.items.every(i => i.autoApprovable);
+
+  /** 段 → 气泡条目：折叠过程 / 产物卡 / 清单卡 / 回执行 / 带 token 页脚的回答 */
+  const toBubbleItem = (seg: Segment) => {
+    if (seg.type === "chain") {
+      return {
+        key: seg.key, role: "tool" as const, content: "",
+        messageRender: () => (
+          <ProcessChain items={seg.items} live={seg.key === liveChainKey} now={now} />
+        ),
+      };
+    }
+    const m = seg.m;
+    const base = {
+      key: m.key, role: m.role, content: m.content, loading: m.loading,
+      className: m.error ? "!bg-transparent [&_.ant-bubble-content]:!bg-red-50 [&_.ant-bubble-content]:!border [&_.ant-bubble-content]:!border-red-200" : undefined,
+    };
+    if (m.role === "ai") {
+      return {
+        ...base,
+        ...(m.key === lastAiKey ? {
+          avatar: {
+            icon: <DiamondLogo size={22} state={sending ? "running" : "idle"} />,
+            style: { background: "transparent", color: "#1a1a1a", boxShadow: "none" },
+          },
+        } : {}),
+        messageRender: (content: string) => (
+          <div>
+            <div className="text-[13px] leading-relaxed md-body">
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={{ table: MDTableBlock }}>{mdFixTables(content)}</Markdown>
+            </div>
+            {m.usage && ((m.usage.input ?? 0) > 0 || (m.usage.output ?? 0) > 0) && (
+              <div className="text-[11px] text-gray-300 mt-1">
+                本轮 {fmtTokens(m.usage.input ?? 0)} 入 · {fmtTokens(m.usage.output ?? 0)} 出
+                {(m.usage.cached ?? 0) > 0 && ` · 缓存命中 ${fmtTokens(m.usage.cached ?? 0)}`}
+                {(m.usage.requests ?? 0) > 1 && ` · ${m.usage.requests} 次模型调用`}
+              </div>
+            )}
+          </div>
+        ),
+      };
+    }
+    if (m.role === "tool") {
+      return {
+        ...base,
+        messageRender: () => (m.chip
+          ? <ArtifactBlock chip={m.chip} done={doneActions} onAction={handleAction} />
+          : m.plan
+            ? <PlanCard items={m.plan} />
+            : (
+              <div className="text-[12px] text-gray-400 py-0.5 whitespace-pre-line">
+                {m.content}
+                {m.link && (
+                  <a className="ml-2" onClick={() => { window.location.hash = m.link!.href; }}>{m.link.label}</a>
+                )}
+              </div>
+            )),
+      };
+    }
+    return base;
+  };
+
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
+    <div className="relative flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
       {/* 页头 */}
       <div className="flex items-center justify-between pb-3">
         <Space>
@@ -755,6 +1386,13 @@ export function AssistantPage() {
           {mode === "live" && (
             <Tooltip title="在「设置 → 模型与端点」切换端点或思考模式，保存即生效，不用重启">
               <Tag color={thinking ? "blue" : "default"}>{thinking ? "思考中" : "直答"}</Tag>
+            </Tooltip>
+          )}
+          {sessionUsage && ((sessionUsage.input ?? 0) > 0 || (sessionUsage.output ?? 0) > 0) && (
+            <Tooltip title="本会话累计 token（端点实测回报值，切会话清零；设置页可看全应用累计）">
+              <Tag color="default" className="!text-gray-400">
+                {fmtTokens(sessionUsage.input)} 入 · {fmtTokens(sessionUsage.output)} 出
+              </Tag>
             </Tooltip>
           )}
         </Space>
@@ -769,7 +1407,8 @@ export function AssistantPage() {
       )}
 
       {/* 消息流 — selectable 豁免全局 user-select:none，允许复制 AI 回复 */}
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 selectable">
+      <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 selectable"
+           onScrollCapture={(e) => trackScroll(e.currentTarget)}>
         {convLoading ? (
           /* 会话切换骨架屏：模拟气泡布局 */
           <div className="space-y-5 pt-2 animate-pulse">
@@ -780,8 +1419,8 @@ export function AssistantPage() {
             ].map((r, i) => (
               <div key={i} className={`flex gap-2.5 ${r.me ? "flex-row-reverse" : ""}`}>
                 <Avatar
-                  icon={r.me ? <UserOutlined /> : <RobotOutlined />}
-                  style={{ background: r.me ? "#1a1a1a" : "#e6fffb", color: r.me ? "#fff" : "#00897b", flexShrink: 0 }}
+                  icon={r.me ? <UserOutlined /> : <DiamondLogo size={15} state="static" />}
+                  style={{ background: r.me ? "#1a1a1a" : "transparent", color: r.me ? "#fff" : "#1a1a1a", flexShrink: 0 }}
                 />
                 <div style={{ width: r.w }}>
                   <Skeleton active title={false} paragraph={{ rows: r.rows, width: "100%" }} />
@@ -790,22 +1429,24 @@ export function AssistantPage() {
             ))}
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-6">
+          // min-h-full 而非 h-full：窗口矮时内容可滚动不裁切，有余量时仍垂直居中
+          <div className="min-h-full flex flex-col items-center justify-center gap-5 py-6">
             <div className="text-center">
-              <RobotOutlined style={{ fontSize: 42, color: "#00bfa5" }} />
+              <DiamondLogo size={44} state={sending ? "running" : "idle"} className="text-gray-900" />
               <div className="text-base font-semibold text-gray-700 mt-3">Hi，我是 Prospector 助手</div>
               <div className="text-xs text-gray-400 mt-1">已接入运价 / 邮件 / 客户 / 跟进 / 发信 11 项能力，写操作一律先弹确认</div>
             </div>
             {/* 能力面板：把已接入的工具摊开成「能干什么」，点一条即发问 */}
-            <div className="w-full max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {/* 窄窗口自动降为单列；宽度富余时三列，字号随视口线性缩放 */}
+            <div className="w-full max-w-[min(64rem,92%)] grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
               {CAPABILITIES.map(g => (
                 <div key={g.title} className="border border-gray-100 rounded-lg p-3 bg-white">
-                  <div className="text-[13px] font-semibold text-gray-800">{g.title}</div>
-                  <div className="text-[11px] text-gray-400 mb-1.5 leading-snug">{g.cap}</div>
+                  <div className="text-[clamp(12px,0.55vw+9px,14px)] font-semibold text-gray-800">{g.title}</div>
+                  <div className="text-[clamp(10px,0.4vw+8px,12px)] text-gray-400 mb-1.5 leading-snug">{g.cap}</div>
                   {g.items.map(q => (
                     <div
                       key={q}
-                      className="text-[12px] text-teal-700 hover:bg-teal-50 rounded px-1.5 py-1 -mx-1.5 cursor-pointer truncate"
+                      className="text-[clamp(11px,0.45vw+9px,13px)] text-teal-700 hover:bg-teal-50 rounded px-1.5 py-1 -mx-1.5 cursor-pointer truncate"
                       title={q}
                       onClick={() => void handleSend(q)}
                     >
@@ -816,32 +1457,14 @@ export function AssistantPage() {
               ))}
             </div>
             <div className="text-[11px] text-gray-400">
-              输入 <code>/</code> 唤出快捷命令 · 写操作（记跟进、入队发信）都会先弹确认框
+              输入 <code>/</code> 唤出快捷命令 · 多步任务会亮出任务清单 · 写操作先在对话里请你就地确认
             </div>
           </div>
         ) : (
           <Bubble.List
             autoScroll
-            items={messages.map(m => ({
-              key: m.key,
-              role: m.role,
-              content: m.content,
-              loading: m.loading,
-              className: m.error ? "!bg-transparent [&_.ant-bubble-content]:!bg-red-50 [&_.ant-bubble-content]:!border [&_.ant-bubble-content]:!border-red-200" : undefined,
-              // 过程行：结构化 chip 走 ProcessLine（含动作卡）；无 chip 的散件（回执行/审批失败）降级为灰字
-              ...(m.role === "tool" ? {
-                messageRender: () => (m.chip
-                  ? <ProcessLine chip={m.chip} done={doneActions} onAction={handleAction} />
-                  : (
-                    <div className="text-[12px] text-gray-400 py-0.5">
-                      {m.content}
-                      {m.link && (
-                        <a className="ml-2" onClick={() => { window.location.hash = m.link!.href; }}>{m.link.label}</a>
-                      )}
-                    </div>
-                  )),
-              } : {}),
-            }))}
+            onScroll={(e) => trackScroll(e.currentTarget)}
+            items={segs.map(toBubbleItem)}
             roles={{
               user: {
                 placement: "end",
@@ -850,44 +1473,88 @@ export function AssistantPage() {
               },
               ai: {
                 placement: "start",
-                avatar: { icon: <RobotOutlined />, style: { background: "#e6fffb", color: "#00897b" } },
+                // 去气泡化：无边框无底色、全宽左对齐（正文由 toBubbleItem 的 md-body 控制排版）
+                styles: { content: { background: "transparent", padding: 0, border: "none", maxWidth: "100%", boxShadow: "none", minWidth: 0 } },
+                // 头像不放这里（否则每条都挂）：由 toBubbleItem 只给最后一条 AI 消息带 DiamondLogo
                 // 等待首包期间（端点延迟可达数秒）用骨架屏代替默认小圆点，观感与会话切换一致
                 loadingRender: () => (
                   <div style={{ minWidth: 240, padding: "4px 0" }}>
                     <Skeleton active title={false} paragraph={{ rows: 2, width: ["82%", "56%"] }} />
                   </div>
                 ),
-                messageRender: (content: string) => (
-                  <div className="text-[13px] leading-relaxed md-body">
-                    <Markdown remarkPlugins={[remarkGfm]}>{mdFixTables(content)}</Markdown>
-                  </div>
-                ),
+                // 正文渲染与本轮 token 页脚由 toBubbleItem 逐条提供（那里能拿到消息级 usage）
               },
               tool: {
                 placement: "start",
-                // 过程行去气泡化：无边框无底色，纯灰字细行
+                // 过程折叠/产物卡/清单卡去气泡化：无边框无底色
                 styles: { content: { background: "transparent", padding: 0, border: "none", minWidth: 0 } },
               },
             }}
           />
         )}
+        {/* AI 追问：贴在回答内容下方，随对话滚动；无标题，仿 ChatGPT 建议卡片 */}
+        {!sending && followUps.length > 0 && messages.length > 0 && (
+          <div className="max-w-[720px] flex flex-wrap gap-2 pt-1">
+            {followUps.map(f => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => void handleSend(f)}
+                className="group inline-flex items-center gap-1.5 max-w-full rounded-full border border-gray-200 bg-white px-3 py-1.5 text-[12px] text-gray-600 hover:border-teal-300 hover:text-teal-700 hover:bg-teal-50/60 transition-colors"
+              >
+                <span className="truncate">{f}</span>
+                <RightOutlined className="!text-[10px] text-gray-300 group-hover:text-teal-500" />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
+      {/* 回到底部：仅在上翻时出现；下方还在长内容时带个提醒点 */}
+      {!atBottom && (
+        <Tooltip title="回到对话底部">
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className="absolute right-4 z-10 flex items-center gap-1.5 rounded-full bg-white border border-gray-200 shadow-md px-2.5 text-gray-500 hover:text-teal-600 hover:border-teal-200 transition-colors"
+            style={{ bottom: jumpBottom }}
+            aria-label="回到对话底部"
+          >
+            <DownOutlined style={{ fontSize: 11 }} />
+            {pendingBelow && <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />}
+          </button>
+        </Tooltip>
+      )}
+
       {/* 输入区 */}
-      <div className="pt-3 relative">
-        {/* 「接下来可以问」：按本轮真实用到的工具生成，让能力被连续体验到 */}
-        {!sending && followUps.length > 0 && messages.length > 0 && (
-          <div className="pb-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-gray-400">接下来可以问：</span>
-            {followUps.map(f => (
-              <Tag
-                key={f}
-                className="!text-[12px] !border-teal-200 !text-teal-700 !bg-teal-50/60 cursor-pointer hover:!bg-teal-100"
-                onClick={() => void handleSend(f)}
-              >
-                {f}
-              </Tag>
+      <div className="pt-3 relative" ref={inputBoxRef}>
+        {/* 写操作就地确认卡（不再用居中弹窗遮挡正在流出的回答） */}
+        {approval && (
+          <div className="mb-2 max-w-[720px] border border-amber-200 bg-amber-50/70 rounded-lg px-3 py-2.5">
+            <div className="flex items-baseline justify-between mb-1">
+              <span className="text-[12.5px] font-medium text-gray-800">
+                <LoadingOutlined spin style={{ color: "#faad14" }} className="mr-1.5" />
+                助手要执行下面这个写操作
+              </span>
+              <span className="text-[11px] text-gray-400">确认后才写入</span>
+            </div>
+            {approval.items.map((it, i) => (
+              <ApprovalItem key={i} tool={it.tool} args={it.args} />
             ))}
+            {canRememberApproval && (
+              <Checkbox
+                checked={rememberApproval} onChange={e => setRememberApproval(e.target.checked)}
+                className="!text-[12px] !text-gray-500 mt-1"
+              >
+                本会话内不再询问「{toolLabel(rememberToolName)}」
+              </Checkbox>
+            )}
+            <div className="flex items-center gap-2 mt-2">
+              <Button type="primary" size="small" style={{ fontSize: 12 }}
+                onClick={() => { void handleApproval(true); }}>确认执行</Button>
+              <Button size="small" style={{ fontSize: 12 }}
+                onClick={() => { void handleApproval(false); }}>拒绝</Button>
+            </div>
           </div>
         )}
         {/* 斜杠命令菜单：输入 / 即出现 */}
@@ -912,6 +1579,13 @@ export function AssistantPage() {
             </Tag>
           </div>
         )}
+        {queued && (
+          <div className="pb-2">
+            <Tag closable color="blue" onClose={() => { queuedRef.current = null; setQueued(null); }}>
+              已排队 · {queued.length > 24 ? `${queued.slice(0, 24)}…` : queued} · 回答结束后自动发出
+            </Tag>
+          </div>
+        )}
         <Sender
           value={inputVal}
           onChange={(v) => setInputVal(v)}
@@ -919,23 +1593,16 @@ export function AssistantPage() {
           loading={sending}
           onSubmit={(text) => { setInputVal(""); handleSend(text); }}
           onCancel={handleStop}
+          onKeyDown={(e) => {
+            // loading 下 Sender 的提交键变停止键；回车改由这里入队排队输入
+            if (sending && e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              const t = inputVal.trim();
+              if (t) { setInputVal(""); handleSend(t); }
+            }
+          }}
         />
       </div>
-
-      {/* 写操作审批（harness 中断流的人工确认环节）：人话描述 + 可展开原始参数 */}
-      <Modal
-        open={!!approval}
-        title="确认写操作"
-        okText="确认执行"
-        cancelText="拒绝"
-        maskClosable={false}
-        onOk={() => { void handleApproval(true); }}
-        onCancel={() => { void handleApproval(false); }}
-      >
-        {approval?.items.map((it, i) => (
-          <ApprovalItem key={i} tool={it.tool} args={it.args} />
-        ))}
-      </Modal>
 
       {/* 动作卡写入确认：展示字段 diff，确认后才执行主进程留存的闭包 */}
       <Modal

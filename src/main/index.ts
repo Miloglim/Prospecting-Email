@@ -1,7 +1,8 @@
-import { app, BrowserWindow, Menu, ipcMain, Tray, nativeImage } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, Tray, nativeImage, dialog } from "electron";
 import * as path from "path";
-import { initDatabase, runMigrations, saveDatabase } from "./db";
+import { initDatabase, runMigrations, saveDatabase, closeDatabase } from "./db";
 import { migrateBodiesOut } from "./services/inbox.service";
+import { migrateAccountPasswords } from "./services/account.service";
 import { Log } from "./logger";
 import { registerContactIPC } from "./transport/contact.ipc";
 import { registerCompanyIPC } from "./transport/company.ipc";
@@ -16,6 +17,8 @@ import { registerHistoryIPC } from "./transport/history.ipc";
 import { registerBounceIPC } from "./transport/bounce.ipc";
 import { registerAiIPC } from "./transport/ai.ipc";
 import { registerAgentIPC } from "./transport/agent.ipc";
+import { registerRatesIPC } from "./transport/rates.ipc";
+import { registerKbIPC } from "./transport/kb.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
 import { initUpdater, cleanupUpdater } from "./updater";
 import { getResourcesRoot, loadConfig } from "./config";
@@ -24,8 +27,25 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 
-// 定时持久化数据库（sql.js 在内存中）
-let saveInterval: ReturnType<typeof setInterval> | null = null;
+// ── P0-5 崩溃兜底：主进程不再静默消失 ──────────────────────────
+// 错误一律落日志；对话框节流 60s 防异常风暴刷屏；进程保持存活（群发批次不受牵连）
+let lastCrashDialogAt = 0;
+function reportCrash(kind: string, err: unknown): void {
+  const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+  Log.error("crash", `${kind}: ${msg}`);
+  const now = Date.now();
+  if (now - lastCrashDialogAt > 60_000) {
+    lastCrashDialogAt = now;
+    try {
+      dialog.showErrorBox(
+        "程序遇到意外错误",
+        `${kind}\n${msg.slice(0, 600)}\n\n错误已记录到日志，程序将继续运行；若反复出现请重启应用。`,
+      );
+    } catch { /* 对话框本身失败则只留日志 */ }
+  }
+}
+process.on("uncaughtException", (err) => reportCrash("未捕获异常", err));
+process.on("unhandledRejection", (reason) => reportCrash("未处理的 Promise 拒绝", reason));
 
 function getIconPath(name: string): string {
   return path.join(getResourcesRoot(), name);
@@ -79,6 +99,12 @@ function createWindow() {
     }
   });
 
+  // P0-5: 渲染进程崩溃 → 落日志并自动重载（替代 Electron 默认白屏）
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    Log.error("crash", `渲染进程退出: ${details.reason} (exitCode=${details.exitCode})`);
+    mainWindow?.webContents.reload();
+  });
+
   if (process.env.NODE_ENV === "development" || process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL || "http://localhost:5173");
   } else {
@@ -117,6 +143,8 @@ function registerAllIPC() {
   registerBounceIPC();
   registerAiIPC();
   registerAgentIPC();
+  registerRatesIPC();
+  registerKbIPC();
   registerSystemIPC();
 
   // 窗口控制
@@ -150,24 +178,22 @@ app.whenReady().then(async () => {
   await initDatabase();
   runMigrations();
   await migrateBodiesOut(); // 存量正文出库迁移（幂等，首次启动把库从正文撑大的状态缩回几 MB）
+  migrateAccountPasswords(); // P0-1: 旧密钥密文一次性重封装为 safeStorage 主密钥（幂等）
   registerAllIPC();
   createWindow();
   createTray();
   initUpdater(mainWindow!);
 
-  // 每 30 秒自动持久化
-  saveInterval = setInterval(() => {
-    saveDatabase();
-  }, 30_000);
+  // P1-1: better-sqlite3 逐事务落盘，无需定时全量保存（旧 sql.js 30s 定时器已移除）
 
   Log.info("app", `启动完成，版本 ${app.getVersion()}`);
 });
 
 app.on("before-quit", () => {
   isQuitting = true;
-  if (saveInterval) clearInterval(saveInterval);
+  saveDatabase();   // WAL checkpoint 收尾
+  closeDatabase();
   cleanupUpdater();
-  saveDatabase();
   Log.info("app", "正在退出...");
 });
 

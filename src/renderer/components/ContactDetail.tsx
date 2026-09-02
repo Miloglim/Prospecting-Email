@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { Drawer, Tabs, Tag, Select, message, Timeline, Input, Button, Tooltip } from "antd";
-import { EditOutlined, SearchOutlined, PartitionOutlined, RobotOutlined } from "@ant-design/icons";
+import { EditOutlined, SearchOutlined, PartitionOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useUpsertContact, type Contact } from "../hooks/useContacts";
 import { CompanyBackcheck } from "./CompanyBackcheck";
+import { DiamondLogo } from "./DiamondLogo";
 import { askAssistant } from "../lib/ask-ai";
 
 /* ---------- 展示元数据（列表/详情共用） ---------- */
@@ -351,7 +352,7 @@ export function ContactDetailDrawer({ contact, open, onClose, onUpdated }: {
             </Tooltip>
             {/* 带着这个联系人问 AI：跳对话页并注入上下文（助手能读到 TA 的资料/邮件/提醒） */}
             <Tooltip title="带着这位联系人问 AI">
-              <Button type="text" size="small" icon={<RobotOutlined />}
+              <Button type="text" size="small" icon={<DiamondLogo size={14} state="static" />}
                 className="btn-hover-color" style={{ color: "#00bfa5", padding: 0, minWidth: 20, height: 20 }}
                 onClick={() => askAssistant({
                   ctx: `contact:${contact.id}`,

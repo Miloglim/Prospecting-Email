@@ -199,7 +199,7 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
   }).from(rateQuotes)
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(rateQuotes.oceanUsd)
-    .limit(Math.min(f.limit ?? 20, 200))
+    .limit(Math.min(f.limit ?? 20, 5000))
     .all();
   return okResult(rows);
 }

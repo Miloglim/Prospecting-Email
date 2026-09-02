@@ -124,6 +124,8 @@ export const IPC = {
     PROFILE_TEST:    chan(PREFIX.AI, "profileTest"),
     /** 出网代理自动检测结果（只读；无需用户配置） */
     PROXY_INFO:      chan(PREFIX.AI, "proxyInfo"),
+    /** AI 追问建议：基于一轮问答产出 2-3 条下一步可问的短问题 */
+    FOLLOW_UPS:      chan(PREFIX.AI, "followUps"),
   },
   AGENT: {
     /** 发起一轮对话（立即返回 conversationId/messageId，内容走 agent:chunk 事件流） */
@@ -144,6 +146,16 @@ export const IPC = {
     TOOL_CALLS: chan(PREFIX.AGENT, "toolCalls"),
     /** 执行结果卡上的「写入类」动作（动作闭包留在主进程注册表，渲染端只传 id） */
     RUN_ACTION: chan(PREFIX.AGENT, "runAction"),
+    /** 产物卡「打开位置」：在资源管理器里高亮该文件（仅允许 outputs/agent 目录内） */
+    OPEN_PATH: chan(PREFIX.AGENT, "openPath"),
+    /** 后台任务快照（任务卡挂载时取一次，此后靠 agent:task 事件增量刷新） */
+    GET_TASK: chan(PREFIX.AGENT, "getTask"),
+    /** 取消后台任务（当前项做完即停） */
+    CANCEL_TASK: chan(PREFIX.AGENT, "cancelTask"),
+    /** 导出诊断包（日志尾部+配置掩码快照+库行数+最近异常 → outputs/agent 的 md） */
+    EXPORT_DIAGNOSTICS: chan(PREFIX.AGENT, "exportDiagnostics"),
+    /** 能力缺口台账清单（按被抱怨次数降序；/缺口 命令查看） */
+    LIST_GAPS: chan(PREFIX.AGENT, "listGaps"),
   },
   RATES: {
     /** 从快照文件全量刷新本地运价镜像 */
@@ -172,6 +184,8 @@ export const IPC = {
     APP_VERSION:      chan(PREFIX.SYSTEM, "appVersion"),
     SELECT_DIRECTORY: chan(PREFIX.SYSTEM, "selectDirectory"),
     OPEN_PATH:        chan(PREFIX.SYSTEM, "openPath"),
+    /** 开机自启开关（新手向导用，Windows 登录项） */
+    SET_AUTO_LAUNCH:  chan(PREFIX.SYSTEM, "setAutoLaunch"),
   },
   UPDATE: {
     CHECK:        chan(PREFIX.UPDATE, "check"),

@@ -1,0 +1,215 @@
+/* ── 新手向导（复刻旧 PE Windows 11 OOBE 样式，白色主题）────────── */
+/* 不覆盖程序标题栏（36px）：从标题栏下方起全屏，内容居中区与主界面一致 */
+.ob-root {
+  position: fixed; top: 36px; left: 0; right: 0; bottom: 0; z-index: 99990;
+  background: #ffffff;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  opacity: 0; transition: opacity 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.ob-root.show { opacity: 1; }
+.ob-root.hide { opacity: 0; pointer-events: none; }
+
+/* 毛玻璃过渡（完成时） */
+.ob-root.finishing {
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.03);
+  transition: backdrop-filter 0.6s cubic-bezier(0.33, 1, 0.68, 1),
+              background 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.ob-root.finishing .ob-card {
+  opacity: 0; transform: translateY(-8px) scale(0.98);
+  transition: all 0.5s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.ob-root.fadeout { opacity: 0; transition: opacity 1.5s cubic-bezier(0.33, 1, 0.68, 1); }
+
+/* margin:auto 安全居中：视口够高时垂直水平居中；不够高时顶部对齐并整体可滚动，
+   不会像 justify-content:center 那样把内容上端溢出到标题栏后面（滚都滚不回去） */
+.ob-card {
+  width: 440px; min-height: 380px; text-align: center;
+  display: flex; flex-direction: column; justify-content: center;
+  position: relative; overflow: hidden;
+  margin: auto; padding: 24px 0; box-sizing: content-box; flex-shrink: 0;
+  transform: translateY(16px);
+  transition: transform 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.ob-root.show .ob-card { transform: translateY(0); }
+
+/* 步骤滑入（Win11 风格 translateX） */
+.ob-step { animation: ob-step-in-fwd 0.3s cubic-bezier(0.33, 1, 0.68, 1) both; }
+.ob-step.back { animation: ob-step-in-back 0.3s cubic-bezier(0.33, 1, 0.68, 1) both; }
+@keyframes ob-step-in-fwd {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes ob-step-in-back {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.ob-h2 {
+  font-size: 24px; font-weight: 350; margin: 0 0 6px; color: #1a1a1a;
+  letter-spacing: -0.3px; display: inline-block;
+}
+.ob-h2.done {
+  background: linear-gradient(to right, #2e7d32 50%, #1a1a1a 50%);
+  background-size: 200% 100%; background-position: right; background-repeat: no-repeat;
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  animation: ob-text-fill 1s 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes ob-text-fill {
+  from { background-position: right; }
+  to   { background-position: left; }
+}
+.ob-desc {
+  font-size: 13px; color: #6b6b6b; margin: 0 auto 32px;
+  max-width: 420px; line-height: 1.6; font-weight: 350;
+}
+
+/* 图标 — 菱形边框（logo 核心元素） */
+.ob-icon {
+  margin: 0 auto 28px; width: 72px; height: 72px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; color: #6b6b6b;
+}
+.ob-icon::before {
+  content: ''; position: absolute; inset: 0;
+  border: 1px solid #e0e0e0; transform: rotate(45deg); border-radius: 4px;
+}
+.ob-icon svg { opacity: 0.7; position: relative; z-index: 1; }
+
+/* 完成页 Logo */
+.ob-logo {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  margin-bottom: 32px;
+}
+.ob-logo-mark {
+  width: 20px; height: 20px; border: 1.5px solid #1a1a1a;
+  transform: rotate(45deg); border-radius: 3px;
+  animation: ob-diamond-form 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.ob-logo-text { text-align: center; line-height: 1.15; }
+.ob-logo-line1 { font-size: 20px; font-weight: 300; color: #1a1a1a; letter-spacing: 0.5px; display: block; animation: ob-text-fade 0.45s 0.15s ease both; }
+.ob-logo-line2 { font-size: 20px; font-weight: 500; color: #1a1a1a; letter-spacing: 0.5px; display: block; animation: ob-text-fade 0.45s 0.3s ease both; }
+@keyframes ob-diamond-form {
+  from { transform: rotate(45deg) scale(0); opacity: 0; }
+  to   { transform: rotate(45deg) scale(1); opacity: 1; }
+}
+@keyframes ob-text-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 表单 */
+.ob-form { text-align: left; margin-bottom: 24px; }
+.ob-field { margin-bottom: 14px; }
+.ob-field label { display: block; font-size: 12px; font-weight: 400; color: #1a1a1a; margin-bottom: 5px; }
+.ob-field input, .ob-field select {
+  width: 100%; font-size: 13px; padding: 10px 12px; box-sizing: border-box;
+  border: 1px solid #e0e0e0; border-radius: 4px;
+  background: #ffffff; color: #1a1a1a;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  font-weight: 350; outline: none;
+}
+.ob-field input:focus, .ob-field select:focus {
+  border-color: #1a1a1a; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.ob-field input.err, .ob-field select.err {
+  border-color: #c62828; background: #fef4f4;
+  box-shadow: 0 0 0 1px rgba(198, 40, 40, 0.12);
+}
+.ob-inline { display: flex; gap: 10px; }
+.ob-inline > div { flex: 1; }
+.ob-error { font-size: 12px; color: #c62828; text-align: center; margin: -8px 0 12px; }
+
+/* 按钮区 */
+.ob-actions { display: flex; justify-content: center; align-items: center; gap: 10px; }
+.ob-btn {
+  padding: 9px 28px; border: none; border-radius: 4px;
+  font-size: 13px; font-weight: 400; cursor: pointer;
+  background: #1a1a1a; color: #f5f5f5;
+  transition: opacity 0.15s;
+}
+.ob-btn:hover { opacity: 0.82; }
+.ob-btn:disabled { opacity: 0.5; cursor: default; }
+.ob-btn.secondary { background: transparent; color: #1a1a1a; border: 1px solid #e0e0e0; }
+.ob-btn.secondary:hover { background: #e0e0e0; }
+.ob-skip {
+  display: inline-block; margin: 14px auto 0; padding: 6px 16px;
+  font-size: 12px; font-weight: 350; color: #6b6b6b;
+  cursor: pointer; background: none; border: 1px solid transparent;
+  border-radius: 4px; transition: all 0.2s;
+}
+.ob-skip:hover { color: #1a1a1a; background: #ffffff; border-color: #e0e0e0; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+
+/* 步骤进度（Win11 细线） */
+.ob-dots { display: flex; justify-content: center; align-items: center; gap: 4px; margin-top: 32px; }
+.ob-dot { width: 24px; height: 2px; border-radius: 1px; background: #e0e0e0; transition: background 0.25s ease; }
+.ob-dot.active { background: #1a1a1a; }
+
+/* 分段选择（关闭窗口时）：与设置页同形态，向导版按 Win11 灰底轨道 + 白滑块 */
+.ob-seg { display: flex; background: #f0f0f0; border-radius: 6px; padding: 3px; gap: 3px; }
+.ob-seg-btn {
+  flex: 1; border: none; background: transparent; border-radius: 4px;
+  padding: 8px 0; font-size: 12.5px; font-weight: 400; color: #6b6b6b;
+  cursor: pointer; transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+.ob-seg-btn:hover { color: #1a1a1a; }
+.ob-seg-btn.on { background: #ffffff; color: #1a1a1a; font-weight: 500; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10); }
+
+/* 开关行（开机自启） */
+.ob-switch-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: #1a1a1a; padding: 10px 0; margin-bottom: 14px;
+}
+.ob-switch {
+  width: 40px; height: 22px; border-radius: 11px; border: none; cursor: pointer;
+  background: #d5d5d5; position: relative; transition: background 0.2s; padding: 0;
+}
+.ob-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: left 0.2s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.ob-switch.on { background: #00bfa5; }
+.ob-switch.on::after { left: 21px; }
+
+/* ── 教程卡（向导结束后，可拖拽）────────────────────────────── */
+.tut-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, 0.15);
+  display: flex; justify-content: center; align-items: flex-start;
+  padding-top: 80px; pointer-events: none;
+  animation: tut-fade-in 0.3s ease both;
+}
+@keyframes tut-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.tut-card {
+  background: #fff; border-radius: 12px; padding: 8px 32px 28px;
+  max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  text-align: center; position: relative; pointer-events: auto;
+  animation: tut-slide-up 0.4s ease;
+}
+@keyframes tut-slide-up {
+  from { transform: translateY(40px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.tut-handle {
+  display: flex; justify-content: center; padding: 10px 0 6px;
+  cursor: grab; user-select: none;
+}
+.tut-handle:active { cursor: grabbing; }
+.tut-handle span { display: block; width: 28px; height: 3px; background: #d0d0d0; border-radius: 2px; }
+.tut-card h2 { font-size: 17px; font-weight: 600; color: #1a1a1a; margin: 6px 0 4px; }
+.tut-steps { text-align: left; margin: 16px 0; }
+.tut-step { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; color: #333; }
+.tut-num {
+  width: 26px; height: 26px; border-radius: 50%; background: #1a1a1a; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.tut-dismiss {
+  font-size: 14px; padding: 10px 40px;
+  background: #00bfa5; color: #fff;
+  border: none; border-radius: 6px; cursor: pointer;
+}
+.tut-dismiss:hover { opacity: 0.9; }

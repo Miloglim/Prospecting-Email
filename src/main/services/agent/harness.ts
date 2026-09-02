@@ -33,10 +33,25 @@ export const AGENT_INSTRUCTIONS = [
   "· reminders_due 到期/逾期跟进提醒（「今天该跟进谁」必查）；queue_status 发信队列进度；accounts_status 发信账号健康；",
   "· company_backcheck 公司网络背调（外部搜索，需已配置搜索密钥）；generate_draft 撰写开发信草稿（只出文本）；",
   "· record_followup 记录跟进（写，需确认）；send_queue_add 把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）；" +
-  "· update_plan 维护对话里的任务清单卡（只更新界面，不读写任何业务数据）。",
+  "· import_contacts 批量导入客户信息入库（写，需确认；用户粘贴任意格式名单/表格/签名时，你负责整理成 contacts 数组再调用，绝不要反问「用 CSV 还是 JSON」这类格式问题——邮箱是唯一键，无效或已存在会跳过不覆盖）；" +
+  "· update_plan 维护对话里的任务清单卡（只更新界面，不读写任何业务数据）；" +
+  "· export_artifact 把整理好的内容导出成文件（md 或 csv，落盘到 outputs/agent，界面出现文件卡）；" +
+  "· start_batch_task 批量后台任务（对话里出进度卡、可取消、不阻塞）：多家公司批量背调 / 各写开发信草稿，或多封邮件批量总结（kind=email_summary，传 messageIds）；" +
+  "· report_gap 登记能力缺口（开发期需求台账，只写台账不碰业务）。",
+  "写操作一步到位：record_followup / generate_draft / send_queue_add 都会自己按 contact（邮箱/姓名/公司名）" +
+    "在库里定位收件人。用户说「给 juan@acme.com 记一条跟进」就直接调用它，" +
+    "不要先 search_contacts 再调（多一次调用就多一次掉链子的机会）。",
+  "出现「背调 / 什么背景 / 值得开发吗 / 这家公司做什么」时，必须调用 company_backcheck —— " +
+    "本地库里只有档案信息，公开背景只能由它查，也不要用 search_contacts 代替。",
   "多步任务必须亮进度：当一件事需要 3 步以上（例如「把这几家都背调一遍再各写一封开发信」「今天该跟进谁，逐个记一条跟进」），" +
   "开工前先调用一次 update_plan 给出全 pending 的步骤清单，此后每完成一步就再调用一次、把全部步骤重发一遍（完成的标 done、正在做的标 doing）；" +
   "单步问答和简单查询不要调用它。清单已在界面上单独展示，正文里禁止再逐条复述一遍。",
+  "导出与批量的分工：用户说「导出/生成文件/整理成表格」时调用 export_artifact 把完整内容落盘成文件，" +
+  "正文只给一句结论（生成了什么、在哪看），不要把全文再贴一遍；" +
+  "用户要把 ≥3 家公司「都背调一遍」或「各写一封开发信」时调用 start_batch_task 起后台任务；" +
+  "用户要「把未读邮件都总结一下」「总结这批邮件」等涉及 ≥3 封邮件的汇总时，先 inbox_search 拿 id，再调用 start_batch_task（kind=email_summary、传 messageIds）起后台总结任务，" +
+  "绝不要用 email_summarize 一封封循环（那会撞每轮调用次数上限、只能做几封）；单封才用 email_summarize，单家公司仍用 company_backcheck / generate_draft。" +
+  "起后台后告诉用户进度卡就在对话里、可随时看、不耽误继续聊别的。",
   "L0 规则：涉及客户、联系人、跟进状态、收件箱邮件的事实性问题，必须先调用工具，仅基于工具返回的数据回答；",
   "运价/舱位价格问题必须调用 quote_search，且提醒用户镜像价为参考价、以船司实时报价为准；工具无数据时明确说「镜像库暂无该航线报价」，不得编造价格。" +
     "库内条数、最低价、有哪些航线船司这类统计问题同样必须先调用（没有筛选条件就传空对象），禁止凭记忆或凭常识作答。",
@@ -93,10 +108,12 @@ type TurnUsageLike = NonNullable<TurnOutcome["usage"]>;
 export function readUsage(unknownUsage: unknown): TurnOutcome["usage"] | undefined {
   const u = unknownUsage as {
     requests?: number; inputTokens?: number; outputTokens?: number;
-    inputTokensDetails?: Array<Record<string, number>>;
+    inputTokensDetails?: Array<Record<string, number>> | Record<string, number>;
   } | undefined;
   if (!u || typeof u.inputTokens !== "number") return undefined;
-  const cached = (u.inputTokensDetails ?? []).reduce((n, d) => n + (d.cached_tokens ?? 0), 0);
+  const det = u.inputTokensDetails;
+  const list = Array.isArray(det) ? det : det ? [det] : [];
+  const cached = list.reduce((n, d) => n + (d.cached_tokens ?? d.cachedTokens ?? 0), 0);
   return { requests: u.requests ?? 0, input: u.inputTokens ?? 0, output: u.outputTokens ?? 0, cached };
 }
 
@@ -190,7 +207,12 @@ function sniffStreamUsage(res: Response, onUsage: (u: TurnUsageLike) => void): R
               requests: 1,
               input: u.prompt_tokens,
               output: typeof u.completion_tokens === "number" ? u.completion_tokens : 0,
-              cached: typeof u.prompt_cache_hit_tokens === "number" ? u.prompt_cache_hit_tokens : 0,
+              cached: (() => {
+                const det = (u as { prompt_tokens_details?: Record<string, unknown> }).prompt_tokens_details;
+                const hit = typeof u.prompt_cache_hit_tokens === "number" ? u.prompt_cache_hit_tokens : 0;   // DeepSeek
+                const cachedTok = det && typeof det.cached_tokens === "number" ? det.cached_tokens : 0;      // OpenAI/vLLM/Agnes
+                return hit || cachedTok;
+              })(),
             });
           }
         } catch { /* 非 JSON 行透传 */ }
@@ -262,7 +284,7 @@ export function hasPending(approvalId: string): boolean {
 export async function runHarnessTurn(o: HarnessOptions): Promise<TurnOutcome> {
   disableTracingOnce();
   const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
-  const ctx: ToolCtx = { conversationId: o.conversationId, counts: new Map(), failures: new Map() };
+  const ctx: ToolCtx = { conversationId: o.conversationId, push: o.push, counts: new Map(), failures: new Map() };
   const tools = buildHarnessTools(ctx);
   const instructions = o.contextNote
     ? `${AGENT_INSTRUCTIONS}\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`

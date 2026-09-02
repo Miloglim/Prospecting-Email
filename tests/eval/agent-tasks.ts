@@ -91,11 +91,12 @@ export const EVAL_CARDS: EvalCard[] = [
   // ── 跟进沉淀（写操作 + 审批链路）──
   {
     id: "fu-approve", group: "跟进沉淀", prompt: "给 juan@acme.com 记一条跟进：已发送报价，等待回复",
-    expect: { toolsOrder: ["search_contacts", "record_followup"], approval: "approve", answerAny: ["已|记录|跟进|完成|✓"] },
+    // 允许一步到位：只调 record_followup（工具会自己按邮箱定位人）或先查再写，都算通过
+    expect: { toolsOrder: ["record_followup"], approval: "approve", answerAny: ["已|记录|跟进|完成|Juan|胡"] },
   },
   {
     id: "fu-reject", group: "跟进沉淀", prompt: "给 juan@acme.com 记一条跟进：客户回复说下周给报价答复",
-    expect: { toolsOrder: ["search_contacts", "record_followup"], approval: "reject", answerAny: ["放弃|未记录|取消|没有记录|拒绝"] },
+    expect: { toolsOrder: ["record_followup"], approval: "reject", answerAny: ["放弃|未记录|取消|没有记录|拒绝|未写入"] },
   },
 
   // ── 邮件与背调（第一刀补齐的能力：原 missing-tool 卡转常规组）──

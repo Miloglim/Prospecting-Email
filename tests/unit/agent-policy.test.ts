@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { TOOL_SPECS, classifyTool, checkBudget, ToolBudgetError } from "../../src/main/services/agent/policy";
-import { searchContactsSchema, recordFollowupSchema } from "../../src/main/services/agent/tools";
+import { TOOL_SPECS, classifyTool, checkBudget, canAutoApprove, ToolBudgetError } from "../../src/main/services/agent/policy";
+import { searchContactsSchema, recordFollowupSchema, normalizePlan } from "../../src/main/services/agent/tools";
 
 describe("agent harness policy", () => {
   it("注册表每个工具都有副作用分级与预算", () => {

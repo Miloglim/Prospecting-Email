@@ -138,6 +138,20 @@ async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
   }
 }
 
+/** 让模型基于本轮问答产出 2-3 个「追问」建议（助手页引导卡片）。失败回空，由调用方兜底规则建议。 */
+export async function suggestFollowUps(input: { userText: string; aiText: string }): Promise<Result<string[]>> {
+  const user =
+    `上一轮用户问：\n"""\n${(input.userText || "").slice(0, 600)}\n"""\n` +
+    `助手回答：\n"""\n${(input.aiText || "").slice(0, 1200)}\n"""\n` +
+    `请给出用户接下来最可能问的 2-3 个短问题（面向国际货代/外贸场景，具体可执行，每条不超过 20 字）。只输出一个 JSON 字符串数组。`;
+  const sys = "你是对话引导助手。只输出一个 JSON 数组（2-3 条中文短句），不要解释、不要代码块围栏。";
+  const r = await chatJson<unknown>(sys, user);
+  if (!r.success) return failResult(r.error);
+  const arr = Array.isArray(r.data) ? r.data.map((x) => String(x).trim()).filter(Boolean).slice(0, 3) : [];
+  if (!arr.length) return failResult("无有效建议");
+  return okResult(arr);
+}
+
 // ── 搜索调用（背调数据源）────────────────────────────────
 // 优先 Exa，其次 Tavily。两者都没配 → fail 提示。
 

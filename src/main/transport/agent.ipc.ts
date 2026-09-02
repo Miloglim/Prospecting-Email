@@ -1,7 +1,11 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow, shell } from "electron";
 import { IPC } from "../contract";
 import * as Agent from "../services/agent.service";
-import { failResult } from "../errors";
+import * as BgTask from "../services/bg-task.service";
+import * as Diagnostics from "../services/diagnostics.service";
+import * as Gaps from "../services/gap.service";
+import { isInsideArtifactDir } from "../services/artifact.service";
+import { failResult, okResult } from "../errors";
 import { Log } from "../logger";
 
 /** 渲染进程事件推送器 — 与 send.ipc/inbox.ipc 同模式，service 层不接触 electron */
@@ -54,4 +58,32 @@ export function registerAgentIPC() {
 
   // 结果卡「写入类」动作：用户点击后执行主进程留存的闭包（过期/重启即失效）
   ipcMain.handle(IPC.AGENT.RUN_ACTION, (_e, actionId: string) => Agent.runAction(actionId));
+
+  // P2 产物卡「打开位置」：仅允许 outputs/agent 目录内的路径（防注入 ../ 越权）
+  ipcMain.handle(IPC.AGENT.OPEN_PATH, (_e, input: { path?: string }) => {
+    const p = input?.path?.trim();
+    if (!p) return failResult("缺少文件路径");
+    if (!isInsideArtifactDir(p)) {
+      Log.warn("agent.openPath", `拒绝打开产物目录之外的路径：${p.slice(0, 120)}`);
+      return failResult("只允许打开助手生成的产物文件");
+    }
+    try {
+      shell.showItemInFolder(p);
+      return okResult(undefined);
+    } catch (err) {
+      return failResult(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  // P2 后台任务：任务卡挂载时取快照（此后靠 agent:task 事件增量刷新）
+  ipcMain.handle(IPC.AGENT.GET_TASK, (_e, input: { taskId?: string }) => BgTask.getTask(input?.taskId ?? ""));
+
+  // P2 后台任务：取消（当前项做完即停）
+  ipcMain.handle(IPC.AGENT.CANCEL_TASK, (_e, input: { taskId?: string }) => BgTask.cancelTask(input?.taskId ?? ""));
+
+  // 诊断包导出：日志尾部 + 配置掩码快照 + 库行数 + 最近异常 → outputs/agent 的 md
+  ipcMain.handle(IPC.AGENT.EXPORT_DIAGNOSTICS, () => Diagnostics.exportDiagnostics());
+
+  // 能力缺口台账（/缺口 命令查看，按被抱怨次数降序）
+  ipcMain.handle(IPC.AGENT.LIST_GAPS, (_e, limit?: number) => Gaps.listGaps(limit ?? 20));
 }

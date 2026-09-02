@@ -296,7 +296,7 @@ it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指�
     const args = { contactId: 1, note: "已发送报价，等待回复" };
     const first = await call(T("record_followup"), args);
     const second = await call(T("record_followup"), args);
-    expect(first).toContain("已为联系人 #1 记录跟进");
+    expect(first).toContain("记录跟进");
     expect(second).toContain("幂等");
     const rows = h.db.select().from(schema.interactions).all();
     expect(rows).toHaveLength(1);
@@ -305,8 +305,27 @@ it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指�
   it("写操作幂等按内容区分：改了备注就该再落一条", async () => {
     await call(T("record_followup"), { contactId: 1, note: "第一次联系" });
     const second = await call(T("record_followup"), { contactId: 1, note: "第二次联系" });
-    expect(second).toContain("已为联系人 #1 记录跟进");
+    expect(second).toContain("记录跟进");
     expect(second).not.toContain("幂等");
+  });
+
+  it("一步到位：只给邮箱也能记跟进（弱模型不必先 search_contacts）", async () => {
+    const out = await call(T("record_followup"), { contact: "juan@acme.com", note: "已电话确认船期" });
+    expect(out).toContain("Juan Garcia");
+    expect(out).toContain("#1");
+    expect(h.db.select().from(schema.interactions).all()).toHaveLength(1);
+  });
+
+  it("多位命中时不猜：回候选清单，且一条都不写库", async () => {
+    h.db.insert(schema.contacts).values([
+      { email: "wang2@x.com", firstName: "Wang", lastName: "Second", country: "China" },
+      { email: "wang3@x.com", firstName: "Wang", lastName: "Third", country: "China" },
+    ]).run();
+    const out = await call(T("record_followup"), { contact: "Wang", note: "x" });
+    expect(out).toContain("匹配到多位");
+    expect(out).toContain("Wang Second");
+    expect(out).toContain("Wang Third");
+    expect(h.db.select().from(schema.interactions).all()).toHaveLength(0);   // 有歧义时绝不落库
   });
 
   it("queue_status：空闲时返回零值结构（不抛错）", async () => {

@@ -92,7 +92,7 @@ function ensureConversation(id: string, firstUserText: string): void {
   saveDatabase();
 }
 
-function appendMessage(convId: string, role: "user" | "assistant", content: string): void {
+function appendMessage(convId: string, role: "user" | "assistant" | "error", content: string): void {
   const db = getDb();
   db.insert(agentMessages).values({ conversationId: convId, role, content, createdAt: nowIso() }).run();
   db.update(agentConversations).set({ updatedAt: nowIso() }).where(eq(agentConversations.id, convId)).run();
@@ -108,7 +108,8 @@ function appendMessage(convId: string, role: "user" | "assistant", content: stri
 async function loadHistory(convId: string): Promise<ChatMsg[]> {
   const rows = getDb().select().from(agentMessages)
     .where(eq(agentMessages.conversationId, convId))
-    .orderBy(asc(agentMessages.id)).all();
+    .orderBy(asc(agentMessages.id)).all()
+    .filter(r => r.role === "user" || r.role === "assistant");   // error 卡片只给人看，不进模型
   if (rows.length <= HISTORY_LIMIT) {
     return rows.map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
   }
@@ -275,16 +276,17 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
       const aborted = (err as { name?: string })?.name === "AbortError";
       if (timedOut) {
         // 看门狗触发：明确告诉用户是端点卡住被强制中断，而非正常"停止"
-        push(EVENTS.AGENT_ERROR, {
-          conversationId,
-          message: `模型响应超时，已强制中断（超过 ${Math.round(TURN_HARD_LIMIT_MS / 1000)} 秒无输出）。可在「设置」换用更稳定的端点。`,
-        });
+        const msg = `模型响应超时，已强制中断（超过 ${Math.round(TURN_HARD_LIMIT_MS / 1000)} 秒无输出）。可在「设置」换用更稳定的端点。`;
+        appendMessage(conversationId, "error", msg);
+        push(EVENTS.AGENT_ERROR, { conversationId, message: msg });
       } else if (aborted) {
         push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: true });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         Log.error("agent.chat", `模型调用失败 ${cfg.mode}`, err instanceof Error ? (err.stack ?? msg) : msg);
-        push(EVENTS.AGENT_ERROR, { conversationId, message: cfg.mode === "live" ? `模型调用失败: ${msg}` : msg });
+        const shown = cfg.mode === "live" ? `模型调用失败: ${msg}` : msg;
+        appendMessage(conversationId, "error", shown);
+        push(EVENTS.AGENT_ERROR, { conversationId, message: shown });
       }
     } finally {
       clearTimeout(watchdog);
@@ -357,14 +359,36 @@ export function listConversations(): Result<ConversationMeta[]> {
   return okResult(rows.map(r => ({ id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt })));
 }
 
-export interface MessageDto { role: string; content: string; createdAt: string }
+export interface MessageDto {
+  role: string; content: string; createdAt: string;
+  /** role=tool 时回带：来自 agent_tool_calls 的审计回放（前端重建过程/产物卡） */
+  toolName?: string; argsJson?: string; resultJson?: string;
+}
+
+/** 两套时间戳统一按 UTC 解析：消息表是 ISO（…T…Z），审计表默认 CURRENT_TIMESTAMP（无时区） */
+function tsOf(s: string): number {
+  const n = Date.parse(/[Z+]|\d{2}:?\d{2}$/.test(s) || s.includes("T") ? s : `${s.replace(" ", "T")}Z`);
+  return Number.isNaN(n) ? 0 : n;
+}
 
 export function getMessages(conversationId: string): Result<MessageDto[]> {
   if (!conversationId) return failResult("参数错误: conversationId 必填");
-  const rows = getDb().select().from(agentMessages)
+  const db = getDb();
+  const rows = db.select().from(agentMessages)
     .where(eq(agentMessages.conversationId, conversationId))
     .orderBy(asc(agentMessages.id)).all();
-  return okResult(rows.map(r => ({ role: r.role, content: r.content, createdAt: r.createdAt })));
+  // 工具过程回放：审计表按会话整取（与消息流按时间交织，页面切回后过程卡/产物卡/失败卡仍在）
+  const calls = db.select().from(agentToolCalls)
+    .where(eq(agentToolCalls.conversationId, conversationId))
+    .orderBy(asc(agentToolCalls.id)).all();
+  const merged: Array<MessageDto & { _t: number }> = [
+    ...rows.map(r => ({ role: r.role, content: r.content, createdAt: r.createdAt, _t: tsOf(r.createdAt) })),
+    ...calls.map(c => ({
+      role: "tool", content: "", createdAt: c.createdAt, _t: tsOf(c.createdAt),
+      toolName: c.toolName, argsJson: c.argsJson ?? undefined, resultJson: c.resultJson ?? undefined,
+    })),
+  ].sort((a, b) => a._t - b._t);
+  return okResult(merged.map(({ _t, ...m }) => m));
 }
 
 export function renameConversation(conversationId: string, title: string): Result<void> {

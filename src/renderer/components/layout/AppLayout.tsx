@@ -1,6 +1,7 @@
 import { Layout } from "antd";
 import { Outlet } from "@tanstack/react-router";
 import { Sidebar } from "./Sidebar";
+import { OnboardingWizard } from "../OnboardingWizard";
 
 const { Content } = Layout;
 
@@ -66,6 +67,7 @@ export function AppLayout() {
           </Content>
         </Layout>
       </Layout>
+      <OnboardingWizard />
     </div>
   );
 }

@@ -4,7 +4,7 @@ import {
   Card, Input, InputNumber, Button, message, notification, Table, Modal, Form, Tag, Space,
   Switch, TimePicker, Tooltip, Badge, Popconfirm,
 } from "antd";
-import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, RobotOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { RichTextEditor } from "../../components/RichTextEditor";
 
 interface EmailAccount {
@@ -98,76 +98,6 @@ function SettingRow({ label, value, onSave, type = "text", placeholder, required
       {saving === "saving" && <span className="text-[11px] text-amber-500 w-4">…</span>}
       {saving === "saved" && <span className="text-[11px] text-green-500 w-4">✓</span>}
       {saving === "error" && <span className="text-[11px] text-red-500 w-4">✗</span>}
-    </div>
-  );
-}
-
-// ── API 密钥行（显示配置状态，点击填新值，写入 .env）──
-function ApiKeyRow({ label, name, hint }: { label: string; name: string; hint?: string }) {
-  const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState("");
-  const [saving, setSaving] = useState<"idle" | "saving" | "saved">("idle");
-  const qc = useQueryClient();
-
-  const { data } = useQuery({
-    queryKey: ["ai", "keys"],
-    queryFn: () => window.api.invoke("ai:getKeys") as Promise<{
-      success: boolean; data?: Record<string, boolean>;
-    }>,
-  });
-  const configured = data?.success ? !!data.data?.[name] : false;
-
-  const save = async () => {
-    setSaving("saving");
-    try {
-      const r = await window.api.invoke("ai:setKey", { name, value: val }) as { success: boolean; error?: string };
-      if (r?.success) {
-        setSaving("saved");
-        setTimeout(() => setSaving("idle"), 1500);
-        setEditing(false);
-        setVal("");
-        qc.invalidateQueries({ queryKey: ["ai", "keys"] });
-        message.success(`${label} 已保存`);
-      } else {
-        message.error(r?.error || "保存失败");
-        setSaving("idle");
-      }
-    } catch { message.error("保存失败"); setSaving("idle"); }
-  };
-
-  return (
-    <div className="flex items-center gap-2.5 py-1.5 min-h-[30px] group">
-      <label className="w-[72px] text-right text-[11px] text-gray-500 flex-shrink-0">{label}</label>
-      {editing ? (
-        <>
-          <Input.Password size="small" placeholder="粘贴 API Key" value={val}
-            onChange={e => setVal(e.target.value)} autoFocus className="flex-1"
-            onPressEnter={save}
-          />
-          <Button size="small" type="primary" loading={saving === "saving"} onClick={save}>保存</Button>
-          <Button size="small" onClick={() => { setEditing(false); setVal(""); }}>取消</Button>
-        </>
-      ) : (
-        <>
-          <span className="flex-1 text-xs cursor-pointer px-1 py-0.5 rounded hover:bg-gray-50"
-            onClick={() => setEditing(true)}
-          >
-            {configured
-              ? <span className="text-green-600">● 已配置</span>
-              : <span className="text-gray-400">未配置 — 点击填写</span>}
-          </span>
-          {hint && <span className="text-[10px] text-gray-400 whitespace-nowrap">{hint}</span>}
-          {configured && saving === "saved" && <span className="text-[11px] text-green-500">✓</span>}
-          {configured && (
-            <Button size="small" danger type="text"
-              onClick={async () => {
-                const r = await window.api.invoke("ai:setKey", { name, value: "" }) as { success: boolean; error?: string };
-                if (r?.success) { qc.invalidateQueries({ queryKey: ["ai", "keys"] }); message.success(`${label} 已删除`); }
-                else message.error(r?.error || "删除失败");
-              }}>删除</Button>
-          )}
-        </>
-      )}
     </div>
   );
 }
@@ -667,6 +597,22 @@ function AgentAuditCard() {
   const writes = (data ?? []).filter(d => d.sideEffect === "write").length;
   const errors = (data ?? []).filter(d => d.error).length;
 
+  /** 诊断包导出：出错时点一下，生成日志+配置快照（密钥已掩码）的 md 发给开发者 */
+  const [diag, setDiag] = useState<{ running: boolean; name?: string; path?: string; error?: string }>({ running: false });
+  const exportDiag = async () => {
+    setDiag({ running: true });
+    try {
+      const r = await window.api.invoke("agent:exportDiagnostics") as
+        { success: boolean; data?: { name: string; path: string }; error?: string };
+      setDiag(r?.success && r.data
+        ? { running: false, name: r.data.name, path: r.data.path }
+        : { running: false, error: r?.error || "导出失败" });
+    } catch (e) {
+      // invoke 被 reject（如主进程未重启、handler 未注册）也要落地提示，防 loading 永转
+      setDiag({ running: false, error: e instanceof Error ? e.message : "导出失败" });
+    }
+  };
+
   return (
     <SettingCard icon="" title="AI 活动记录"
       status={errors > 0 ? <Tag color="red">{errors} 条异常</Tag> : undefined}>
@@ -682,8 +628,16 @@ function AgentAuditCard() {
         pagination={{ pageSize: 8, hideOnSinglePage: true }}
         locale={{ emptyText: "暂无记录 — 在「新对话」里让助手查价/查联系人后会出现在这里" }}
       />
-      <div className="pt-2">
+      <div className="pt-2 flex items-center gap-2 flex-wrap">
         <Button size="small" icon={<SyncOutlined spin={isFetching} />} onClick={() => void refetch()}>刷新</Button>
+        <Button size="small" loading={diag.running} onClick={() => { void exportDiag(); }}>导出诊断包</Button>
+        {diag.name && (
+          <span className="text-[11px] text-gray-400">
+            {diag.name}
+            <a className="ml-1.5" onClick={() => { void window.api.invoke("agent:openPath", { path: diag.path }); }}>打开位置</a>
+          </span>
+        )}
+        {diag.error && <span className="text-[11px] text-red-400">{diag.error}</span>}
       </div>
     </SettingCard>
   );
@@ -717,8 +671,6 @@ function ProviderCard() {
   const [testStates, setTestStates] = useState<Record<string, TestState>>({});
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ProfileDto | null>(null);
-  const [keyFor, setKeyFor] = useState<ProfileDto | null>(null);
-  const [keyVal, setKeyVal] = useState("");
   const [form] = Form.useForm();
 
   const { data, isLoading } = useQuery({
@@ -758,27 +710,23 @@ function ProviderCard() {
     const preset = ENDPOINT_PRESETS[0] ?? { label: "", baseUrl: "", model: "" };
     setEditing(p);
     form.setFieldsValue(p
-      ? { name: p.name, baseUrl: p.baseUrl, model: p.model }
-      : { name: "", baseUrl: preset.baseUrl, model: preset.model });
+      ? { name: p.name, baseUrl: p.baseUrl, model: p.model, apiKey: "" }
+      : { name: "", baseUrl: preset.baseUrl, model: preset.model, apiKey: "" });
     setFormOpen(true);
   };
 
   const submitForm = async () => {
     const v = await form.validateFields();
-    const r = await window.api.invoke("ai:profileUpsert", { ...(editing ? { id: editing.id } : {}), ...v }) as
-      { success: boolean; error?: string };
+    const { apiKey, ...cfg } = v as { apiKey?: string; name: string; baseUrl: string; model: string };
+    const r = await window.api.invoke("ai:profileUpsert", { ...(editing ? { id: editing.id } : {}), ...cfg }) as
+      { success: boolean; error?: string; data?: { id?: string } };
     if (!r?.success) { message.error(r?.error || "保存失败"); return; }
-    message.success(editing ? "端点已更新" : "端点已新增，填密钥后即可启用");
+    const pid = editing?.id ?? r.data?.id;
+    if (pid && (apiKey ?? "").trim()) {
+      await window.api.invoke("ai:profileKey", { id: pid, value: apiKey!.trim() });
+    }
+    message.success(editing ? "已保存" : "已添加，填密钥后即可启用");
     setFormOpen(false);
-    refresh();
-  };
-
-  const saveKey = async () => {
-    if (!keyFor) return;
-    const r = await window.api.invoke("ai:profileKey", { id: keyFor.id, value: keyVal }) as { success: boolean; error?: string };
-    if (!r?.success) { message.error(r?.error || "写入失败"); return; }
-    message.success(keyVal.trim() ? "密钥已写入 .env" : "密钥已清除");
-    setKeyFor(null); setKeyVal("");
     refresh();
   };
 
@@ -789,7 +737,7 @@ function ProviderCard() {
         {st?.activeId
           ? <>当前生效：<b>{profiles.find(p => p.id === st.activeId)?.name ?? st.activeId}</b> · {st.endpoint.baseUrl} · 模型 {st.endpoint.model || "未填"}</>
           : <>尚未激活任何端点。{st?.endpoint.hasBaseUrl && st.endpoint.hasKey
-            ? <>正在使用 .env 手写配置（{st.endpoint.baseUrl}），建议「新增端点」后启用，便于随时切换。</>
+            ? <>正在使用 .env 手写配置（{st.endpoint.baseUrl}），建议「添加服务商」后启用，便于随时切换。</>
             : <>对话与背调/开发信/邮件总结都会走这一份配置。</>}</>}
       </div>
 
@@ -799,7 +747,7 @@ function ProviderCard() {
         size="small"
         loading={isLoading}
         pagination={false}
-        locale={{ emptyText: "还没有端点 — 点下面「新增端点」，或直接用预设模板" }}
+        locale={{ emptyText: "还没有服务商 — 点下面「添加服务商」，或直接用预设模板" }}
         columns={[
           {
             title: "端点", dataIndex: "name", key: "name",
@@ -822,7 +770,7 @@ function ProviderCard() {
               const t = testStates[r.id];
               return (
                 <Space size={4}>
-                  <Button size="small" loading={t?.running} onClick={() => void runTest(r)}>测一下</Button>
+                  <Button size="small" loading={t?.running} onClick={() => void runTest(r)}>测试</Button>
                   {t && !t.running && (
                     <span className={`text-[11px] ${t.ok ? "text-green-600" : "text-red-500"}`}>{t.text}</span>
                   )}
@@ -831,7 +779,7 @@ function ProviderCard() {
             },
           },
           {
-            title: "操作", key: "ops", width: 210,
+            title: "操作", key: "ops", width: 150,
             render: (_: unknown, r) => (
               <Space size={2} wrap>
                 <Button size="small" type={r.active ? "default" : "primary"} ghost={!r.active} disabled={r.active}
@@ -842,18 +790,8 @@ function ProviderCard() {
                   }}>
                   {r.active ? "使用中" : "启用"}
                 </Button>
-                <Tooltip title={r.active ? "思考模式影响当前生效端点的首字速度" : "启用后生效"}>
-                  <span>
-                    <Switch size="small" checked={r.thinking}
-                      onChange={async (v) => {
-                        await window.api.invoke("ai:profileThinking", { id: r.id, thinking: v });
-                        refresh();
-                      }} />
-                  </span>
-                </Tooltip>
-                <Button size="small" type="text" onClick={() => { setKeyFor(r); setKeyVal(""); }}>密钥</Button>
                 <Button size="small" type="text" onClick={() => openForm(r)}>编辑</Button>
-                <Popconfirm title="删除该端点？其 .env 密钥一并清除" onConfirm={async () => {
+                <Popconfirm title="删除该服务商？其密钥一并清除" onConfirm={async () => {
                   await window.api.invoke("ai:profileDelete", r.id);
                   refresh();
                 }}>
@@ -867,7 +805,7 @@ function ProviderCard() {
 
       <div className="pt-2">
         <Space wrap size={8}>
-          <Button size="small" icon={<PlusOutlined />} onClick={() => openForm(null)}>新增端点</Button>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => openForm(null)}>添加服务商</Button>
           <Tooltip title="主进程的 fetch 不读系统代理，海外端点（Gemini / OpenAI）必须经本地代理才通。这里自动读你系统里配的那个，不做端口扫描，探活成功才用。">
             <span className="text-[11px] text-gray-400">
               出网代理：{proxy?.active
@@ -878,11 +816,10 @@ function ProviderCard() {
             </span>
           </Tooltip>
           <Button size="small" type="text" onClick={() => qc.invalidateQueries({ queryKey: ["ai", "proxy"] })}>重新探测</Button>
-          <span className="text-[10px] text-gray-400">密钥写 <code>.env</code>，不入库；切换即时生效，无需重启</span>
         </Space>
       </div>
 
-      <Modal open={formOpen} title={editing ? "编辑端点" : "新增端点"} okText="保存"
+      <Modal open={formOpen} title={editing ? "编辑服务商" : "添加服务商"} okText="保存"
         cancelText="取消" maskClosable={false}
         onOk={submitForm} onCancel={() => setFormOpen(false)} destroyOnClose>
         <Form form={form} layout="vertical" size="small" className="pt-1">
@@ -906,23 +843,12 @@ function ProviderCard() {
           <Form.Item name="model" label="模型名" rules={[{ required: true, message: "模型名必填，否则会报 400" }]}>
             <Input placeholder="如 agnes-2.5-pro-beta / deepseek-chat" className="!font-mono" />
           </Form.Item>
+          <Form.Item name="apiKey" label="API 密钥">
+            <Input.Password placeholder={editing ? "留空则不修改" : "粘贴密钥（如 sk-…），启用前需填写"} autoComplete="off" />
+          </Form.Item>
         </Form>
       </Modal>
 
-      <Modal open={!!keyFor} title={`${keyFor?.name ?? ""} · 密钥`} okText="写入 .env" cancelText="取消"
-        confirmLoading={false} onOk={saveKey} onCancel={() => setKeyFor(null)} destroyOnClose>
-        <div className="text-[11px] text-gray-400 mb-2">
-          变量名 <code>{keyFor?.keyEnv}</code>；留空保存即清除。密钥不进数据库、不进对话上下文。
-        </div>
-        <Input.Password value={keyVal} onChange={e => setKeyVal(e.target.value)} placeholder="sk-…" autoFocus />
-      </Modal>
-
-      <div className="mt-3 pt-3 border-t border-gray-100">
-        <div className="text-[11px] text-gray-400 mb-1.5">搜索与回落密钥（同样写入 .env，保存即生效）</div>
-        <ApiKeyRow label="Exa AI" name="EXA_API_KEY" hint="仅「公司背调」工具使用" />
-        <ApiKeyRow label="Tavily" name="TAVILY_API_KEY" hint="背调搜索源（Exa 不可用时备用）" />
-        <ApiKeyRow label="DeepSeek" name="DEEPSEEK_API_KEY" hint="回落端点：只有没激活任何模型端点时，背调/开发信/邮件总结才用它" />
-      </div>
     </SettingCard>
   );
 }

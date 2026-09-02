@@ -1,0 +1,72 @@
+/* ── DiamondLogo：程序菱形标识 + 指针视差轨迹跟踪 ──
+   分层：.dl-track（视差位移，JS 写 translate）> .dl-box/.dl-core（CSS 动画，写 transform）。
+   translate 与 transform 是独立 CSS 属性，视差与旋转/呼吸永不冲突。
+   规范见 docs/diamond-logo-parallax-spec.md。 */
+.dl {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* 视差层：只负责 translate（JS 直写） */
+.dl-track {
+  position: absolute; inset: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  translate: 0px 0px;
+  will-change: translate;
+  pointer-events: none;
+}
+/* 回弹：指针超出影响半径 / 离开窗口时，带轻微过冲弹回中心 */
+.dl-trackable .dl-track { transition: translate 0.48s cubic-bezier(0.34, 1.56, 0.64, 1); }
+/* 跟随：指针在影响半径内（JS 切 .dl-near），快速贴手 */
+.dl-trackable.dl-near .dl-track { transition: translate 0.12s ease-out; }
+
+/* 外圈：可见菱形边框，承担旋转/呼吸/光晕 */
+.dl-box {
+  width: 80%; height: 80%;
+  border-style: solid; border-color: currentColor;
+  border-radius: 22%;
+  transform: rotate(45deg);
+  opacity: 0.9;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+}
+/* 中心点 */
+.dl-core {
+  background: currentColor; border-radius: 20%;
+  transform: rotate(45deg);
+}
+
+/* hover 光晕环（currentColor 12% 淡染） */
+.dl-trackable:hover .dl-box {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+/* idle 时外圈 hover 额外放大（running 时旋转动画优先，放大不生效，仅留光晕） */
+.dl-idle:hover .dl-box { transform: rotate(45deg) scale(1.16); }
+
+/* idle：整体慢呼吸（动效在根层 scale，与视差 translate 正交） */
+.dl-idle { animation: dl-breathe 3.2s ease-in-out infinite; }
+.dl-idle .dl-core { animation: dl-pulse 3.2s ease-in-out infinite; }
+@keyframes dl-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.82; }
+  50%      { transform: scale(1.07); opacity: 1; }
+}
+@keyframes dl-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+
+/* running：外圈持续旋转 + 内核快闪；hover 加速旋转 */
+.dl-running .dl-box { animation: dl-spin 1.8s linear infinite; }
+.dl-running .dl-core { animation: dl-pulse 0.9s ease-in-out infinite; }
+.dl-running:hover .dl-box { animation-duration: 0.9s; }
+@keyframes dl-spin {
+  from { transform: rotate(45deg); }
+  to   { transform: rotate(405deg); }
+}
+
+/* 降低动效偏好：关闭呼吸/旋转/闪烁（视差由 JS 侧媒体查询另行跳过） */
+@media (prefers-reduced-motion: reduce) {
+  .dl-idle, .dl-idle .dl-core,
+  .dl-running .dl-box, .dl-running .dl-core { animation: none; }
+  .dl-trackable .dl-track { transition: none; }
+}

@@ -54,7 +54,7 @@ export interface SendSchedule {
 
 export interface RuntimeConfig {
   /** 通用设置 */
-  general?: { closeAction?: "tray" | "quit" };
+  general?: { closeAction?: "tray" | "quit"; autoLaunch?: boolean };
   /** 全局发信日限额（从首次真实发送起 24h 重置） */
   sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number };
   /** 全局默认发件人名称（账号 displayName 优先） */

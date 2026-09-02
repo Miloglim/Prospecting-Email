@@ -8,15 +8,7 @@
     "endHour": 8,
     "groupSize": 5,
     "groupDelayMinSeconds": 1,
-    "groupDelayMaxSeconds": 10,
-    "companyDelayMinMinutes": 15,
-    "companyDelayMaxMinutes": 20,
-    "singleRecipDelayMinSeconds": 5,
-    "singleRecipDelayMaxSeconds": 10,
-    "templateRotateGroups": 3,
-    "batchSize": 12,
-    "batchPauseMinSeconds": 94,
-    "batchPauseMaxSeconds": 167
+    "groupDelayMaxSeconds": 10
   },
   "test": {
     "email": "",
@@ -42,7 +34,9 @@
     "sentToday": 0
   },
   "general": {
-    "closeAction": "quit"
+    "closeAction": "quit",
+    "autoLaunch": false
   },
-  "sentenceSubjects": {}
+  "sentenceSubjects": {},
+  "defaultSendMode": "preset"
 }

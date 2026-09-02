@@ -242,3 +242,93 @@ body {
 }
 .md-body tbody tr:last-child td { border-bottom: none; }
 .md-body tbody tr:hover td { background: #f9f9f9; }
+
+/* ── 助手数据表格卡（工具结果渲染的 antd Table）：白底灰线 + 外阴影成卡 ── */
+.chat-table-card {
+  display: inline-block;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 2px 6px 6px 2px;   /* 给阴影留展开位，防被消息区滚动容器裁边 */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12), 0 8px 20px rgba(0, 0, 0, 0.16);
+}
+.chat-table-card .ant-table { background: #fff; }
+.chat-table-card .ant-table-cell { border-color: #e5e5e5 !important; }
+.chat-table-card .ant-table-container::before,
+.chat-table-card .ant-table-container::after { background: #e5e5e5 !important; }
+
+/* ── Agent 过程时间线（ThoughtChain small 再压缩）──
+   组件默认按"内容卡"设计：节点圆 20px、行距 12px、内容带边框白卡——对日志流太重。
+   连接线几何由节点尺寸推导（根缩进 = 节点宽、header/content 反移 = -节点宽、
+   线 x = 节点宽/2 - 1、footer 线 x = -(节点宽/2) - 1），压节点必须同步改这组值防错位。 */
+.agent-chain .ant-thought-chain { gap: 4px; padding-inline-start: 14px; }
+.agent-chain .ant-thought-chain-item-header { margin-bottom: 2px; gap: 6px; }
+.agent-chain .ant-thought-chain-item-header,
+.agent-chain .ant-thought-chain-item-content { margin-inline-start: -14px; }
+.agent-chain .ant-thought-chain-item-header::before,
+.agent-chain .ant-thought-chain-item-content::before { inset-inline-start: 6px; }
+.agent-chain .ant-thought-chain-item-header::before { top: 14px; bottom: -6px; }
+.agent-chain .ant-thought-chain-item-footer::before { inset-inline-start: -8px; }
+.agent-chain .ant-thought-chain-item-icon { width: 14px; height: 14px; font-size: 10px; }
+.agent-chain .ant-thought-chain-item-title {
+  height: 16px; line-height: 16px; max-height: 16px; font-weight: 400;
+}
+.agent-chain .ant-thought-chain-item-content { padding: 0; }
+.agent-chain .ant-thought-chain-item-content-box {
+  padding: 0; border: none; background: transparent; border-radius: 0;
+  max-width: 100%;
+}
+.agent-chain .ant-thought-chain-item-footer { margin-top: 2px; }
+
+/* md 表格进了卡片：去掉表自身的边框/圆角/外边距，线由单元格出、角由卡片管 */
+.md-body .chat-table-card table { border: none; border-radius: 0; margin: 0; }
+
+/* ── 助手正文 Markdown 排版（对齐 ChatGPT）：Tailwind preflight 抹平了默认样式，这里逐条补齐 ── */
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body p { margin: 0 0 10px; line-height: 1.7; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { margin: 16px 0 8px; font-weight: 600; line-height: 1.35; color: #111827; }
+.md-body h1 { font-size: 18px; }
+.md-body h2 { font-size: 16px; }
+.md-body h3 { font-size: 15px; }
+.md-body h4 { font-size: 13.5px; }
+.md-body ul, .md-body ol { margin: 0 0 10px; padding-left: 22px; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 3px 0; line-height: 1.65; }
+.md-body li > ul, .md-body li > ol { margin: 3px 0; }
+.md-body a { color: #0f766e; text-decoration: none; }
+.md-body a:hover { text-decoration: underline; }
+.md-body blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid #e5e7eb; color: #6b7280; background: #f9fafb; }
+.md-body hr { border: none; border-top: 1px solid #eee; margin: 14px 0; }
+.md-body strong { font-weight: 600; }
+.md-body :not(pre) > code { background: #f3f4f6; color: #b54708; padding: 1px 5px; border-radius: 5px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.md-body pre { background: #f6f8fa; border: 1px solid #eaecef; border-radius: 8px; padding: 12px 14px; margin: 10px 0; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+.md-body pre code, .md-body pre code.hljs { background: transparent; padding: 0; display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* 库按「状态-下一状态」复合类把图标容器涂成状态色（黑/绿/红实心块），叠在自带的小图标后面
+   就是"圆点很大"的观感；节点图标全部由组件自带字形负责 → 底色一律去掉。
+   库规则带 !important 且选择器为 3 类复合，这里用 [class*] 凑到同级 + !important 对拍。 */
+.agent-chain .ant-thought-chain-item-icon { background-color: transparent !important; }
+.agent-chain .ant-thought-chain-item[class*="-pending"] .ant-thought-chain-item-icon,
+.agent-chain .ant-thought-chain-item[class*="-success"] .ant-thought-chain-item-icon,
+.agent-chain .ant-thought-chain-item[class*="-error"] .ant-thought-chain-item-icon {
+  background-color: transparent !important;
+}
+/* 连接线：库宽 = lineWidth×2 = 4px，且状态切换涂黑→绿渐变线——统一 2px 纯灰（14px 节点下 x=6 正好居中） */
+.agent-chain .ant-thought-chain-item[class*="-pending"] > *::before,
+.agent-chain .ant-thought-chain-item[class*="-success"] > *::before,
+.agent-chain .ant-thought-chain-item[class*="-error"] > *::before {
+  width: 2px !important;
+  background-color: #d9d9d9 !important;
+  background-image: none !important;
+}
+
+/* ── 会话列表：行悬停纯 CSS 态（JS 改内联背景会因 leave 丢失而卡色，禁用）＋三点菜单 hover 显 ── */
+.conv-row { transition: background 0.12s; }
+.conv-row:hover { background: rgba(255, 255, 255, 0.06) !important; }
+.conv-row.active:hover { background: rgba(255, 255, 255, 0.16) !important; }
+.conv-row .conv-more { opacity: 0; transition: opacity 0.15s ease; }
+.conv-row:hover .conv-more,
+.conv-row:focus-within .conv-more { opacity: 1; }

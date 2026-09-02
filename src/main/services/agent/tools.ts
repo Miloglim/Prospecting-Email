@@ -20,12 +20,15 @@ import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
-import { upsertContact } from "../contact.service";
+import { upsertContact, importContacts } from "../contact.service";
 import { upsertTemplate } from "../template.service";
 import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
 import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from "./tool-cache";
 import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
+import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
+import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
+import { reportGap as reportGapRow } from "../gap.service";
 
 /** 同一工具连续失败达此数 → 本回合暂停该工具（Q5 熔断：不让模型换参数死磕） */
 export const MAX_CONSECUTIVE_FAILURES = 2;
@@ -127,6 +130,55 @@ function nextStageAfter(current: string | null): { key: string; label: string } 
 
 const cell = (v: unknown): string => (v == null || v === "" ? "—" : String(v));
 
+export interface ResolvedContact { id: number; name: string; email: string; company: string | null }
+
+/** 按 id / 邮箱 / 姓名 / 公司名在库里确定性定位联系人（最多回 10 条） */
+function resolveContacts(q: string): ResolvedContact[] {
+  const tokens = (q || "").split(/\s+/).filter(Boolean).slice(0, 4);
+  if (!tokens.length) return [];
+  const rows = getDb().select({
+    id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
+    companyName: companies.name,
+  }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+    .where(and(...tokens.map(tok => {
+      const p = `%${tok}%`;
+      return or(like(contacts.email, p), like(contacts.firstName, p), like(contacts.lastName, p), like(companies.name, p));
+    }))).limit(10).all();
+  return rows.map(r => ({
+    id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
+    email: r.email, company: r.companyName ?? null,
+  }));
+}
+
+/**
+ * 目标解析：contactId 优先，其次 contact（邮箱/姓名/公司名任一）。
+ * 弱模型（实测 agnes-2.5-flash）串「先 search_contacts 再写」两步经常只走第一步，
+ * 所以写工具自己定位人 —— 一步办成；检索在代码里做，不靠模型记忆。
+ */
+function pickTarget(
+  args: { contactId?: number | null; contact?: string | null },
+): { ok: true; person: ResolvedContact } | { ok: false; why: "ambiguous" | "notfound"; candidates: ResolvedContact[] } {
+  if (args.contactId) {
+    const one = getDb().select({
+      id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
+      companyName: companies.name,
+    }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+      .where(eq(contacts.id, args.contactId)).get();
+    if (one) {
+      return { ok: true, person: {
+        id: one.id, name: [one.firstName, one.lastName].filter(Boolean).join(" ") || one.email,
+        email: one.email, company: one.companyName ?? null,
+      } };
+    }
+  }
+  const found = resolveContacts(args.contact || "");
+  if (found.length === 1) return { ok: true, person: found[0]! };
+  return { ok: false, why: found.length > 1 ? "ambiguous" : "notfound", candidates: found };
+}
+
+const candidatesText = (list: ResolvedContact[]) => list.slice(0, 5)
+  .map(c => '#' + c.id + ' ' + c.name + (c.company ? '（' + c.company + '）' : '') + ' ' + c.email).join('；');
+
 /** 按公司名模糊找库内记录：多命中时优先精确同名，其次首条（供背调联动判断「库里有没有」） */
 function findCompanyByName(name: string) {
   const tokens = name.split(/\s+/).filter(Boolean).slice(0, 4);
@@ -199,7 +251,8 @@ export const searchContactsSchema = z.object({
 });
 
 export const recordFollowupSchema = z.object({
-  contactId: optInt().describe("联系人 id（来自 search_contacts 返回；字符串形式也接受）"),
+  contactId: optInt().describe("联系人 id（可选；有 id 就不必填 contact）"),
+  contact: optStr(80).describe("联系人定位串：邮箱、姓名或公司名任一（如 juan@acme.com 或 Juan Garcia）。本工具会自己在库里定位，不需要先调 search_contacts"),
   note: z.string().min(1).max(500).describe("跟进记录内容"),
 });
 
@@ -293,16 +346,18 @@ export const companyBackcheckSchema = z.object({
 });
 
 export const generateDraftSchema = z.object({
-  companyName: z.string().min(1).max(80).describe("目标公司名"),
-  contactName: z.string().max(60).describe("收件人姓名"),
+  companyName: optStr(80).describe("目标公司名（给了 contact 时可省略，工具会用库里档案补全）"),
+  contactName: optStr(60).describe("收件人姓名（给了 contact 时可省略）"),
   language: z.string().max(8).nullable().optional().describe("输出语言：EN 英语 / ES 西语 / PT 葡语；其他值按 EN 处理"),
   focus: optStr(300).describe("内容侧重提示，如主推航线、客户痛点"),
-  contactId: optInt().describe("收件联系人 id（来自 search_contacts；带上它才会出现「入队」按钮）"),
+  contactId: optInt().describe("收件联系人 id（可选）"),
+  contact: optStr(80).describe("收件人的邮箱/姓名/公司名任一；给了它本工具会自己定位人并补全姓名与公司，无需先调 search_contacts"),
 });
 
 export const sendQueueAddSchema = z.object({
-  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).min(1).max(50))
-    .describe("收件联系人 id 列表（来自 search_contacts 返回的 id；也接受 [\"1\",\"2\"] 或 \"1,2\")"),
+  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50))
+    .describe("收件联系人 id 列表；也接受字符串数组或 \"1,2\" 形式。只有一个收件人时可改用 contact"),
+  contact: optStr(80).describe("单个收件人的邮箱/姓名/公司名（本工具会自己定位人，无需先调 search_contacts）"),
   subject: z.string().min(1).max(150).describe("邮件主题（可含 {{company}}/{{firstName}} 变量）"),
   body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量）"),
 });
@@ -450,27 +505,28 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 幂等：同一会话里相同内容 5 分钟内只落一次（模型重复提交/用户连点）
       const dup = lookupIdempotent(ctx, "record_followup", args);
       if (dup) return dup;
-      if (!args.contactId) {
-        audit(ctx, "record_followup", "write", args, undefined, "approved", "缺少 contactId");
-        return "失败：缺少参数 contactId（需要联系人 id）。请先用 search_contacts 查到人再记跟进。";
+      // 定位人：id 或 邮箱/姓名/公司名任一（弱模型不必先调 search_contacts）
+      const target = pickTarget(args);
+      if (!target.ok) {
+        const why = target.why === "ambiguous"
+          ? `「${args.contact}」匹配到多位联系人，请用 contactId 指定其一：${candidatesText(target.candidates)}`
+          : `库里找不到「${args.contact ?? `#${args.contactId}`}」，请先用 search_contacts 确认这人是否已建档`;
+        audit(ctx, "record_followup", "write", args, undefined, "approved", "未定位到联系人");
+        return `失败：${why}`;
       }
-      const exists = getDb().select({ id: contacts.id }).from(contacts)
-        .where(eq(contacts.id, args.contactId)).get();
-      if (!exists) {
-        audit(ctx, "record_followup", "write", args, undefined, "approved", `联系人 #${args.contactId} 不存在`);
-        return `失败：联系人 #${args.contactId} 不存在，请先用 search_contacts 查询`;
-      }
+      const pid = target.person.id;
       getDb().insert(interactions).values({
-        contactId: args.contactId, type: "note", direction: "outbound",
+        contactId: pid, type: "note", direction: "outbound",
         channel: "manual", bodyPreview: args.note,
       }).run();
       saveDatabase();
       audit(ctx, "record_followup", "write", args, { ok: true }, "approved");
       invalidateCache("record_followup");
-      rememberResult(ctx, "record_followup", args, `已为联系人 #${args.contactId} 记录跟进`);
-      const stageRow = getDb().select({ stage: contacts.stage }).from(contacts).where(eq(contacts.id, args.contactId)).get();
+      const who = `${target.person.name}（#${pid}${target.person.company ? ` · ${target.person.company}` : ""}）`;
+      rememberResult(ctx, "record_followup", args, `已为 ${who} 记录跟进`);
+      const stageRow = getDb().select({ stage: contacts.stage }).from(contacts).where(eq(contacts.id, pid)).get();
       const nextStage = nextStageAfter(stageRow?.stage ?? null);
-      return `已为联系人 #${args.contactId} 记录跟进。` + (nextStage
+      return `已为 ${who} 记录跟进。` + (nextStage
         ? `提示用户：TA 当前阶段是「${stageRow?.stage ?? "冷开发"}」，要不要顺手推进到「${nextStage.label}」？（可在 CRM 看板里改，或让我用动作卡来做）`
         : "（该联系人已是终态阶段，无需推进）");
     },
@@ -813,10 +869,21 @@ export function buildHarnessTools(ctx: ToolCtx) {
     execute: async (args) => {
       const note = gate(ctx, "generate_draft");
       if (note) return note;
+      // 收件人可由 contact/contactId 任一定位；定位到就用档案补全姓名与公司（少一步 = 弱模型少一次掉链子）
+      const target = args.contactId || args.contact ? pickTarget(args) : null;
+      const person = target && target.ok ? target.person : null;
+      if (target && !target.ok) {
+        audit(ctx, "generate_draft", "read", args, undefined, "auto", "未定位到收件人");
+        return `失败：${target.why === "ambiguous"
+          ? `「${args.contact}」匹配到多位联系人，请改用 contactId 指定其一：${candidatesText(target.candidates)}`
+          : `库里找不到「${args.contact}」；不知道对方是否建档时，先调 search_contacts，或直接给我公司名继续写`}`;
+      }
+      const companyName = args.companyName || person?.company || person?.name || "客户";
+      const contactName = args.contactName || person?.name || companyName;
       const r = await generateEmailDraft({
         language: (["EN", "ES", "PT"].includes((args.language ?? "EN").toUpperCase()) ? args.language!.toUpperCase() : "EN") as "EN" | "ES" | "PT",
-        companyName: args.companyName,
-        contactName: args.contactName,
+        companyName,
+        contactName,
         backcheck: args.focus ? ({ summary: args.focus } as BackcheckReport) : null,
       });
       if (!r.success) {
@@ -826,10 +893,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 拆 SUBJECT 行 → 主题/正文（结果卡动作与入队都要用）
       const raw = r.data.trim();
       const m = /^SUBJECT:\s*(.+)\s*$/im.exec(raw);
-      const subject = (m?.[1] ?? `Following up — ${args.companyName}`).trim().slice(0, 150);
+      const subject = (m?.[1] ?? `Following up — ${companyName}`).trim().slice(0, 150);
       const body = (m ? raw.slice(m.index + m[0].length) : raw).replace(/^\s+/, "").trim();
       const lang = args.language ?? "EN";
-      const tplName = `${args.companyName} · AI 开发信`.slice(0, 60);
+      const tplName = `${companyName} · AI 开发信`.slice(0, 60);
 
       const actions: AnyAction[] = [
         registerAction({
@@ -849,27 +916,28 @@ export function buildHarnessTools(ctx: ToolCtx) {
           },
         }),
       ];
-      if (args.contactId) {
+      const draftContactId = person?.id ?? args.contactId;
+      if (draftContactId) {
         actions.push(registerAction({
           conversationId: ctx.conversationId, toolName: "generate_draft",
           label: "入队发给这位联系人",
-          confirm: `把这封信加入发送队列，收件人 #${args.contactId}`,
+          confirm: `把这封信加入发送队列，收件人 ${person ? `${person.name}（` : ""}#${draftContactId}${person ? "）" : ""}`,
           detail: "入队 ≠ 发送：队列建好后不会自动开始，仍要你在「发送中心」点「开始」",
           diff: [
             { field: "subject", label: "主题", from: "—", to: subject },
-            { field: "contact", label: "收件人", from: "—", to: `#${args.contactId} ${args.contactName || ""}`.trim() },
+            { field: "contact", label: "收件人", from: "—", to: `#${draftContactId} ${contactName}`.trim() },
           ],
           target: { label: "去发送中心", href: "#/campaigns" },
           run: async () => {
-            const s = await startDynamicSend([args.contactId!], subject, body, false);
+            const s = await startDynamicSend([draftContactId], subject, body, false);
             return s.success
               ? okResult(`已入队 ${s.data.queuedCount} 封（批次 ${s.data.batchId.slice(0, 8)}），等待你在发送中心点开始`)
               : failResult(s.error);
           },
         }));
       }
-      // 不重复放 draft 全文：推送给前端的结果有 6000 字上限，长信会把 actions 挤出截断范围
-      const out = { subject, body, language: lang, contactId: args.contactId ?? null, actions };
+      // 正文只放一份（subject/body）：整条结果受推送上限约束，重复字段会挤掉 actions
+      const out = { subject, body, language: lang, contactId: draftContactId ?? null, actions };
       audit(ctx, "generate_draft", "read", args, { subject, length: body.length, actions: actions.length }, "auto");
       return JSON.stringify(out);
     },
@@ -1017,7 +1085,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const sendQueueAdd = tool({
     name: "send_queue_add",
-    description: "把一封邮件加入发送队列。触发时机：用户明确说「把/给 X 发一封邮件」「发给 X」「发报价给 X」时，必须先 search_contacts 拿到 contactId，再调用本工具入队 —— 系统随后会弹人工确认框，那一步就是征求同意，因此不要只在正文里问「要不要发」而不调用本工具。本工具只入队不发送：队列建好后处于未启动状态，用户仍需在「发送中心」点「开始」才真正外发。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
+    description: "把一封邮件加入发送队列。触发时机：用户明确说「把/给 X 发一封邮件」「发给 X」「发报价给 X」时直接调用本工具入队（收件人可用 contactIds 或 contact=邮箱/姓名，本工具会自己在库里定位，不必先调 search_contacts）—— 系统随后会弹人工确认框，那一步就是征求同意，因此不要只在正文里问「要不要发」而不调用本工具。本工具只入队不发送：队列建好后处于未启动状态，用户仍需在「发送中心」点「开始」才真正外发。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
     parameters: sendQueueAddSchema,
     needsApproval: true,
     execute: async (args) => {
@@ -1025,7 +1093,23 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (gateNote) return gateNote;
       const dup = lookupIdempotent(ctx, "send_queue_add", args);
       if (dup) return dup;
-      const r = await startDynamicSend(args.contactIds, args.subject, args.body, false);
+      // 收件人：id 列表优先，否则用 contact 定位（少一步 = 弱模型少一次掉链子）
+      let ids = args.contactIds ?? [];
+      if (ids.length === 0 && args.contact) {
+        const t = pickTarget({ contact: args.contact });
+        if (!t.ok) {
+          audit(ctx, "send_queue_add", "write", args, undefined, "approved", "未定位到收件人");
+          return `失败：${t.why === "ambiguous"
+            ? `「${args.contact}」匹配到多位联系人，请用 contactIds 指定：${candidatesText(t.candidates)}`
+            : `库里找不到「${args.contact}」，请先确认对方已建档`}`;
+        }
+        ids = [t.person.id];
+      }
+      if (ids.length === 0) {
+        audit(ctx, "send_queue_add", "write", args, undefined, "approved", "缺少收件人");
+        return "失败：缺少收件人。请给 contactIds（或单个 contact：邮箱/姓名）。";
+      }
+      const r = await startDynamicSend(ids, args.subject, args.body, false);
       if (!r.success) {
         audit(ctx, "send_queue_add", "write", args, undefined, "approved", r.error);
         forget(ctx, "send_queue_add", args);
@@ -1057,9 +1141,146 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  const exportArtifact = tool({
+    name: "export_artifact",
+    description: "把整理好的内容导出成文件给用户带走（落盘到 outputs/agent，对话里出现文件卡，可「打开位置」「复制路径」）。"
+      + "用户说「导出 / 生成文件 / 整理成表格」时调用本工具，完整内容写进文件，不要在回答正文里再贴一遍全文。"
+      + "md 格式用 content 传 Markdown 正文；csv 格式用 rows 传二维数组（首行是表头）。本工具只写产物目录，不碰任何业务数据。",
+    parameters: exportArtifactSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "export_artifact");
+      if (gateNote) return gateNote;
+      const dup = lookupIdempotent(ctx, "export_artifact", args);
+      if (dup) return dup;
+      const format: ArtifactFormat = /^csv$/i.test(String(args.format ?? "").trim()) ? "csv" : "md";
+      const title = String(args.title ?? "").trim().slice(0, 40) || "导出内容";
+      let content: string;
+      if (format === "csv") {
+        const rows = (Array.isArray(args.rows) ? args.rows : [])
+          .filter(r => Array.isArray(r))
+          .slice(0, 500)
+          .map(r => r.slice(0, 20).map(c => String(c ?? "").slice(0, 200)));
+        if (!rows.length) {
+          audit(ctx, "export_artifact", "read", args, undefined, "auto", "csv 缺少 rows");
+          return JSON.stringify({ ok: false, notice: "导出 csv 需要 rows（首行为表头的二维数组）。请补齐数据后再调用本工具。" });
+        }
+        content = toCsv(rows);
+      } else {
+        content = String(args.content ?? "").trim().slice(0, 64_000);
+        if (!content) {
+          audit(ctx, "export_artifact", "read", args, undefined, "auto", "content 为空");
+          return JSON.stringify({ ok: false, notice: "导出 md 需要 content（Markdown 正文）。请补齐内容后再调用本工具。" });
+        }
+      }
+      const w = writeArtifact(title, format, content);
+      if (!w.success) {
+        audit(ctx, "export_artifact", "read", args, undefined, "auto", w.error);
+        return `导出失败：${w.error}`;
+      }
+      audit(ctx, "export_artifact", "read", args, w.data, "auto");
+      const okMsg = JSON.stringify({ artifact: w.data, notice: "文件已生成，对话里已显示文件卡。正文给用户一句结论即可，禁止再贴全文。" });
+      rememberResult(ctx, "export_artifact", args, okMsg);
+      return okMsg;
+    },
+  });
+
+  const importContactsTool = tool({
+    name: "import_contacts",
+    description: "把用户提供的客户信息批量导入本地联系人库。用户粘贴任意格式（名单/表格/邮件签名/一段话）时，先把每条整理成 contacts（姓名/邮箱/公司/国家/职位/电话/阶段/备注）再调用本工具；绝不要反问用户「用 CSV 还是 JSON」。"
+      + "邮箱是去重与写入的键：无效邮箱跳过、库里已存在的邮箱不会被覆盖（只提示疑似已存在）。"
+      + "写操作，执行前请用户确认；被拒绝则不写。完成后给一句结论并询问是否按公司/国家汇总、或挑几位进开发信。",
+    parameters: importContactsSchema,
+    needsApproval: true,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "import_contacts");
+      if (gateNote) return gateNote;
+      const { tsv, invalid, count } = buildImportTsv(args.contacts);
+      const total = args.contacts.length;
+      if (count === 0) {
+        audit(ctx, "import_contacts", "write", args, undefined, "approved", "无有效邮箱可导入");
+        return `没有可导入的联系人：${total} 条里 ${invalid.length} 条邮箱无效或缺失。每条必须有合法邮箱，请核对后重试。`;
+      }
+      const mapping = Object.fromEntries(IMPORT_HEADER.map((h) => [h, h]));
+      const res = await importContacts({ mode: "execute", type: "tsv", data: tsv, mapping });
+      if (!res.success) {
+        audit(ctx, "import_contacts", "write", args, undefined, "approved", res.error);
+        return `导入失败：${res.error}`;
+      }
+      const { imported, skipped } = res.data;
+      audit(ctx, "import_contacts", "write", args, { imported, skipped, invalid: invalid.length }, "approved");
+      invalidateCache("search_contacts");
+      saveDatabase();
+      return `导入完成：新增 ${imported} 位，跳过 ${skipped} 位（邮箱已存在/为空），无效 ${invalid.length} 位`
+        + (invalid.length ? `（如 ${invalid.slice(0, 3).join("、")}）` : "")
+        + "。要不要按公司/国家汇总一下，或挑几位直接进开发信？";
+    },
+  });
+
+  const startBatchTask = tool({
+    name: "start_batch_task",
+    description: "把批量活起成后台任务（对话里出进度卡、逐项推进、可随时取消、不阻塞对话）。三种 kind：backcheck=批量背调（≥3 家）、draft=批量开发信草稿（≥3 家）、email_summary=批量邮件总结（≥3 封，传 messageIds）。"
+      + "凡是要总结多封邮件，一律用本工具（传 messageIds，来自 inbox_search），绝不要用 email_summarize 一封封循环（那会撞每轮调用次数上限、只能做几封）。单封才用 email_summarize，单家才用 company_backcheck / generate_draft。"
+      + "上限：公司 10 家、邮件 60 封；完成后自动生成文件产物。只搜索与生成文本，绝不发送任何邮件。",
+    parameters: startBatchTaskSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "start_batch_task");
+      if (gateNote) return gateNote;
+      const kind = normalizeBatchKind(args.kind);
+      if (kind === "email_summary") {
+        const ids = normalizeMessageIds(args.messageIds);
+        if (!ids.length) {
+          audit(ctx, "start_batch_task", "read", args, undefined, "auto", "邮件 id 为空");
+          return JSON.stringify({ ok: false, notice: "email_summary 需要 messageIds（先用 inbox_search 拿到邮件 id）。请让用户补充或先检索。" });
+        }
+        const r = startTask(ctx.push, { conversationId: ctx.conversationId, kind, messageIds: ids });
+        if (!r.success) { audit(ctx, "start_batch_task", "read", args, undefined, "auto", r.error); return `启动后台任务失败：${r.error}`; }
+        audit(ctx, "start_batch_task", "read", args, r.data, "auto");
+        return JSON.stringify({ task: r.data, notice: `后台任务已启动（总结 ${r.data.total} 封），进度卡已在对话中展示，完成后自动生成文件产物。告诉用户可随时看进度、继续问别的，不要重复调用本工具。` });
+      }
+      const companies = normalizeBatchItems(args.companies);
+      if (!companies.length) {
+        audit(ctx, "start_batch_task", "read", args, undefined, "auto", "公司列表为空");
+        return JSON.stringify({ ok: false, notice: "companies 至少要有一家有 name 的公司。请让用户补充，或改用对应的单公司工具。" });
+      }
+      const r = startTask(ctx.push, { conversationId: ctx.conversationId, kind, companies });
+      if (!r.success) {
+        audit(ctx, "start_batch_task", "read", args, undefined, "auto", r.error);
+        return `启动后台任务失败：${r.error}`;
+      }
+      audit(ctx, "start_batch_task", "read", args, r.data, "auto");
+      return JSON.stringify({ task: r.data, notice: "后台任务已启动，进度卡已在对话中展示。告诉用户随时能看进度、可以继续问别的。不要重复调用本工具。" });
+    },
+  });
+
+  const reportGap = tool({
+    name: "report_gap",
+    description: "登记一条「客户端目前做不到」的能力缺口（开发期需求台账）。"
+      + "触发时机：用户想要的操作在当前工具清单里不存在（例如把人推荐的新联系人加入联系人库、修改客户阶段、删除数据等），" +
+      "你必须先如实说明做不到并给出绕行办法，然后调用本工具记一笔：wanted=用户想做而做不了的事（一句话）、scene=当时在办的事、workaround=你给出的替代路径。"
+      + "同一回合同类缺口只记一次；这只是台账读写，不执行任何业务操作。",
+    parameters: z.object({
+      wanted: z.string().describe("想做但做不到的事，一句话"),
+      scene: z.string().nullable().optional().describe("当时在办的事（如「跟进 jberrocal 的自动回复」）"),
+      workaround: z.string().nullable().optional().describe("你给用户的绕行办法"),
+    }),
+    execute: async (args) => {
+      const gateNote = gate(ctx, "report_gap");
+      if (gateNote) return gateNote;
+      const r = reportGapRow(args);
+      audit(ctx, "report_gap", "read", args, r.success ? r.data : undefined, "auto", r.success ? undefined : r.error);
+      if (!r.success) return `缺口登记失败：${r.error}`;
+      return JSON.stringify({
+        ok: true, gapId: r.data.gapId, hits: r.data.hits,
+        notice: r.data.merged
+          ? "该缺口此前已登记，本次计入抱怨次数。已足够，禁止再为同一缺口调用本工具。"
+          : "缺口已登记进台账。如实把做不到和绕行办法讲给用户即可，禁止假装已完成。",
+      });
+    },
+  });
+
   return [
     searchContacts, recordFollowup, quoteSearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
-    updatePlan,
+    updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
   ];
 }

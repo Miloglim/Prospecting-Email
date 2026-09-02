@@ -4,10 +4,11 @@ import { Button, message, Modal, Tooltip, Progress, notification } from "antd";
 // (Button etc. used in sub-components)
 import {
   ReloadOutlined, MailOutlined,
-  DeleteOutlined, RobotOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { askAssistant } from "../../lib/ask-ai";
+import { DiamondLogo } from "../../components/DiamondLogo";
 
 interface InboxItem {
   id: number; fromEmail: string; fromName: string | null;
@@ -647,29 +648,25 @@ export function InboxList() {
                         {(TYPE as Record<string, {label: string}>)[String(value)]?.label || String(value)}
                       </span>
                     ) : String(value)}
+                    {/* 菱形 = 引用这封邮件让 AI 起草回复（原「AI」整行两按钮收敛成一个图标） */}
+                    {label === "发件人" && (
+                      <Tooltip title="引用这封邮件，让 AI 起草回复" placement="top">
+                        <span
+                          onClick={() => askAssistant({
+                            ctx: `message:${sel_.id}`,
+                            question: "根据这封邮件帮我起草一封回复，语气专业简洁",
+                          })}
+                          style={{ display: "inline-flex", alignItems: "center", verticalAlign: "-1px", marginLeft: 5, cursor: "pointer", color: "#00bfa5", opacity: 0.9 }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = "0.9"; }}
+                        >
+                          <DiamondLogo size={11} state="static"   /* 静态：不呼吸、无中心点，只做入口标识 */ />
+                        </span>
+                      </Tooltip>
+                    )}
                   </span>
                 </div>
               ))}
-              {/* AI 动作：带着这封邮件的上下文跳对话页（助手会读正文并给下一步） */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "5px 12px", borderBottom: "1px solid #f5f5f5" }}>
-                <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>AI</span>
-                <Button size="small" type="text" icon={<RobotOutlined style={{ color: "#00bfa5" }} />}
-                  style={{ color: "#00897b", fontSize: 11, height: 22, padding: "0 6px" }}
-                  onClick={() => askAssistant({
-                    ctx: `message:${sel_.id}`,
-                    question: "总结一下这封邮件，告诉我下一步该做什么",
-                  })}>
-                  总结这封邮件
-                </Button>
-                <Button size="small" type="text"
-                  style={{ color: "#00897b", fontSize: 11, height: 22, padding: "0 6px" }}
-                  onClick={() => askAssistant({
-                    ctx: `message:${sel_.id}`,
-                    question: "根据这封邮件帮我起草一封回复，语气专业简洁",
-                  })}>
-                  起草回复
-                </Button>
-              </div>
               {/* 账号 + 关联 一行两栏 */}
               <div style={{ display: "flex", borderBottom: "1px solid #f5f5f5" }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: senderContact ? "50%" : "100%" }}>

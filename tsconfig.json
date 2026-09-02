@@ -16,7 +16,8 @@
     "paths": {
       "@main/*": ["src/main/*"],
       "@renderer/*": ["src/renderer/*"],
-      "@preload/*": ["src/preload/*"]
+      "@preload/*": ["src/preload/*"],
+      "@/*": ["src/renderer/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

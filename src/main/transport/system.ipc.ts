@@ -22,6 +22,19 @@ export function registerSystemIPC() {
     }
   });
 
+  // 开机自启（新手向导 step3 用）；同时持久化到 config.general.autoLaunch 供 UI 回显
+  ipcMain.handle(IPC.SYSTEM.SET_AUTO_LAUNCH, (_e, enabled: boolean) => {
+    try {
+      app.setLoginItemSettings({ openAtLogin: !!enabled });
+      const current = loadConfig();
+      saveConfig({ ...current, general: { ...(current.general || {}), autoLaunch: !!enabled } });
+      Log.info("system.autoLaunch", enabled ? "已开启开机自启" : "已关闭开机自启");
+      return okResult(undefined);
+    } catch (err) {
+      return failResult(`设置失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
   ipcMain.handle(IPC.SYSTEM.UPDATE_CONFIG, (_e, partial) => {
     const current = loadConfig();
     // schedule / sentenceSubjects 深度合并，避免前端只传部分字段时覆盖丢失
