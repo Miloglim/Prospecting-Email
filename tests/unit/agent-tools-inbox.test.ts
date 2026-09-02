@@ -124,7 +124,7 @@ const call = (t: ToolLike, args: unknown): Promise<string> => t.invoke({}, JSON.
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { summarizeEmail } = await import("../../src/main/services/ai.service");
 
-const ctx = { conversationId: "test-conv", counts: new Map<string, number>() };
+const ctx = { conversationId: "test-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
 /** 按工具名取（注册顺序会变，按名索引更稳） */
 let toolByName: Record<string, ToolLike> = {};
 const T = (name: string): ToolLike => toolByName[name]!;
@@ -136,6 +136,7 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
   beforeEach(() => {
     newSandbox();
     ctx.counts.clear();
+    ctx.failures.clear();
     const all = buildHarnessTools(ctx) as unknown as ToolLike[];
     toolByName = Object.fromEntries(all.map(t => [t.name ?? "", t]));
   });
@@ -164,6 +165,30 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     // 种子库中 40HQ 共 4 条（r1/r2/r3/r4），40HC 应被 normalizeContainer 归一后命中同一批
     const out = JSON.parse(await call(T("quote_search"), { container: "40HC" })) as { total: number };
     expect(out.total).toBe(4);
+  });
+
+  it("显式 null 的可选参数等同省略（DeepSeek 会把没用上的字段填 null）", async () => {
+    const withNulls = JSON.parse(await call(T("quote_search"), {
+      lane: null, carrier: null, pod: null, container: null, includeExpired: null, limit: null,
+    })) as { total: number; quotes: unknown[] };
+    expect(withNulls.total).toBe(5);              // 不加条件 = 全量命中
+    expect(withNulls.quotes.length).toBeGreaterThan(0);
+
+    const inboxNulls = JSON.parse(await call(T("inbox_search"), {
+      query: null, classification: null, unreadOnly: null, limit: null,
+    })) as { messages: unknown[] };
+    expect(inboxNulls.messages).toHaveLength(2);
+  });
+
+  it("空字符串的可选筛选＝不过滤（模型用空串表达留省，不能被当成非法参数）", async () => {
+    const out = JSON.parse(await call(T("quote_search"), {
+      lane: "", carrier: "", pod: "", container: "", limit: 0,
+    })) as { total: number; quotes: unknown[] };
+    expect(out.total).toBe(5);
+    const inbox = JSON.parse(await call(T("inbox_search"), {
+      query: "   ", classification: "随便写的值", limit: 0,
+    })) as { total: number };
+    expect(inbox.total).toBeGreaterThanOrEqual(2);   // 非法分类被忽略，既不报错也不查空
   });
 
   it("quote_search：口语航线名（加勒比线）命中受控枚举「加勒比」", async () => {
@@ -238,6 +263,50 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     expect(out.healthy).toBe(1);
     expect(out.issues.find(i => i.email === "broken@x.com")!.problems).toContain("发信熔断中");
     expect(out.issues.find(i => i.email === "off@x.com")!.problems).toBe("已停用");
+  });
+
+it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指令", async () => {
+    const first = await call(T("email_summarize"), { messageId: 999 });
+    const second = await call(T("email_summarize"), { messageId: 998 });
+    expect(first).toContain("不存在");
+    expect(second).toContain("不存在");
+    const third = await call(T("email_summarize"), { messageId: 997 });
+    expect(third).toContain("tool_suspended");
+    expect(third).toContain("不要再调用本工具");
+  });
+
+  it("熔断计数看「连续」：中间成功一次就清零", async () => {
+    await call(T("email_summarize"), { messageId: 999 });           // 失败 1
+    const ok = await call(T("email_summarize"), { messageId: 1 });   // 成功 → 计数清零
+    expect(ok).toContain("summary");
+    const again = await call(T("email_summarize"), { messageId: 998 }); // 又失败，但只算第 1 次
+    expect(again).toContain("不存在");
+    expect(again).not.toContain("tool_suspended");
+  });
+
+  it("熔断不吞预算：暂停期间不再计数", async () => {
+    const suspended = await call(T("email_summarize"), { messageId: 999 });
+    await call(T("email_summarize"), { messageId: 998 });
+    await call(T("email_summarize"), { messageId: 997 });       // 已熔断，直接给暂停语
+    expect(suspended).not.toContain("tool_suspended");
+    expect(ctx.counts.get("email_summarize")).toBeLessThanOrEqual(2);
+  });
+
+  it("写操作幂等：相同内容 5 分钟内重复提交只落一条", async () => {
+    const args = { contactId: 1, note: "已发送报价，等待回复" };
+    const first = await call(T("record_followup"), args);
+    const second = await call(T("record_followup"), args);
+    expect(first).toContain("已为联系人 #1 记录跟进");
+    expect(second).toContain("幂等");
+    const rows = h.db.select().from(schema.interactions).all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("写操作幂等按内容区分：改了备注就该再落一条", async () => {
+    await call(T("record_followup"), { contactId: 1, note: "第一次联系" });
+    const second = await call(T("record_followup"), { contactId: 1, note: "第二次联系" });
+    expect(second).toContain("已为联系人 #1 记录跟进");
+    expect(second).not.toContain("幂等");
   });
 
   it("queue_status：空闲时返回零值结构（不抛错）", async () => {

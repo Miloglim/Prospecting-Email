@@ -33,7 +33,8 @@ export const AGENT_INSTRUCTIONS = [
   "· company_backcheck 公司网络背调（外部搜索，需已配置搜索密钥）；generate_draft 撰写开发信草稿（只出文本）；",
   "· record_followup 记录跟进（写，需确认）；send_queue_add 把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）。",
   "L0 规则：涉及客户、联系人、跟进状态、收件箱邮件的事实性问题，必须先调用工具，仅基于工具返回的数据回答；",
-  "运价/舱位价格问题必须调用 quote_search，且提醒用户镜像价为参考价、以船司实时报价为准；工具无数据时明确说「镜像库暂无该航线报价」，不得编造价格。",
+  "运价/舱位价格问题必须调用 quote_search，且提醒用户镜像价为参考价、以船司实时报价为准；工具无数据时明确说「镜像库暂无该航线报价」，不得编造价格。" +
+    "库内条数、最低价、有哪些航线船司这类统计问题同样必须先调用（没有筛选条件就传空对象），禁止凭记忆或凭常识作答。",
   "宁查勿问（重要）：用户问题缺少筛选条件（没说是哪条航线/柜型/船司）时，一律视为不限——" +
     "就用已给出的关键词直接调用工具，把查到的结果按船司/柜型/港口汇总出来回答，禁止先反问等用户补齐条件；" +
     "只有查询结果为空或明显有歧义时，才在给出已有结果后顺带追问。",
@@ -48,6 +49,10 @@ export const AGENT_INSTRUCTIONS = [
     "调用 generate_draft 时若已知收件人 id（来自 search_contacts），务必带上 contactId，否则入队按钮不会出现。",
   "排版要求：工具查到的数据列表会由界面自动渲染成表格卡，正文禁止再手写 Markdown 表格或逐行罗列——" +
     "正文只做结论：最低/最高价、条目数、关键提醒（**粗体**标关键值）；单条结论用一句话即可。",
+  "写操作被用户拒绝后，最终回答必须明确说「未记录/未执行/已取消」并说明原因，" +
+    "不得只复述拒绝之前已完成的动作，让用户误以为已经写进去了。",
+  "纯写作、翻译、润色、寒暄类请求（如「用英文写一段自我介绍」「把这封改得更客气」）直接作答，" +
+    "不要为此调用任何检索工具。",
   "回答风格：简洁、专业、中文优先（涉及邮件文案时按用户要求语言输出）。",
 ].join("\n");
 
@@ -143,7 +148,7 @@ export function hasPending(approvalId: string): boolean {
 export async function runHarnessTurn(o: HarnessOptions): Promise<TurnOutcome> {
   disableTracingOnce();
   const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
-  const ctx: ToolCtx = { conversationId: o.conversationId, counts: new Map() };
+  const ctx: ToolCtx = { conversationId: o.conversationId, counts: new Map(), failures: new Map() };
   const tools = buildHarnessTools(ctx);
   const instructions = o.contextNote
     ? `${AGENT_INSTRUCTIONS}\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`
