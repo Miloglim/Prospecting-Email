@@ -789,6 +789,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
         id: c.id,
         name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email,
         company: c.companyName ?? "", reminderAt: c.reminderAt ?? "", note: c.followupNote ?? "",
+        // 逾期来源：显式提醒到期 or 沉默超期（无提醒但距最近跟进 >5 天 = 看板标红的同一批）
+        reason: c.reminderAt ? "显式提醒到期" : `沉默 ${(c.staleDays ?? 0)} 天未跟进`,
       });
       const due = r.data.due.map(brief);
       const overdue = r.data.overdue.map(brief);

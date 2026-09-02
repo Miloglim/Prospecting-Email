@@ -29,6 +29,10 @@ export interface PipelineContact {
   tags: string[];
   status: string;
   reminderAt: string | null;
+  /** 距最近一次跟进/阶段变更的天数（沉默时长）；无记录为 null */
+  staleDays: number | null;
+  /** 沉默超期：看板标红与助手「今天该跟进谁」共用此判定，不再各算一套 */
+  overdue: boolean;
   lastFollowupAt: string | null;
   lastFollowupNote: string | null;
   country: string | null; language: string | null; clientType: string | null;
@@ -38,6 +42,30 @@ export interface PipelineContact {
 }
 
 export interface StageData { key: string; label: string; color: string; contacts: PipelineContact[]; }
+
+/**
+ * 「该跟进却没跟进」的唯一口径：
+ *   有显式提醒 → 提醒时间过了就算逾期
+ *   无显式提醒 → 按沉默时长判定（最近跟进/阶段变更距今 > SILENT_OVERDUE_DAYS）
+ * 看板红点与 agent 的 reminders_due 都走这里，不再一处说逾期、一处说没有。
+ */
+export const SILENT_OVERDUE_DAYS = 5;
+
+function staleDaysOf(lastAt: string | null): number | null {
+  if (!lastAt) return null;
+  const t = new Date(lastAt).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+
+function isOverdue(reminderAt: string | null | undefined, lastAt: string | null): boolean {
+  if (reminderAt) {
+    const t = new Date(reminderAt).getTime();
+    return !Number.isNaN(t) && t <= Date.now();
+  }
+  const days = staleDaysOf(lastAt);
+  return days !== null && days > SILENT_OVERDUE_DAYS;
+}
 
 // ── 管线列表 — 从 contacts 表直接读取 ──
 
@@ -99,6 +127,8 @@ export function listPipeline(): Result<StageData[]> {
       status: r.status || "",
       companyName: r.companyName || null,
       reminderAt: reminder?.nextFollowupAt || null,
+      staleDays: staleDaysOf(followAt ?? (extra.stageChangedAt as string) ?? null),
+      overdue: isOverdue(reminder?.nextFollowupAt, followAt ?? (extra.stageChangedAt as string) ?? null),
       lastFollowupAt: followAt,
       lastFollowupNote: followNote,
       stageChangedAt: extra.stageChangedAt as string || null,
@@ -257,6 +287,8 @@ export function getDetail(contactId: number): Result<{
     sendStage: row.sendStage || "cold",
     status: row.status || "",
     reminderAt: reminder?.nextFollowupAt || null,
+    staleDays: staleDaysOf((extra.stageChangedAt as string) ?? null),
+    overdue: isOverdue(reminder?.nextFollowupAt, (extra.stageChangedAt as string) ?? null),
     lastFollowupAt: null,
     lastFollowupNote: null,
     stageChangedAt: extra.stageChangedAt as string || null,
@@ -323,50 +355,52 @@ export function getDetail(contactId: number): Result<{
 export interface ReminderContact extends PipelineContact { followupNote: string | null; }
 
 export function checkReminders(): Result<{ due: ReminderContact[]; overdue: ReminderContact[] }> {
-  const db = getDb();
-  const rows = db.select({
-    id: contacts.id, email: contacts.email,
-    firstName: contacts.firstName, lastName: contacts.lastName,
+  const pipe = listPipeline();
+  if (!pipe.success) return failResult(pipe.error);
+  const flat = pipe.data.flatMap(st => st.contacts);
+  const now = Date.now();
+  const tomorrow = now + 86400000;
+
+  const asReminder = (c: PipelineContact): ReminderContact => ({ ...c, followupNote: c.lastFollowupNote });
+  const overdue: ReminderContact[] = [];
+  const due: ReminderContact[] = [];
+  for (const c of flat) {
+    // 逾期：显式提醒时间已过 或 无提醒但沉默超期（看板标红的那批）
+    if (isOverdue(c.reminderAt, c.lastFollowupAt ?? c.stageChangedAt)) { overdue.push(asReminder(c)); continue; }
+    const t = c.reminderAt ? new Date(c.reminderAt).getTime() : NaN;
+    if (!Number.isNaN(t) && t <= tomorrow) due.push(asReminder(c));   // 24 小时内到期
+  }
+  // 逾期按紧急度排：沉默天数大的在前
+  // 补漏：listPipeline 只含「已触达」客户，但提醒可以设在任何联系人身上
+  // （比如刚建档案还没进管线的）。显式提醒不能因为没进管线就消失。
+  const seen = new Set(flat.map(c => c.id));
+  const rows = getDb().select({
+    id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
+    companyId: contacts.companyId, country: contacts.country, language: contacts.language,
+    clientType: contacts.clientType, assignee: contacts.assignee, tags: contacts.tags,
+    status: contacts.status, extra: contacts.extra, stage: contacts.stage,
     companyName: companies.name,
-    extra: contacts.extra, status: contacts.status,
-    tags: contacts.tags, country: contacts.country, language: contacts.language, clientType: contacts.clientType,
-    assignee: contacts.assignee,
   }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id)).all();
-
-  const now = new Date().toISOString();
-  const tomorrow = new Date(Date.now() + 86400000).toISOString();
-  const due: PipelineContact[] = [];
-  const overdue: PipelineContact[] = [];
-
   for (const r of rows) {
+    if (seen.has(r.id)) continue;
     const extra = parseJSON(r.extra || "{}");
     const reminder = extra.crmReminder as Record<string, string> | undefined;
     if (!reminder?.nextFollowupAt) continue;
-
+    const t = new Date(reminder.nextFollowupAt).getTime();
+    if (Number.isNaN(t)) continue;
     const c: PipelineContact = {
-      ...r, companyName: r.companyName || null, companyId: null,
-      extra, stage: "reaching", sendStage: "cold", tags: [],
-      status: r.status || "",
-      reminderAt: reminder.nextFollowupAt,
-      lastFollowupAt: null, lastFollowupNote: null,
-      stageChangedAt: extra.stageChangedAt as string || null,
-      title: null, phone: null, linkedinUrl: null,
+      ...r, tags: parseStringArray(r.tags || "[]"), extra, companyName: r.companyName || null, companyId: r.companyId,
+      stage: "other", sendStage: r.stage || "cold", status: r.status || "",
+      reminderAt: reminder.nextFollowupAt, staleDays: null, overdue: t <= now,
+      lastFollowupAt: null, lastFollowupNote: null, title: null, phone: null, linkedinUrl: null,
+      stageChangedAt: (extra.stageChangedAt as string) ?? null,
     };
-
-    if (reminder.nextFollowupAt <= now) overdue.push(c);
-    else if (reminder.nextFollowupAt <= tomorrow) due.push(c);
+    const rc: ReminderContact = { ...c, followupNote: null };
+    if (t <= now) overdue.push(rc); else if (t <= tomorrow) due.push(rc);
   }
 
-  // 补充每个待跟进联系人的最近一条跟进记录
-  const withNotes = (list: PipelineContact[]): ReminderContact[] => list.map(c => {
-    const note = db.select({ bodyPreview: interactions.bodyPreview })
-      .from(interactions)
-      .where(and(eq(interactions.contactId, c.id), eq(interactions.type, "note")))
-      .orderBy(desc(interactions.createdAt)).limit(1).get();
-    return { ...c, followupNote: note?.bodyPreview || null };
-  });
-
-  return okResult({ due: withNotes(due), overdue: withNotes(overdue) });
+  overdue.sort((a, b) => (b.staleDays ?? -1) - (a.staleDays ?? -1));
+  return okResult({ due, overdue });
 }
 
 // ── 工具 ──

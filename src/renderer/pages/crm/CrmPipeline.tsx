@@ -20,6 +20,8 @@ interface PipelineContact {
   companyName: string | null; companyId: number | null;
   stage: string; sendStage: string;
   reminderAt: string | null;
+  /** 服务端统一口径：沉默天数与是否逾期（看板红点与助手 reminders_due 同源） */
+  staleDays: number | null; overdue: boolean;
   lastFollowupAt: string | null; lastFollowupNote: string | null;
   country: string | null; language: string | null; clientType: string | null;
   assignee: string | null;
@@ -59,8 +61,13 @@ function daysAgo(d: string) {
   return `${delta} 天前`;
 }
 
-/** 最近跟进超期预警色：>5 天红、>3 天橙、其余灰 */
-function followAgeClass(d: string): string {
+/**
+ * 最近跟进预警色：与 reminders_due 同一口径（服务端算好的 staleDays/overdue），
+ * 避免出现「看板标红、助手说没逾期」这种自相矛盾。
+ * 红 = 沉默超期（>5 天，看板与助手都算逾期）；橙 = >3 天预警；其余灰。
+ */
+function followAgeClass(d: string, overdue?: boolean): string {
+  if (overdue) return "text-red-500 font-medium";
   const days = (Date.now() - new Date(d).getTime()) / 86400000;
   if (days > 5) return "text-red-500 font-medium";
   if (days > 3) return "text-orange-500 font-medium";
@@ -443,7 +450,7 @@ export function CrmPipeline() {
                         <span className="text-[11px] text-gray-400 flex-1 truncate">{c.companyName || "—"}</span>
                         <span className="flex items-center gap-2 flex-shrink-0">
                           {c.lastFollowupAt ? (
-                            <span className={`text-[10px] flex items-center gap-1 ${followAgeClass(c.lastFollowupAt)}`}>
+                            <span className={`text-[10px] flex items-center gap-1 ${followAgeClass(c.lastFollowupAt, c.overdue)}`}>
                               <span className="flex-shrink-0">{daysAgo(c.lastFollowupAt)}</span>
                               <EditOutlined className="text-[9px] flex-shrink-0" />
                               <span className="truncate">{(c.lastFollowupNote || "").slice(0, 10)}</span>
