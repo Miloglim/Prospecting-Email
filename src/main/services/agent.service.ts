@@ -11,12 +11,13 @@ import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { inboxMessages } from "../db/schema/inbox";
 import {
-  runHarnessTurn, resolveApproval, rejectPendingFor, hasPending,
+  runHarnessTurn, resolveApproval, rejectPendingFor, hasPending, clearAutoApprove,
   type PushFn, type ChatMsg, type TurnOutcome,
 } from "./agent/harness";
 
 type TurnOutcomeUsage = TurnOutcome["usage"];
 import { executeAction, dropActionsForConversation } from "./agent/actions";
+import { chat as llmChat } from "./ai.service";
 import { readActiveEndpoint } from "./endpoint.service";
 
 export type { PushFn };
@@ -98,12 +99,42 @@ function appendMessage(convId: string, role: "user" | "assistant", content: stri
   saveDatabase();
 }
 
-/** 读会话消息（asc），仅带最近 HISTORY_LIMIT 条进上下文 */
-function loadHistory(convId: string): ChatMsg[] {
+/**
+ * 读会话消息（asc）进上下文，三级记忆：
+ *   近端：最近 HISTORY_LIMIT 条原文（短期记忆，完整保留）
+ *   中段：超出部分压成一条「此前对话摘要」注入（会话摘要层），不再硬截断丢失
+ *   摘要生成：用生效端点做一次性小请求；生成失败则退化为「前情省略」标记（不阻塞对话）
+ */
+async function loadHistory(convId: string): Promise<ChatMsg[]> {
   const rows = getDb().select().from(agentMessages)
     .where(eq(agentMessages.conversationId, convId))
     .orderBy(asc(agentMessages.id)).all();
-  return rows.slice(-HISTORY_LIMIT).map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
+  if (rows.length <= HISTORY_LIMIT) {
+    return rows.map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
+  }
+  const dropped = rows.slice(0, rows.length - HISTORY_LIMIT);
+  const recent = rows.slice(-HISTORY_LIMIT).map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
+  const summary = await summarizeEarlier(convId, dropped);
+  return [{ role: "user", content: `【系统注入·此前对话摘要（${dropped.length} 条已压缩，不必再提）】
+${summary}` }, ...recent];
+}
+
+/** 轻任务 LLM 调用：会话压缩摘要等单发小任务（将来可路由到便宜档模型） */
+function callLightweight(system: string, user: string): Promise<Result<string>> {
+  return llmChat(system, user);
+}
+
+/** 压缩超限中段：走轻任务端点（同端点小请求），200 字以内中文要点；失败给占位而非报错 */
+async function summarizeEarlier(convId: string, dropped: Array<{ role: string; content: string }>): Promise<string> {
+  const text = dropped.map(m => `${m.role === "user" ? "用户" : "助手"}: ${m.content.slice(0, 400)}`).join("\n").slice(0, 8000);
+  try {
+    const r = await callLightweight(
+      "你是对话压缩器。把以下多轮对话压成不超过 200 字的中文要点：已讨论的结论、已查到的关键数据、用户的偏好与未决事项。只输出要点本身。",
+      text,
+    );
+    if (r.success) return r.data;
+  } catch { /* 摘要失败不阻塞对话 */ }
+  return `（本会话此前另有 ${dropped.length} 条消息，压缩失败已省略；如需回顾请重新说明要点）`;
 }
 
 // ── Mock Provider：端点未配置时模拟流式，用于打通/演示链路 ──
@@ -215,7 +246,7 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
         // live：harness 自带系统提示词（L0 规则）与工具集；历史只带 user/assistant 正文
         const outcome = await runHarnessTurn({
           baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
-          history: loadHistory(conversationId),
+          history: await loadHistory(conversationId),
           conversationId, push, signal: state.abort.signal,
           contextNote: resolveContextNote(input.context),
         });
@@ -266,7 +297,7 @@ export function stop(conversationId: string): Result<void> {
   return okResult(undefined);
 }
 
-export interface ApprovalInput { approvalId?: string; approved?: boolean; }
+export interface ApprovalInput { approvalId?: string; approved?: boolean; rememberTool?: string; }
 
 /** 渲染端审批结论 → harness 恢复执行。续跑完成落消息 + DONE；链式再审批则继续等确认。 */
 export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput): Promise<Result<{ resumed: boolean }>> {
@@ -282,7 +313,7 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
     const outcome = await resolveApproval(approvalId, !!input.approved, {
       baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
       history: [], conversationId: "", push, signal: ac.signal,
-    });
+    }, input.rememberTool?.trim());
     if (outcome.kind === "approval") return okResult({ resumed: false });
     if (outcome.text) appendMessage(outcome.conversationId, "assistant", outcome.text);
     if (outcome.usage) {
@@ -347,6 +378,7 @@ export function deleteConversation(conversationId: string): Result<void> {
   db.delete(agentConversations).where(eq(agentConversations.id, conversationId)).run();
   saveDatabase();
   runtime.delete(conversationId);
+  clearAutoApprove(conversationId);            // 「本会话内不再询问」随会话一起失效
   dropActionsForConversation(conversationId);   // 该会话未点击的动作卡一并作废
   Log.debug("agent.delete", conversationId.slice(0, 8));
   return okResult(undefined);

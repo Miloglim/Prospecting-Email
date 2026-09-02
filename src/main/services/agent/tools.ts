@@ -24,6 +24,7 @@ import { upsertContact } from "../contact.service";
 import { upsertTemplate } from "../template.service";
 import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
+import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from "./tool-cache";
 import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
 
 /** 同一工具连续失败达此数 → 本回合暂停该工具（Q5 熔断：不让模型换参数死磕） */
@@ -39,6 +40,22 @@ const SUSPENDED_NOTE = JSON.stringify({
 function gate(ctx: ToolCtx, toolName: string): string | null {
   if ((ctx.failures?.get(toolName) ?? 0) >= MAX_CONSECUTIVE_FAILURES) return SUSPENDED_NOTE;
   return budgetNote(ctx.counts, toolName);
+}
+
+/** 读工具统一入口：门闸 + 结果缓存（命中不再消耗查询次数，也不写审计） */
+function cachedRead(ctx: ToolCtx, toolName: string, args: unknown): string | null {
+  const note = gate(ctx, toolName);
+  if (note) return note;
+  const hit = lookupCache(ctx, toolName, args);
+  if (hit !== null) { countHit(); return hit; }
+  countMiss();
+  return null;
+}
+
+/** 读工具收尾：落审计 + 写缓存 */
+function finishRead(ctx: ToolCtx, toolName: string, args: unknown, result: string): string {
+  rememberCache(ctx, toolName, args, result);
+  return result;
 }
 
 /** 动作卡三类：write（主进程持闭包，点击才执行）/ prompt（续问）/ navigate（跳转查看） */
@@ -215,8 +232,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "在本地联系人库按姓名/邮箱/公司名关键词检索，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段）。涉及客户的事实性回答必须且只能基于本工具返回的数据。绝对不要用本工具查运价、邮件或公司公开背景（那是 quote_search / inbox_search / company_backcheck）。",
     parameters: searchContactsSchema,
     execute: async (args) => {
-      const note = gate(ctx, "search_contacts");
-      if (note) return note;
+      const cached = cachedRead(ctx, "search_contacts", args);
+      if (cached) return cached;
       // 按词切分匹配（live 评测实锤：模型常传全名 "Juan Garcia"，整串 LIKE 匹配不上单列 firstName/lastName → 误判查无此人）
       const perToken = args.query.split(/\s+/).filter(Boolean).slice(0, 4).map(tok => {
         const p = `%${tok}%`;
@@ -332,6 +349,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }).run();
       saveDatabase();
       audit(ctx, "record_followup", "write", args, { ok: true }, "approved");
+      invalidateCache("record_followup");
       rememberResult(ctx, "record_followup", args, `已为联系人 #${args.contactId} 记录跟进`);
       const stageRow = getDb().select({ stage: contacts.stage }).from(contacts).where(eq(contacts.id, args.contactId)).get();
       const nextStage = nextStageAfter(stageRow?.stage ?? null);
@@ -346,8 +364,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "查询本地海运运价镜像库（源自钉钉《海运运价智能台账》，每日同步）。绝对不要用它回答客户、联系人、邮件内容或公司背景问题（那是 search_contacts / inbox_search / company_backcheck 的事）；查不到价格时直接说没有，不要编造。所有参数均可省略——用户只给目的港时仅传 pod 即可，省略的条件视为不限。返回 目的港/船司/柜型/USD价/有效期/备注 结构化列表，按价格升序。运价相关问题必须且只能基于本工具结果回答；结果为参考价，回答时须提醒以船司实时报价为准。",
     parameters: quoteSearchSchema,
     execute: async (args) => {
-      const note = gate(ctx, "quote_search");
-      if (note) return note;
+      const cached = cachedRead(ctx, "quote_search", args);
+      if (cached) return cached;
       // 模型可传 null（字段已声明 nullable），统一在此收敛成 undefined，保证 QuoteFilters 契约干净
       const trimmed = (v: string | null | undefined): string | undefined => {
         const t = (v ?? "").trim();
@@ -391,7 +409,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
         } : {}),
       };
       audit(ctx, "quote_search", "read", args, out, "auto");
-      return JSON.stringify(out);
+      return finishRead(ctx, "quote_search", args, JSON.stringify(out));
     },
   });
 
@@ -400,8 +418,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "检索本地收件箱邮件（发件人/主题/正文摘要关键词，可按系统分类与未读过滤），返回 发件人/主题/分类/时间/id 列表。用户问「今天有什么新邮件/询盘/退信」「谁给我发过…」时使用本工具；要总结某封邮件先用本工具拿 id。",
     parameters: inboxSearchSchema,
     execute: async (args) => {
-      const note = gate(ctx, "inbox_search");
-      if (note) return note;
+      const cached = cachedRead(ctx, "inbox_search", args);
+      if (cached) return cached;
       const INBOX_CLASSES = ["inquiry", "reply", "bounce", "auto_reply", "normal"];
       const q0 = (args.query ?? "").trim();
       const cls = (args.classification ?? "").trim().toLowerCase();
@@ -461,12 +479,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
         }));
         break;   // 一张卡最多给一个创建动作，避免按钮噪音
       }
-      return JSON.stringify({
+      return finishRead(ctx, "inbox_search", args, JSON.stringify({
         total: raw.length,
         ...(raw.length < defaultLimit ? { complete: true, notice: "以上即全部匹配邮件，直接作答即可" } : {}),
         messages: raw,
         ...(actions.length ? { actions } : {}),
-      });
+      }));
     },
   });
 
@@ -735,8 +753,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "查询发信引擎与队列实时状态：是否运行中/已暂停、总组数、已发组数、失败组数、待发的组数与收件人数。用户问「还有多少没发出去」「发送进度」「队列是不是卡住了」时使用。",
     parameters: z.object({}),
     execute: async () => {
-      const note = gate(ctx, "queue_status");
-      if (note) return note;
+      const cached = cachedRead(ctx, "queue_status", {});
+      if (cached) return cached;
       const s = getSendStatus();
       const q = getQueueItems();
       const items = q.success ? q.data : [];
@@ -760,8 +778,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "查询到期与已逾期的跟进提醒（CRM 今日待跟进清单）。只回答「今天/最近该跟进谁」这类清单问题；要看某个人具体资料请用 search_contacts。，返回联系人 id/姓名/公司/提醒时间/跟进备注。用户问「今天该跟进谁」「有哪些到期提醒」「哪些客户 overdue 了」时必须先调用本工具。",
     parameters: z.object({}),
     execute: async () => {
-      const note = gate(ctx, "reminders_due");
-      if (note) return note;
+      const cached = cachedRead(ctx, "reminders_due", {});
+      if (cached) return cached;
       const r = checkReminders();
       if (!r.success) {
         audit(ctx, "reminders_due", "read", {}, undefined, "auto", r.error);
@@ -839,8 +857,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "查询发信/收信账号的配置与健康状态：总数、启用数、健康数（无熔断且无连续失败），以及每个异常账号的具体问题（停用/发信熔断/连续失败次数/最近收信错误）。用户问「几个账号能用」「账号有没有问题」「哪个账号挂了」时使用。",
     parameters: z.object({}),
     execute: async () => {
-      const note = gate(ctx, "accounts_status");
-      if (note) return note;
+      const cached = cachedRead(ctx, "accounts_status", {});
+      if (cached) return cached;
       const rows = getDb().select({
         id: emailAccounts.id, email: emailAccounts.email, isActive: emailAccounts.isActive,
         consecutiveFails: emailAccounts.consecutiveFails, circuitOpenAt: emailAccounts.circuitOpenAt,
@@ -885,6 +903,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
         return `入队失败：${r.error}`;
       }
       audit(ctx, "send_queue_add", "write", args, r.data, "approved");
+      invalidateCache("send_queue_add");
       const okMsg = `已加入发送队列：${r.data.queuedCount} 封（批次 ${r.data.batchId.slice(0, 8)}，${r.data.dropped} 组因限额被丢弃）。队列已建立但尚未启动，请提示用户到「发送中心」确认后手动点开始发送。`;
       rememberResult(ctx, "send_queue_add", args, okMsg);
       return okMsg;

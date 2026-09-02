@@ -7,6 +7,7 @@ import { getDb, saveDatabase } from "../../db";
 import { agentToolCalls } from "../../db/schema/agent";
 import { Log } from "../../logger";
 import { okResult, failResult, type Result } from "../../errors";
+import { invalidateCache } from "./tool-cache";
 
 export interface ActionDiffRow { field: string; label: string; from: string; to: string }
 
@@ -78,6 +79,7 @@ export async function executeAction(id: string): Promise<Result<{ label: string;
   const a = hit.action;
   try {
     const r = await a.run();
+    if (r.success) invalidateCache();   // 动作卡写入成功 → 读缓存全清（宁多勿漏，防读到改前数据）
     audit(a, r.success ? r.data : undefined, r.success ? undefined : r.error);
     if (!r.success) return failResult(r.error);
     return okResult({ label: a.label, message: r.data, ...(a.target ? { target: a.target } : {}) });

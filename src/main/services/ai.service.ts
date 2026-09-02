@@ -3,7 +3,7 @@ import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 import { upsertEnv } from "../env-store";
-import { readActiveEndpoint, endpointFamily, thinkingExtras } from "./endpoint.service";
+import { readActiveEndpoint, readLightEndpoint, endpointFamily, thinkingExtras } from "./endpoint.service";
 import { netFetch } from "../net-proxy";
 
 // ── .env 加载（dotenv：Node 不内置 .env 解析）──────────
@@ -74,8 +74,13 @@ function resolveLlmEndpoint(): { url: string; model: string; key: string; label:
 }
 
 /** 调用 LLM，返回纯文本。超时 60s。 */
-async function chat(system: string, user: string): Promise<Result<string>> {
-  const ep = resolveLlmEndpoint();
+/** 轻任务 LLM 调用（会话压缩摘要等单发小任务；也被 agent.service 复用） */
+export async function chat(system: string, user: string): Promise<Result<string>> {
+  // 大小模型路由：能力调用（总结/背调/开发信/压缩摘要）优先走轻任务档 LIGHT_*，未配置回落主端点
+  const light = readLightEndpoint();
+  const ep = light.source === "light"
+    ? { url: light.baseUrl.endsWith("/chat/completions") ? light.baseUrl : light.baseUrl.replace(/\/$/, "") + "/chat/completions", model: light.model, key: light.apiKey, label: "light" }
+    : resolveLlmEndpoint();
   if (!ep) return failResult("模型端点未配置：请到「设置 → 模型与端点」填好 Base URL / 密钥 / 模型名并启用（或在 .env 配 DEEPSEEK_API_KEY 作回落）");
 
   const controller = new AbortController();

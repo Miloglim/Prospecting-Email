@@ -86,6 +86,30 @@ export function thinkingExtras(family: EndpointFamily, thinking: boolean): Recor
   }
 }
 
+// ── 轻任务端点（大小模型路由的「小」档）──────────────────────
+// 适用：会话压缩摘要、邮件总结、背调报告——单发、无工具循环，便宜档足够。
+// 未配置时回落主端点（行为与今天一致）；密钥同样只进 .env。
+export interface LightEndpoint {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** main=未配置轻任务档，回落主端点 */
+  source: "light" | "main";
+}
+
+export function readLightEndpoint(main: ActiveEndpoint = readActiveEndpoint()): LightEndpoint {
+  const baseUrl = (process.env.LIGHT_API_BASE_URL || "").trim();
+  const keyEnv = (process.env.LIGHT_KEY_ENV || "").trim();
+  const model = (process.env.LIGHT_MODEL || "").trim();
+  const pointed = keyEnv ? (process.env[keyEnv] || "").trim() : "";
+  const legacy = (process.env.LIGHT_API_KEY || "").trim();
+  const apiKey = pointed || legacy;
+  if (baseUrl && apiKey && model) {
+    return { baseUrl, apiKey, model, source: "light" };
+  }
+  return { baseUrl: main.baseUrl, apiKey: main.apiKey, model: main.model, source: "main" };
+}
+
 /** 供 UI 展示的安全视图（绝不含密钥值） */
 export function endpointView(e: ActiveEndpoint = readActiveEndpoint()):
   { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; thinking: boolean; source: ActiveEndpoint["source"]; keyEnv: string } {

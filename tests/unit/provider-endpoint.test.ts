@@ -23,7 +23,7 @@ process.env.AI_PROVIDERS_PATH = STORE_FILE;
 const KEYS = ["AGENT_API_BASE_URL", "AGENT_MODEL", "AGENT_KEY_ENV", "AGENT_API_KEY", "AGENT_THINKING", "DEEPSEEK_API_KEY"];
 for (const k of KEYS) delete process.env[k];
 
-const { readActiveEndpoint, endpointFamily, thinkingExtras } = await import("../../src/main/services/endpoint.service");
+const { readActiveEndpoint, endpointFamily, thinkingExtras, readLightEndpoint } = await import("../../src/main/services/endpoint.service");
 const { parseProxyServer } = await import("../../src/main/net-proxy");
 const { upsertEnv, readEnvFile } = await import("../../src/main/env-store");
 const Prov = await import("../../src/main/services/provider.service");
@@ -161,6 +161,36 @@ describe("出网代理自动检测", () => {
     // 没有端口 / 只有 socks 之类不可直接当 http 代理用的写法 → 不采用（宁可直连）
     expect(parseProxyServer("proxy.example.com")).toBe("");
     expect(parseProxyServer("socks=127.0.0.1:1080")).toBe("");
+  });
+});
+
+describe("轻任务端点（大小模型路由）", () => {
+  it("未配置 LIGHT_* → 回落主端点（source=main，行为与今天一致）", () => {
+    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", thinking: false, source: "profile" });
+    expect(e.source).toBe("main");
+    expect(e.model).toBe("big");
+  });
+
+  it("配置齐备 → 走轻任务档；指针密钥优先于 legacy", () => {
+    process.env.LIGHT_API_BASE_URL = "https://light.example/v1";
+    process.env.LIGHT_MODEL = "small-cheap";
+    process.env.LIGHT_KEY_ENV = "LIGHT_KEY_A";
+    process.env.LIGHT_KEY_A = "sk-light";
+    const e = readLightEndpoint();
+    expect(e.source).toBe("light");
+    expect(e.apiKey).toBe("sk-light");
+    expect(e.model).toBe("small-cheap");
+    delete process.env.LIGHT_API_BASE_URL; delete process.env.LIGHT_MODEL;
+    delete process.env.LIGHT_KEY_ENV; delete process.env.LIGHT_KEY_A;
+  });
+
+  it("缺任一项（base/密钥/模型）→ 视为未配置，回落主端点", () => {
+    process.env.LIGHT_API_BASE_URL = "https://light.example/v1";
+    process.env.LIGHT_MODEL = "small-cheap";
+    // 没有密钥
+    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", thinking: false, source: "profile" });
+    expect(e.source).toBe("main");
+    delete process.env.LIGHT_API_BASE_URL; delete process.env.LIGHT_MODEL;
   });
 });
 
