@@ -681,7 +681,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const generateDraft = tool({
     name: "generate_draft",
-    description: "为指定公司/联系人生成一封开发信草稿（带 SUBJECT: 主题行 + 正文，支持 EN/ES/PT）。本工具只产出文本，不会发送；用户可通过结果卡上的按钮一键存素材库或入队。撰写前若已有背调结论，把要点放进 focus；已知收件人时带上 contactId 才能入队。",
+    description: "生成一封开发信/跟进信/回信的草稿（带 SUBJECT: 主题行 + 正文，支持 EN/ES/PT）。"
+      + "本工具只产出文本、不发送；用户可用结果卡按钮一键存素材库或入队。"
+      + "写什么由你从对话与上下文里已有的材料决定：如果邮件正文已经在上下文里，就直接照着它写，"
+      + "绝对不要为了『起草/回复邮件』先去调 company_backcheck 或其他检索工具（那是跑题）；"
+      + "上下文中没有的关键数字（如成交价、柜型）用 {{占位}} 标出并在结尾一句话提示，不要连环追问。"
+      + "已知收件人 contactId 时才带上它（结果卡才会出现「入队」按钮）。",
     parameters: generateDraftSchema,
     execute: async (args) => {
       const note = gate(ctx, "generate_draft");

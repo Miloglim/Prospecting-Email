@@ -174,6 +174,9 @@ function judge(card: EvalCard, ev: Collected, db: Driz): Verdict {
   if (e.approval && ev.approvals === 0) {
     return { pass: false, attribution: "model-tool-misuse", note: "未触发写工具/审批流程" };
   }
+  if (e.toolsNone?.some(t => calledTools.includes(t))) {
+    return { pass: false, attribution: "model-tool-misuse", note: `禁调工具被调用: ${e.toolsNone.filter(x => calledTools.includes(x)).join(",")}` };
+  }
   if (e.forbidTools && calledTools.length > 0) {
     return { pass: false, attribution: "model-tool-misuse", note: `不该调工具却调了: ${calledTools.join(",")}` };
   }

@@ -58,6 +58,11 @@ export const AGENT_INSTRUCTIONS = [
     "不得只复述拒绝之前已完成的动作，让用户误以为已经写进去了。",
   "纯写作、翻译、润色、寒暄类请求（如「用英文写一段自我介绍」「把这封改得更客气」）直接作答，" +
     "不要为此调用任何检索工具。",
+  "写邮件/回信类的取材优先级：上下文里已给的邮件正文 > 已有对话内容 > 工具。" +
+    "「根据这封邮件起草回复」绝不需要 company_backcheck（那是查公司公开背景用的）；" +
+    "正文已在上下文时也不要再调 inbox_search / email_summarize 去重复读它。",
+  "信息不全时不要连环追问：先产出能用的草稿，未知处用 {{占位}} 或【待确认】标出，" +
+    "最多在结尾用一句话说明可以补充哪些信息。",
   "回答风格：简洁、专业、中文优先（涉及邮件文案时按用户要求语言输出）。",
 ].join("\n");
 
@@ -382,7 +387,7 @@ async function collectRunResult(
   }
 
   if (text) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: text });
-  return { kind: "done", text, conversationId: o.conversationId, usage: readUsage(r.usage) };
+  return { kind: "done", text, conversationId: o.conversationId, usage: sumStreamUsage() ?? readUsage(r.usage) };
 }
 
 async function streamRun(
@@ -402,7 +407,7 @@ async function streamRun(
     return collectRunResult(r, agent, ctx, o);
   }
 
-  lastStreamUsage.length = 0;                       // 本回合嗅探计数从零开始
+  if (!resumeState) lastStreamUsage.length = 0;      // 新回合才清零；审批续跑接着上一段累计，否则用量只剩后半截
   const raw = await run(agent, (resumeState ?? o.history) as never, {
     stream: true, signal: o.signal, maxTurns: 6,
   });
@@ -481,11 +486,11 @@ async function streamRun(
       })),
     });
     Log.info("agent.harness", `写操作待审批 ${approvalId.slice(0, 8)}（${interruptions.length} 项）`);
-    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: readUsage(result.usage) ?? sumStreamUsage() };
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: sumStreamUsage() ?? readUsage(result.usage) };
   }
 
   const finalText = text || String((result as { finalOutput?: unknown }).finalOutput ?? "");
   // 兜底：本轮一个字都没流出来但拿到了完整最终文本（模型/端点差异）→ 整段补推，前端不留空骨架
   if (!text && finalText) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: finalText });
-  return { kind: "done", text: finalText, conversationId: o.conversationId, usage: readUsage(result.usage) ?? sumStreamUsage() };
+  return { kind: "done", text: finalText, conversationId: o.conversationId, usage: sumStreamUsage() ?? readUsage(result.usage) };
 }

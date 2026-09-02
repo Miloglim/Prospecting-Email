@@ -192,9 +192,19 @@ function resolveContextNote(ctxRaw: string | undefined): string | undefined {
         .where(eq(companies.id, id)).get();
       return c ? `公司 #${id} ${c.name}${c.country ? `（${c.country}）` : ""}` : undefined;
     }
-    const msg = db.select({ subject: inboxMessages.subject, fromEmail: inboxMessages.fromEmail })
-      .from(inboxMessages).where(eq(inboxMessages.id, id)).get();
-    return msg ? `邮件 #${id}「${msg.subject || "(无主题)"}」来自 ${msg.fromEmail}` : undefined;
+    const msg = db.select({
+      subject: inboxMessages.subject, fromEmail: inboxMessages.fromEmail, fromName: inboxMessages.fromName,
+      bodyPreview: inboxMessages.bodyPreview, classification: inboxMessages.classification,
+      receivedAt: inboxMessages.receivedAt, matchedContactId: inboxMessages.matchedContactId,
+    }).from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+    if (!msg) return undefined;
+    // 上下文必须带正文：此前只给「主题 + 发件人」，模型手里没有内容，就会自己去「找资料」——
+    // 实测它为了起草回信去调了 company_backcheck。正文一次给足，比让它猜工具便宜也更稳。
+    const body = (msg.bodyPreview || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
+    const who = msg.fromName ? `${msg.fromName} <${msg.fromEmail}>` : msg.fromEmail;
+    return `邮件 #${id}｜主题「${msg.subject || "(无主题)"}」｜发件人 ${who}｜分类 ${msg.classification || "其他"}｜时间 ${msg.receivedAt}`
+      + `${msg.matchedContactId ? `｜已匹配联系人 #${msg.matchedContactId}` : ""}\n`
+      + `正文（已随本次提问一并提供，直接据此作答，不要再调用工具去读它）：${body || "（无正文摘要，可用 email_summarize 取全文）"}`;
   } catch (err) {
     Log.warn("agent.chat", `解析上下文失败 ${ctxRaw}: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;

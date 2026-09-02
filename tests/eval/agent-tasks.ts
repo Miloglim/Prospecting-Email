@@ -12,6 +12,8 @@ export interface EvalExpect {
   toolsOrder?: string[];
   /** 完全不应调用任何工具（护栏/生成类） */
   forbidTools?: boolean;
+  /** 允许调别的工具，但这几个绝对不能调（工具选错型回归，如「起草回信去跑背调」） */
+  toolsNone?: string[];
   /** 最终回答需命中其一（正则源串数组） */
   answerAny?: string[];
   /** 最终回答禁止出现（正则源串数组），如编造金额 */
@@ -108,6 +110,13 @@ export const EVAL_CARDS: EvalCard[] = [
   {
     id: "em-inbox", group: "邮件与背调", prompt: "收件箱里现在有几封未读邮件？都是谁的",
     expect: { toolsAny: ["inbox_search"], answerAny: ["\\d|没有|无|封"] },
+  },
+  {
+    // 真实事故回归：带邮件上下文要回信，模型却去调了 company_backcheck（根因：上下文没给正文 +
+    // generate_draft 描述里写着「撰写前若已有背调结论」，等于指引它先跑背调）
+    id: "em-reply-toolchoice", group: "邮件与背调", prompt: "根据这封邮件帮我起草一封回复，语气专业简洁",
+    context: "message:1",
+    expect: { toolsNone: ["company_backcheck"], answerAny: ["SUBJECT|主题|Dear|Hi|回复|草稿"] },
   },
   {
     id: "bk-acme", group: "邮件与背调", prompt: "给 ACME 这家公司做个背调",
