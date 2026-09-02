@@ -807,6 +807,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "写什么由你从对话与上下文里已有的材料决定：如果邮件正文已经在上下文里，就直接照着它写，"
       + "绝对不要为了『起草/回复邮件』先去调 company_backcheck 或其他检索工具（那是跑题）；"
       + "上下文中没有的关键数字（如成交价、柜型）用 {{占位}} 标出并在结尾一句话提示，不要连环追问。"
+      + "边界：只用于给客户写开发信/跟进信/回信；寒暄、自我介绍、翻译、改写一段现成文字都不要调本工具。"
       + "已知收件人 contactId 时才带上它（结果卡才会出现「入队」按钮）。",
     parameters: generateDraftSchema,
     execute: async (args) => {
