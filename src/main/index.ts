@@ -40,8 +40,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    minWidth: 1040,
+    minHeight: 660,   // 低于此值对话区与能力面板会被挤压；1366×768 屏仍有充分余量
     title: "Milogin's Prospector.",
     icon: appIcon,
     backgroundColor: "#09090b",
