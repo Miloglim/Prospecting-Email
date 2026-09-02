@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   DashboardOutlined, UserOutlined, SendOutlined,
   InboxOutlined, FileTextOutlined, RobotOutlined,
-  SettingOutlined, MoreOutlined,
+  SettingOutlined, MoreOutlined, DollarOutlined,
 } from "@ant-design/icons";
 import { Dropdown, Input, Modal } from "antd";
 import { useAppContext } from "../../AppContext";
@@ -20,6 +20,7 @@ const navItems: NavItem[] = [
   { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
   { key: "/inbox", icon: <InboxOutlined />, label: "收件箱", dot: true },
   { key: "/customers", icon: <UserOutlined />, label: "客户", dot: true },
+  { key: "/rates", icon: <DollarOutlined />, label: "运价库" },
   { key: "/campaigns", icon: <SendOutlined />, label: "发送中心" },
   { key: "/templates", icon: <FileTextOutlined />, label: "素材库" },
 ];

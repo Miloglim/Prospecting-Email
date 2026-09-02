@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, Input, Button, Tag, message, Empty, Popconfirm, Space } from "antd";
 import { SearchOutlined, PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, CloseOutlined, EnvironmentOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,13 +28,30 @@ export function CompanyPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // 深链定位：#/customers?view=company&sel=<id>（AI 动作卡「查看公司档案」用）
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    const raw = window.location.hash;
+    const qs = raw.includes("?") ? raw.split("?")[1] : "";
+    const sel = Number(new URLSearchParams(qs).get("sel"));
+    return Number.isInteger(sel) && sel > 0 ? sel : null;
+  });
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editVal, setEditVal] = useState("");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDomain, setNewDomain] = useState("");
   const PAGE_SIZE = 100;
+
+  // sel 只在首次进入时起作用，消费后从 hash 摘掉，避免刷新反复定位
+  useEffect(() => {
+    const raw = window.location.hash;
+    if (!raw.includes("sel=")) return;
+    const [base, qs = ""] = raw.split("?");
+    const sp = new URLSearchParams(qs);
+    sp.delete("sel");
+    const rest = sp.toString();
+    window.location.hash = rest ? `${base}?${rest}` : base!;
+  }, []);
 
   const { data: listData, isLoading } = useQuery({
     queryKey: ["companies", search, page],

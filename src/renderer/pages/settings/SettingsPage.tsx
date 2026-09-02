@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Card, Input, InputNumber, Button, message, Table, Modal, Form, Tag, Space,
-  Switch, TimePicker, Tooltip, Badge,
+  Card, Input, InputNumber, Button, message, notification, Table, Modal, Form, Tag, Space,
+  Switch, TimePicker, Tooltip, Badge, Popconfirm,
 } from "antd";
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, RobotOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { RichTextEditor } from "../../components/RichTextEditor";
@@ -13,6 +13,7 @@ interface EmailAccount {
   imapHost: string | null; imapPort: number | null;
   displayName: string | null; signature: string | null;
   consecutiveFails: number; isActive: number;
+  lastFetchError: string | null; lastFetchAt: string | null; fetchFailCount: number;
 }
 
 interface SendSchedule {
@@ -245,6 +246,95 @@ function SettingCard({ icon, title, required, children, status }: {
       </div>
       <div className="px-4 pt-1 pb-3">{children}</div>
     </div>
+  );
+}
+
+function KbDispatchCard() {
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({
+    queryKey: ["kb", "config"],
+    queryFn: () => window.api.invoke("kb:getConfig") as Promise<{
+      baseUrl: string; hasToken: boolean; tokenPreview: string; applicationId: string;
+    }>,
+  });
+  const DEFAULT_BASE_URL = "https://kb.iyunquna.com";
+  const [token, setToken] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [appId, setAppId] = useState("");
+  const [adv, setAdv] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // 一键：补默认地址 + 存令牌 → 探针测连通
+  const connect = async () => {
+    setBusy(true);
+    const patch: Record<string, string> = {};
+    if (token.trim()) patch.token = token.trim();
+    if (!cfg?.baseUrl) patch.baseUrl = baseUrl.trim() || DEFAULT_BASE_URL;
+    else if (baseUrl.trim()) patch.baseUrl = baseUrl.trim();
+    if (adv && (appId.trim() || cfg?.applicationId)) patch.applicationId = appId.trim();
+    if (Object.keys(patch).length) {
+      const s = await window.api.invoke("kb:setConfig", patch) as { success: boolean; error?: string };
+      if (!s?.success) { setTest({ ok: false, text: s?.error || "保存失败" }); setBusy(false); return; }
+      qc.invalidateQueries({ queryKey: ["kb", "config"] });
+      setToken("");
+    }
+    const r = await window.api.invoke("kb:testConnection") as {
+      success: boolean; error?: string; data?: { verdict: string; hint: string };
+    };
+    setTest(r?.success ? { ok: r.data?.verdict === "connected", text: r.data?.hint || "已测试" } : { ok: false, text: r?.error || "测试失败" });
+    setBusy(false);
+  };
+
+  const status = test
+    ? (test.ok ? <Tag color="green">已连通</Tag> : <Tag color="orange">未连通</Tag>)
+    : (cfg?.hasToken ? <Tag color="green">已配置</Tag> : <Tag>未配置</Tag>);
+
+  return (
+    <SettingCard icon="" title="KB 中转接口" status={status}>
+      <div className="text-[11px] text-gray-400 mb-2">
+        填入 KB 测试令牌即可让 Prospector 访问公司内网接口。令牌在 KB「个人中心 → 申请测试令牌」获取，24 小时后需重新申请。
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="w-[72px] text-right text-[11px] text-gray-500 shrink-0">KB 令牌</span>
+        <Input.Password size="small" className="flex-1"
+          placeholder={cfg?.hasToken ? `已配置 ${cfg.tokenPreview}，留空则不修改` : "粘贴 kbtt_ 开头的令牌"}
+          value={token} onChange={e => setToken(e.target.value)} onPressEnter={connect} />
+        {cfg?.hasToken && (
+          <Button size="small" danger type="text" onClick={async () => {
+            await window.api.invoke("kb:setConfig", { token: "" });
+            qc.invalidateQueries({ queryKey: ["kb", "config"] }); setTest(null); message.success("令牌已清除");
+          }}>清除</Button>
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-2">
+        <button className="text-[11px] text-gray-400 hover:text-teal-600" onClick={() => setAdv(v => !v)}>
+          {adv ? "收起高级设置" : "高级设置"}
+        </button>
+        <Button size="small" type="primary" loading={busy} onClick={connect}>保存并测试连接</Button>
+      </div>
+
+      {adv && (
+        <div className="mt-2 space-y-2 pt-2 border-t border-gray-100">
+          <div className="flex items-center gap-2">
+            <span className="w-[72px] text-right text-[11px] text-gray-500 shrink-0">KB 地址</span>
+            <Input size="small" placeholder={DEFAULT_BASE_URL}
+              value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-[72px] text-right text-[11px] text-gray-500 shrink-0">App ID</span>
+            <Input size="small" placeholder="生产环境用，可选"
+              value={appId} onChange={e => setAppId(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      {test && (
+        <div className={`mt-2 text-[11px] leading-snug px-2 py-1.5 rounded border ${test.ok ? "bg-green-50 border-green-200 text-green-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+          {test.text}
+        </div>
+      )}
+    </SettingCard>
   );
 }
 
@@ -526,9 +616,321 @@ const fmtDur = (s: number) => {
 const fmtFinish = (d: Date) =>
   d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit" });
 
+// ── AI 活动记录：agent_tool_calls 审计可视化（谁在什么会话里调了什么工具、写操作是否经人工确认）──
+interface ToolCallLog {
+  id: number;
+  conversationId: string;
+  toolName: string;
+  sideEffect: string;
+  argsPreview: string;
+  approval: string;
+  error: string | null;
+  createdAt: string;
+}
+
+const AUDIT_TOOL_LABELS: Record<string, string> = {
+  quote_search: "查询运价", search_contacts: "检索联系人", record_followup: "记录跟进",
+  inbox_search: "检索邮件", email_summarize: "总结邮件", company_backcheck: "公司背调",
+  generate_draft: "撰写开发信", send_queue_add: "加入发信队列",
+  queue_status: "发送进度", reminders_due: "到期提醒", accounts_status: "账号健康", reasoning: "思考",
+};
+
+function AgentAuditCard() {
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ["agentToolCalls"],
+    queryFn: async () => {
+      const r = await window.api.invoke("agent:toolCalls", 60) as { success: boolean; data?: ToolCallLog[] };
+      return r?.success ? (r.data ?? []) : [];
+    },
+    refetchInterval: 30_000,
+  });
+
+  const approvalTag = (a: string) =>
+    a === "approved" ? <Tag color="green">已批准</Tag>
+      : a === "rejected" ? <Tag color="red">已拒绝</Tag>
+        : <Tag color="default">自动</Tag>;
+
+  const columns = [
+    { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 150,
+      render: (v: string) => <span className="text-[11px] text-gray-400">{(v || "").replace("T", " ").slice(0, 19)}</span> },
+    { title: "工具", dataIndex: "toolName", key: "toolName", width: 110,
+      render: (v: string) => AUDIT_TOOL_LABELS[v] || v },
+    { title: "副作用", dataIndex: "sideEffect", key: "sideEffect", width: 70,
+      render: (v: string) => v === "write" ? <Tag color="orange">写</Tag> : <Tag color="default">读</Tag> },
+    { title: "参数摘要", dataIndex: "argsPreview", key: "argsPreview", ellipsis: true,
+      render: (v: string) => <span className="text-[11px] text-gray-500">{v || "—"}</span> },
+    { title: "确认", dataIndex: "approval", key: "approval", width: 80, render: approvalTag },
+    { title: "异常", dataIndex: "error", key: "error", ellipsis: true,
+      render: (v: string | null) => v ? <span className="text-[11px] text-red-400">{v}</span> : null },
+  ];
+
+  const writes = (data ?? []).filter(d => d.sideEffect === "write").length;
+  const errors = (data ?? []).filter(d => d.error).length;
+
+  return (
+    <SettingCard icon="" title="AI 活动记录"
+      status={errors > 0 ? <Tag color="red">{errors} 条异常</Tag> : undefined}>
+      <div className="text-[11px] text-gray-400 mb-2">
+        最近 {data?.length ?? 0} 次工具调用（其中写操作 {writes} 次，全部经人工确认）。30 秒自动刷新。
+      </div>
+      <Table<ToolCallLog>
+        dataSource={data ?? []}
+        rowKey="id"
+        columns={columns}
+        size="small"
+        loading={isLoading}
+        pagination={{ pageSize: 8, hideOnSinglePage: true }}
+        locale={{ emptyText: "暂无记录 — 在「新对话」里让助手查价/查联系人后会出现在这里" }}
+      />
+      <div className="pt-2">
+        <Button size="small" icon={<SyncOutlined spin={isFetching} />} onClick={() => void refetch()}>刷新</Button>
+      </div>
+    </SettingCard>
+  );
+}
+
+// ── 模型与端点：多套 profile + 一键热切换 + 真连通性测试 ──────────────
+// 密钥只写 .env（后端 provider.service 负责），界面永不回显密钥值。
+// 激活即写生效参数并同步 process.env —— 切换后不用重启应用。
+interface ProfileDto {
+  id: string; name: string; baseUrl: string; model: string; keyEnv: string;
+  thinking: boolean; hasKey: boolean; active: boolean;
+}
+interface EndpointStatus {
+  profiles: ProfileDto[];
+  activeId: string | null;
+  endpoint: { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; thinking: boolean; source: string; keyEnv: string };
+  mode: "live" | "mock";
+}
+type TestState = { running?: boolean; ok?: boolean; text?: string };
+
+const ENDPOINT_PRESETS = [
+  { label: "Gemini Flash（推荐）", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.7-flash" },
+  { label: "Agnes（云端 OpenAI 兼容）", baseUrl: "https://apihub.agnes-ai.com/v1", model: "agnes-2.5-pro-beta" },
+  { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { label: "本地 Ollama", baseUrl: "http://localhost:11434/v1", model: "qwen3:8b" },
+  { label: "公司内部中转", baseUrl: "", model: "" },
+];
+
+function ProviderCard() {
+  const qc = useQueryClient();
+  const [testStates, setTestStates] = useState<Record<string, TestState>>({});
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<ProfileDto | null>(null);
+  const [keyFor, setKeyFor] = useState<ProfileDto | null>(null);
+  const [keyVal, setKeyVal] = useState("");
+  const [form] = Form.useForm();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["ai", "endpoint"],
+    queryFn: () => window.api.invoke("ai:endpointStatus") as Promise<{ success: boolean; data?: EndpointStatus }>,
+  });
+  const st = data?.success ? data.data : null;
+  const profiles = st?.profiles ?? [];
+
+  // 只读展示：主进程自动检测到的出网代理状态（探活失败即直连，不阻塞任何功能）
+  const { data: proxyData } = useQuery({
+    queryKey: ["ai", "proxy"],
+    queryFn: () => window.api.invoke("ai:proxyInfo") as Promise<{
+      success: boolean; data?: { active: boolean; proxy: string; candidate: string };
+    }>,
+  });
+  const proxy = proxyData?.success ? proxyData.data : null;
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["ai", "endpoint"] });
+    qc.invalidateQueries({ queryKey: ["agent", "status"] });
+  };
+
+  const runTest = async (p: ProfileDto) => {
+    setTestStates(s => ({ ...s, [p.id]: { running: true } }));
+    const r = await window.api.invoke("ai:profileTest", p.id) as
+      { success: boolean; data?: { ok: boolean; latencyMs: number; error?: string }; error?: string };
+    if (!r?.success) { setTestStates(s => ({ ...s, [p.id]: { ok: false, text: r?.error || "测试失败" } })); return; }
+    const d = r.data!;
+    setTestStates(s => ({
+      ...s,
+      [p.id]: { ok: d.ok, text: d.ok ? `通 · ${(d.latencyMs / 1000).toFixed(1)}s` : (d.error || "失败") },
+    }));
+  };
+
+  const openForm = (p: ProfileDto | null) => {
+    const preset = ENDPOINT_PRESETS[0] ?? { label: "", baseUrl: "", model: "" };
+    setEditing(p);
+    form.setFieldsValue(p
+      ? { name: p.name, baseUrl: p.baseUrl, model: p.model }
+      : { name: "", baseUrl: preset.baseUrl, model: preset.model });
+    setFormOpen(true);
+  };
+
+  const submitForm = async () => {
+    const v = await form.validateFields();
+    const r = await window.api.invoke("ai:profileUpsert", { ...(editing ? { id: editing.id } : {}), ...v }) as
+      { success: boolean; error?: string };
+    if (!r?.success) { message.error(r?.error || "保存失败"); return; }
+    message.success(editing ? "端点已更新" : "端点已新增，填密钥后即可启用");
+    setFormOpen(false);
+    refresh();
+  };
+
+  const saveKey = async () => {
+    if (!keyFor) return;
+    const r = await window.api.invoke("ai:profileKey", { id: keyFor.id, value: keyVal }) as { success: boolean; error?: string };
+    if (!r?.success) { message.error(r?.error || "写入失败"); return; }
+    message.success(keyVal.trim() ? "密钥已写入 .env" : "密钥已清除");
+    setKeyFor(null); setKeyVal("");
+    refresh();
+  };
+
+  return (
+    <SettingCard icon="" title="模型与端点"
+      status={st ? <Tag color={st.mode === "live" ? "green" : "orange"}>{st.mode === "live" ? "已接入" : "Mock（未配置端点）"}</Tag> : undefined}>
+      <div className="text-[11px] text-gray-500 mb-2 leading-relaxed">
+        {st?.activeId
+          ? <>当前生效：<b>{profiles.find(p => p.id === st.activeId)?.name ?? st.activeId}</b> · {st.endpoint.baseUrl} · 模型 {st.endpoint.model || "未填"}</>
+          : <>尚未激活任何端点。{st?.endpoint.hasBaseUrl && st.endpoint.hasKey
+            ? <>正在使用 .env 手写配置（{st.endpoint.baseUrl}），建议「新增端点」后启用，便于随时切换。</>
+            : <>对话与背调/开发信/邮件总结都会走这一份配置。</>}</>}
+      </div>
+
+      <Table<ProfileDto>
+        dataSource={profiles}
+        rowKey="id"
+        size="small"
+        loading={isLoading}
+        pagination={false}
+        locale={{ emptyText: "还没有端点 — 点下面「新增端点」，或直接用预设模板" }}
+        columns={[
+          {
+            title: "端点", dataIndex: "name", key: "name",
+            render: (v: string, r) => (
+              <div>
+                <span className="text-[12px] font-medium text-gray-800">
+                  {r.active && <span className="text-teal-600 mr-1">●</span>}{v}
+                </span>
+                <div className="text-[11px] text-gray-400 font-mono">{r.baseUrl}</div>
+              </div>
+            ),
+          },
+          { title: "模型", dataIndex: "model", key: "model", width: 130,
+            render: (v: string) => <span className="text-[11px] font-mono">{v || "—"}</span> },
+          { title: "密钥", dataIndex: "hasKey", key: "hasKey", width: 60,
+            render: (v: boolean) => v ? <Tag color="green" className="!my-0">已配</Tag> : <Tag className="!my-0">未配</Tag> },
+          {
+            title: "测试", key: "test", width: 120,
+            render: (_: unknown, r) => {
+              const t = testStates[r.id];
+              return (
+                <Space size={4}>
+                  <Button size="small" loading={t?.running} onClick={() => void runTest(r)}>测一下</Button>
+                  {t && !t.running && (
+                    <span className={`text-[11px] ${t.ok ? "text-green-600" : "text-red-500"}`}>{t.text}</span>
+                  )}
+                </Space>
+              );
+            },
+          },
+          {
+            title: "操作", key: "ops", width: 210,
+            render: (_: unknown, r) => (
+              <Space size={2} wrap>
+                <Button size="small" type={r.active ? "default" : "primary"} ghost={!r.active} disabled={r.active}
+                  onClick={async () => {
+                    const res = await window.api.invoke("ai:profileActivate", r.id) as { success: boolean; error?: string };
+                    if (res?.success) { message.success(`已切到「${r.name}」，立即生效`); refresh(); }
+                    else message.error(res?.error || "切换失败");
+                  }}>
+                  {r.active ? "使用中" : "启用"}
+                </Button>
+                <Tooltip title={r.active ? "思考模式影响当前生效端点的首字速度" : "启用后生效"}>
+                  <span>
+                    <Switch size="small" checked={r.thinking}
+                      onChange={async (v) => {
+                        await window.api.invoke("ai:profileThinking", { id: r.id, thinking: v });
+                        refresh();
+                      }} />
+                  </span>
+                </Tooltip>
+                <Button size="small" type="text" onClick={() => { setKeyFor(r); setKeyVal(""); }}>密钥</Button>
+                <Button size="small" type="text" onClick={() => openForm(r)}>编辑</Button>
+                <Popconfirm title="删除该端点？其 .env 密钥一并清除" onConfirm={async () => {
+                  await window.api.invoke("ai:profileDelete", r.id);
+                  refresh();
+                }}>
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+
+      <div className="pt-2">
+        <Space wrap size={8}>
+          <Button size="small" icon={<PlusOutlined />} onClick={() => openForm(null)}>新增端点</Button>
+          <Tooltip title="主进程的 fetch 不读系统代理，海外端点（Gemini / OpenAI）必须经本地代理才通。这里自动读你系统里配的那个，不做端口扫描，探活成功才用。">
+            <span className="text-[11px] text-gray-400">
+              出网代理：{proxy?.active
+                ? <span className="text-teal-600">已自动启用 {proxy.proxy}</span>
+                : proxy?.candidate
+                  ? <span className="text-amber-600">检测到 {proxy.candidate} 但未连通（直连中，开启 VPN 后自动跟上）</span>
+                  : <span>未检测到（直连中）</span>}
+            </span>
+          </Tooltip>
+          <Button size="small" type="text" onClick={() => qc.invalidateQueries({ queryKey: ["ai", "proxy"] })}>重新探测</Button>
+          <span className="text-[10px] text-gray-400">密钥写 <code>.env</code>，不入库；切换即时生效，无需重启</span>
+        </Space>
+      </div>
+
+      <Modal open={formOpen} title={editing ? "编辑端点" : "新增端点"} okText="保存"
+        cancelText="取消" maskClosable={false}
+        onOk={submitForm} onCancel={() => setFormOpen(false)} destroyOnClose>
+        <Form form={form} layout="vertical" size="small" className="pt-1">
+          {!editing && (
+            <Form.Item label="快速模板">
+              <Space wrap size={4}>
+                {ENDPOINT_PRESETS.map(p => (
+                  <Tag key={p.label} className="cursor-pointer" onClick={() => form.setFieldsValue({ baseUrl: p.baseUrl, model: p.model })}>
+                    {p.label}
+                  </Tag>
+                ))}
+              </Space>
+            </Form.Item>
+          )}
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "给这个端点起个名" }]}>
+            <Input placeholder="如 Agnes 测试档 / 本地 Ollama" />
+          </Form.Item>
+          <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, pattern: /^https?:\/\//, message: "需以 http(s):// 开头" }]}>
+            <Input placeholder="https://xxx/v1" className="!font-mono" />
+          </Form.Item>
+          <Form.Item name="model" label="模型名" rules={[{ required: true, message: "模型名必填，否则会报 400" }]}>
+            <Input placeholder="如 agnes-2.5-pro-beta / deepseek-chat" className="!font-mono" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal open={!!keyFor} title={`${keyFor?.name ?? ""} · 密钥`} okText="写入 .env" cancelText="取消"
+        confirmLoading={false} onOk={saveKey} onCancel={() => setKeyFor(null)} destroyOnClose>
+        <div className="text-[11px] text-gray-400 mb-2">
+          变量名 <code>{keyFor?.keyEnv}</code>；留空保存即清除。密钥不进数据库、不进对话上下文。
+        </div>
+        <Input.Password value={keyVal} onChange={e => setKeyVal(e.target.value)} placeholder="sk-…" autoFocus />
+      </Modal>
+
+      <div className="mt-3 pt-3 border-t border-gray-100">
+        <div className="text-[11px] text-gray-400 mb-1.5">搜索与回落密钥（同样写入 .env，保存即生效）</div>
+        <ApiKeyRow label="Exa AI" name="EXA_API_KEY" hint="仅「公司背调」工具使用" />
+        <ApiKeyRow label="Tavily" name="TAVILY_API_KEY" hint="背调搜索源（Exa 不可用时备用）" />
+        <ApiKeyRow label="DeepSeek" name="DEEPSEEK_API_KEY" hint="回落端点：只有没激活任何模型端点时，背调/开发信/邮件总结才用它" />
+      </div>
+    </SettingCard>
+  );
+}
+
 export function SettingsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<EmailAccount | null>(null);
+  const [testingId, setTestingId] = useState<number | null>(null);
   const [form] = Form.useForm();
   const qc = useQueryClient();
   const [activeSection, setActiveSection] = useState("sec-general");
@@ -537,6 +939,11 @@ export function SettingsPage() {
     queryKey: ["accounts"],
     queryFn: () => window.api.invoke("accounts:list") as Promise<{ success: boolean; data?: EmailAccount[] }>,
   });
+
+  // 收信健康度事件驱动刷新：后台每轮抓取成功后账号列表状态实时更新（无需重进设置页）
+  useEffect(() => {
+    return window.api.on("inbox:health", () => { qc.invalidateQueries({ queryKey: ["accounts"] }); });
+  }, [qc]);
 
   const { data: configData } = useQuery({
     queryKey: ["settings"],
@@ -605,7 +1012,22 @@ export function SettingsPage() {
   const accountColumns = [
     { title: "邮箱", dataIndex: "email", key: "email", render: (v: string) => <span className="font-mono text-xs">{v}</span> },
     { title: "SMTP", key: "smtp", render: (_: unknown, r: EmailAccount) => <span className="text-[11px] text-gray-500">{r.smtpHost}:{r.smtpPort}</span> },
-    { title: "状态", key: "status", width: 70, render: (_: unknown, r: EmailAccount) => r.consecutiveFails > 0 ? <Tag color="orange">异常</Tag> : <Tag color="green">正常</Tag> },
+    { title: "状态", key: "status", width: 120, render: (_: unknown, r: EmailAccount) => {
+      // 发信熔断（consecutiveFails）与收信失败（fetchFailCount）分开呈现
+      const sendBad = r.consecutiveFails > 0;
+      const recvBad = r.fetchFailCount > 0;
+      if (!sendBad && !recvBad) return <Tag color="green">正常</Tag>;
+      return (
+        <Space size={2}>
+          {sendBad && <Tooltip title={`发信连续失败 ${r.consecutiveFails} 次（已熔断）`}><Tag color="orange">发信异常</Tag></Tooltip>}
+          {recvBad && (
+            <Tooltip title={`连续失败 ${r.fetchFailCount} 次${r.lastFetchAt ? ` · ${new Date(r.lastFetchAt).toLocaleString("zh-CN")}` : ""}：${r.lastFetchError || "收信失败"}`}>
+              <Tag color="red">收信异常</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      );
+    } },
     {
       title: "操作", key: "actions", width: 120,
       render: (_: unknown, r: EmailAccount) => (
@@ -623,9 +1045,32 @@ export function SettingsPage() {
             });
             setAddOpen(true);
           }}>编辑</Button>
-          <Button size="small" icon={<CheckCircleOutlined />} onClick={async () => {
-            const res = await window.api.invoke("accounts:validate", r.id) as { success: boolean; data?: { smtpOk: boolean; imapOk: boolean }; error?: string };
-            res?.success ? message.info(`SMTP: ${res.data?.smtpOk ? "✓" : "✗"} IMAP: ${res.data?.imapOk ? "✓" : "✗"}`) : message.error(res?.error || "失败");
+          <Button size="small" icon={<CheckCircleOutlined />} loading={testingId === r.id} onClick={async () => {
+            setTestingId(r.id);
+            try {
+              const res = await window.api.invoke("accounts:validate", r.id) as {
+                success: boolean;
+                data?: { smtpOk: boolean; smtpError?: string; imapOk: boolean; imapError?: string };
+                error?: string;
+              };
+              if (!res?.success || !res.data) { message.error(res?.error || "验证请求失败"); return; }
+              const { smtpOk, smtpError, imapOk, imapError } = res.data;
+              if (smtpOk && imapOk) {
+                message.success(`${r.email} 连接正常（SMTP + IMAP 认证通过）`);
+              } else {
+                const parts = [
+                  !smtpOk && `SMTP ✗ ${smtpError || "失败"}`,
+                  !imapOk && `IMAP ✗ ${imapError || "失败"}`,
+                ].filter(Boolean).join("；");
+                notification.error({
+                  message: `${r.email} 连接异常`,
+                  description: parts,
+                  duration: 8,
+                });
+              }
+            } finally {
+              setTestingId(null);
+            }
           }}>测试</Button>
           <Button danger size="small" icon={<DeleteOutlined />} onClick={async () => {
             const res = await deleteMut.mutateAsync(r.id);
@@ -637,9 +1082,9 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="flex gap-8 max-w-2xl mx-auto">
+    <div className="mx-auto flex w-full max-w-6xl gap-8">
       {/* 主内容 */}
-      <div className="flex-1 space-y-8">
+      <div className="min-w-[600px] flex-1 space-y-8">
         {/* ═══ 通用 ═══ */}
         <div id="sec-general" className="settings-section">
           <div className="text-[13px] font-bold mb-3 text-gray-800">通用</div>
@@ -779,17 +1224,9 @@ export function SettingsPage() {
         {/* ═══ API 与服务 ═══ */}
         <div id="sec-api" className="settings-section">
           <div className="text-[13px] font-bold mb-3 text-gray-800">API 与服务</div>
-          <SettingCard icon="" title="API 密钥">
-            <ApiKeyRow label="DeepSeek" name="DEEPSEEK_API_KEY" hint="背调 / AI 开发信 / 邮件总结" />
-            <ApiKeyRow label="Exa AI" name="EXA_API_KEY" hint="背调搜索源" />
-            <ApiKeyRow label="Tavily" name="TAVILY_API_KEY" hint="背调搜索源（备用）" />
-            <div className="text-[10px] text-gray-400 pt-1">
-              密钥写入项目 <code>.env</code>（已 gitignore），保存后立即生效。
-            </div>
-          </SettingCard>
-          <SettingCard icon="" title="网络代理">
-            <SettingRow label="HTTP 代理" value="" onSave={() => {}} type="text" disabled />
-          </SettingCard>
+          <ProviderCard />
+          <KbDispatchCard />
+          <AgentAuditCard />
         </div>
 
         {/* ═══ 客户跟进 ═══ */}

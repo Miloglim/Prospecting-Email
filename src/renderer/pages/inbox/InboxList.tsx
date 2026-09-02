@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Button, message, Modal, Tooltip, Progress } from "antd";
+import { Button, message, Modal, Tooltip, Progress, notification } from "antd";
 
 // (Button etc. used in sub-components)
 import {
   ReloadOutlined, MailOutlined,
-  DeleteOutlined,
+  DeleteOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { askAssistant } from "../../lib/ask-ai";
 
 interface InboxItem {
   id: number; fromEmail: string; fromName: string | null;
@@ -122,6 +123,25 @@ export function InboxList() {
     try { await window.api.invoke("inbox:fetch"); } finally { setFetching(false); setFetchProgress({}); }
     qc.invalidateQueries({ queryKey: ["inbox"] });
   };
+
+  // 收信健康度：主进程每轮抓取推送 → 失败账号弹常驻通知，同时刷新设置页账号列表缓存
+  useEffect(() => {
+    return window.api.on("inbox:health", (data) => {
+      const list = data as Array<{ accountId: number; email: string; ok: boolean; error?: string }>;
+      const bad = (list || []).filter(x => !x.ok);
+      if (bad.length > 0) {
+        notification.error({
+          key: "inbox-health",
+          message: bad.length === 1 ? `${bad[0]!.email} 收信失败` : `${bad.length} 个账号收信失败`,
+          description: bad.map(b => `${b.email}：${b.error || "未知错误"}`).join("；"),
+          duration: 0,
+        });
+      } else if (list?.length) {
+        notification.destroy?.("inbox-health");
+      }
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+    });
+  }, [qc]);
 
   const classMut = useMutation({
     mutationFn: (p: { id: number; classification: string }) => window.api.invoke("inbox:classify", p),
@@ -632,6 +652,26 @@ export function InboxList() {
                   </span>
                 </div>
               ))}
+              {/* AI 动作：带着这封邮件的上下文跳对话页（助手会读正文并给下一步） */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "5px 12px", borderBottom: "1px solid #f5f5f5" }}>
+                <span style={{ color: "#999", fontWeight: 600, fontSize: 10, minWidth: 36, flexShrink: 0 }}>AI</span>
+                <Button size="small" type="text" icon={<RobotOutlined style={{ color: "#00bfa5" }} />}
+                  style={{ color: "#00897b", fontSize: 11, height: 22, padding: "0 6px" }}
+                  onClick={() => askAssistant({
+                    ctx: `message:${sel_.id}`,
+                    question: "总结一下这封邮件，告诉我下一步该做什么",
+                  })}>
+                  总结这封邮件
+                </Button>
+                <Button size="small" type="text"
+                  style={{ color: "#00897b", fontSize: 11, height: 22, padding: "0 6px" }}
+                  onClick={() => askAssistant({
+                    ctx: `message:${sel_.id}`,
+                    question: "根据这封邮件帮我起草一封回复，语气专业简洁",
+                  })}>
+                  起草回复
+                </Button>
+              </div>
               {/* 账号 + 关联 一行两栏 */}
               <div style={{ display: "flex", borderBottom: "1px solid #f5f5f5" }}>
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "5px 12px", width: senderContact ? "50%" : "100%" }}>

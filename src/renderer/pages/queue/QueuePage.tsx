@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Button, Card, Progress, Tag, Popconfirm, Space, Empty, message } from "antd";
 import {
   PauseCircleOutlined, PlayCircleOutlined, StopOutlined,
-  ClockCircleOutlined, LoadingOutlined,
+  ClockCircleOutlined, LoadingOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { askAssistant } from "../../lib/ask-ai";
 
 interface QueueItem {
   id: string; companyName: string; companyId: number;
@@ -147,6 +148,12 @@ export function QueuePage() {
               </Popconfirm>
             </>
           )}
+          <Button size="small" icon={<RobotOutlined style={{ color: "#00bfa5" }} />}
+            onClick={() => askAssistant({
+              question: status
+                ? `发送队列现在什么状态？已发 ${status.sentCount} 组、失败 ${status.failedCount} 组，有问题的账号帮我查一下原因`
+                : "发送队列现在什么状态？还有多少没发出去",
+            })}>问 AI</Button>
           <Button size="small" onClick={() => setCollapsed(new Set(items.map(i => i.id)))}>
             全部折叠
           </Button>

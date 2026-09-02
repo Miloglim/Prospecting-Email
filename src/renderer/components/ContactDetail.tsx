@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
 import { Drawer, Tabs, Tag, Select, message, Timeline, Input, Button, Tooltip } from "antd";
-import { EditOutlined, SearchOutlined, PartitionOutlined } from "@ant-design/icons";
+import { EditOutlined, SearchOutlined, PartitionOutlined, RobotOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useUpsertContact, type Contact } from "../hooks/useContacts";
 import { CompanyBackcheck } from "./CompanyBackcheck";
+import { askAssistant } from "../lib/ask-ai";
 
 /* ---------- 展示元数据（列表/详情共用） ---------- */
 export const CLIENT_TYPE: Record<string, { label: string; color: string }> = {
@@ -346,6 +347,16 @@ export function ContactDetailDrawer({ contact, open, onClose, onUpdated }: {
                 disabled={contact.status !== "reached"}
                 className="btn-hover-color" style={{ color: contact.status === "reached" ? "#bbb" : "#d9d9d9", padding: 0, minWidth: 20, height: 20 }}
                 onClick={() => { window.location.hash = `#/customers?view=board&detail=${contact.id}`; }}
+              />
+            </Tooltip>
+            {/* 带着这个联系人问 AI：跳对话页并注入上下文（助手能读到 TA 的资料/邮件/提醒） */}
+            <Tooltip title="带着这位联系人问 AI">
+              <Button type="text" size="small" icon={<RobotOutlined />}
+                className="btn-hover-color" style={{ color: "#00bfa5", padding: 0, minWidth: 20, height: 20 }}
+                onClick={() => askAssistant({
+                  ctx: `contact:${contact.id}`,
+                  question: `${fullName} 最近的情况怎么样？今天该不该跟进，建议怎么跟？`,
+                })}
               />
             </Tooltip>
           </div>

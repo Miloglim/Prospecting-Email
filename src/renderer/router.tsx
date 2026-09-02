@@ -4,6 +4,7 @@ import { Dashboard } from "./pages/dashboard/Dashboard";
 import { AssistantPage } from "./pages/assistant/AssistantPage";
 import { CustomersPage } from "./pages/customers/CustomersPage";
 import { InboxList } from "./pages/inbox/InboxList";
+import { RateBoard } from "./pages/rates/RateBoard";
 import { SendCenter } from "./pages/campaigns/SendCenter";
 import { TemplateList } from "./pages/templates/TemplateList";
 import { SettingsPage } from "./pages/settings/SettingsPage";
@@ -36,6 +37,12 @@ const inboxRoute = createRoute({
   component: InboxList,
 });
 
+const ratesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/rates",
+  component: RateBoard,
+});
+
 const campaignsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/campaigns",
@@ -59,6 +66,7 @@ const routeTree = rootRoute.addChildren([
   assistantRoute,
   customersRoute,
   inboxRoute,
+  ratesRoute,
   campaignsRoute,
   templatesRoute,
   settingsRoute,

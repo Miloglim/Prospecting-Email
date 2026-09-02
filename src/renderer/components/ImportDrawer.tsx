@@ -60,7 +60,7 @@ export function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => 
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   // 缓存原始数据，execute 时重新送后端解析全部行
-  const rawDataRef = useRef<{ type: "csv" | "xlsx" | "tsv"; data?: string; filePath?: string } | null>(null);
+  const rawDataRef = useRef<{ type: "csv" | "xlsx" | "tsv"; data: string } | null>(null);
 
   const reset = () => {
     setStep("input");
@@ -77,36 +77,29 @@ export function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => 
     onClose();
   };
 
-  // 读取文件 → 送后端预览（filePath 优先，避免 IPC 传几十 MB base64）
+  // 读取文件内容 → 送后端预览（P0-4: 不再把本地路径传给主进程，内容经 File API 读取）
   const processFile = async (file: File) => {
     setLoading(true);
     try {
-      const p = (file as unknown as { path?: string }).path;
       const ext = file.name.split(".").pop()?.toLowerCase();
       const type: "csv" | "xlsx" = (ext === "csv") ? "csv" : "xlsx";
 
       let data = "";
-      let filePath: string | undefined;
-      if (p) {
-        filePath = p;
+      if (type === "xlsx") {
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const CHUNK = 0x8000;
+        const parts: string[] = [];
+        for (let i = 0; i < bytes.length; i += CHUNK)
+          parts.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)));
+        data = btoa(parts.join(""));
       } else {
-        // fallback: 无 path（极少数安全策略下）
-        if (type === "xlsx") {
-          const buf = await file.arrayBuffer();
-          const bytes = new Uint8Array(buf);
-          const CHUNK = 0x8000;
-          const parts: string[] = [];
-          for (let i = 0; i < bytes.length; i += CHUNK)
-            parts.push(String.fromCharCode(...bytes.subarray(i, i + CHUNK)));
-          data = btoa(parts.join(""));
-        } else {
-          data = await file.text();
-        }
+        data = await file.text();
       }
 
-      rawDataRef.current = { type, data, filePath };
+      rawDataRef.current = { type, data };
 
-      const r = await window.api.invoke("contacts:import", { mode: "preview", type, data, filePath }) as {
+      const r = await window.api.invoke("contacts:import", { mode: "preview", type, data }) as {
         success: boolean; data?: PreviewData; error?: string;
       };
       if (r.success && r.data) {
@@ -152,9 +145,9 @@ export function ImportDrawer({ open, onClose }: { open: boolean; onClose: () => 
     if (!rawDataRef.current) return;
     setImporting(true);
     try {
-      const { type, data, filePath } = rawDataRef.current;
+      const { type, data } = rawDataRef.current;
       const r = await window.api.invoke("contacts:import", {
-        mode: "execute", type, data, filePath, mapping,
+        mode: "execute", type, data, mapping,
       }) as { success: boolean; data?: { imported: number; skipped: number }; error?: string };
 
       if (r.success && r.data) {

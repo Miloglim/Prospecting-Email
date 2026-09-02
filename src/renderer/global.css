@@ -212,3 +212,33 @@ body {
   from { height: 0; opacity: 0; }
   to { height: 14px; opacity: 1; }
 }
+
+/* ── AI 回答 Markdown 表格样式（react-markdown 裸 table 补边框/斑马纹/滚动） ── */
+.md-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: auto;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  margin: 10px 0;
+  font-size: 13px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+.md-body th, .md-body td {
+  padding: 7px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+  border-right: 1px solid #eee;
+  white-space: nowrap;
+}
+.md-body th:last-child, .md-body td:last-child { border-right: none; }
+.md-body thead th {
+  background: #fafafa;
+  font-weight: 600;
+  color: #555;
+  border-bottom: 1px solid #e5e5e5;
+}
+.md-body tbody tr:last-child td { border-bottom: none; }
+.md-body tbody tr:hover td { background: #f9f9f9; }
