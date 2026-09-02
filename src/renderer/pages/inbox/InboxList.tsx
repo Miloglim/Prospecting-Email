@@ -99,8 +99,8 @@ export function InboxList() {
   const [viewed, setViewed] = useState<Set<string>>(loadViewed);
   const [menu, setMenu] = useState<{ x: number; y: number; item: InboxItem } | null>(null);
   // 虚拟滚动：只渲染可视区，避免千余封邮件全量渲染卡顿
-  const ROW_H = 72; // 固定行高
-  const SENDER_ROW_H = 54; // 发信人行高（固定）
+  const ROW_H = 58; // 固定行高（压缩后：主题/发信人/标记三行的紧凑高度）
+  const SENDER_ROW_H = 46; // 发信人行高（固定）
   const OVERSCAN = 6; // 上下多渲染几行，滚动不露白
   const listRef = useRef<HTMLDivElement>(null);
   const [listH, setListH] = useState(600);
@@ -401,16 +401,16 @@ export function InboxList() {
       <div className="flex flex-col flex-shrink-0 bg-white" style={{ width: "40%", minWidth: 340, userSelect: "none", borderRight: "1px solid #e8e8e8" }}>
 
         {/* 顶部 */}
-        <div style={{ padding: "12px 14px 8px", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        <div style={{ padding: "7px 10px 5px", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
           <button onClick={doFetch} disabled={fetching} className="btn"
-            style={{ padding: "5px 12px", fontSize: 11, gap: 4 }}>
-            <ReloadOutlined className={fetching ? "animate-spin" : ""} style={{ fontSize: 12 }} /> 刷新
+            style={{ padding: "2px 7px", fontSize: 10, gap: 3, borderRadius: 5, lineHeight: "16px" }}>
+            <ReloadOutlined className={fetching ? "animate-spin" : ""} style={{ fontSize: 11 }} /> 刷新
           </button>
           <input
             placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)}
-            style={{ flex: 1, border: "1px solid #e5e5e5", borderRadius: 6, padding: "5px 10px", fontSize: 11, outline: "none", minWidth: 0 }} />
-          {sel.size > 1 && <button onClick={batchRead} className="btn" style={{ padding: "5px 8px", fontSize: 10 }}>已读</button>}
-          {sel.size > 1 && <button onClick={batchDel} className="btn" style={{ padding: "5px 8px", fontSize: 10, color: "#e5484d", borderColor: "#fecaca" }}>删({sel.size})</button>}
+            style={{ flex: 1, border: "1px solid #e5e5e5", borderRadius: 5, padding: "2px 7px", fontSize: 10, outline: "none", minWidth: 0, lineHeight: "16px" }} />
+          {sel.size > 1 && <button onClick={batchRead} className="btn" style={{ padding: "2px 6px", fontSize: 10, borderRadius: 5, lineHeight: "16px" }}>已读</button>}
+          {sel.size > 1 && <button onClick={batchDel} className="btn" style={{ padding: "2px 6px", fontSize: 10, color: "#e5484d", borderColor: "#fecaca", borderRadius: 5, lineHeight: "16px" }}>删({sel.size})</button>}
         </div>
         {/* 拉取进度弹窗 — 分账号详细显示 */}
         <Modal title="拉取邮件" open={fetching} footer={null} closable={false} width={420}>
@@ -431,23 +431,14 @@ export function InboxList() {
           </div>
         </Modal>
 
-        {/* 计数条 */}
-        <div style={{ padding: "2px 14px 6px", fontSize: 10, color: "#bbb", display: "flex", gap: 8, flexShrink: 0 }}>
-          <span>退信 {counts.bounce ?? 0}</span>
-          <span>回复 {counts.replied ?? 0}</span>
-          <span>已发送 {counts.sent ?? 0}</span>
-          <span>自动回复 {counts.autoreply ?? 0}</span>
-          <span>其他 {counts.other ?? 0}</span>
-        </div>
-
         {/* 视图切换 */}
-        <div style={{ display: "flex", padding: "4px 14px", gap: 4, flexShrink: 0 }}>
+        <div style={{ display: "flex", padding: "2px 10px 4px", gap: 4, flexShrink: 0 }}>
           {(["flat", "sender"] as const).map(v => {
             const on = view === v;
             return (
               <button key={v} onClick={() => { setView(v); setSenderFilter(null); }}
                 style={{
-                  flex: 1, padding: "5px 0", fontSize: 11, cursor: "pointer", border: "1px solid #e5e5e5",
+                  flex: 1, padding: "2px 0", fontSize: 10, cursor: "pointer", border: "1px solid #e5e5e5",
                   borderRadius: 6, background: on ? "#1a1a1a" : "#fff", color: on ? "#fff" : "#666",
                   fontWeight: on ? 600 : 400, transition: "all .12s",
                 }}>
@@ -462,9 +453,9 @@ export function InboxList() {
           const cur = senderGroups.find(g => g.email === senderFilter);
           const curName = cur?.name || senderFilter;
           return (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderBottom: "1px solid #e8e8e8", background: "#fafafa", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderBottom: "1px solid #e8e8e8", background: "#fafafa", flexShrink: 0 }}>
               <button onClick={() => setSenderFilter(null)}
-                style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer", border: "1px solid #e5e5e5", borderRadius: 6, background: "#fff", color: "#555", flexShrink: 0, transition: "all .12s" }}
+                style={{ display: "flex", alignItems: "center", gap: 4, padding: "1px 7px", fontSize: 10, cursor: "pointer", border: "1px solid #e5e5e5", borderRadius: 5, background: "#fff", color: "#555", flexShrink: 0, transition: "all .12s" }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "#2563eb"; (e.currentTarget as HTMLElement).style.color = "#2563eb"; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "#e5e5e5"; (e.currentTarget as HTMLElement).style.color = "#555"; }}>
                 ← 返回发信人列表
@@ -486,9 +477,9 @@ export function InboxList() {
             return (
               <button key={f.key} onClick={() => setFilter(f.key)}
                 style={{
-                  flex: 1, padding: "8px 0", fontSize: 11, cursor: "pointer", border: 0, background: "none",
+                  flex: 1, padding: "5px 0", fontSize: 10.5, cursor: "pointer", border: 0, background: "none",
                   color: on ? "#1a1a1a" : "#999", fontWeight: on ? 600 : 400,
-                  boxShadow: on ? "inset 0 -2px 0 #1a1a1a" : "none",
+                  boxShadow: on ? "inset 0 -1.5px 0 #1a1a1a" : "none",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 3, whiteSpace: "nowrap",
                   transition: "color .12s",
                 }}
@@ -509,7 +500,7 @@ export function InboxList() {
           if (cnt === 0) return null;
           return (
             <button onClick={() => { Modal.confirm({ title: `确定删除这 ${cnt} 个已匹配联系人？`, content: "联系人及其往来记录一并删除，退信邮件保留。此操作不可撤销。", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
-              style={{ width: "100%", padding: "7px 0", border: 0, fontSize: 11, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>一键删除已匹配联系人 ({cnt})</button>
+              style={{ width: "100%", padding: "4px 0", border: 0, fontSize: 10.5, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>一键删除已匹配联系人 ({cnt})</button>
           );
         })()}
 
@@ -529,7 +520,7 @@ export function InboxList() {
                   const realIdx = senderStart + idx;
                   return (
                     <div key={g.email} onClick={() => setSenderFilter(g.email)}
-                      style={{ position: "absolute", top: realIdx * SENDER_ROW_H, left: 0, right: 0, height: SENDER_ROW_H, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", cursor: "pointer", borderBottom: "1px solid #f5f5f5" }}
+                      style={{ position: "absolute", top: realIdx * SENDER_ROW_H, left: 0, right: 0, height: SENDER_ROW_H, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "4px 12px", cursor: "pointer", borderBottom: "1px solid #f5f5f5" }}
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(0,0,0,.015)"; }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -568,8 +559,8 @@ export function InboxList() {
                     style={{
                       position: "absolute", top: realIdx * ROW_H, left: 0, right: 0, height: ROW_H,
                       boxSizing: "border-box",
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "10px 14px 10px 11px", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "6px 12px 6px 9px", cursor: "pointer",
                       background: isAct ? "rgba(0,0,0,.04)" : "transparent",
                       borderLeft: isAct ? "3px solid #1a1a1a" : "3px solid transparent",
                       borderBottom: "1px solid #f5f5f5",
@@ -583,7 +574,7 @@ export function InboxList() {
                     </span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 1 }}>
-                        <span style={{ fontSize: 13, fontWeight: isNew ? 500 : 400, color: "#1a1a1a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontSize: 12, fontWeight: isNew ? 500 : 400, color: "#1a1a1a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {i.subject || i.fromName || i.fromEmail}
                         </span>
                         <span style={{ fontSize: 10, color: "#bbb", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{shortTime(i.receivedAt)}</span>
@@ -627,7 +618,14 @@ export function InboxList() {
         {!sel_ ? (
           <div className="flex-1 flex flex-col items-center justify-center" style={{ color: "#ddd" }}>
             <MailOutlined style={{ fontSize: 32, marginBottom: 10 }} />
-            <span style={{ fontSize: 13 }}>选择左侧邮件</span>
+            {/* 原先左侧列表顶部那行计数条迁到这里：左栏少一行、多出一屏邮件 */}
+            <div style={{ fontSize: 11, color: "#c4c4c4", display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", lineHeight: 1.9 }}>
+              <span>退信 {counts.bounce ?? 0}</span>
+              <span>回复 {counts.replied ?? 0}</span>
+              <span>已发送 {counts.sent ?? 0}</span>
+              <span>自动回复 {counts.autoreply ?? 0}</span>
+              <span>其他 {counts.other ?? 0}</span>
+            </div>
           </div>
         ) : (
           <>
