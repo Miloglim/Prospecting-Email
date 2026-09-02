@@ -54,25 +54,25 @@ const TURN_HARD_LIMIT_MS = 150_000;
 // ── Provider 配置 ────────────────────────────────────────
 
 interface ProviderConfig {
-  mode: "mock" | "live";
+  /** 是否已配好可用端点；未配好时对话直接失败并给出指引（不再有假流式 Mock） */
+  configured: boolean;
   baseUrl: string;
   apiKey: string;
   model: string;
 }
 
 /** 生效端点：统一走 endpoint.service 解析（界面激活 profile 后立即变化，无需重启）。
- *  live 需同时具备 BASE_URL + KEY，否则回落 mock。 */
+ *  需同时具备 BASE_URL + KEY 才算就绪；未就绪时对话直接失败并给出配置指引。 */
 function getProviderConfig(): ProviderConfig {
   const e = readActiveEndpoint();
-  if (e.baseUrl && e.apiKey) return { mode: "live", baseUrl: e.baseUrl, apiKey: e.apiKey, model: e.model };
-  return { mode: "mock", baseUrl: e.baseUrl, apiKey: e.apiKey, model: e.model };
+  return { configured: !!(e.baseUrl && e.apiKey), baseUrl: e.baseUrl, apiKey: e.apiKey, model: e.model };
 }
 
 /** 配置状态（不含密钥值），供 UI 显示模式横幅 */
-export function status(): Result<{ mode: "mock" | "live"; model: string; hasBaseUrl: boolean; hasKey: boolean; thinking: boolean }> {
+export function status(): Result<{ configured: boolean; model: string; baseUrl: string; thinking: boolean }> {
   const c = getProviderConfig();
   return okResult({
-    mode: c.mode, model: c.model, hasBaseUrl: !!c.baseUrl, hasKey: !!c.apiKey,
+    configured: c.configured, model: c.model, baseUrl: c.baseUrl,
     thinking: readActiveEndpoint().thinking,
   });
 }
@@ -138,27 +138,6 @@ async function summarizeEarlier(convId: string, dropped: Array<{ role: string; c
   return `（本会话此前另有 ${dropped.length} 条消息，压缩失败已省略；如需回顾请重新说明要点）`;
 }
 
-// ── Mock Provider：端点未配置时模拟流式，用于打通/演示链路 ──
-
-async function streamMock(sessionId: string, userText: string, push: PushFn, signal: AbortSignal): Promise<string> {
-  const full = [
-    "（Mock 模式 — 没有可用的模型端点）",
-    "",
-    `我收到了你的消息：「${userText.slice(0, 200)}」，以下是模拟回复。`,
-    "",
-    "到「设置 → 模型与端点」新增一个端点（Agnes / DeepSeek / 本地 Ollama / 公司中转 都有模板），",
-    "填好密钥后点「启用」——回到这个对话立刻生效，不需要重启应用。",
-    "",
-    "（想手改配置也可以：项目根目录 .env 里的 AGENT_API_BASE_URL / AGENT_API_KEY / AGENT_MODEL）",
-  ].join("\n");
-  for (let i = 0; i < full.length; i += 6) {
-    if (signal.aborted) return full.slice(0, i);
-    push(EVENTS.AGENT_CHUNK, { conversationId: sessionId, delta: full.slice(i, i + 6) });
-    await new Promise(r => setTimeout(r, 20));
-  }
-  return full;
-}
-
 // ── 对外：发起对话 / 停止 / 审批回执 ─────────────────────────────
 
 export interface ChatInput {
@@ -217,9 +196,12 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
   const text = input?.text?.trim();
   if (!text) return failResult("参数错误: text 必填");
 
-  // live 但模型名没填 → 直接说清楚，别让端点回一个看不懂的 400/404（也不留下半截用户消息）
+  // 配置不全时立刻失败并指路：不静默降级、也不留下半截用户消息
   const cfg0 = getProviderConfig();
-  if (cfg0.mode === "live" && !cfg0.model) {
+  if (!cfg0.configured) {
+    return failResult("未配置模型端点：请到「设置 → 模型与端点」新增端点、填入密钥并启用（Base URL / 模型名都要有）");
+  }
+  if (!cfg0.model) {
     return failResult("模型名未填：请到「设置 → 模型与端点」给当前端点补上 Model（如 gemini-2.5-flash、deepseek-chat）");
   }
 
@@ -247,14 +229,12 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
       state.abort?.abort();
     }, TURN_HARD_LIMIT_MS);
     const cfg = getProviderConfig();
-    Log.debug("agent.chat", `回合开始 conv=${conversationId.slice(0, 8)} mode=${cfg.mode}`);
+    Log.debug("agent.chat", `回合开始 conv=${conversationId.slice(0, 8)} model=${cfg.model || "（未填）"}`);
     try {
       let answer = "";
       let outcomeUsage: TurnOutcomeUsage | undefined;
-      if (cfg.mode === "mock") {
-        answer = await streamMock(conversationId, text, push, state.abort.signal);
-      } else {
-        // live：harness 自带系统提示词（L0 规则）与工具集；历史只带 user/assistant 正文
+      {
+        // harness 自带系统提示词（L0 规则）与工具集；历史只带 user/assistant 正文
         const outcome = await runHarnessTurn({
           baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
           history: await loadHistory(conversationId),
@@ -283,8 +263,8 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
         push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: true });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
-        Log.error("agent.chat", `模型调用失败 ${cfg.mode}`, err instanceof Error ? (err.stack ?? msg) : msg);
-        const shown = cfg.mode === "live" ? `模型调用失败: ${msg}` : msg;
+        Log.error("agent.chat", "模型调用失败", err instanceof Error ? (err.stack ?? msg) : msg);
+        const shown = `模型调用失败: ${msg}`;
         appendMessage(conversationId, "error", shown);
         push(EVENTS.AGENT_ERROR, { conversationId, message: shown });
       }
@@ -317,7 +297,7 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
   if (!approvalId) return failResult("参数错误: approvalId 必填");
   if (!hasPending(approvalId)) return failResult("审批已不存在（可能已停止或重启作废）");
   const cfg = getProviderConfig();
-  if (cfg.mode !== "live") return failResult("模型端点未配置");
+  if (!cfg.configured) return failResult("未配置模型端点：请到「设置 → 模型与端点」配置并启用一个端点");
   // 续跑同样受墙钟保护 + 异常显式推送，避免 rejected promise 被吞、UI 永远等待
   const ac = new AbortController();
   const watchdog = setTimeout(() => ac.abort(), TURN_HARD_LIMIT_MS);

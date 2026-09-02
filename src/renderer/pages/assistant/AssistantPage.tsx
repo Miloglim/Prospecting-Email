@@ -833,7 +833,7 @@ export function AssistantPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [sending, setSending] = useState(false);
   const [convLoading, setConvLoading] = useState(false);
-  const [mode, setMode] = useState<"mock" | "live">("mock");
+  const [configured, setConfigured] = useState(false);
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState(false);
   const [inputVal, setInputVal] = useState("");
@@ -914,8 +914,8 @@ export function AssistantPage() {
   // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次
   const refreshStatus = async () => {
     const r = await window.api.invoke("agent:status") as
-      IpcResult<{ mode: "mock" | "live"; model: string; thinking?: boolean }>;
-    if (r?.success && r.data) { setMode(r.data.mode); setModel(r.data.model); setThinking(!!r.data.thinking); }
+      IpcResult<{ configured: boolean; model: string; thinking?: boolean }>;
+    if (r?.success && r.data) { setConfigured(r.data.configured); setModel(r.data.model); setThinking(!!r.data.thinking); }
   };
   useEffect(() => { void refreshStatus(); }, []);
 
@@ -1380,10 +1380,8 @@ export function AssistantPage() {
       <div className="flex items-center justify-between pb-3">
         <Space>
           <h2 className="text-lg font-bold text-gray-800 m-0">AI 助手</h2>
-          <Tag color={mode === "live" ? "green" : "orange"}>
-            {mode === "live" ? model || "live" : "Mock 模式"}
-          </Tag>
-          {mode === "live" && (
+          <Tag color={configured ? "green" : "red"}>{configured ? (model || "已接入") : "未配置端点"}</Tag>
+          {configured && (
             <Tooltip title="在「设置 → 模型与端点」切换端点或思考模式，保存即生效，不用重启">
               <Tag color={thinking ? "blue" : "default"}>{thinking ? "思考中" : "直答"}</Tag>
             </Tooltip>
@@ -1398,11 +1396,16 @@ export function AssistantPage() {
         </Space>
       </div>
 
-      {mode === "mock" && (
+      {!configured && (
         <Alert
-          type="warning" showIcon closable className="mb-2"
-          message="还没有可用的模型端点，当前为 Mock 流"
-          description="去「设置 → 模型与端点」新增端点（有 Agnes / DeepSeek / 本地 Ollama / 公司中转 模板），填密钥后点「启用」，回到这里立刻生效，不用重启应用。"
+          type="error" showIcon className="mb-2"
+          message="未配置模型端点，助手无法回答"
+          description="到「设置 → 模型与端点」新增端点（Agnes / DeepSeek / 本地 Ollama / 公司中转 都有模板），填好密钥后点「启用」——保存即生效，不用重启应用。"
+          action={
+            <Button size="small" onClick={() => { window.location.hash = "#/settings"; }}>
+              去设置
+            </Button>
+          }
         />
       )}
 

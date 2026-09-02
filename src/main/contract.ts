@@ -132,7 +132,7 @@ export const IPC = {
     CHAT:   chan(PREFIX.AGENT, "chat"),
     /** 中断当前生成 */
     STOP:   chan(PREFIX.AGENT, "stop"),
-    /** provider 配置状态（mock/live），供 UI 显示模式横幅 */
+    /** 端点就绪状态（configured / 模型 / 思考），供 UI 角标与提示 */
     STATUS: chan(PREFIX.AGENT, "status"),
     /** 会话列表（按更新时间倒序） */
     LIST_CONVERSATIONS:  chan(PREFIX.AGENT, "listConversations"),

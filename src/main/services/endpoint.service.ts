@@ -37,7 +37,7 @@ export function readActiveEndpoint(): ActiveEndpoint {
   return { baseUrl, apiKey, model, thinking, source };
 }
 
-/** 端点是否可用于 live 对话（缺 base 或 key 一律回落 Mock） */
+/** 端点是否就绪：缺 base 或 key 都算未配置（对话会直接失败并提示去设置） */
 export function isLiveEndpoint(e: ActiveEndpoint = readActiveEndpoint()): boolean {
   return !!(e.baseUrl && e.apiKey);
 }

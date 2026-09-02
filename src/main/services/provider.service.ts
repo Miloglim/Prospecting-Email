@@ -105,7 +105,8 @@ export function getEndpointStatus(): Result<{
   profiles: ProfileDto[];
   activeId: string | null;
   endpoint: ReturnType<typeof endpointView>;
-  mode: "live" | "mock";
+  /** 端点是否可用（未配置就是 false，界面直接提示去配置，不再有 Mock 假流） */
+  configured: boolean;
 }> {
   const s = readStore();
   const e = readActiveEndpoint();
@@ -113,7 +114,7 @@ export function getEndpointStatus(): Result<{
     profiles: s.profiles.map(p => toDto(s, p)),
     activeId: s.activeId,
     endpoint: endpointView(e),
-    mode: e.baseUrl && e.apiKey ? "live" : "mock",
+    configured: !!(e.baseUrl && e.apiKey),
   });
 }
 
@@ -193,7 +194,7 @@ export function setProfileThinking(id: string, thinking: boolean): Result<Profil
 }
 
 /** 激活 = 写指针与生效参数到 .env + 同步 process.env，立即生效（无需重启） */
-export function activateProfile(id: string): Result<{ mode: "live" | "mock"; model: string; name: string }> {
+export function activateProfile(id: string): Result<{ configured: boolean; model: string; name: string }> {
   const s = readStore();
   const p = s.profiles.find(x => x.id === id);
   if (!p) return failResult(`端点不存在: ${id}`);
@@ -208,7 +209,7 @@ export function activateProfile(id: string): Result<{ mode: "live" | "mock"; mod
   upsertEnv("AGENT_THINKING", p.thinking ? "1" : "");
   const e = readActiveEndpoint();
   Log.info("provider.activate", `切换到 ${p.name}（model=${p.model || "默认"} thinking=${p.thinking}）即时生效`);
-  return okResult({ mode: e.baseUrl && e.apiKey ? "live" : "mock", model: e.model, name: p.name });
+  return okResult({ configured: !!(e.baseUrl && e.apiKey), model: e.model, name: p.name });
 }
 
 export function deactivateProfile(): Result<void> {

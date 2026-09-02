@@ -654,7 +654,7 @@ interface EndpointStatus {
   profiles: ProfileDto[];
   activeId: string | null;
   endpoint: { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; thinking: boolean; source: string; keyEnv: string };
-  mode: "live" | "mock";
+  configured: boolean;
 }
 type TestState = { running?: boolean; ok?: boolean; text?: string };
 
@@ -732,7 +732,7 @@ function ProviderCard() {
 
   return (
     <SettingCard icon="" title="模型与端点"
-      status={st ? <Tag color={st.mode === "live" ? "green" : "orange"}>{st.mode === "live" ? "已接入" : "Mock（未配置端点）"}</Tag> : undefined}>
+      status={st ? <Tag color={st.configured ? "green" : "red"}>{st.configured ? "已接入" : "未配置端点"}</Tag> : undefined}>
       <div className="text-[11px] text-gray-500 mb-2 leading-relaxed">
         {st?.activeId
           ? <>当前生效：<b>{profiles.find(p => p.id === st.activeId)?.name ?? st.activeId}</b> · {st.endpoint.baseUrl} · 模型 {st.endpoint.model || "未填"}</>

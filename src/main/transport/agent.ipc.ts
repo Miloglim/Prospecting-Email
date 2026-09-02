@@ -18,11 +18,13 @@ function makePush() {
 export function registerAgentIPC() {
   const push = makePush();
 
-  // 启动时记录 provider 模式 — 排查「还在 Mock」类问题的第一现场
+  // 启动时记录端点就绪状态 — 排查「助手不回话」的第一现场
   const st = Agent.status();
   if (st.success) {
-    const d = st.data as { mode: string; model: string };
-    Log.info("agent.init", `provider=${d.mode} model=${d.mode === "mock" ? "-" : d.model}${d.mode === "mock" ? "（.env 未配置 AGENT_API_*，或改动后未重启应用）" : ""}`);
+    const d = st.data as { configured: boolean; model: string };
+    Log.info("agent.init", d.configured
+      ? `端点就绪 model=${d.model}`
+      : "未配置模型端点（设置 → 模型与端点 里新增并启用后，无需重启即可对话）");
   }
 
   // 发起一轮对话（立即返回 ID，正文走 agent:chunk 事件流）
@@ -38,7 +40,7 @@ export function registerAgentIPC() {
   ipcMain.handle(IPC.AGENT.RESOLVE_APPROVAL, (_e, input: Agent.ApprovalInput) =>
     Agent.resolveApprovalRequest(push, input ?? {}));
 
-  // provider 配置状态（mock/live）
+  // 端点就绪状态（供对话页角标与提示）
   ipcMain.handle(IPC.AGENT.STATUS, () => Agent.status());
 
   // 会话管理（左侧历史列表）
