@@ -36,6 +36,53 @@ const SUSPENDED_NOTE = JSON.stringify({
     + "请基于本回合已取到的数据作答，并如实告诉用户这件事此刻没做成、原因是什么；不要再调用本工具。",
 });
 
+// ── 导入联系人的归一化（纯函数，可单测）──────────────────────────
+export interface ImportContactInput {
+  name?: string | null; email: string; company?: string | null; country?: string | null;
+  title?: string | null; phone?: string | null; stage?: string | null; note?: string | null;
+}
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const impClean = (s?: string | null): string => (s ?? "").replace(/[\t\r\n]+/g, " ").trim();
+/** 与 importContacts 的字段键对齐（firstName/lastName/companyName/extraNote 都是它的既有列） */
+export const IMPORT_HEADER = ["firstName", "lastName", "email", "companyName", "country", "title", "phone", "stage", "extraNote"] as const;
+
+/** 把归一化后的联系人数组拼成 importer 吃的 TSV：校验邮箱、批内按邮箱去重、全名拆 first/last、阶段缺省 cold。 */
+export function buildImportTsv(contacts: ImportContactInput[]): { tsv: string; invalid: string[]; count: number } {
+  const seen = new Set<string>();
+  const invalid: string[] = [];
+  const rows: string[][] = [];
+  for (const c of contacts) {
+    const email = (c.email ?? "").trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) { invalid.push(impClean(c.name) || email || "(空)"); continue; }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    const full = impClean(c.name);
+    const sp = full.indexOf(" ");
+    const first = sp < 0 ? full : full.slice(0, sp);
+    const last = sp < 0 ? "" : full.slice(sp + 1);
+    rows.push([first, last, email, impClean(c.company), impClean(c.country), impClean(c.title), impClean(c.phone), impClean(c.stage) || "cold", impClean(c.note)]);
+  }
+  const tsv = [IMPORT_HEADER.join("\t"), ...rows.map(r => r.join("\t"))].join("\n");
+  return { tsv, invalid, count: rows.length };
+}
+
+/**
+ * SDK 层失败识别：参数校验类错误（InvalidToolInputError 等）发生在 execute 之前，
+ * 走不到我们的 audit，于是熔断计数原本对这类失败完全失明——实测 flash 把 contactId
+ * 发成 "1" 后原样重试 5 次撞满 max turns 就是这么漏过去的。这里按输出文本补记。
+ */
+export function isToolRuntimeError(out: string): boolean {
+  return /An error occurred while running the tool|InvalidToolInputError|tool (?:call )?error|执行失败/i.test(out);
+}
+
+/** 按工具输出记一次成/败（成功清零，失败累加，达阈值后 gate() 会让该工具本回合静默） */
+export function noteToolOutcome(ctx: ToolCtx, toolName: string | undefined, output: string): void {
+  if (!toolName) return;
+  const fails = ctx.failures ?? (ctx.failures = new Map());
+  if (isToolRuntimeError(output)) fails.set(toolName, (fails.get(toolName) ?? 0) + 1);
+  else fails.set(toolName, 0);
+}
+
 /** 回合内可用性门闸：先熔断后预算；返回 null 表示放行 */
 function gate(ctx: ToolCtx, toolName: string): string | null {
   if ((ctx.failures?.get(toolName) ?? 0) >= MAX_CONSECUTIVE_FAILURES) return SUSPENDED_NOTE;
@@ -105,6 +152,41 @@ function budgetNote(counts: Map<string, number>, toolName: string): string | nul
 export type { ToolCtx } from "./types";
 import type { ToolCtx } from "./types";
 
+/**
+ * 宽松取值：模型常把 id 发成字符串（实测 flash 发 "1"）、把布尔发成 "false"、
+ * 把 id 数组发成 "1,2"。zod 在这些情况下会抛 InvalidToolInputError —— 它发生在
+ * execute 之前，我们的预算与熔断计数都看不见，模型只会原样重试到撞满 max turns。
+ * 所以这里一律归一，归一不了就当没填，绝不让它炸。
+ */
+const toInt = (v: unknown): number | undefined => {
+  const n = typeof v === "string" ? Number(v.trim()) : typeof v === "number" ? v : NaN;
+  return Number.isInteger(n) && (n as number) > 0 ? (n as number) : undefined;
+};
+const toBool = (v: unknown): boolean | undefined => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const t = v.trim().toLowerCase();
+    if (t === "true" || t === "1" || t === "yes") return true;
+    if (t === "false" || t === "0" || t === "no") return false;
+  }
+  return undefined;
+};
+const toIds = (v: unknown): number[] => {
+  const raw = Array.isArray(v) ? v
+    : typeof v === "string" ? v.split(/[,;\s]+/) : [];
+  return [...new Set(raw.map(toInt).filter((n): n is number => n !== undefined))].slice(0, 50);
+};
+/** 可选字符串：空串/全空格/null 一律归一为「未填」，不留给下游判 */
+const optStr = (max: number) => z.preprocess(
+  (v: unknown) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
+  z.string().max(max).nullable().optional(),
+);
+
+// 注意：可选字段必须 .nullable().optional() 成对出现 —— SDK 转 JSON Schema 时
+// 只认这一种「可选」表达（少了 nullable 就整工具转换失败，实测踩过两次）。
+const optInt = () => z.preprocess((v: unknown) => toInt(v) ?? undefined, z.number().int().nullable().optional());
+const optBool = () => z.preprocess((v: unknown) => toBool(v) ?? undefined, z.boolean().nullable().optional());
+
 // ── Schema 设计原则（live 评测两轮实锤）─────────────────────────
 // ① 能用「钳制/归一」解决的，绝不用 .max()/.enum() 硬拒：zod 校验失败发生在 execute 之前，
 //    预算守卫拦不住，模型会当成接口故障反复重试直到 max turns。
@@ -113,11 +195,11 @@ import type { ToolCtx } from "./types";
 //    字段回传 null —— 声明可空后 null 能过校验，下游用 ?? / ?. / 真值判断天然按「未填」处理。
 export const searchContactsSchema = z.object({
   query: z.string().min(1).max(80).describe("姓名/邮箱/公司名关键词"),
-  limit: z.number().int().nullable().optional().describe("返回条数上限，默认 10"),
+  limit: optInt().describe("返回条数上限，默认 10（发成字符串也行）"),
 });
 
 export const recordFollowupSchema = z.object({
-  contactId: z.number().int().positive().describe("联系人 id（来自 search_contacts 返回）"),
+  contactId: optInt().describe("联系人 id（来自 search_contacts 返回；字符串形式也接受）"),
   note: z.string().min(1).max(500).describe("跟进记录内容"),
 });
 
@@ -153,43 +235,74 @@ export const updatePlanSchema = z.object({
   items: z.array(planItemSchema).describe("全量清单（每次调用覆盖上一次，不是增量），最多 8 步"),
 });
 
+// ── P2：产物导出 & 后台批量任务（元能力，均只读/只写产物目录）──────
+export const exportArtifactSchema = z.object({
+  title: z.string().describe("文件名（不带扩展名，如「未读邮件总结」）"),
+  format: z.string().nullable().optional().describe("md 或 csv；其它写法按 md 处理"),
+  content: z.string().nullable().optional().describe("Markdown 正文（md 格式必填；csv 格式用 rows 不用它）"),
+  rows: z.array(z.array(z.string())).nullable().optional().describe("csv 数据（首行为表头）；每格都是字符串"),
+});
+
+const batchCompanySchema = z.object({
+  name: z.string().describe("公司名（英文优先）"),
+  country: z.string().nullable().optional().describe("国家/地区，帮助收敛搜索"),
+});
+export const startBatchTaskSchema = z.object({
+  kind: z.string().nullable().optional().describe("backcheck=批量背调 / draft=批量开发信草稿 / email_summary=批量邮件总结；写「开发信」「写信」算 draft，写「总结邮件/邮件总结」算 email_summary"),
+  companies: z.array(batchCompanySchema).nullable().optional().describe("backcheck/draft 用：要处理的公司列表，最多 10 家"),
+  messageIds: z.array(z.number().int().positive()).nullable().optional().describe("email_summary 用：要总结的邮件 id 列表（来自 inbox_search），最多 60 封"),
+});
+
+export const importContactsSchema = z.object({
+  contacts: z.array(z.object({
+    name: z.string().nullable().optional().describe("姓名（整串即可，工具自动拆名/姓）"),
+    email: z.string().describe("邮箱，必填——去重与写入的唯一键，缺了这条会被判无效"),
+    company: z.string().nullable().optional().describe("公司名"),
+    country: z.string().nullable().optional().describe("国家/地区"),
+    title: z.string().nullable().optional().describe("职位"),
+    phone: z.string().nullable().optional().describe("电话"),
+    stage: z.string().nullable().optional().describe("阶段 cold/f1-f4，留空按 cold"),
+    note: z.string().nullable().optional().describe("备注"),
+  })).min(1).describe("要导入的联系人：把用户粘贴的任意内容（表格/名单/邮件签名等）整理成这个数组即可，不要反问用户要 CSV 还是 JSON"),
+});
+
 export const quoteSearchSchema = z.object({
-  lane: z.string().max(20).nullable().optional().describe("航线（加勒比/南美东/南美西/墨西哥/中美洲/欧地），不传则全航线"),
-  carrier: z.string().max(10).nullable().optional().describe("船司三字码，如 CMA/MSK/MSC；不看船司就省略或传空"),
-  pod: z.string().max(60).nullable().optional().describe("目的港关键词（英文港名，模糊匹配）；不限则省略或传空"),
-  container: z.string().max(10).nullable().optional().describe("柜型，如 20GP/40GP/40HQ/NOR（写 40HC 也会自动归一）；不限则省略或传空"),
-  includeExpired: z.boolean().nullable().optional().describe("是否包含已过有效期记录，默认 false"),
-  limit: z.number().int().nullable().optional().describe("返回条数，默认 20，按价格升序"),
+  lane: optStr(20).describe("航线（加勒比/南美东/南美西/墨西哥/中美洲/欧地），不传则全航线"),
+  carrier: optStr(10).describe("船司三字码，如 CMA/MSK/MSC；不看船司就省略或传空"),
+  pod: optStr(60).describe("目的港关键词（英文港名，模糊匹配）；不限则省略或传空"),
+  container: optStr(10).describe("柜型，如 20GP/40GP/40HQ/NOR（写 40HC 也会自动归一）；不限则省略或传空"),
+  includeExpired: optBool().describe("是否包含已过有效期记录，默认 false"),
+  limit: optInt().describe("返回条数，默认 20，按价格升序"),
 });
 
 export const inboxSearchSchema = z.object({
-  query: z.string().max(120).nullable().optional().describe("关键词，匹配发件人邮箱/主题/正文摘要；不传则返回最近邮件"),
+  query: optStr(120).describe("关键词，匹配发件人邮箱/主题/正文摘要；不传则返回最近邮件"),
   classification: z.string().max(20).nullable().optional()
     .describe("按系统分类过滤：inquiry=询盘 reply=回复 bounce=退信 auto_reply=自动回复；其他值视为不过滤"),
-  unreadOnly: z.boolean().nullable().optional().describe("只看未读，默认 false"),
-  limit: z.number().int().nullable().optional().describe("返回条数，默认 10，按时间倒序"),
+  unreadOnly: optBool().describe("只看未读，默认 false"),
+  limit: optInt().describe("返回条数，默认 10，按时间倒序"),
 });
 
 export const emailSummarizeSchema = z.object({
-  messageId: z.number().int().positive().describe("邮件 id（来自 inbox_search 返回）"),
+  messageId: optInt().describe("邮件 id（来自 inbox_search 返回）") ,
 });
 
 export const companyBackcheckSchema = z.object({
   companyName: z.string().min(2).max(80).describe("公司名（英文优先，可用行业常见拼写）"),
-  country: z.string().max(40).nullable().optional().describe("国家/地区，帮助收敛搜索"),
+  country: optStr(40).describe("国家/地区，帮助收敛搜索"),
 });
 
 export const generateDraftSchema = z.object({
   companyName: z.string().min(1).max(80).describe("目标公司名"),
   contactName: z.string().max(60).describe("收件人姓名"),
   language: z.string().max(8).nullable().optional().describe("输出语言：EN 英语 / ES 西语 / PT 葡语；其他值按 EN 处理"),
-  focus: z.string().max(300).nullable().optional().describe("内容侧重提示，如主推航线、客户痛点"),
-  contactId: z.number().int().positive().nullable().optional().describe("收件联系人 id（来自 search_contacts；带上它才会出现「入队」按钮）"),
+  focus: optStr(300).describe("内容侧重提示，如主推航线、客户痛点"),
+  contactId: optInt().describe("收件联系人 id（来自 search_contacts；带上它才会出现「入队」按钮）"),
 });
 
 export const sendQueueAddSchema = z.object({
-  contactIds: z.array(z.number().int().positive()).min(1).max(50)
-    .describe("收件联系人 id 列表（来自 search_contacts 返回的 id）"),
+  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).min(1).max(50))
+    .describe("收件联系人 id 列表（来自 search_contacts 返回的 id；也接受 [\"1\",\"2\"] 或 \"1,2\")"),
   subject: z.string().min(1).max(150).describe("邮件主题（可含 {{company}}/{{firstName}} 变量）"),
   body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量）"),
 });
@@ -337,6 +450,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 幂等：同一会话里相同内容 5 分钟内只落一次（模型重复提交/用户连点）
       const dup = lookupIdempotent(ctx, "record_followup", args);
       if (dup) return dup;
+      if (!args.contactId) {
+        audit(ctx, "record_followup", "write", args, undefined, "approved", "缺少 contactId");
+        return "失败：缺少参数 contactId（需要联系人 id）。请先用 search_contacts 查到人再记跟进。";
+      }
       const exists = getDb().select({ id: contacts.id }).from(contacts)
         .where(eq(contacts.id, args.contactId)).get();
       if (!exists) {
@@ -495,6 +612,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
     execute: async (args) => {
       const note = gate(ctx, "email_summarize");
       if (note) return note;
+      if (!args.messageId) {
+        audit(ctx, "email_summarize", "read", args, undefined, "auto", "缺少 messageId");
+        return "失败：缺少参数 messageId。请先用 inbox_search 拿到邮件 id 再总结。";
+      }
       const row = getDb().select({
         id: inboxMessages.id, fromName: inboxMessages.fromName, fromEmail: inboxMessages.fromEmail,
         subject: inboxMessages.subject, bodyPreview: inboxMessages.bodyPreview,

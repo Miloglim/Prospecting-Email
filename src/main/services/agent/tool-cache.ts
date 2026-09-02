@@ -37,14 +37,14 @@ function prune(): void {
   }
 }
 
-/** 命中返回缓存结果（附标记，模型可知道这是刚才查过的同一份）；未命中 null */
+/** 命中则原样返回缓存结果（不加任何人类文字：工具输出是 JSON 合同，追加会让它无法解析）；未命中 null */
 export function lookupCache(ctx: ToolCtx, toolName: string, args: unknown): string | null {
   const ttl = TTL_BY_TOOL[toolName];
   if (!ttl) return null;                       // 不在缓存名单里 = 每次都真查
   prune();
   const hit = store.get(keyOf(ctx, toolName, args));
   if (!hit || Date.now() - hit.at > hit.ttl) return null;
-  return `${hit.result}\n（缓存命中：与刚才 ${Math.round((Date.now() - hit.at) / 1000)} 秒前那次查询结果相同，可直接使用）`;
+  return hit.result;
 }
 
 export function rememberCache(ctx: ToolCtx, toolName: string, args: unknown, result: string): void {

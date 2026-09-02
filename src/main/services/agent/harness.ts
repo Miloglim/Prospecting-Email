@@ -14,7 +14,7 @@ import { Log } from "../../logger";
 import { EVENTS } from "../../events";
 import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.service";
 import { netFetch } from "../../net-proxy";
-import { buildHarnessTools, auditRejected, normalizePlan, type ToolCtx, type PlanItem } from "./tools";
+import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, type ToolCtx, type PlanItem } from "./tools";
 import { canAutoApprove } from "./policy";
 
 /** 主进程 → 渲染进程事件推送器（由 transport 层注入，service 不 import electron） */
@@ -357,6 +357,7 @@ async function collectRunResult(
       const name = (it.callId && callName.get(it.callId)) || it.name || "";
       if (name === PLAN_TOOL) continue;   // 清单只以快照形式呈现，不留过程行
       const out = typeof it.output === "string" ? it.output : JSON.stringify(it.output ?? "");
+      noteToolOutcome(ctx, (it.callId && callName.get(it.callId)) || it.name, out);
       o.push(EVENTS.AGENT_TOOL_CALL, {
         conversationId: o.conversationId,
         tool: name, callId: it.callId,
@@ -452,6 +453,8 @@ async function streamRun(
         const name = (ri.callId && callName.get(ri.callId)) || ri.name || "";
         if (name === PLAN_TOOL) continue;   // 清单只以快照形式呈现，不留过程行
         const out = typeof ri.output === "string" ? ri.output : JSON.stringify(ri.output ?? "");
+        // SDK 层校验失败走不到 execute/audit，只能在这里补记，否则熔断对这类故障失明
+        noteToolOutcome(ctx, name, out);
         // result 供前端渲染「数据表格卡 + 动作卡」（模型上下文走 SDK 内部通道，与此无关）。
         // 上限要够大：截断会让 JSON 不合法 → 整张卡消失；actions 又在末尾，长草稿会被切掉。
         o.push(EVENTS.AGENT_TOOL_CALL, {
