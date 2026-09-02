@@ -7,3 +7,12 @@ data/
 *.log
 .codegraph/
 out/
+
+# 运行时配置与临时产物（不进版本库）
+# ai/ = 模型端点 profile（密钥仍在 .env，这里只有 baseUrl 与模型名）
+# .trash/ = 删除保护回收站 + 评测报告输出
+# work_pptx/ = PPT 生成中间产物；kbdocx_tmp/ = 文档解包临时目录
+ai/
+.trash/
+work_pptx/
+kbdocx_tmp/
