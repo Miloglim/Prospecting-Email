@@ -17,9 +17,10 @@ import { eq } from "drizzle-orm";
 
 type Driz = ReturnType<typeof drizzle<typeof schema>>;
 type ToolEv = { tool: string; status: string };
+type TurnUsage = { requests: number; input: number; output: number; cached: number };
 type Collected = {
   tools: ToolEv[]; text: string; approvals: number;
-  error?: string; done: boolean;
+  error?: string; done: boolean; usage?: TurnUsage;
 };
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>> | null = null;
@@ -207,7 +208,7 @@ function judge(card: EvalCard, ev: Collected, db: Driz): Verdict {
 const LIVE = (process.env.AGENT_EVAL || "").trim() === "live";
 // 评测固定关思考：思考档会吞答案(gr-lang)且延迟 10 倍(rate-honest-empty 79s)，测的是"工具编排智商"不是推理
 process.env.AGENT_THINKING = "";
-const results: Array<{ id: string; group: string; pass: boolean; attribution: string; note: string; tools: string; ms: number }> = [];
+const results: Array<{ id: string; group: string; pass: boolean; attribution: string; note: string; tools: string; ms: number; usage?: TurnUsage }> = [];
 let sandbox: Driz;
 /** 每张卡开跑时的跟进备注基线（种子自带一条），写操作落库校验按增量判断 */
 let baselineNotes = 0;
@@ -225,7 +226,10 @@ async function runCard(card: EvalCard): Promise<Collected> {
     const d = data as Record<string, unknown>;
     if (channel === "agent:chunk") ev.text += String(d.delta ?? "");
     else if (channel === "agent:toolCall" && d.status === "calling") ev.tools.push({ tool: String(d.tool), status: "calling" });
-    else if (channel === "agent:done") { ev.done = true; settle(); }
+    else if (channel === "agent:done") {
+      ev.usage = (d as { usage?: TurnUsage }).usage;
+      ev.done = true; settle();
+    }
     else if (channel === "agent:error") { ev.error = String(d.message); settle(); }
     else if (channel === "agent:approval") {
       ev.approvals++;
@@ -266,7 +270,7 @@ describe.skipIf(!LIVE)("Agent 归因评测（live）", () => {
       // 防编造双保险：确认工具或 ctx 至少有一条真实通路（answerAny 已含 ACME，这里校验非空回答）
       if (!ev.text.trim()) { v.pass = false; v.attribution = "answer-quality"; v.note = "空回答"; }
     }
-    results.push({ id: card.id, group: card.group, pass: v.pass, attribution: v.attribution, note: v.note, tools: ev.tools.map(t => t.tool).join("→"), ms: Date.now() - t0 });
+    results.push({ id: card.id, group: card.group, pass: v.pass, attribution: v.attribution, note: v.note, tools: ev.tools.map(t => t.tool).join("→"), ms: Date.now() - t0, ...(ev.usage ? { usage: ev.usage } : {}) });
     // 限流卡：记录不判失败（免费档批量必触发 429，能力结论以非限流卡为准）
     if (v.attribution === "ratelimited") {
       console.log(`⚠ ${card.id} 被端点限流(429)，本轮不计`);
@@ -289,6 +293,14 @@ describe.skipIf(!LIVE)("Agent 归因评测（live）", () => {
       ...results.map(r => `${r.pass ? "✅" : "❌"} [${r.group}] ${r.id.padEnd(16)} ${(r.ms / 1000).toFixed(1)}s  工具:${r.tools || "—"}  ${r.attribution}${r.note ? "  " + r.note : ""}`),
       "──────── 汇总 ────────",
       `有效卡通过率（剔除已知缺口/限流）: ${(passRate * 100).toFixed(0)}%（${real.filter(r => r.pass).length}/${real.length}）`,
+      (() => {
+        const withU = results.filter(r => r.usage);
+        if (!withU.length) return "  token: 端点未回 usage（不计，避免猜数）";
+        const sum = (k: keyof TurnUsage) => withU.reduce((n, r) => n + (r.usage![k] ?? 0), 0);
+        return `  token 合计: 输入 ${sum("input").toLocaleString()} / 输出 ${sum("output").toLocaleString()}`
+          + ` / 缓存命中 ${sum("cached").toLocaleString()}（${withU.length}/${results.length} 张卡有结算，`
+          + `API 调用 ${sum("requests")} 次；单卡均值 输入 ${Math.round(sum("input") / withU.length).toLocaleString()}）`;
+      })(),
       ...[...byAttr.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `  ${k}: ${n}`),
       ...results.filter(r => r.attribution === "gap-resolved").map(r => `  🎉 ${r.id}: 缺口已补齐，请更新任务卡`),
       // 本轮可信度：限流占比过高时，通过率不能当作能力结论（免费档批量必触发 429）

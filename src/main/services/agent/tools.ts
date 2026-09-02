@@ -578,7 +578,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const sendQueueAdd = tool({
     name: "send_queue_add",
-    description: "把一封邮件加入发送队列（写操作，执行前请求人工确认）。只入队不发送——队列建立后不会自动开始，用户需到「发送中心」手动点「开始」才真正发信。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 联系人变量。",
+    description: "把一封邮件加入发送队列。触发时机：用户明确说「把/给 X 发一封邮件」「发给 X」「发报价给 X」时，必须先 search_contacts 拿到 contactId，再调用本工具入队 —— 系统随后会弹人工确认框，那一步就是征求同意，因此不要只在正文里问「要不要发」而不调用本工具。本工具只入队不发送：队列建好后处于未启动状态，用户仍需在「发送中心」点「开始」才真正外发。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
     parameters: sendQueueAddSchema,
     needsApproval: true,
     execute: async (args) => {

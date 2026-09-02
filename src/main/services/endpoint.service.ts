@@ -47,13 +47,16 @@ export function isLiveEndpoint(e: ActiveEndpoint = readActiveEndpoint()): boolea
 // Ollama 认 chat_template_kwargs.thinking，Google 的 OpenAI 兼容层只认自己的
 // google.thinking_config —— 给 Google 塞 chat_template_kwargs 有被判 400 的风险。
 // 所以注入必须按族走，不能一把梭。
-export type EndpointFamily = "google" | "ollama" | "openai" | "compat";
+export type EndpointFamily = "google" | "ollama" | "openai" | "strict" | "compat";
 
 export function endpointFamily(baseUrl: string): EndpointFamily {
   const u = (baseUrl || "").toLowerCase();
   if (u.includes("generativelanguage.googleapis.com")) return "google";
   if (/localhost|127\.0\.0\.1|:11434/.test(u)) return "ollama";
   if (u.includes("api.openai.com") || u.includes(".openai.azure.com") || u.includes("api.azure.com")) return "openai";
+  // DeepSeek：OpenAI 兼容但参数白名单严格的托管服务，塞 vLLM 私有键有被判非法的风险；
+  // 它的推理能力在另一档模型（deepseek-reasoner）上，本来也不靠这个开关
+  if (u.includes("api.deepseek.com")) return "strict";
   return "compat";   // agnes / vLLM / 自建 OpenAI 兼容网关
 }
 
@@ -74,6 +77,9 @@ export function thinkingExtras(family: EndpointFamily, thinking: boolean): Recor
     case "openai":
       // OpenAI 自家不认这些扩展键；推理强度另用 reasoning_effort 表达
       return thinking ? { reasoning_effort: "low" } : {};
+    case "strict":
+      // 严格白名单的兼容服务（DeepSeek 等）：一个多余键都不要塞
+      return {};
     default:
       // vLLM/agnes：enable_thinking（flash 系）与 thinking（pro 系）混发，jinja 模板忽略未知键
       return { chat_template_kwargs: { enable_thinking: thinking, thinking } };

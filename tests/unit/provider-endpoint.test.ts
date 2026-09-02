@@ -169,6 +169,7 @@ describe("端点族识别与思考参数方言", () => {
     expect(endpointFamily("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("google");
     expect(endpointFamily("http://localhost:11434/v1")).toBe("ollama");
     expect(endpointFamily("https://api.openai.com/v1")).toBe("openai");
+    expect(endpointFamily("https://api.deepseek.com/v1")).toBe("strict");
     expect(endpointFamily("https://apihub.agnes-ai.com/v1")).toBe("compat");
   });
 
@@ -178,6 +179,11 @@ describe("端点族识别与思考参数方言", () => {
     expect(thinkingExtras("google", true)).toEqual({});
     expect(thinkingExtras("openai", false)).toEqual({});
     expect(thinkingExtras("openai", false).chat_template_kwargs).toBeUndefined();
+  });
+
+  it("严格白名单网关（DeepSeek）不注入任何扩展键", () => {
+    expect(thinkingExtras("strict", false)).toEqual({});
+    expect(thinkingExtras("strict", true)).toEqual({});
   });
 
   it("Ollama 与 vLLM/agnes 各自用自己认的键", () => {

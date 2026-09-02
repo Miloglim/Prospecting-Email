@@ -68,6 +68,19 @@ export interface TurnOutcome {
   text: string;
   conversationId: string;
   approvalId?: string;
+  /** 本回合真实 token 结算；端点没回 usage 时为 undefined（宁可没有，也不猜数） */
+  usage?: { requests: number; input: number; output: number; cached: number };
+}
+
+/** 从 SDK 的 Usage 对象取一份扁平快照；缓存命中在 inputTokensDetails.cached_tokens */
+export function readUsage(unknownUsage: unknown): TurnOutcome["usage"] | undefined {
+  const u = unknownUsage as {
+    requests?: number; inputTokens?: number; outputTokens?: number;
+    inputTokensDetails?: Array<Record<string, number>>;
+  } | undefined;
+  if (!u || typeof u.inputTokens !== "number") return undefined;
+  const cached = (u.inputTokensDetails ?? []).reduce((n, d) => n + (d.cached_tokens ?? 0), 0);
+  return { requests: u.requests ?? 0, input: u.inputTokens ?? 0, output: u.outputTokens ?? 0, cached };
 }
 
 interface PendingApproval {
@@ -97,7 +110,13 @@ function makeClient(baseUrl: string, apiKey: string): OpenAI {
         const body = JSON.parse(init.body) as Record<string, unknown>;
         if (Array.isArray(body.messages)) {
           Object.assign(body, extras);
+          // 流式默认不回报 token 用量；加上后 DeepSeek/vLLM/OpenAI 会在末帧给 usage
+          if (body.stream === true && !body.stream_options) body.stream_options = { include_usage: true };
           init = { ...init, body: JSON.stringify(body) };
+          if (process.env.AGENT_DEBUG_BODY === "1") {
+            // 成本核算用：落盘真实请求体（含 tools 定义），离线复放即可量到精确 token
+            try { require("fs").writeFileSync(".trash/last-request.json", JSON.stringify(body), "utf-8"); } catch { /* 目录不存在则忽略 */ }
+          }
         }
       } catch { /* 非 JSON 请求体原样透传 */ }
     }
@@ -172,6 +191,7 @@ type RunItemLite = {
 interface RunResultLite {
   output?: RunItemLite[];
   finalOutput?: unknown;
+  usage?: unknown;
   state: { getInterruptions(): Array<Record<string, unknown>> };
 }
 
@@ -215,11 +235,11 @@ async function collectRunResult(
       items: interruptions.map(i => ({ tool: String(i.name ?? "unknown"), args: i.arguments })),
     });
     Log.info("agent.harness", `（非流式）写操作待审批 ${approvalId.slice(0, 8)}`);
-    return { kind: "approval", text, conversationId: o.conversationId, approvalId };
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: readUsage(r.usage) };
   }
 
   if (text) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: text });
-  return { kind: "done", text, conversationId: o.conversationId };
+  return { kind: "done", text, conversationId: o.conversationId, usage: readUsage(r.usage) };
 }
 
 async function streamRun(
@@ -243,7 +263,7 @@ async function streamRun(
     stream: true, signal: o.signal, maxTurns: 6,
   });
   const result = raw as unknown as AsyncIterable<unknown> & {
-    state: RunState<any, any>; finalOutput?: unknown;
+    state: RunState<any, any>; finalOutput?: unknown; usage?: unknown;
   };
 
   /**
@@ -307,11 +327,11 @@ async function streamRun(
       items: interruptions.map(i => ({ tool: String(i.name ?? "unknown"), args: i.arguments })),
     });
     Log.info("agent.harness", `写操作待审批 ${approvalId.slice(0, 8)}（${interruptions.length} 项）`);
-    return { kind: "approval", text, conversationId: o.conversationId, approvalId };
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: readUsage(result.usage) };
   }
 
   const finalText = text || String((result as { finalOutput?: unknown }).finalOutput ?? "");
   // 兜底：本轮一个字都没流出来但拿到了完整最终文本（模型/端点差异）→ 整段补推，前端不留空骨架
   if (!text && finalText) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: finalText });
-  return { kind: "done", text: finalText, conversationId: o.conversationId };
+  return { kind: "done", text: finalText, conversationId: o.conversationId, usage: readUsage(result.usage) };
 }

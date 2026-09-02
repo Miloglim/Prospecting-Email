@@ -12,8 +12,10 @@ import { companies } from "../db/schema/companies";
 import { inboxMessages } from "../db/schema/inbox";
 import {
   runHarnessTurn, resolveApproval, rejectPendingFor, hasPending,
-  type PushFn, type ChatMsg,
+  type PushFn, type ChatMsg, type TurnOutcome,
 } from "./agent/harness";
+
+type TurnOutcomeUsage = TurnOutcome["usage"];
 import { executeAction, dropActionsForConversation } from "./agent/actions";
 import { readActiveEndpoint } from "./endpoint.service";
 
@@ -32,6 +34,15 @@ interface RuntimeState {
 }
 
 const runtime = new Map<string, RuntimeState>();
+
+// ── 本次运行的 token 累计（端点回 usage 才计，不猜数）──
+export interface TokenTotals { requests: number; input: number; output: number; cached: number; turns: number }
+const totals: TokenTotals = { requests: 0, input: 0, output: 0, cached: 0, turns: 0 };
+
+/** 累计用量快照：设置页与评测据此换算成本，避免"感觉贵/感觉便宜"式争论 */
+export function tokenTotals(): Result<TokenTotals> {
+  return okResult({ ...totals });
+}
 
 /** 每次请求携带的历史条数上限（system 除外），防上下文膨胀 */
 const HISTORY_LIMIT = 30;
@@ -197,6 +208,7 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
     Log.debug("agent.chat", `回合开始 conv=${conversationId.slice(0, 8)} mode=${cfg.mode}`);
     try {
       let answer = "";
+      let outcomeUsage: TurnOutcomeUsage | undefined;
       if (cfg.mode === "mock") {
         answer = await streamMock(conversationId, text, push, state.abort.signal);
       } else {
@@ -207,11 +219,17 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
           conversationId, push, signal: state.abort.signal,
           contextNote: resolveContextNote(input.context),
         });
-        if (outcome.kind === "approval") return; // 写操作等人工确认；续跑收尾在 resolveApprovalRequest
+        if (outcome.kind === "approval") { outcomeUsage = outcome.usage; return; } // 写操作等人工确认；续跑收尾在 resolveApprovalRequest
         answer = outcome.text;
+        outcomeUsage = outcome.usage;
+        if (outcome.usage) {
+          totals.requests += outcome.usage.requests; totals.input += outcome.usage.input;
+          totals.output += outcome.usage.output; totals.cached += outcome.usage.cached; totals.turns += 1;
+          Log.info("agent.usage", `conv=${conversationId.slice(0, 8)} 调用${outcome.usage.requests}次 in=${outcome.usage.input} out=${outcome.usage.output} 缓存命中=${outcome.usage.cached}`);
+        }
       }
       if (answer) appendMessage(conversationId, "assistant", answer);
-      push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: state.abort.signal.aborted });
+      push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: state.abort.signal.aborted, usage: outcomeUsage });
     } catch (err: unknown) {
       const aborted = (err as { name?: string })?.name === "AbortError";
       if (timedOut) {
@@ -267,7 +285,11 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
     });
     if (outcome.kind === "approval") return okResult({ resumed: false });
     if (outcome.text) appendMessage(outcome.conversationId, "assistant", outcome.text);
-    push(EVENTS.AGENT_DONE, { conversationId: outcome.conversationId, messageId: "", stopped: false });
+    if (outcome.usage) {
+      totals.requests += outcome.usage.requests; totals.input += outcome.usage.input;
+      totals.output += outcome.usage.output; totals.cached += outcome.usage.cached; totals.turns += 1;
+    }
+    push(EVENTS.AGENT_DONE, { conversationId: outcome.conversationId, messageId: "", stopped: false, usage: outcome.usage });
     return okResult({ resumed: true });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
