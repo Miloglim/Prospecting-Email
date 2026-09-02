@@ -28,8 +28,12 @@ export const EVENTS = {
   AGENT_ERROR: "agent:error",
   /** Agent 工具调用状态（calling/done） */
   AGENT_TOOL_CALL: "agent:toolCall",
+  /** Agent 多步任务清单快照（update_plan 全量推送，渲染端原地刷新） */
+  AGENT_PLAN: "agent:plan",
   /** Agent 写操作请求人工审批 */
   AGENT_APPROVAL: "agent:approval",
+  /** Agent 后台长任务进度快照（start_batch_task 每步全量推送，任务卡原地刷新） */
+  AGENT_TASK: "agent:task",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
