@@ -15,11 +15,12 @@ import { agentToolCalls } from "../../db/schema/agent";
 import { Log } from "../../logger";
 import { okResult, failResult } from "../../errors";
 import { checkBudget, ToolBudgetError } from "./policy";
-import { getBody } from "../inbox.service";
-import { checkReminders } from "../crm.service";
+import { getBody, markRead } from "../inbox.service";
+import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
+import { upsertContact } from "../contact.service";
 import { upsertTemplate } from "../template.service";
 import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
@@ -44,6 +45,21 @@ function gate(ctx: ToolCtx, toolName: string): string | null {
 const promptAction = (label: string, text: string) => ({ kind: "prompt" as const, label, text });
 const navAction = (label: string, href: string) => ({ kind: "navigate" as const, label, href });
 type AnyAction = ActionCard | ReturnType<typeof promptAction> | ReturnType<typeof navAction>;
+
+
+/** CRM 发送阶段推进序（与 contacts.stage 及看板语义一致）：记完跟进给「下一步」建议用 */
+const STAGE_SEQ: Array<{ key: string; label: string }> = [
+  { key: "cold", label: "F1 首封触达" },
+  { key: "f1", label: "F2 二次跟进" },
+  { key: "f2", label: "F3 需求确认" },
+  { key: "f3", label: "F4 报价推进" },
+  { key: "f4", label: "合作洽谈" },
+];
+function nextStageAfter(current: string | null): { key: string; label: string } | null {
+  const i = STAGE_SEQ.findIndex(s => s.key === (current ?? "cold"));
+  if (i < 0 || i >= STAGE_SEQ.length - 1) return null;
+  return STAGE_SEQ[i + 1]!;
+}
 
 const cell = (v: unknown): string => (v == null || v === "" ? "—" : String(v));
 
@@ -86,6 +102,38 @@ export const searchContactsSchema = z.object({
 export const recordFollowupSchema = z.object({
   contactId: z.number().int().positive().describe("联系人 id（来自 search_contacts 返回）"),
   note: z.string().min(1).max(500).describe("跟进记录内容"),
+});
+
+// ── update_plan：界面任务清单（元工具，不读写任何业务数据）─────────────
+export type PlanState = "pending" | "doing" | "done";
+export interface PlanItem { text: string; state: PlanState }
+
+const PLAN_DONE_RE = /^(done|completed|complete|finished|ok|已?完成|做完|已完成|已做)$/i;
+const PLAN_DOING_RE = /^(doing|in[_\s-]?progress|running|active|wip|current|进行中|正在做|在做|当前)$/i;
+
+/**
+ * 归一模型给的清单：条数与文本长度在代码里钳制，状态词按同义词容错。
+ * execute 与 harness 推 agent:plan 事件共用此口径，避免两处各写一套判据。
+ */
+export function normalizePlan(raw: unknown): PlanItem[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr.slice(0, 8).map((entry): PlanItem => {
+    const o = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+    const text = String(o.text ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+    const st = String(o.state ?? "").trim();
+    const state: PlanState = PLAN_DONE_RE.test(st) ? "done" : PLAN_DOING_RE.test(st) ? "doing" : "pending";
+    return { text, state };
+  }).filter(i => i.text.length > 0);
+}
+
+const planItemSchema = z.object({
+  text: z.string().describe("这一步做什么，一句话（如「检索 ACME 的联系人」）"),
+  state: z.string().nullable().optional()
+    .describe("pending=待办 / doing=进行中 / done=已完成；写 completed、in_progress 也会被归一"),
+});
+
+export const updatePlanSchema = z.object({
+  items: z.array(planItemSchema).describe("全量清单（每次调用覆盖上一次，不是增量），最多 8 步"),
 });
 
 export const quoteSearchSchema = z.object({
@@ -208,7 +256,54 @@ export function buildHarnessTools(ctx: ToolCtx) {
           )],
         });
       }
-      return JSON.stringify(out);
+      // P1-5：多命中 → 两种批量路径任选：整批各生成一封入队（写动作），或续问聚焦
+      const batch = out.slice(0, 10);
+      return JSON.stringify({
+        results: out,
+        actions: [
+          registerAction({
+            conversationId: ctx.conversationId, toolName: "search_contacts",
+            label: `给这 ${batch.length} 位各生成一封跟进信`,
+            confirm: `为检索到的前 ${batch.length} 位联系人各生成一封跟进信并加入发送队列`,
+            detail: "入队 ≠ 发送：到「发送中心」核对后手动点开始；每人一封、按各自语言",
+            diff: [
+              { field: "targets", label: "收件人", from: "—", to: batch.slice(0, 5).map(c => `#${c.id} ${c.name}`).join("、") + (batch.length > 5 ? ` 等 ${batch.length} 人` : "") },
+            ],
+            target: { label: "去发送中心", href: "#/campaigns" },
+            run: async () => {
+              const queued: string[] = [];
+              const failed: string[] = [];
+              for (const c of batch) {
+                const contact = getDb().select({
+                  id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName,
+                  language: contacts.language, companyId: contacts.companyId, email: contacts.email,
+                }).from(contacts).where(eq(contacts.id, c.id)).get();
+                if (!contact) { failed.push(`#${c.id}`); continue; }
+                const companyName = contact.companyId
+                  ? (getDb().select({ name: companies.name }).from(companies).where(eq(companies.id, contact.companyId)).get()?.name ?? "")
+                  : "";
+                const lang = ["ES", "PT"].includes(String(contact.language ?? "").toUpperCase())
+                  ? (String(contact.language).toUpperCase() as "ES" | "PT") : "EN";
+                const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email;
+                const draft = await generateEmailDraft({ language: lang, companyName: companyName || c.company || name, contactName: name });
+                if (!draft.success) { failed.push(name); continue; }
+                const raw = draft.data.trim();
+                const m = /^SUBJECT:\s*(.+)\s*$/im.exec(raw);
+                const subject = (m?.[1] ?? `Following up — ${companyName || name}`).trim().slice(0, 150);
+                const body = (m ? raw.slice(m.index + m[0].length) : raw).replace(/^\s+/, "").trim();
+                const q = await startDynamicSend([contact.id], subject, body, false);
+                if (q.success) queued.push(name); else failed.push(name);
+              }
+              return okResult(
+                `批量成信完成：${queued.length} 封已入队${queued.length ? `（${queued.join("、")}）` : ""}`
+                + (failed.length ? `；${failed.length} 位未成（${failed.join("、")}）` : "")
+                + "。队列未启动，请到「发送中心」核对后点开始。",
+              );
+            },
+          }),
+          promptAction("先看清这批人再决定", `把刚才检索到的 ${batch.length} 位联系人按公司归组，说明各自阶段与国家，帮助判断该给谁写信`),
+        ],
+      });
     },
   });
 
@@ -238,7 +333,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
       saveDatabase();
       audit(ctx, "record_followup", "write", args, { ok: true }, "approved");
       rememberResult(ctx, "record_followup", args, `已为联系人 #${args.contactId} 记录跟进`);
-      return `已为联系人 #${args.contactId} 记录跟进`;
+      const stageRow = getDb().select({ stage: contacts.stage }).from(contacts).where(eq(contacts.id, args.contactId)).get();
+      const nextStage = nextStageAfter(stageRow?.stage ?? null);
+      return `已为联系人 #${args.contactId} 记录跟进。` + (nextStage
+        ? `提示用户：TA 当前阶段是「${stageRow?.stage ?? "冷开发"}」，要不要顺手推进到「${nextStage.label}」？（可在 CRM 看板里改，或让我用动作卡来做）`
+        : "（该联系人已是终态阶段，无需推进）");
     },
   });
 
@@ -323,16 +422,50 @@ export function buildHarnessTools(ctx: ToolCtx) {
         .orderBy(desc(inboxMessages.receivedAt))
         .limit(Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50))
         .all();
-      const out = rows.map(r => ({ ...r, from: r.fromName || r.fromEmail, matchedContactId: r.matchedContactId ?? undefined }));
-      audit(ctx, "inbox_search", "read", args, out, "auto");
+      const raw = rows.map(r => ({ ...r, from: r.fromName || r.fromEmail, matchedContactId: r.matchedContactId ?? undefined }));
+      audit(ctx, "inbox_search", "read", args, raw, "auto");
       // 收敛信号：空结果如实回答；结果少于 limit 说明已全量返回
-      if (out.length === 0) {
+      if (raw.length === 0) {
         return JSON.stringify({ messages: [], notice: "收件箱中没有匹配的邮件。请直接如实告知用户，不要重复调用本工具。" });
       }
+      const defaultLimit = Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50);
+      // P1-1：真实客户来信（询盘/回复）但库中无此联系人 → 附「创建联系人」写入动作
+      const actions: AnyAction[] = [];
+      for (const m of raw) {
+        if (m.matchedContactId || !["inquiry", "reply"].includes(String(m.classification))) continue;
+        const cands = getDb().select({ id: contacts.id }).from(contacts).where(eq(contacts.email, m.fromEmail)).all();
+        if (cands.length > 0) continue;
+        const label = `把 ${m.from} 加为客户`;
+        actions.push(registerAction({
+          conversationId: ctx.conversationId, toolName: "inbox_search",
+          label,
+          confirm: `为发件人 ${m.fromEmail} 创建联系人${m.fromName ? `（${m.fromName}）` : ""}`,
+          detail: "只建联系人档案，不发任何邮件",
+          diff: [
+            { field: "email", label: "邮箱", from: "—（库中无此联系人）", to: m.fromEmail },
+            { field: "name", label: "姓名", from: "—", to: m.fromName || "（取邮箱前缀）" },
+            { field: "status", label: "状态", from: "—", to: "已触达（刚来信）" },
+          ],
+          target: { label: "查看联系人", href: `#/customers?view=table&add=1&email=${encodeURIComponent(m.fromEmail)}` },
+          run: async () => {
+            const nameGuess = m.fromName?.trim() || m.fromEmail.split("@")[0]!;
+            const [first, ...rest] = nameGuess.split(/\s+/);
+            const u = await upsertContact({
+              email: m.fromEmail,
+              firstName: first ?? nameGuess,
+              lastName: rest.join(" ") || null,
+              status: "reached",
+            });
+            return u.success ? okResult(`已创建联系人 ${u.data.email} #${u.data.id}`) : failResult(u.error);
+          },
+        }));
+        break;   // 一张卡最多给一个创建动作，避免按钮噪音
+      }
       return JSON.stringify({
-        total: out.length,
-        ...(out.length < Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50) ? { complete: true, notice: "以上即全部匹配邮件，直接作答即可" } : {}),
-        messages: out,
+        total: raw.length,
+        ...(raw.length < defaultLimit ? { complete: true, notice: "以上即全部匹配邮件，直接作答即可" } : {}),
+        messages: raw,
+        ...(actions.length ? { actions } : {}),
       });
     },
   });
@@ -347,6 +480,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const row = getDb().select({
         id: inboxMessages.id, fromName: inboxMessages.fromName, fromEmail: inboxMessages.fromEmail,
         subject: inboxMessages.subject, bodyPreview: inboxMessages.bodyPreview,
+        classification: inboxMessages.classification, isRead: inboxMessages.isRead,
         matchedContactId: inboxMessages.matchedContactId,
       }).from(inboxMessages).where(eq(inboxMessages.id, args.messageId)).get();
       if (!row) {
@@ -374,12 +508,66 @@ export function buildHarnessTools(ctx: ToolCtx) {
         audit(ctx, "email_summarize", "read", args, undefined, "auto", r.error);
         return `总结失败：${r.error}`;
       }
-      const out = {
+      const summary = {
         id: row.id, from: row.fromName || row.fromEmail, subject: row.subject ?? "",
         summary: r.data.summary, nextStep: r.data.nextStep,
       };
-      audit(ctx, "email_summarize", "read", args, out, "auto");
-      return JSON.stringify(out);
+      audit(ctx, "email_summarize", "read", args, summary, "auto");
+
+      // P1-2/P1-3：按邮件类型给「顺手办掉」的写动作（点击才执行，落动作卡审计）
+      const actions: AnyAction[] = [];
+      const cls = String(row.classification ?? "");
+      if (row.matchedContactId) {
+        if (cls === "inquiry" || cls === "reply") {
+          actions.push(registerAction({
+            conversationId: ctx.conversationId, toolName: "email_summarize",
+            label: "记一条跟进",
+            confirm: `给联系人 #${row.matchedContactId} 记跟进：「${r.data.summary.slice(0, 40)}…」`,
+            detail: "写入该联系人的跟进历史；只记事，不改阶段",
+            diff: [
+              { field: "note", label: "跟进内容", from: "—", to: `收到${cls === "inquiry" ? "询盘" : "回复"}：${r.data.summary.slice(0, 50)}` },
+              { field: "direction", label: "方向", from: "—", to: "客户来件" },
+            ],
+            run: async () => {
+              getDb().insert(interactions).values({
+                contactId: row.matchedContactId!, type: "note", direction: "inbound",
+                channel: "email", bodyPreview: `收到${cls === "inquiry" ? "询盘" : "回复"}：${r.data.summary}`,
+              }).run();
+              saveDatabase();
+              return okResult(`已给联系人 #${row.matchedContactId} 记一条「收到${cls === "inquiry" ? "询盘" : "回复"}」的跟进`);
+            },
+          }));
+        }
+        if (cls === "bounce") {
+          actions.push(registerAction({
+            conversationId: ctx.conversationId, toolName: "email_summarize",
+            label: "标记已流失",
+            confirm: `把联系人 #${row.matchedContactId} 标记为「已流失」（邮箱退信）`,
+            detail: "改的是 CRM 阶段；后续仍可手动改回",
+            diff: [
+              { field: "stage", label: "阶段", from: "当前阶段", to: "已流失 (lost)" },
+              { field: "reason", label: "原因", from: "—", to: "邮箱退信" },
+            ],
+            run: async () => {
+              const r2 = await setStage(row.matchedContactId!, "lost");
+              return r2.success ? okResult(`已把联系人 #${row.matchedContactId} 标记为已流失`) : failResult(r2.error);
+            },
+          }));
+        }
+        if (cls === "inquiry" || cls === "reply") {
+          actions.push(registerAction({
+            conversationId: ctx.conversationId, toolName: "email_summarize",
+            label: "标记已读",
+            confirm: `把这封邮件（#${row.id}）标为已读`,
+            diff: [{ field: "isRead", label: "状态", from: "未读", to: "已读" }],
+            run: async () => {
+              const r2 = markRead(row.id);
+              return r2.success ? okResult("已标记已读") : failResult(r2.error);
+            },
+          }));
+        }
+      }
+      return JSON.stringify({ ...summary, ...(actions.length ? { actions } : {}) });
     },
   });
 
@@ -586,12 +774,63 @@ export function buildHarnessTools(ctx: ToolCtx) {
       });
       const due = r.data.due.map(brief);
       const overdue = r.data.overdue.map(brief);
+      const all = [...overdue, ...due];                       // 逾期优先
       const out = { dueCount: due.length, overdueCount: overdue.length, due, overdue };
-      audit(ctx, "reminders_due", "read", {}, out, "auto");
+
+      // P1-4：提醒清单 → 一键批量成信入队（每人生成一封、按各自语言，入队不发送）
+      const actions: AnyAction[] = [];
+      if (all.length > 0) {
+        const targets = all.slice(0, 10);
+        actions.push(registerAction({
+          conversationId: ctx.conversationId, toolName: "reminders_due",
+          label: `给这 ${targets.length} 位批量生成跟进信`,
+          confirm: `为清单前 ${targets.length} 位联系人各生成一封跟进信并加入发送队列`,
+          detail: "入队 ≠ 发送：全部生成后到「发送中心」核对批次，手动点开始才外发；每人一封、按各自语言",
+          diff: [
+            { field: "targets", label: "收件人", from: "—", to: targets.slice(0, 5).map(c => `#${c.id} ${c.name}`).join("、") + (targets.length > 5 ? ` 等 ${targets.length} 人` : "") },
+            { field: "batch", label: "批次", from: "—", to: "生成后显示" },
+          ],
+          target: { label: "去发送中心", href: "#/campaigns" },
+          run: async () => {
+            const queued: string[] = [];
+            const failed: string[] = [];
+            for (const c of targets) {
+              const contact = getDb().select({
+                id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName,
+                language: contacts.language, companyId: contacts.companyId, email: contacts.email,
+              }).from(contacts).where(eq(contacts.id, c.id)).get();
+              if (!contact) { failed.push(`#${c.id}（已不存在）`); continue; }
+              const companyName = contact.companyId
+                ? (getDb().select({ name: companies.name }).from(companies).where(eq(companies.id, contact.companyId)).get()?.name ?? "")
+                : "";
+              const lang = ["ES", "PT"].includes(String(contact.language ?? "").toUpperCase())
+                ? (String(contact.language).toUpperCase() as "ES" | "PT") : "EN";
+              const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email;
+              const draft = await generateEmailDraft({
+                language: lang, companyName: companyName || c.company || name, contactName: name,
+                backcheck: c.note ? { summary: `此前跟进备注：${c.note}` } as BackcheckReport : null,
+              });
+              if (!draft.success) { failed.push(`${name}（${draft.error.slice(0, 30)}）`); continue; }
+              const raw = draft.data.trim();
+              const m = /^SUBJECT:\s*(.+)\s*$/im.exec(raw);
+              const subject = (m?.[1] ?? `Following up — ${companyName || name}`).trim().slice(0, 150);
+              const body = (m ? raw.slice(m.index + m[0].length) : raw).replace(/^\s+/, "").trim();
+              const q = await startDynamicSend([contact.id], subject, body, false);
+              if (q.success) queued.push(name); else failed.push(`${name}（${q.error.slice(0, 30)}）`);
+            }
+            return okResult(
+              `批量成信完成：${queued.length} 封已入队${queued.length ? `（${queued.join("、")}）` : ""}`
+              + (failed.length ? `；${failed.length} 位未成：${failed.join("、")}` : "")
+              + "。队列未启动，请到「发送中心」核对内容后点开始。",
+            );
+          },
+        }));
+      }
+      audit(ctx, "reminders_due", "read", {}, { ...out, actions: actions.length }, "auto");
       if (due.length === 0 && overdue.length === 0) {
         return JSON.stringify({ ...out, notice: "今天没有到期或逾期的提醒。请如实告知用户，不要重复调用本工具。" });
       }
-      return JSON.stringify(out);
+      return JSON.stringify({ ...out, ...(actions.length ? { actions } : {}) });
     },
   });
 
@@ -618,7 +857,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }).filter((x): x is { id: number; email: string; problems: string } => x !== null);
       const healthyCount = rows.filter(r =>
         r.isActive === 1 && !r.circuitOpenAt && r.consecutiveFails === 0 && r.fetchFailCount === 0).length;
-      const out = { total: rows.length, enabled: rows.filter(r => r.isActive === 1).length, healthy: healthyCount, issues };
+      // P1-7：有异常 → 直接给「去修」入口（跳设置页账号区）与复测动作
+      const actions: AnyAction[] = [];
+      if (issues.length > 0) {
+        actions.push(navAction("去设置页修账号", "#/settings"));
+      }
+      const out = { total: rows.length, enabled: rows.filter(r => r.isActive === 1).length, healthy: healthyCount, issues, ...(actions.length ? { actions } : {}) };
       audit(ctx, "accounts_status", "read", {}, out, "auto");
       return JSON.stringify(out);
     },
@@ -647,8 +891,27 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  const updatePlan = tool({
+    name: "update_plan",
+    description: "更新界面上展示的任务清单卡，让用户看到多步任务进行到了哪一步。"
+      + "只在任务确实需要 3 步以上时调用（例如「把这几家都背调一遍，各自写一封开发信」「今天该跟进谁，逐个记一条跟进」）："
+      + "开工前先给一份全 pending 的清单；此后每做完一步再调用一次，把全部步骤重发一遍（已完成的标 done、正在做的标 doing），"
+      + "不要只发增量。单步问答、简单查询一律不要调用本工具。本工具只更新界面清单，不读写任何业务数据。",
+    parameters: updatePlanSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "update_plan");
+      if (gateNote) return gateNote;
+      const items = normalizePlan(args.items);
+      audit(ctx, "update_plan", "read", args, { steps: items.length }, "auto");
+      return JSON.stringify(items.length
+        ? { ok: true, notice: "清单已更新并展示给用户。直接继续执行下一步，不要在正文里复述这份清单。" }
+        : { ok: false, notice: "清单为空（items 里每条都要有 text）。界面无变化；如非多步任务请直接作答，不要重复调用本工具。" });
+    },
+  });
+
   return [
     searchContacts, recordFollowup, quoteSearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
+    updatePlan,
   ];
 }
