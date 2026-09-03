@@ -371,7 +371,7 @@ export async function runResearchScene(
   if (!pol || !pod) return failResult("缺少起运港或目的港：这两项必须由用户提供，其余可用默认值");
   // 前置检查：没配检索源就立刻指路，别先花一次 LLM 调用、再把 6 条查询全发出去空跑
   if (!hasSearchSource()) {
-    return failResult("未配置联网检索源：在项目根目录 .env 里填 EXA_API_KEY 或 TAVILY_API_KEY 任一密钥后重启程序（本能力只读公开网页，不发送任何邮件）");
+    return failResult("未配置联网检索源：请到「设置 → API 与服务 → 联网检索源」填 EXA_API_KEY 或 TAVILY_API_KEY 任一密钥（保存即生效；本能力只读公开网页，不发送任何邮件）");
   }
   const scope: NonNullable<LaneInput["scope"]> = input.scope ?? "both";
   const weeks = Math.min(Math.max(input.weeks && input.weeks > 0 ? input.weeks : 4, 1), 12);

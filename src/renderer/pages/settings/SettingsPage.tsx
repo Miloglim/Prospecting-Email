@@ -270,6 +270,54 @@ function KbDispatchCard() {
   );
 }
 
+// ── 联网检索源：公司背调与航线行情调研共用的两把密钥（通道 ai:getKeys / ai:setKey）──
+function SearchKeyCard() {
+  const qc = useQueryClient();
+  const [exa, setExa] = useState("");
+  const [tavily, setTavily] = useState("");
+  const [busy, setBusy] = useState(false);
+  const { data: keys } = useQuery({
+    queryKey: ["ai", "keys"],
+    queryFn: () => window.api.invoke("ai:getKeys") as Promise<{ success: boolean; data?: Record<string, boolean> }>,
+  });
+  const st = keys?.success ? keys.data : undefined;
+  const on = (n: string) => !!st?.[n];
+
+  const save = async (name: string, value: string, clear = false) => {
+    setBusy(true);
+    const r = await window.api.invoke("ai:setKey", { name, value: clear ? "" : value.trim() }) as { success: boolean; error?: string };
+    setBusy(false);
+    if (!r?.success) { message.error(r?.error || "写入失败"); return; }
+    message.success(clear ? "密钥已清除" : "已写入 .env，本次运行立即生效");
+    qc.invalidateQueries({ queryKey: ["ai", "keys"] });
+    if (name === "EXA_API_KEY") setExa(""); else setTavily("");
+  };
+
+  const row = (label: string, name: string, ph: string, val: string, set: (v: string) => void) => (
+    <div className="flex items-center gap-2 mt-2">
+      <span className="w-[72px] text-right text-[11px] text-gray-500 shrink-0">{label}</span>
+      <Input.Password size="small" className="flex-1"
+        placeholder={on(name) ? "已配置，留空则不修改" : ph}
+        value={val} onChange={e => set(e.target.value)}
+        onPressEnter={() => { if (val.trim()) void save(name, val); }} />
+      <Button size="small" type="primary" loading={busy} disabled={!val.trim()} onClick={() => void save(name, val)}>保存</Button>
+      {on(name) && <Button size="small" danger type="text" onClick={() => void save(name, "", true)}>清除</Button>}
+    </div>
+  );
+
+  return (
+    <SettingCard icon="" title="联网检索源"
+      status={on("EXA_API_KEY") || on("TAVILY_API_KEY") ? <Tag color="green">已配置</Tag> : <Tag color="orange">未配置</Tag>}>
+      <div className="text-[11px] text-gray-400 mb-1">
+        「公司背调」和「航线行情调研」靠它查公开网页：两把密钥填一把就够（Exa 优先，无结果自动回落 Tavily）。
+        密钥存项目根目录 .env，界面不回显，保存后无需重启。
+      </div>
+      {row("Exa 密钥", "EXA_API_KEY", "粘贴 Exa 控制台的 API Key", exa, setExa)}
+      {row("Tavily 密钥", "TAVILY_API_KEY", "粘贴 tvly- 开头的 API Key", tavily, setTavily)}
+    </SettingCard>
+  );
+}
+
 // ── 版本管理器 ──
 interface ReleaseInfo {
   version: string; name: string; publishedAt: string;
@@ -1170,6 +1218,7 @@ export function SettingsPage() {
         <div id="sec-api" className="settings-section">
           <div className="text-[13px] font-bold mb-3 text-gray-800">API 与服务</div>
           <ProviderCard />
+          <SearchKeyCard />
           <KbDispatchCard />
           <AgentAuditCard />
         </div>
