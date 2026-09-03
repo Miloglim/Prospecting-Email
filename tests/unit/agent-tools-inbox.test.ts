@@ -363,4 +363,10 @@ it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指�
     expect(out.pendingGroups).toBe(0);
     expect(out.pendingRecipients).toBe(0);
   });
+
+  it("注册表一致：每个已注册工具都在 TOOL_SPECS 里有档位（否则没有预算守卫与副作用分级）", () => {
+    const unregistered = Object.keys(toolByName).filter(n => n && !TOOL_SPECS[n]);
+    expect(unregistered).toEqual([]);
+    expect(toolByName.market_research).toBeTruthy();   // 内置联网调研确实在表里
+  });
 });

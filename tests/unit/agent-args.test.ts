@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   searchContactsSchema, recordFollowupSchema, quoteSearchSchema, inboxSearchSchema,
   emailSummarizeSchema, generateDraftSchema, sendQueueAddSchema, isToolRuntimeError,
+  marketResearchSchema, splitRoute,
 } from "../../src/main/services/agent/tools";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -70,5 +71,24 @@ describe("SDK 层失败识别（熔断的失明补丁）", () => {
     expect(ctx.failures.get("quote_search")).toBe(2);
     ctx.failures.set("quote_search", 0);         // 一次成功即清零
     expect(ctx.failures.get("quote_search")).toBe(0);
+  });
+});
+
+describe("内置调研能力的参数宽进与航线拆分", () => {
+  it("market_research：空对象 / null / scope 大小写与空串 / weeks 发成字符串都不能炸", () => {
+    expect(ok<Record<string, unknown>>(marketResearchSchema, {})).toEqual({});
+    const nulled = ok<{ pol?: string; scope?: string; weeks?: number }>(marketResearchSchema, {
+      route: null, pol: null, pod: null, scope: null, container: null, weeks: null,
+    });
+    expect(nulled.pol).toBeUndefined();
+    expect(ok<{ scope?: string }>(marketResearchSchema, { scope: "  Rates  " }).scope).toBe("  Rates  ");  // 归一交给 execute
+    expect(ok<{ weeks?: number }>(marketResearchSchema, { pol: "上海", pod: "桑托斯", weeks: "6" }).weeks).toBe(6);
+  });
+
+  it("航线串在代码里拆，不让模型自己拆（分隔符覆盖中英文常见写法）", () => {
+    expect(splitRoute("上海到桑托斯")).toEqual({ pol: "上海", pod: "桑托斯" });
+    expect(splitRoute("Ningbo → Santos")).toEqual({ pol: "Ningbo", pod: "Santos" });
+    expect(splitRoute("Shanghai to Santos")).toEqual({ pol: "Shanghai", pod: "Santos" });
+    expect(splitRoute("桑托斯")).toEqual({ pol: "", pod: "" });      // 拆不出来 → 交回上层追问
   });
 });

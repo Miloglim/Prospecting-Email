@@ -55,6 +55,7 @@ interface PlanStep { text: string; state: "pending" | "doing" | "done" }
 /** 工具 → 人话名（过程卡展示用） */
 const TOOL_LABELS: Record<string, string> = {
   quote_search: "查询运价",
+  market_research: "调研公开行情",
   search_contacts: "检索联系人",
   record_followup: "记录跟进",
   inbox_search: "检索邮件",
@@ -86,7 +87,9 @@ function resultBrief(r?: string): string {
   try {
     const o = JSON.parse(r) as unknown;
     if (Array.isArray(o)) return `${o.length} 条结果`;
-    const p2 = o as { artifact?: { name?: unknown }; task?: { total?: unknown } };
+    const p2 = o as { artifact?: { name?: unknown }; task?: { total?: unknown }; checked?: unknown };
+    // 调研结果同时带产物与核实数：核实数更能说明这次到底查到了什么
+    if (typeof p2.checked === "string") return p2.checked;
     if (p2.artifact && typeof p2.artifact.name === "string") return `已生成 ${p2.artifact.name}`;
     if (p2.task && typeof p2.task.total === "number") return `共 ${p2.task.total} 家`;
     const obj = o as {
@@ -127,6 +130,8 @@ const COL_LABELS: Record<string, string> = {
   fromName: "发件人", fromEmail: "发件邮箱", from: "发件人", subject: "主题", classification: "分类",
   receivedAt: "时间", isRead: "已读", summary: "总结", nextStep: "下一步", rating: "评分",
   reminderAt: "提醒时间", problems: "问题", healthy: "健康数", enabled: "启用数", total: "总数",
+  // 公开行情调研明细表（来源 | 数据 | 口径 | 发布/更新 | 可信度 | 链接）
+  source: "来源", value: "数据", scope: "口径", published: "发布/更新", credibility: "可信度", url: "链接", info: "船期信息",
 };
 /** 表格卡里的 ISO 时间转北京时间（存的是 UTC，用户看 +8 的钟点；不转就得自己算） */
 const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -513,7 +518,7 @@ function ArtifactBlock({ chip, done, onAction }: {
     </div>
   );
 
-  if (parsed?.artifact) {
+  if (parsed?.artifact && !rows) {
     return (
       <div className="py-1">
         {header}
@@ -557,6 +562,7 @@ function ArtifactBlock({ chip, done, onAction }: {
     return (
       <div className="py-1 max-w-[720px]">
         {header}
+        {parsed?.artifact && <FileCard artifact={parsed.artifact} />}
         <div className="chat-table-card relative">
           <CopyTableButton rows={rows} cols={copyCols} />
           <Table
@@ -773,6 +779,10 @@ const CAPABILITIES: Array<{ title: string; cap: string; items: string[] }> = [
     items: ["santos 的价格怎么样", "加勒比线 40HQ 最便宜到多少", "运价库里现在总共有多少条报价"],
   },
   {
+    title: "看市场行情", cap: "联网多源调研公开运价与船期，逐页核实并标注可信度，出带来源链接的报告",
+    items: ["上海到桑托斯现在公开市场报多少", "宁波到金斯堡最近有没有新船期", "我们台账上 santos 的价在市场算什么水平"],
+  },
+  {
     title: "管邮件", cap: "检索收件箱 + 逐封总结并给下一步建议",
     items: ["我今天有哪些未读邮件", "总结一下 juan@acme.com 发来的询盘邮件", "把未读邮件都总结一下，导出成文件"],
   },
@@ -793,6 +803,7 @@ const CAPABILITIES: Array<{ title: string; cap: string; items: string[] }> = [
 /** 本轮调用过的工具 → 「接下来可以问」引导（让能力被连续体验到） */
 const FOLLOW_UPS: Record<string, string[]> = {
   quote_search: ["按最便宜的船司给客户写一封开发信", "把这条航线的报价按柜型对比一下"],
+  market_research: ["这个价格在我们台账里算什么水平", "按公开市场价给客户写一封报价信"],
   search_contacts: ["给这位联系人记一条跟进", "查一下这个人的往来邮件记录"],
   inbox_search: ["把最值得回复的三封总结一下", "帮我起草一封回复给最新那封询盘"],
   email_summarize: ["按同样标准总结其他未读邮件", "把这条建议对应的跟进记到联系人上"],
@@ -834,6 +845,7 @@ const SLASH_COMMANDS: SlashCmd[] = [
   { cmd: "/今日", desc: "今日待跟进清单：/今日", noArg: true, template: () => "今天我该跟进谁？把到期和逾期的提醒列出来" },
   { cmd: "/进度", desc: "发信队列进度：/进度", noArg: true, template: () => "发送队列现在什么状态，还有多少没发出去" },
   { cmd: "/背调", desc: "公司网络背调，如「/背调 Acme Ltd」", template: a => `帮我背调「${a}」这家公司的背景、进口活跃度和货代契合点` },
+  { cmd: "/调研", desc: "联网调研航线市场行情，如「/调研 上海到桑托斯」", template: a => `调研 ${a || "一条航线"} 的公开市场运价和船期行情，多源核实后给结论并附来源链接和日期` },
   { cmd: "/新对话", desc: "开一个新会话：/新对话" },
   { cmd: "/缺口", desc: "查看助手登记过的能力缺口：/缺口" },
   { cmd: "/help", desc: "查看可用命令：/help" },

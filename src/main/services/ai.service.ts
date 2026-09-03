@@ -125,7 +125,7 @@ export async function chat(system: string, user: string): Promise<Result<string>
 }
 
 /** 调 LLM 并要求返回 JSON，解析失败时给 fail */
-async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
+export async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
   const r = await chat(system, user);
   if (!r.success) return r;
   try {
@@ -164,7 +164,12 @@ export interface SearchHit {
   snippet: string;
 }
 
-async function searchExa(query: string): Promise<Result<SearchHit[]>> {
+/** 检索深度：背调用默认档（8 条 ×800 字）；联网调研要「少而深」，传 6 ×1200 */
+export interface SearchOpts { numResults?: number; textChars?: number }
+
+const DEFAULT_OPTS: Required<SearchOpts> = { numResults: 8, textChars: 800 };
+
+async function searchExa(query: string, opts: Required<SearchOpts>): Promise<Result<SearchHit[]>> {
   const key = getApiKey("EXA_API_KEY");
   if (!key) return failResult("EXA_API_KEY 未配置");
 
@@ -174,14 +179,14 @@ async function searchExa(query: string): Promise<Result<SearchHit[]>> {
     const res = await netFetch(EXA_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": key },
-      body: JSON.stringify({ query, numResults: 8, contents: { text: { maxCharacters: 800 } } }),
+      body: JSON.stringify({ query, numResults: opts.numResults, contents: { text: { maxCharacters: opts.textChars } } }),
       signal: controller.signal,
     });
     if (!res.ok) return failResult(`Exa 调用失败 (${res.status})`);
     const json = (await res.json()) as { results?: Array<{ title?: string; url?: string; text?: string }> };
     return okResult((json.results || []).map(r => ({
       title: r.title || "", url: r.url || "",
-      snippet: (r.text || "").slice(0, 800),
+      snippet: (r.text || "").slice(0, opts.textChars),
     })));
   } catch (err: unknown) {
     Log.error("ai.exa", "Exa 搜索失败", err instanceof Error ? err.stack : String(err));
@@ -189,7 +194,7 @@ async function searchExa(query: string): Promise<Result<SearchHit[]>> {
   } finally { clearTimeout(timer); }
 }
 
-async function searchTavily(query: string): Promise<Result<SearchHit[]>> {
+async function searchTavily(query: string, opts: Required<SearchOpts>): Promise<Result<SearchHit[]>> {
   const key = getApiKey("TAVILY_API_KEY");
   if (!key) return failResult("TAVILY_API_KEY 未配置");
 
@@ -199,14 +204,14 @@ async function searchTavily(query: string): Promise<Result<SearchHit[]>> {
     const res = await netFetch(TAVILY_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key: key, query, max_results: 8 }),
+      body: JSON.stringify({ api_key: key, query, max_results: opts.numResults }),
       signal: controller.signal,
     });
     if (!res.ok) return failResult(`Tavily 调用失败 (${res.status})`);
     const json = (await res.json()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
     return okResult((json.results || []).map(r => ({
       title: r.title || "", url: r.url || "",
-      snippet: (r.content || "").slice(0, 800),
+      snippet: (r.content || "").slice(0, opts.textChars),
     })));
   } catch (err: unknown) {
     Log.error("ai.tavily", "Tavily 搜索失败", err instanceof Error ? err.stack : String(err));
@@ -214,12 +219,22 @@ async function searchTavily(query: string): Promise<Result<SearchHit[]>> {
   } finally { clearTimeout(timer); }
 }
 
+/** 联网检索统一入口：Exa 优先，无结果/未配时回落 Tavily（两者都没配 → fail，明确指路） */
+export async function searchWeb(query: string, opts: SearchOpts = {}): Promise<Result<SearchHit[]>> {
+  const o = { ...DEFAULT_OPTS, ...opts };
+  const exa = await searchExa(query, o);
+  if (exa.success && exa.data.length > 0) return exa;
+  return await searchTavily(query, o);
+}
+
+/** 至少配了一个联网检索源吗？上层用它做前置检查，避免把一批查询全发出去空跑一轮 */
+export function hasSearchSource(): boolean {
+  return !!(getApiKey("EXA_API_KEY") || getApiKey("TAVILY_API_KEY"));
+}
+
 /** 搜索公司资料：Exa 优先，失败/未配时尝试 Tavily */
 export async function searchCompany(query: string): Promise<Result<SearchHit[]>> {
-  const exa = await searchExa(query);
-  if (exa.success && exa.data.length > 0) return exa;
-  const tavily = await searchTavily(query);
-  return tavily;
+  return searchWeb(query);
 }
 
 // ── 功能调用：背调报告 / 开发信 / 邮件总结 ────────────────

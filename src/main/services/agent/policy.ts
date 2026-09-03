@@ -21,6 +21,8 @@ export const TOOL_SPECS: Record<string, ToolSpec> = {
   inbox_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
   email_summarize:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
   company_backcheck:{ sideEffect: "read",  requiresApproval: false, budgetPerTurn: 1 },
+  // 联网调研：一次调用就跑完整套「多源检索→页面核实→交叉分级→成稿」，成本高，单轮最多 2 次
+  market_research:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
   generate_draft:   { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
   queue_status:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
   reminders_due:    { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },

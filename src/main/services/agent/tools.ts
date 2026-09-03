@@ -28,6 +28,7 @@ import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from
 import { readIdentity } from "./identity";
 import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
+import { runResearchScene, CRED_LABEL } from "../research.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
 import { reportGap as reportGapRow } from "../gap.service";
 
@@ -143,6 +144,38 @@ export function beijingTime(iso: string | null | undefined): string {
 }
 
 const cell = (v: unknown): string => (v == null || v === "" ? "—" : String(v));
+
+/**
+ * 航线串拆成起运港/目的港：模型常整串传「上海到桑托斯」「Ningbo → Santos」，
+ * 让它自己拆不稳（实测会把「桑托斯」拆成「托斯」）。拆不出来就交回调用方去问用户。
+ */
+export function splitRoute(route: string | null | undefined): { pol: string; pod: string } {
+  const s = String(route || "").trim();
+  if (!s) return { pol: "", pod: "" };
+  const parts = s
+    .split(/\s*(?:到|至|去|→|->|=>|\|{1,2}|[;,]|\/|[-—]\s?to\s?|\s+to\s+)\s*/i)
+    .map(x => x.trim()).filter(Boolean);
+  if (parts.length >= 2) return { pol: parts[0]!.slice(0, 40), pod: parts[1]!.slice(0, 40) };
+  return { pol: "", pod: "" };
+}
+
+/** 与本地运价镜像对照（只报库里真有的：条数、USD 区间、最晚有效期；没有就 null，不编造） */
+export function mirrorCompareForPod(podEn: string, podCn: string): string | null {
+  for (const term of [podEn, podCn]) {
+    const t = String(term || "").trim();
+    if (!t) continue;
+    const rows = listQuotes({ pod: t, limit: 30 });
+    if (!rows.success || !rows.data.length) continue;
+    const prices = rows.data.map(q => q.oceanUsd).filter((n): n is number => typeof n === "number" && n > 0).sort((a, b) => a - b);
+    const total = countQuotes({ pod: t });
+    const latest = rows.data.map(q => q.validTo || "").sort().pop();
+    return `镜像库「${t}」有 ${total} 条参考价`
+      + (prices.length ? `，区间 ${prices[0]}–${prices[prices.length - 1]} USD` : "")
+      + (latest ? `，最晚有效期 ${latest}` : "")
+      + "；公开来源报价与它的差距要逐条对照口径判断，不要直接比大小";
+  }
+  return null;
+}
 
 export interface ResolvedContact { id: number; name: string; email: string; company: string | null }
 
@@ -362,6 +395,15 @@ export const emailSummarizeSchema = z.object({
   // 上限与 toIds 的截断一致：卡在 max 上会让参数解析先炸掉（发生在预算计数之前，模型只会重试到 max turns）。
   messageIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50).nullable().optional())
     .describe("不要传：本工具一次只总结一封。多封邮件一律用 start_batch_task(kind=\"email_summary\", messageIds=[…])"),
+});
+
+export const marketResearchSchema = z.object({
+  route: optStr(80).describe("整串航线，如「上海到桑托斯」「Ningbo → Santos」（工具内部会拆成起运/目的港）"),
+  pol: optStr(40).describe("起运港（与 route 二选一；中文名/英文/UNLOCODE 都行）"),
+  pod: optStr(40).describe("目的港（与 route 二选一）"),
+  scope: optStr(12).describe("rates=只看运价 / schedules=只看船期 / both=两者（默认 both）"),
+  container: optStr(8).describe("柜型 20GP / 40GP / 40HQ，留空为不限"),
+  weeks: optInt().describe("时间窗「近期」按最近 N 周，默认 4，上限 12"),
 });
 
 export const companyBackcheckSchema = z.object({
@@ -609,6 +651,68 @@ export function buildHarnessTools(ctx: ToolCtx) {
       };
       audit(ctx, "quote_search", "read", args, out, "auto");
       return finishRead(ctx, "quote_search", args, JSON.stringify(out));
+    },
+  });
+
+  const marketResearch = tool({
+    name: "market_research",
+    description: "联网调研某航线的公开市场行情：多源检索 → 逐页核实 → 交叉核对分级 → 产出带来源链接与日期的报告（自动落文件）。"
+      + "用户问「某航线现在什么行情 / 外面报多少 / 最近有没有新船期 / 我们这个价在市场算什么水平」时用本工具；"
+      + "查自己台账里的价用 quote_search。缺起运港或目的港时只追问这两项（其余可默认）。"
+      + "一次调用就跑完整套流程，不要换措辞连续调用；查不到可核实来源时它会如实给缺口，绝不编数字。",
+    parameters: marketResearchSchema,
+    execute: async (args) => {
+      const note = gate(ctx, "market_research");
+      if (note) return note;
+      const fromRoute = splitRoute(args.route);
+      const pol = (args.pol || "").trim() || fromRoute.pol;
+      const pod = (args.pod || "").trim() || fromRoute.pod;
+      if (!pol || !pod) {
+        // 方法论要求：只追问这两个港口，其余用默认值。这是待补信息、不是故障 → 不带 error，不喂熔断计数
+        const need = {
+          needPorts: true,
+          notice: "调研一条航线只需要两个必填项：起运港与目的港。请用一句话问用户（如「从哪个港到哪个港？柜型要不要限定？」），"
+            + "拿到后直接再调本工具；柜型与时间窗可以留空走默认。",
+        };
+        audit(ctx, "market_research", "read", args, need, "auto");
+        return JSON.stringify(need);
+      }
+      const scopeRaw = String(args.scope || "").trim().toLowerCase();
+      const scope = scopeRaw === "rates" || scopeRaw === "schedules" ? scopeRaw : "both";
+      const r = await runResearchScene(
+        { pol, pod, scope, container: (args.container || "").trim() || undefined, weeks: args.weeks ?? undefined },
+        { mirrorCompare: mirrorCompareForPod },
+      );
+      if (!r.success) {
+        audit(ctx, "market_research", "read", args, undefined, "auto", r.error);
+        return JSON.stringify({
+          error: "research_failed",
+          notice: r.error + "。请如实告诉用户这次没查到公开行情、以及要补哪一项，"
+            + "禁止凭自己的知识给运价数字；用户台账里的价格可以用 quote_search 查。",
+        });
+      }
+      const o = r.data.out;
+      const rows = o.rates.map(x => ({
+        source: x.source.slice(0, 40), value: x.value, scope: x.scope,
+        published: x.published, credibility: CRED_LABEL[x.credibility], url: x.url,
+      }));
+      const out = {
+        route: o.route,
+        window: o.window,
+        checked: `${o.evidenceCount.fetched}/${o.evidenceCount.hits} 个来源通过页面核实`,
+        say: rows.length
+          ? `公开来源核实完成：${o.conclusions.length} 条结论、${rows.length} 条运价来源可引用`
+          : "本轮没有通过核实的公开来源，因此不给运价数字（缺口见 gaps）",
+        conclusions: o.conclusions.map(c => c.text),
+        results: rows,
+        gaps: o.gaps.slice(0, 5),
+        dropped: o.dropped.slice(0, 5),
+        artifact: r.data.artifact,
+        notice: "报告文件已生成（全部来源链接与日期都在里面）。正文只讲结论加一句时效提醒（即期价以天计变化）；"
+          + "明细表已由界面表格卡呈现，不要再自建汇总表，也不要补表里没有的数字、日期或来源。",
+      };
+      audit(ctx, "market_research", "read", args, out, "auto");
+      return finishRead(ctx, "market_research", args, JSON.stringify(out));
     },
   });
 
@@ -1337,7 +1441,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
   });
 
   return [
-    searchContacts, recordFollowup, quoteSearch, inboxSearch, emailSummarize,
+    searchContacts, recordFollowup, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
   ];

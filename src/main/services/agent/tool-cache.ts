@@ -8,6 +8,8 @@ import type { ToolCtx } from "./types";
 
 const TTL_BY_TOOL: Record<string, number> = {
   quote_search: 10 * 60_000,      // 运价镜像：快照级数据，10 分钟
+  // 公开行情调研：整套流程要几十秒（多源检索+抓页+归纳），同航线短时窗内直接复用
+  market_research: 10 * 60_000,
   search_contacts: 3 * 60_000,    // 联系人：可能刚被动作卡改过，短些
   inbox_search: 2 * 60_000,       // 收件箱：新邮件随时到
   reminders_due: 5 * 60_000,
