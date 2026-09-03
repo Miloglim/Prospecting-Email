@@ -371,7 +371,7 @@ export async function runResearchScene(
   if (!pol || !pod) return failResult("缺少起运港或目的港：这两项必须由用户提供，其余可用默认值");
   // 前置检查：没配检索源就立刻指路，别先花一次 LLM 调用、再把 6 条查询全发出去空跑
   if (!hasSearchSource()) {
-    return failResult("未配置联网检索源：请到「设置 → 模型与端点 → 搜索源」填入 Exa 或 Tavily 任一密钥后重试（本能力只读公开网页，不发送任何邮件）");
+    return failResult("未配置联网检索源：在项目根目录 .env 里填 EXA_API_KEY 或 TAVILY_API_KEY 任一密钥后重启程序（本能力只读公开网页，不发送任何邮件）");
   }
   const scope: NonNullable<LaneInput["scope"]> = input.scope ?? "both";
   const weeks = Math.min(Math.max(input.weeks && input.weeks > 0 ? input.weeks : 4, 1), 12);
@@ -390,7 +390,7 @@ export async function runResearchScene(
   if (!usable.length) {
     const failed = searched.find(s => !s.success);
     const why = failed && !failed.success ? failed.error : "搜索源无结果";
-    return failResult(`联网调研失败：${why}（检查「设置 → 搜索源」里 Exa / Tavily 的密钥是否已配置）`);
+    return failResult(`联网调研失败：${why}（检索源不可用或没有结果，可稍后重试；密钥在 .env 的 EXA_API_KEY / TAVILY_API_KEY）`);
   }
   const seen = new Set<string>();
   const evs: Evidence[] = [];
