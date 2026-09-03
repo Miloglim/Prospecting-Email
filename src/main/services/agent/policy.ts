@@ -16,10 +16,10 @@ export interface ToolSpec {
 }
 
 export const TOOL_SPECS: Record<string, ToolSpec> = {
-  search_contacts:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
-  quote_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
-  inbox_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
-  email_summarize:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
+  search_contacts:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 5 },
+  quote_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 5 },
+  inbox_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
+  email_summarize:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
   company_backcheck:{ sideEffect: "read",  requiresApproval: false, budgetPerTurn: 1 },
   generate_draft:   { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
   queue_status:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },

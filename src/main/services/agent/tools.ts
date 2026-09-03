@@ -3,7 +3,7 @@
 // execute 内强制：预算守卫 → 执行 → 审计落库。write 工具的 needsApproval 由
 // SDK 中断流接管，execute 只在人工批准后才可能运行。
 import { z } from "zod";
-import { eq, like, or, and, desc } from "drizzle-orm";
+import { eq, like, or, and, desc, ne, sql } from "drizzle-orm";
 import { tool } from "@openai/agents";
 import { getDb, saveDatabase } from "../../db";
 import { contacts } from "../../db/schema/contacts";
@@ -37,7 +37,8 @@ export const MAX_CONSECUTIVE_FAILURES = 2;
 const SUSPENDED_NOTE = JSON.stringify({
   error: "tool_suspended",
   notice: "该工具本轮已连续失败 " + MAX_CONSECUTIVE_FAILURES + " 次，现在不可用（不是换个参数就能绕开的接口抖动）。"
-    + "请基于本回合已取到的数据作答，并如实告诉用户这件事此刻没做成、原因是什么；不要再调用本工具。",
+    + "请先交付本回合已经取到的数据，再用一句话说明这件事暂时没办成、以及建议下一步（换一个说法或稍后再试）；"
+    + "不要重复调用本工具，也不要把没取到的内容编出来。",
 });
 
 // ── 导入联系人的归一化（纯函数，可单测）──────────────────────────
@@ -93,12 +94,12 @@ function gate(ctx: ToolCtx, toolName: string): string | null {
   return budgetNote(ctx.counts, toolName);
 }
 
-/** 读工具统一入口：门闸 + 结果缓存（命中不再消耗查询次数，也不写审计） */
+/** 读工具统一入口：先查缓存（命中不占配额、不写审计），未过闸再返回暂停/预算提示 */
 function cachedRead(ctx: ToolCtx, toolName: string, args: unknown): string | null {
+  const hit = lookupCache(ctx, toolName, args);
+  if (hit !== null) { countHit(); return hit; }      // 命中：同一次查询的重复问法，不吃预算
   const note = gate(ctx, toolName);
   if (note) return note;
-  const hit = lookupCache(ctx, toolName, args);
-  if (hit !== null) { countHit(); return hit; }
   countMiss();
   return null;
 }
@@ -127,6 +128,18 @@ function nextStageAfter(current: string | null): { key: string; label: string } 
   const i = STAGE_SEQ.findIndex(s => s.key === (current ?? "cold"));
   if (i < 0 || i >= STAGE_SEQ.length - 1) return null;
   return STAGE_SEQ[i + 1]!;
+}
+
+/** ISO/UTC 存储 → 北京时间可读串：时间交给模型换算就会编（实测把 12:13 写成 09:24） */
+export function beijingTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return String(iso);
+  const d = new Date(t + 8 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const 日 = `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  return (d.toISOString().slice(0, 10) === new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
+    ? "今天 " : 日 + " ") + p(d.getUTCHours()) + ":" + p(d.getUTCMinutes());
 }
 
 const cell = (v: unknown): string => (v == null || v === "" ? "—" : String(v));
@@ -196,7 +209,12 @@ function budgetNote(counts: Map<string, number>, toolName: string): string | nul
   try { checkBudget(counts, toolName); return null; }
   catch (e) {
     if (e instanceof ToolBudgetError) {
-      return JSON.stringify({ error: "budget_exhausted", notice: "本工具本轮查询次数已达上限。这不是接口故障——请立即基于此前已返回的数据作答，不要再调用本工具。" });
+      return JSON.stringify({
+        error: "budget_exhausted",
+        notice: "本工具本轮查询次数已用满（这不是接口故障，不要再调用它）。"
+          + "请立即交付已有结果：把已经取到的数据完整列给用户，并一句话说明还有哪些部分本轮没取到、用户可以再说一句继续。"
+          + "禁止回答「请你自己打开客户端查看」，也不要为没取到的部分编造内容。",
+      });
     }
     throw e;
   }
@@ -338,7 +356,12 @@ export const inboxSearchSchema = z.object({
 });
 
 export const emailSummarizeSchema = z.object({
-  messageId: optInt().describe("邮件 id（来自 inbox_search 返回）") ,
+  messageId: optInt().describe("邮件 id（单封时用；来自 inbox_search 返回）"),
+  // 兜底字段：弱模型常自己发明 messageIds 想一次总结多封。本工具不做批量（一封封循环会撞
+  // 本轮调用上限，且没有进度条），识别到这个意图时直接把请求转交给后台任务。
+  // 上限与 toIds 的截断一致：卡在 max 上会让参数解析先炸掉（发生在预算计数之前，模型只会重试到 max turns）。
+  messageIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50).nullable().optional())
+    .describe("不要传：本工具一次只总结一封。多封邮件一律用 start_batch_task(kind=\"email_summary\", messageIds=[…])"),
 });
 
 export const companyBackcheckSchema = z.object({
@@ -605,7 +628,9 @@ export function buildHarnessTools(ctx: ToolCtx) {
         conds.push(or(like(inboxMessages.fromEmail, q), like(inboxMessages.subject, q), like(inboxMessages.bodyPreview, q)));
       }
       if (INBOX_CLASSES.includes(cls)) conds.push(eq(inboxMessages.classification, cls));
-      if (args.unreadOnly) conds.push(eq(inboxMessages.isRead, 0));
+      // 「未读」指待我处理的来信：我方自己发出的副本（classification=sent）也是 is_read=0，
+      // 不排除会把"我发出去的邮件"算成未读，计数与清单一起失真（用户实测抓到过）
+      if (args.unreadOnly) conds.push(eq(inboxMessages.isRead, 0), ne(inboxMessages.classification, "sent"));
       const rows = getDb().select({
         id: inboxMessages.id, fromName: inboxMessages.fromName, fromEmail: inboxMessages.fromEmail,
         subject: inboxMessages.subject, classification: inboxMessages.classification,
@@ -616,11 +641,23 @@ export function buildHarnessTools(ctx: ToolCtx) {
         .orderBy(desc(inboxMessages.receivedAt))
         .limit(Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50))
         .all();
-      const raw = rows.map(r => ({ ...r, from: r.fromName || r.fromEmail, matchedContactId: r.matchedContactId ?? undefined }));
+      // 时间由服务端算成北京时间、条数由服务端算好：模型不换算时区、不自己数数
+      // （此前它在汇总表里把 12:13 写成 09:24 这类编造时间，就是两头都让它自己算导致的）
+      const raw = rows.map(r => ({
+        ...r,
+        from: r.fromName || r.fromEmail,
+        matchedContactId: r.matchedContactId ?? undefined,
+        收到时间: beijingTime(r.receivedAt),
+      }));
+      const matchedTotal = getDb().select({ n: sql<number>`count(*)` }).from(inboxMessages)
+        .where(conds.length ? and(...conds) : undefined).get()?.n ?? raw.length;
       audit(ctx, "inbox_search", "read", args, raw, "auto");
       // 收敛信号：空结果如实回答；结果少于 limit 说明已全量返回
+      // 空结果也要走 finishRead 落缓存：否则模型换个措辞重复问同一个查不到的条件，
+      // 每次都真查并吃掉一次预算，很快撞满 budgetPerTurn 卡住（「中断反应」的成因之一）
       if (raw.length === 0) {
-        return JSON.stringify({ messages: [], notice: "收件箱中没有匹配的邮件。请直接如实告知用户，不要重复调用本工具。" });
+        return finishRead(ctx, "inbox_search", args,
+          JSON.stringify({ total: 0, messages: [], notice: "收件箱中没有匹配的邮件。请直接如实告知用户，不要重复调用本工具。" }));
       }
       const defaultLimit = Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50);
       // P1-1：真实客户来信（询盘/回复）但库中无此联系人 → 附「创建联系人」写入动作
@@ -656,7 +693,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
         break;   // 一张卡最多给一个创建动作，避免按钮噪音
       }
       return finishRead(ctx, "inbox_search", args, JSON.stringify({
-        total: raw.length,
+        total: matchedTotal,
+        returned: raw.length,
+        // 让模型照抄结论，别自己数条数、别自己换算时间
+        say: `共 ${matchedTotal} 封匹配，本条列出 ${raw.length} 封（时间为北京时间）`,
+        ...(args.unreadOnly ? { unreadHint: "此处「未读」只算来信，已排除我方自己发出的邮件副本" } : {}),
         ...(raw.length < defaultLimit ? { complete: true, notice: "以上即全部匹配邮件，直接作答即可" } : {}),
         messages: raw,
         ...(actions.length ? { actions } : {}),
@@ -671,6 +712,19 @@ export function buildHarnessTools(ctx: ToolCtx) {
     execute: async (args) => {
       const note = gate(ctx, "email_summarize");
       if (note) return note;
+      const batchIds = Array.isArray(args.messageIds) ? args.messageIds : [];
+      if (!args.messageId && batchIds.length) {
+        // 模型自己发明了 messageIds：这是有效意图，不算失败（不喂熔断计数），直接把请求转交出去
+        const redirect = {
+          redirect: "start_batch_task",
+          messageIds: batchIds,
+          notice: "多封邮件的总结不在本工具做（一封封循环会撞本轮调用上限，也没有进度条）。"
+            + "请立即调用 start_batch_task，kind=\"email_summary\"，messageIds 照抄上面这串——"
+            + "不要再用 inbox_search 重新查一遍，也不要回答「请你自己打开客户端查看」。",
+        };
+        audit(ctx, "email_summarize", "read", args, redirect, "auto");
+        return JSON.stringify(redirect);
+      }
       if (!args.messageId) {
         audit(ctx, "email_summarize", "read", args, undefined, "auto", "缺少 messageId");
         return "失败：缺少参数 messageId。请先用 inbox_search 拿到邮件 id 再总结。";

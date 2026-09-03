@@ -128,7 +128,24 @@ const COL_LABELS: Record<string, string> = {
   receivedAt: "时间", isRead: "已读", summary: "总结", nextStep: "下一步", rating: "评分",
   reminderAt: "提醒时间", problems: "问题", healthy: "健康数", enabled: "启用数", total: "总数",
 };
-const cellText = (v: unknown): string => (v == null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+/** 表格卡里的 ISO 时间转北京时间（存的是 UTC，用户看 +8 的钟点；不转就得自己算） */
+const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+export function fmtCellTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t + 8 * 3600_000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  const day = d.toISOString().slice(0, 10);
+  return day === today ? `今天 ${stamp}` : `${day.slice(5)} ${stamp}`;
+}
+const cellText = (v: unknown): string => {
+  if (v == null || v === "") return "—";
+  if (typeof v === "object") return JSON.stringify(v);
+  const str = String(v);
+  return ISO_TS.test(str) ? fmtCellTime(str) : str;
+};
 
 /** 审批人话化：工具+参数 → 一句中文说明（不再展示裸 JSON） */
 function describeApproval(tool: string | undefined, argsRaw: unknown): string {

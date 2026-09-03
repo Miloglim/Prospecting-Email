@@ -123,6 +123,8 @@ const call = (t: ToolLike, args: unknown): Promise<string> => t.invoke({}, JSON.
 // 被测链路（mock 之后动态 import）
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { summarizeEmail } = await import("../../src/main/services/ai.service");
+// 预算次数以配置为准，测试不写死（改预算值时不必回来改断言）
+const { TOOL_SPECS } = await import("../../src/main/services/agent/policy");
 
 const ctx = { conversationId: "test-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
 /** 按工具名取（注册顺序会变，按名索引更稳） */
@@ -235,12 +237,35 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     expect(audits.some(a => a.toolName === "email_summarize" && a.approval === "auto")).toBe(true);
   });
 
+  it("email_summarize：模型自己传 messageIds 想批量 → 转交后台任务，不死在参数错误上", async () => {
+    const out = JSON.parse(await call(T("email_summarize"), { messageIds: [1, 2] })) as {
+      redirect: string; messageIds: number[]; notice: string;
+    };
+    expect(out.redirect).toBe("start_batch_task");
+    expect(out.messageIds).toEqual([1, 2]);
+    expect(out.notice).toContain("email_summary");
+    expect(ctx.failures.get("email_summarize") ?? 0).toBe(0);   // 有效转交不喂熔断计数
+  });
+
   it("预算守卫：超过 budgetPerTurn 后返回 budget_exhausted 引导语", async () => {
-    await call(T("inbox_search"), {});
-    await call(T("inbox_search"), {});
-    await call(T("inbox_search"), {});
-    const out = await call(T("inbox_search"), {});
+    const budget = TOOL_SPECS.inbox_search!.budgetPerTurn ?? 0;
+    expect(budget).toBeGreaterThan(0);
+    // 参数逐次不同：相同参数的重复问法会命中短时缓存、不占配额（这是设计行为，见另一条测试）
+    for (let i = 1; i <= budget; i++) {
+      const ok = await call(T("inbox_search"), { limit: i });
+      expect(ok).not.toContain("budget_exhausted");
+    }
+    const out = await call(T("inbox_search"), { limit: budget + 1 });
     expect(out).toContain("budget_exhausted");
+    expect(out).toContain("交付已有结果");
+  });
+
+  it("缓存命中不占配额：同一条件的重复查询不会耗尽预算", async () => {
+    for (let i = 0; i < 8; i++) {
+      const out = await call(T("inbox_search"), { query: "cache-check-unique" });
+      expect(out).not.toContain("budget_exhausted");   // 第 2 次起走缓存，counts 一直是 1
+    }
+    expect(ctx.counts.get("inbox_search")).toBe(1);
   });
 
   it("reminders_due：到期/逾期分桶 + 跟进备注回填", async () => {
@@ -272,7 +297,8 @@ it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指�
     expect(second).toContain("不存在");
     const third = await call(T("email_summarize"), { messageId: 997 });
     expect(third).toContain("tool_suspended");
-    expect(third).toContain("不要再调用本工具");
+    expect(third).toContain("不要重复调用本工具");
+    expect(third).toContain("请先交付本回合已经取到的数据");
   });
 
   it("熔断计数看「连续」：中间成功一次就清零", async () => {

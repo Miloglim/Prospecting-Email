@@ -103,6 +103,30 @@ const KEYWORDS = {
 export type { InboxMessageRow } from "../db/schema/inbox";
 export type Classification = "replied" | "bounce" | "autoreply" | "other" | "sent";
 
+/** 退信判定所需的「投递报告结构证据」：正文必须真长得像 NDR，避免误伤正常商务邮件 */
+const NDR_MARKERS = [
+  "reporting-mta", "final-recipient", "diagnostic-code", "original-recipient",
+  "delivery to the following recipient", "failed to deliver", "delivery has failed",
+  "以下收件人", "投递失败", "退信", "无法送达",
+];
+/** SMTP 协议码：`smtp; 550`、`status: 5.1.1`、`550 5.1.1` 这类明确形态 */
+const SMTP_CODE_RE = /(smtp;\s*5\d{2}|status:\s*5\d{2}[\d.\-]*|\b5\d{2}\s+[2345]\.\d\.\d)/i;
+
+/** 我方邮箱域名（同事/公司内部往来绝不判退信）。60 秒缓存，逐封分类不重复查库。 */
+let _internalDomains: string[] | null = null;
+let _internalAt = 0;
+export function internalDomains(): string[] {
+  if (_internalDomains && Date.now() - _internalAt < 60_000) return _internalDomains;
+  _internalAt = Date.now();
+  try {
+    const rows = getDb().select({ email: emailAccounts.email }).from(emailAccounts).all();
+    _internalDomains = [...new Set(rows
+      .map(r => (r.email.split("@")[1] || "").trim().toLowerCase())
+      .filter(d => d.includes(".")))];
+  } catch { _internalDomains = []; }
+  return _internalDomains;
+}
+
 export function classify(
   subject: string | null, from: string | null, bodyText: string | null,
   hasContactMatch = false, isCcOnly = false,
@@ -111,15 +135,27 @@ export function classify(
   const f = (from || "").toLowerCase();
   const b = (bodyText || "").toLowerCase().slice(0, 500);
 
+  const domain = f.split("@")[1] || "";
+  if (domain && internalDomains().includes(domain)) {
+    // 我方域名来信（同事转发的报价、内部系统通知）：不判退信也不判自动回复
+    if (KEYWORDS.reply_prefix.some(k => s.startsWith(k))) return "replied";
+    return hasContactMatch ? "replied" : "other";
+  }
+
   // 0. 自动回复优先（可能也带 Re:）
   if (KEYWORDS.auto_reply.some(k => s.includes(k) || b.includes(k))) return "autoreply";
 
-  // 1. 退信检测
-  if (KEYWORDS.bounce_subject.some(k => s.includes(k))) return "bounce";
-  if (KEYWORDS.bounce_senders.some(k => f.includes(k))) return "bounce";
-  if (/\b5\d{2}\b/.test(b)) return "bounce";
-  if (KEYWORDS.bounce_body.some(k => b.includes(k))) return "bounce";
-  if (KEYWORDS.bounce_left.some(k => b.includes(k))) return "bounce";
+  // 1. 退信检测——要硬证据。曾有 `/\b5\d{2}\b/` 这种裸数字规则：运价「545 / 580 /
+  //    5 天免箱期」直接被判定退信，还据此建议用户「对方邮箱失效，改电话联系同事」。
+  //    现在必须满足：主题命中退信短语 / 发件人是退信机器 / 有 SMTP 协议码 /
+  //    （正文命中退信词 且 有 NDR 结构字段）。
+  const strongSubject = KEYWORDS.bounce_subject.some(k => s.includes(k));
+  const daemonSender = KEYWORDS.bounce_senders.some(k => f.includes(k));
+  const protocolCode = SMTP_CODE_RE.test(b);
+  const bodyWithStructure =
+    (KEYWORDS.bounce_body.some(k => b.includes(k)) || KEYWORDS.bounce_left.some(k => b.includes(k)))
+    && NDR_MARKERS.some(k => b.includes(k));
+  if (strongSubject || daemonSender || protocolCode || bodyWithStructure) return "bounce";
 
   // 2. 仅被抄送 → 不算回复（不触发联系人状态「已回复」）
   if (isCcOnly) return "other";

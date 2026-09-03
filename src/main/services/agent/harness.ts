@@ -79,6 +79,11 @@ export const AGENT_INSTRUCTIONS = [
     "正文已在上下文时也不要再调 inbox_search / email_summarize 去重复读它。",
   "信息不全时不要连环追问：先产出能用的草稿，未知处用 {{占位}} 或【待确认】标出，" +
     "最多在结尾用一句话说明可以补充哪些信息。",
+  "照抄不许推算：邮件条数、收发时间、是否已读、分类（含是否退信）、联系人阶段等字段，" +
+    "只能原样引用工具返回的值（inbox_search 已给北京时间与算好的条数，直接抄用）。" +
+    "禁止自己数条数、换算时区或推断状态；工具没给的就写「未取到」，不要填空。",
+  "不要自建汇总表：数据列表由界面表格卡呈现；正文只写结论。若确实要归纳，只允许引用工具已返回的字段，" +
+    "不得为凑齐行列补出新的数字、时间或状态。",
   "回答风格：简洁、专业、中文优先（涉及邮件文案时按用户要求语言输出）。",
 ].join("\n");
 
@@ -428,14 +433,14 @@ async function streamRun(
 
   if (!streaming) {
     const r = await run(agent, (resumeState ?? o.history) as never, {
-      stream: false, signal: o.signal, maxTurns: 6,
+      stream: false, signal: o.signal, maxTurns: 8,
     }) as unknown as RunResultLite;
     return collectRunResult(r, agent, ctx, o);
   }
 
   if (!resumeState) lastStreamUsage.length = 0;      // 新回合才清零；审批续跑接着上一段累计，否则用量只剩后半截
   const raw = await run(agent, (resumeState ?? o.history) as never, {
-    stream: true, signal: o.signal, maxTurns: 6,
+    stream: true, signal: o.signal, maxTurns: 8,
   });
   const result = raw as unknown as AsyncIterable<unknown> & {
     state: RunState<any, any>; finalOutput?: unknown; usage?: unknown;
