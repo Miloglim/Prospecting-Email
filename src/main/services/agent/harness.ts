@@ -16,6 +16,7 @@ import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.
 import { netFetch } from "../../net-proxy";
 import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, type ToolCtx, type PlanItem } from "./tools";
 import { canAutoApprove } from "./policy";
+import { identityBlock } from "./identity";
 
 /** 主进程 → 渲染进程事件推送器（由 transport 层注入，service 不 import electron） */
 export type PushFn = (channel: string, data: unknown) => void;
@@ -286,9 +287,11 @@ export async function runHarnessTurn(o: HarnessOptions): Promise<TurnOutcome> {
   const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
   const ctx: ToolCtx = { conversationId: o.conversationId, push: o.push, counts: new Map(), failures: new Map() };
   const tools = buildHarnessTools(ctx);
-  const instructions = o.contextNote
-    ? `${AGENT_INSTRUCTIONS}\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`
-    : AGENT_INSTRUCTIONS;
+  // 身份档案每次现读：在设置里改完「助手身份」立刻生效，不用重启应用
+  let instructions = AGENT_INSTRUCTIONS + identityBlock();
+  if (o.contextNote) {
+    instructions += `\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`;
+  }
   const agent = new Agent<any, any>({
     name: "prospector-assistant",
     instructions,

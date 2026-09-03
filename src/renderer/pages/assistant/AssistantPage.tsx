@@ -834,6 +834,8 @@ export function AssistantPage() {
   const [sending, setSending] = useState(false);
   const [convLoading, setConvLoading] = useState(false);
   const [configured, setConfigured] = useState(false);
+  /** 我方身份是否填全（缺了 AI 只能留 {{占位符}}） */
+  const [identityOk, setIdentityOk] = useState(true);
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState(false);
   const [inputVal, setInputVal] = useState("");
@@ -914,8 +916,11 @@ export function AssistantPage() {
   // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次
   const refreshStatus = async () => {
     const r = await window.api.invoke("agent:status") as
-      IpcResult<{ configured: boolean; model: string; thinking?: boolean }>;
-    if (r?.success && r.data) { setConfigured(r.data.configured); setModel(r.data.model); setThinking(!!r.data.thinking); }
+      IpcResult<{ configured: boolean; model: string; thinking?: boolean; identityOk?: boolean }>;
+    if (r?.success && r.data) {
+      setConfigured(r.data.configured); setModel(r.data.model); setThinking(!!r.data.thinking);
+      setIdentityOk(r.data.identityOk !== false);
+    }
   };
   useEffect(() => { void refreshStatus(); }, []);
 
@@ -1406,6 +1411,15 @@ export function AssistantPage() {
               去设置
             </Button>
           }
+        />
+      )}
+
+      {configured && !identityOk && (
+        <Alert
+          type="info" showIcon closable className="mb-2"
+          message="助手还不知道你是谁"
+          description="「设置 → 发信人身份」里补上自称、我方公司与署名后，它写的邮件就会直接用它落款，而不是留 {{firstName}} {{company}} 这类占位符。"
+          action={<Button size="small" onClick={() => { window.location.hash = "#/settings"; }}>去填写</Button>}
         />
       )}
 

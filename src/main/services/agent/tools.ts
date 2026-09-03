@@ -25,6 +25,7 @@ import { upsertTemplate } from "../template.service";
 import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
 import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from "./tool-cache";
+import { readIdentity } from "./identity";
 import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
@@ -395,6 +396,8 @@ function safeParse(s: string): unknown {
 }
 
 export function buildHarnessTools(ctx: ToolCtx) {
+  // 身份档案：一处读，供单封与批量两处成信时自落款（免得留 {{firstName}} 占位）
+  const sender = readIdentity();
   const searchContacts = tool({
     name: "search_contacts",
     description: "在本地联系人库按姓名/邮箱/公司名关键词检索，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段）。涉及客户的事实性回答必须且只能基于本工具返回的数据。绝对不要用本工具查运价、邮件或公司公开背景（那是 quote_search / inbox_search / company_backcheck）。",
@@ -470,7 +473,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
                 const lang = ["ES", "PT"].includes(String(contact.language ?? "").toUpperCase())
                   ? (String(contact.language).toUpperCase() as "ES" | "PT") : "EN";
                 const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email;
-                const draft = await generateEmailDraft({ language: lang, companyName: companyName || c.company || name, contactName: name });
+                const draft = await generateEmailDraft({ language: lang, companyName: companyName || c.company || name, contactName: name, sender });
                 if (!draft.success) { failed.push(name); continue; }
                 const raw = draft.data.trim();
                 const m = /^SUBJECT:\s*(.+)\s*$/im.exec(raw);
@@ -885,6 +888,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
         companyName,
         contactName,
         backcheck: args.focus ? ({ summary: args.focus } as BackcheckReport) : null,
+        sender,
       });
       if (!r.success) {
         audit(ctx, "generate_draft", "read", args, undefined, "auto", r.error);

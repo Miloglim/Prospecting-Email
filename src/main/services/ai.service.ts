@@ -248,21 +248,44 @@ export async function generateBackcheckReport(input: BackcheckInput, hits: Searc
   return chatJson<BackcheckReport>(system, user);
 }
 
+export interface DraftSender {
+  selfName?: string;
+  company?: string;
+  title?: string;
+  business?: string;
+  persona?: string;
+  signature?: string;
+}
+
 export interface EmailDraftInput {
   language: string; // EN / ES / PT
   companyName: string;
   contactName: string;
   backcheck?: BackcheckReport | null;
+  /** 我方身份（自称 / 公司 / 职位 / 业务口径 / 署名）；不传模型只能留占位符 */
+  sender?: DraftSender;
 }
 
 export async function generateEmailDraft(input: EmailDraftInput): Promise<Result<string>> {
   const lang = input.language === "ES" ? "西班牙语" : input.language === "PT" ? "葡萄牙语" : "英语";
-  const system = `你是货代销售文案专家。用${lang}写一封给潜在客户的开发信，语气专业但不生硬，3-4 段，带主题行（用 SUBJECT: 开头）和正文。不要多余解释。`;
+  const s = input.sender;
+  const who = s ? [s.selfName, s.title, s.company].filter(Boolean).join(" / ") : "";
+  const system = `你是货代销售文案专家。用${lang}写一封给客户的经营性邮件（开发信 / 跟进信 / 回信），语气专业但不生硬，3-4 段，带主题行（用 SUBJECT: 开头）和正文。不要多余解释。`;
   const back = input.backcheck
     ? `\n背调要点：${input.backcheck.summary ?? ""}${input.backcheck.logisticsFit ? `；契合点：${input.backcheck.logisticsFit}` : ""}`
     : "";
-  const user = `公司：${input.companyName}\n联系人：${input.contactName}\n${back}\n\n请写开发信。`;
-  return chat(system, user);
+  // 身份进 prompt：否则模型只能编一个发件人，或留一堆 {{占位}} 让你自己填
+  const idBlock = s && who
+    ? `\n【我方身份】${who}${s.business ? `；业务：${s.business}` : ""}${s.persona ? `；角色口径：${s.persona}` : ""}\n`
+      + "正文一律用上面的真实自称与身份落款，禁止留 {{firstName}} {{company}} {{phone}} 这类占位符。"
+    : "";
+  const user = `收件公司：${input.companyName}\n收件人：${input.contactName}\n${back}${idBlock}\n\n请写这封邮件。`;
+  const r = await chat(system, user);
+  // 与真实发信保持一致：send.service 会自动追加署名，草稿这里也补上，免得"草稿没落款、发出去才有"
+  if (r.success && s?.signature && !r.data.trimEnd().endsWith(s.signature.trim())) {
+    return okResult(`${r.data.trimEnd()}\n\n${s.signature}`);
+  }
+  return r;
 }
 
 export interface EmailSummaryInput {

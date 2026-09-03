@@ -26,6 +26,8 @@ interface RuntimeConfig {
   fromName: string;
   bodyName: string;
   signature: string;
+  /** 助手身份（注入每轮对话）：我方公司 / 职位 / 业务口径 / 固定角色 */
+  identity?: { company?: string; title?: string; business?: string; persona?: string };
   schedule: SendSchedule;
   test: { email: string; company: string; enabled: boolean; dryRun: boolean };
   crm: { followupDays: Record<string, number>; todoAdvanceDays: number; autoArchiveDays: number };
@@ -1064,8 +1066,9 @@ export function SettingsPage() {
             )}
           </SettingCard>
 
-          {/* 发信人信息 */}
-          <SettingCard icon="" title="发信人信息">
+          {/* 发信人信息 = 也是助手身份：这几项会注入每轮对话，决定它用谁的口吻写信、怎么落款 */}
+          <SettingCard icon="" title="发信人身份"
+            status={<Tag color="blue" className="!text-[10px]">助手写信时用它</Tag>}>
             <SettingRow label="发件人名称" value={config?.fromName || ""}
               onSave={v => saveConfigMut.mutate({ fromName: String(v) })}
               placeholder="收件人看到的发件人名称" hint="账号名优先" />
@@ -1074,7 +1077,23 @@ export function SettingsPage() {
               placeholder="正文中的自称，如 Zayne" hint="用于正文落款" />
             <SettingRow label="正文署名" value={config?.signature || ""}
               onSave={v => saveConfigMut.mutate({ signature: String(v) })}
-              placeholder="邮件正文末尾的署名" />
+              placeholder="邮件正文末尾的署名（公司 / 电话 / 邮箱 / 地址）" />
+            <div className="text-[11px] text-gray-400 mt-1 mb-2 pl-1">下面四项只给 AI 助手看，不影响发信格式：</div>
+            <SettingRow label="我方公司" value={config?.identity?.company || ""}
+              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, company: String(v) } })}
+              placeholder="如 运去哪 YQN / Milogin Freight" />
+            <SettingRow label="我的职位" value={config?.identity?.title || ""}
+              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, title: String(v) } })}
+              placeholder="如 航线经理 / 海外销售" />
+            <SettingRow label="业务口径" value={config?.identity?.business || ""}
+              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, business: String(v) } })}
+              placeholder="主营航线与服务，如 拉美整箱海运为主，CMA/MSC 常报，可提供门到门" />
+            <SettingRow label="助手角色" value={config?.identity?.persona || ""}
+              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, persona: String(v) } })}
+              placeholder="固定扮演的角色与分寸，如 我代表我方与客户谈舱位与报价；未确认的价格不得承诺" />
+            <div className="text-[10px] text-amber-600 mt-1">
+              未填「自称 / 我方公司 / 署名」时，AI 起草的邮件只能留 {'{{占位符}}'}。
+            </div>
           </SettingCard>
 
           {/* 发送规则 — 模拟人工 */}

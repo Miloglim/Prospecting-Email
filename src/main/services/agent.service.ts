@@ -19,6 +19,7 @@ type TurnOutcomeUsage = TurnOutcome["usage"];
 import { executeAction, dropActionsForConversation } from "./agent/actions";
 import { chat as llmChat } from "./ai.service";
 import { readActiveEndpoint } from "./endpoint.service";
+import { identityGaps } from "./agent/identity";
 
 export type { PushFn };
 
@@ -69,11 +70,13 @@ function getProviderConfig(): ProviderConfig {
 }
 
 /** 配置状态（不含密钥值），供 UI 显示模式横幅 */
-export function status(): Result<{ configured: boolean; model: string; baseUrl: string; thinking: boolean }> {
+export function status(): Result<{ configured: boolean; model: string; baseUrl: string; thinking: boolean; identityOk: boolean }> {
   const c = getProviderConfig();
   return okResult({
     configured: c.configured, model: c.model, baseUrl: c.baseUrl,
     thinking: readActiveEndpoint().thinking,
+    // 身份缺失时草稿只能留占位符，界面据此提示去补
+    identityOk: identityGaps().length === 0,
   });
 }
 

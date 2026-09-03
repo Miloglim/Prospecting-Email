@@ -57,6 +57,8 @@ export interface RuntimeConfig {
   general?: { closeAction?: "tray" | "quit"; autoLaunch?: boolean };
   /** 全局发信日限额（从首次真实发送起 24h 重置） */
   sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number };
+  /** 助手身份档案：我方公司、职位、业务口径与固定角色（注入每轮对话） */
+  identity?: { company?: string; title?: string; business?: string; persona?: string };
   /** 全局默认发件人名称（账号 displayName 优先） */
   fromName: string;
   /** 邮件正文中的自称（如 Zayne），用于正文落款 */
@@ -94,6 +96,7 @@ export const DEFAULT_SCHEDULE: SendSchedule = {
 };
 
 const DEFAULT_CONFIG: RuntimeConfig = {
+  identity: { company: "", title: "", business: "", persona: "" },
   fromName: "",
   bodyName: "",
   signature: "",
@@ -152,6 +155,7 @@ export function loadConfig(): RuntimeConfig {
     ...raw,
     schedule: sched.success ? { ...DEFAULT_SCHEDULE, ...sched.data } : DEFAULT_SCHEDULE,
     test: test.success ? { ...DEFAULT_CONFIG.test, ...test.data } : DEFAULT_CONFIG.test,
+    identity: { ...DEFAULT_CONFIG.identity, ...(raw.identity || {}) },
     crm: { ...DEFAULT_CONFIG.crm, ...(raw.crm || {}), followupDays: { ...DEFAULT_CONFIG.crm.followupDays, ...(raw.crm?.followupDays || {}) } },
   };
 }
