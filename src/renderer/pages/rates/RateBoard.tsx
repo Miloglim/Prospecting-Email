@@ -98,10 +98,8 @@ export function RateBoard() {
           )}
         </Space>
         <Space>
-          <Tooltip title="从公司电脑的运价服务刷新本地镜像（每 10 分钟自动同步一次）">
-            <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
-              loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步运价库</Button>
-          </Tooltip>
+          <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
+            loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步运价库</Button>
         </Space>
       </div>
 

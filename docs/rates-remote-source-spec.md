@@ -42,7 +42,7 @@ sender/msg_time/image_name/record_id）同名直取。数值容忍字符串带�
   dws 字段映射、parseSnapshot）整体移除。
 - **服务地址为程序内置参数**，无 UI 配置：默认 `http://192.168.189.229:8788`，
   `RATES_REMOTE_URL` 环境变量可覆盖（供换网络环境用，界面上不出现）。
-- 定时同步：启动后 5 秒首拉 + 每 10 分钟轮询（`RATES_REMOTE_MINUTES` 可覆盖）；
+- 定时同步：启动后 5 秒首拉 + 每 4 小时轮询（默认 240 分钟，`RATES_REMOTE_MINUTES` 可覆盖）；
   同步中防重入；自动同步失败只记日志，手动同步失败才弹提示。
 
 ## 5. UI（RateBoard / 仪表盘运价卡）

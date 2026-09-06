@@ -12,6 +12,6 @@ export function registerRatesIPC() {
   // 镜像统计
   ipcMain.handle(IPC.RATES.STATUS, () => Rates.status());
 
-  // 启动定时同步：5 秒后首拉 + 每 10 分钟轮询（失败只记日志，不打扰用户）
+  // 启动定时同步：5 秒后首拉 + 每 4 小时轮询（失败只记日志，不打扰用户）
   Rates.startAutoSync();
 }

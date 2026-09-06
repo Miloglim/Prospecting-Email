@@ -15,7 +15,7 @@ import { netFetch } from "../net-proxy";
 /** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
 const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "http://192.168.189.229:8788";
 /** 自动同步间隔（分钟），RATES_REMOTE_MINUTES 可覆盖，最小 1 */
-const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 10) || 10);
+const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 240) || 240);   // 默认 4 小时
 const PAGE_SIZE = 500;
 const ROW_CAP = 20_000;
 
