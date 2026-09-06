@@ -21,11 +21,11 @@ body {
   color: #bbb;
 }
 
-/* 滚动条 — 轻量扁平 */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* 滚动条 — 全局唯一样式（纵向 + 横向统一）：细、浅灰、悬停加深 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.16); }
+::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #bfbfbf; }
 ::-webkit-scrollbar-corner { background: transparent; }
 /* 隐藏滚动条直到 hover（可选，保留轻量可见的默认态） */
 
@@ -98,11 +98,31 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 .settings-section {
+  position: relative;
   animation: section-enter 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .settings-section:nth-child(2) { animation-delay: 0.06s; }
 .settings-section:nth-child(3) { animation-delay: 0.12s; }
 .settings-section:nth-child(4) { animation-delay: 0.18s; }
+
+/* 导航定位到某分区时的一圈青色描边+轻填充（独立伪元素，不抢 section-enter 动画） */
+@keyframes sec-locate {
+  0%   { opacity: 0; box-shadow: 0 0 0 0 rgba(0,191,165,0); }
+  22%  { opacity: 1; }
+  40%  { opacity: 1; box-shadow: 0 0 0 2px rgba(0,191,165,.85), 0 0 22px 6px rgba(0,191,165,.16); }
+  100% { opacity: 0; box-shadow: 0 0 0 0 rgba(0,191,165,0); }
+}
+.settings-section.is-located::after {
+  content: "";
+  position: absolute;
+  inset: -6px -8px;
+  border-radius: 12px;
+  background: rgba(0,191,165,.05);
+  border: 1.5px solid rgba(0,191,165,.7);
+  pointer-events: none;
+  opacity: 0;
+  animation: sec-locate 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
 
 /* 动态更新面板 — 顺滑展开 */
 @keyframes dynamic-enter {
@@ -177,8 +197,7 @@ body {
   pointer-events: none;
   transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.settings-rail-item:hover .settings-rail-label,
-.settings-rail-item.active .settings-rail-label {
+.settings-rail-item:hover .settings-rail-label {
   opacity: 1;
   transform: translateX(0);
 }
@@ -253,10 +272,17 @@ body {
   margin: 2px 6px 6px 2px;   /* 给阴影留展开位，防被消息区滚动容器裁边 */
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12), 0 8px 20px rgba(0, 0, 0, 0.16);
 }
+/* 表格行的悬停指针；选中/悬停底色统一由 App.tsx 的 antd 令牌（收件箱淡黑灰）提供，别在这儿再写一套色 */
+.row-select-table .ant-table-tbody > tr {
+  cursor: pointer;
+}
+
 .chat-table-card .ant-table { background: #fff; }
 .chat-table-card .ant-table-cell { border-color: #e5e5e5 !important; }
+/* antd 无固定列时的横向滚动两侧阴影（container::before/after）：曾改成实心灰背景，
+   表格一横滚两侧就各立一条灰竖块糊住边缘列——卡片表没有固定列，这阴影无价值，关掉 */
 .chat-table-card .ant-table-container::before,
-.chat-table-card .ant-table-container::after { background: #e5e5e5 !important; }
+.chat-table-card .ant-table-container::after { display: none !important; }
 
 /* ── Agent 过程时间线（ThoughtChain small 再压缩）──
    组件默认按"内容卡"设计：节点圆 20px、行距 12px、内容带边框白卡——对日志流太重。
@@ -280,6 +306,25 @@ body {
   max-width: 100%;
 }
 .agent-chain .ant-thought-chain-item-footer { margin-top: 2px; }
+
+/* 思考逐字生长时跟一个光标，封口即随节点消失（纯 CSS，不加状态位） */
+.agent-caret {
+  display: inline-block; margin-left: 1px; color: #8c8c8c;
+  animation: agent-caret-blink 1s steps(2, start) infinite;
+}
+@keyframes agent-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* 导航栏会话行：该会话有回合在跑时的呼吸点（18px 行高里只占 5px，不加高、不推字） */
+.conv-running-dot {
+  flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
+  margin-right: 5px; background: #00bfa5;
+  animation: conv-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes conv-dot-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .agent-caret, .conv-running-dot { animation: none; }
+  .conv-running-dot { opacity: .9; }
+}
 
 /* md 表格进了卡片：去掉表自身的边框/圆角/外边距，线由单元格出、角由卡片管 */
 .md-body .chat-table-card table { border: none; border-radius: 0; margin: 0; }

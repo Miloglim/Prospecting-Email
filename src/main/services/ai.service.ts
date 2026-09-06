@@ -4,6 +4,7 @@ import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 import { upsertEnv } from "../env-store";
 import { readActiveEndpoint, readLightEndpoint, endpointFamily, thinkingExtras } from "./endpoint.service";
+import { readIdentity } from "./agent/identity";
 import { netFetch } from "../net-proxy";
 
 // ── .env 加载（dotenv：Node 不内置 .env 解析）──────────
@@ -283,24 +284,21 @@ export interface EmailDraftInput {
 
 export async function generateEmailDraft(input: EmailDraftInput): Promise<Result<string>> {
   const lang = input.language === "ES" ? "西班牙语" : input.language === "PT" ? "葡萄牙语" : "英语";
-  const s = input.sender;
-  const who = s ? [s.selfName, s.title, s.company].filter(Boolean).join(" / ") : "";
-  const system = `你是货代销售文案专家。用${lang}写一封给客户的经营性邮件（开发信 / 跟进信 / 回信），语气专业但不生硬，3-4 段，带主题行（用 SUBJECT: 开头）和正文。不要多余解释。`;
+  // 身份固定后缺省取全局档案：任何调用方（含批量跟进/后台任务）起草都不再"裸奔"
+  const s = input.sender ?? readIdentity();
+  const who = [s.selfName, s.company].filter(Boolean).join(" / ");
+  const system = `你是运去哪（YQN）国际物流的销售文案助理，代表运去哪用${lang}写一封给客户的经营性邮件（开发信 / 跟进信 / 回信）。语气专业但不生硬，像资深销售：简洁、有分寸、不堆砌客套、不过度承诺时效。3-4 段，带主题行（用 SUBJECT: 开头）和正文。不要多余解释。`;
   const back = input.backcheck
     ? `\n背调要点：${input.backcheck.summary ?? ""}${input.backcheck.logisticsFit ? `；契合点：${input.backcheck.logisticsFit}` : ""}`
     : "";
-  // 身份进 prompt：否则模型只能编一个发件人，或留一堆 {{占位}} 让你自己填
-  const idBlock = s && who
-    ? `\n【我方身份】${who}${s.business ? `；业务：${s.business}` : ""}${s.persona ? `；角色口径：${s.persona}` : ""}\n`
-      + "正文一律用上面的真实自称与身份落款，禁止留 {{firstName}} {{company}} {{phone}} 这类占位符。"
+  // 身份 + 报价纪律进 prompt：模型不再编发件人、不留占位符、不承诺未确认价格
+  const idBlock = who
+    ? `\n【我方身份】${who}\n`
+      + "正文一律用上面的真实自称与身份落款，禁止留 {{firstName}} {{company}} {{phone}} 这类占位符。\n"
+      + "报价纪律：未经确认的运价、舱位、船期不向客户承诺；涉及价格注明「以最终确认为准」。"
     : "";
   const user = `收件公司：${input.companyName}\n收件人：${input.contactName}\n${back}${idBlock}\n\n请写这封邮件。`;
-  const r = await chat(system, user);
-  // 与真实发信保持一致：send.service 会自动追加署名，草稿这里也补上，免得"草稿没落款、发出去才有"
-  if (r.success && s?.signature && !r.data.trimEnd().endsWith(s.signature.trim())) {
-    return okResult(`${r.data.trimEnd()}\n\n${s.signature}`);
-  }
-  return r;
+  return chat(system, user);
 }
 
 export interface EmailSummaryInput {

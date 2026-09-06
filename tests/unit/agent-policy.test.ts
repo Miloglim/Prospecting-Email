@@ -93,6 +93,11 @@ describe("任务清单归一 normalizePlan", () => {
     expect(normalizePlan(undefined)).toEqual([]);
     expect(normalizePlan("oops")).toEqual([]);
     expect(normalizePlan([null, 1, { state: "done" }])).toEqual([]);
-    expect(normalizePlan([{ text: "查运价", state: null }])).toEqual([{ text: "查运价", state: "pending" }]);
+    const one = normalizePlan([{ text: "查运价", state: null }]);
+    expect(one).toHaveLength(1);
+    expect(one[0]).toMatchObject({ text: "查运价", state: "pending" });
+    expect(typeof one[0]!.id).toBe("string");
+    // 稳定 id：同一文本归一后哈希一致（全量重发时渲染端可识别同一步）
+    expect(one[0]!.id).toBe(normalizePlan([{ text: "查运价" }])[0]!.id);
   });
 });

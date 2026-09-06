@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Avatar, Button, Checkbox, Modal, Skeleton, Space, Table, Tag, Tooltip } from "antd";
+import { Alert, Avatar, Button, Checkbox, Dropdown, Modal, message, Skeleton, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import {
   UserOutlined, LoadingOutlined, CheckCircleOutlined,
@@ -13,99 +13,23 @@ import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github.css";
 import remarkGfm from "remark-gfm";
 import { DiamondLogo } from "../../components/DiamondLogo";
-import { CONVS_CHANGED, gotoConversation } from "../../components/layout/Sidebar";
+import {
+  clearQueued, enqueue, markAction, navigate as openConversation,
+  nextKey, pushLocal, pushLocalText, resetDraft, resolveApproval as submitApproval, send as sendTurn,
+  setBudgetAsk, setCtx as setConvCtx, stop as stopTurn, useActiveConvKey, useConvState,
+} from "../../hooks/useAgentTranscript";
+import type { ApprovalReq, Msg, PlanStep } from "../../hooks/useAgentTranscript";
+import { ensureToolMeta, toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
+
+// 工具元数据（注册表派生的中文名/追问引导）：模块加载即取，到达后订阅处统一刷新
+void ensureToolMeta();
 
 /** IPC 返回的统一包裹形态（结构同 main/errors 的 Result，渲染层本地声明避免跨层 import） */
 type IpcResult<T> = { success: boolean; data?: T; error?: string };
 
-interface Msg {
-  key: string;
-  role: "user" | "ai" | "tool";
-  content: string;
-  /** 等待首个增量时显示呼吸点 */
-  loading?: boolean;
-  /** 正在流式接收 */
-  streaming?: boolean;
-  error?: boolean;
-  /** 产生时刻（过程行折叠后据此算「用时 Xs」；历史消息可缺省） */
-  ts?: number;
-  /** 过程卡结构化字段（role=tool 时） */
-  chip?: {
-    kind: "calling" | "done" | "reasoning";
-    tool?: string;
-    /** 工具调用 id：calling → done 原地升级按它配对，同名连发不会错配 */
-    callId?: string;
-    args?: string;
-    detail?: string;   // 参数摘要 / 结果摘要 / 思考全文
-    brief?: string;    // done 卡的「N 条结果」小尾巴
-  };
-  /** 任务清单快照（role=tool，由 agent:plan 全量覆盖、原地刷新） */
-  plan?: PlanStep[];
-  /** 后台任务卡引用（工具结果里的 task 字段，进度走 agent:task 事件） */
-  task?: { taskId: string };
-  /** 本轮 token 结算（挂在收尾的 AI 气泡上；端点没回 usage 就不显示） */
-  usage?: { requests?: number; input?: number; output?: number; cached?: number };
-  /** 动作执行后的回执行（role=tool 无 chip 时），带可选跳转 */
-  link?: { label: string; href: string };
-}
-
-/** 任务清单里的一步（与主进程 update_plan 归一后的形状一致） */
-interface PlanStep { text: string; state: "pending" | "doing" | "done" }
-
-/** 工具 → 人话名（过程卡展示用） */
-const TOOL_LABELS: Record<string, string> = {
-  quote_search: "查询运价",
-  market_research: "调研公开行情",
-  search_contacts: "检索联系人",
-  record_followup: "记录跟进",
-  inbox_search: "检索邮件",
-  email_summarize: "总结邮件",
-  company_backcheck: "公司背调",
-  generate_draft: "撰写开发信",
-  queue_status: "查询发送进度",
-  reminders_due: "查询到期提醒",
-  accounts_status: "查询账号健康",
-  send_queue_add: "加入发信队列",
-  update_plan: "更新任务清单",
-  export_artifact: "导出文件",
-  start_batch_task: "启动后台任务",
-  report_gap: "登记能力缺口",
-  reasoning: "思考",
-};
-const toolLabel = (name?: string) => (name && TOOL_LABELS[name]) || name || "工具";
-
-/** 过程卡文本格式化：tool_called 带参数摘要，tool_output 带结果规模，reasoning 为思考段 */
-function fmtChipArgs(a?: string): string {
-  if (!a) return "";
-  try {
-    const o = JSON.parse(a) as Record<string, unknown>;
-    return Object.entries(o).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ");
-  } catch { return a.slice(0, 48); }
-}
-function resultBrief(r?: string): string {
-  if (!r) return "";
-  try {
-    const o = JSON.parse(r) as unknown;
-    if (Array.isArray(o)) return `${o.length} 条结果`;
-    const p2 = o as { artifact?: { name?: unknown }; task?: { total?: unknown }; checked?: unknown };
-    // 调研结果同时带产物与核实数：核实数更能说明这次到底查到了什么
-    if (typeof p2.checked === "string") return p2.checked;
-    if (p2.artifact && typeof p2.artifact.name === "string") return `已生成 ${p2.artifact.name}`;
-    if (p2.task && typeof p2.task.total === "number") return `共 ${p2.task.total} 家`;
-    const obj = o as {
-      total?: number; count?: number; quotes?: unknown; data?: { length?: number };
-      results?: unknown[]; dueCount?: number; overdueCount?: number; pendingGroups?: number; healthy?: number; enabled?: number;
-    };
-    if (typeof obj.dueCount === "number") return `到期 ${obj.dueCount} · 逾期 ${obj.overdueCount ?? 0}`;
-    if (typeof obj.pendingGroups === "number") return `待发 ${obj.pendingGroups} 组`;
-    if (typeof obj.healthy === "number" && typeof obj.enabled === "number") return `${obj.healthy}/${obj.enabled} 健康`;
-    if (typeof obj.total === "number") return `共 ${obj.total} 条`;
-    if (typeof obj.count === "number") return `${obj.count} 条结果`;
-    if (Array.isArray(obj.results)) return `${obj.results.length} 条结果`;
-    if (obj.data?.length != null) return `${obj.data.length} 条`;
-  } catch { /* 非 JSON 结果不展示摘要 */ }
-  return "";
-}
+/** 工具 → 人话名（过程卡展示用）：唯一事实源在主进程注册表（agent/manifest.ts），
+ *  经 agent:toolMeta 取回缓存在 tool-meta；reasoning 是思考伪通道，本地特判即可 */
+const toolLabel = (name?: string) => (name === "reasoning" ? "思考" : toolLabelText(name));
 
 /** 工具结果 JSON → 数据行（供「数据表格卡」渲染）：支持数组本体 / {quotes}{messages}{due}{results} */
 function asRows(detail?: string): Record<string, unknown>[] | null {
@@ -662,16 +586,23 @@ function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: 
   const chainItems: ThoughtChainItem[] = items.map(m => {
     const c = m.chip!;
     const brief = (s?: string, n = 90) => (s && s.length > n ? `${s.slice(0, n)}…` : s) ?? "";
+    // 长思考只显示尾部：最新一句才是在想的这件事，头部留白没有阅读价值
+    const tail = (s?: string, n = 400) => (s && s.length > n ? `…${s.slice(-n)}` : s) ?? "";
     if (c.kind === "reasoning") {
+      const growing = !!c.live;
       return {
-        key: m.key, icon: <BulbOutlined style={{ fontSize: 10, color: "#bfbfbf" }} />,
-        title: <span className="text-[12px] text-gray-500">思考</span>,
+        key: m.key,
+        icon: growing
+          ? <LoadingOutlined spin style={{ fontSize: 10, color: "#8c8c8c" }} />
+          : <BulbOutlined style={{ fontSize: 10, color: "#bfbfbf" }} />,
+        title: <span className="text-[12px] text-gray-500">{growing ? "正在思考" : "思考"}</span>,
         content: (
           <div className="text-[12px] text-gray-400 pl-2 border-l border-gray-200 whitespace-pre-wrap leading-relaxed">
-            {brief(c.detail, 400)}
+            {growing ? tail(c.detail) : brief(c.detail, 400)}
+            {growing && <span className="agent-caret">▍</span>}
           </div>
         ),
-        status: "success",
+        status: growing ? "pending" : "success",
       };
     }
     if (c.kind === "calling") {
@@ -682,9 +613,13 @@ function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: 
         status: "pending",
       };
     }
+    const failed = !!c.failed;
     return {
-      key: m.key, icon: <CheckCircleOutlined style={{ fontSize: 10, color: "#52c41a" }} />,
-      title: <span className="text-[12px] text-gray-500">已{toolLabel(c.tool)}</span>,
+      key: m.key,
+      icon: failed
+        ? <CloseCircleOutlined style={{ fontSize: 10, color: "#ff4d4f" }} />
+        : <CheckCircleOutlined style={{ fontSize: 10, color: "#52c41a" }} />,
+      title: <span className="text-[12px] text-gray-500">{failed ? `${toolLabel(c.tool)}失败` : `已${toolLabel(c.tool)}`}</span>,
       description: (c.brief || c.args)
         ? <span className="text-[11px]">{brief(c.brief || c.args, 60)}</span>
         : undefined,
@@ -695,7 +630,7 @@ function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: 
           </div>
         )
         : undefined,
-      status: "success",
+      status: failed ? "error" : "success",
     };
   });
 
@@ -747,74 +682,55 @@ function PlanCard({ items }: { items: PlanStep[] }) {
   );
 }
 
-/** 过程卡插入在「正在流式的 AI 气泡」之前，保证回答气泡恒在列表末尾（豆包式过程在上、答案在下） */
-function insertBeforeStreamingBubble(prev: Msg[], chip: Msg): Msg[] {
-  const stamped = { ...chip, ts: chip.ts ?? Date.now() };
-  for (let i = prev.length - 1; i >= 0; i--) {
-    const m = prev[i]!;
-    if (m.role === "ai" && m.streaming) {
-      return [...prev.slice(0, i), stamped, ...prev.slice(i)];
-    }
-  }
-  return [...prev, stamped];
-}
-
-interface ApprovalReq {
-  approvalId: string;
-  conversationId?: string;
-  /** autoApprovable 由主进程按 policy 下发：只有低风险写工具才允许「本会话内不再询问」 */
-  items: Array<{ tool?: string; args?: unknown; autoApprovable?: boolean }>;
-}
-
-let seq = 0;
-const nextKey = () => `m${++seq}`;
-
 /**
- * 能力面板（空态展示）：把助手真实接入的工具摊开给用户看，点一条即发问。
- * 分组名对应工具，用户不需要记工具名——这里是「能干什么」。
+ * 能力面板兜底版：主进程的建议还没回来（或没配端点）时显示这份。
+ * 六个 title 必须与主进程 suggestion.service 的 GROUP_TITLES 一字不差，
+ * prompt 前缀必须与 GROUP_PROMPT 一字不差 —— 卡上显示 text，点击发送 prompt。
  */
-const CAPABILITIES: Array<{ title: string; cap: string; items: string[] }> = [
+const CAPABILITIES: Array<{ title: string; cap: string; items: Array<{ text: string; prompt: string }> }> = [
   {
     title: "查运价", cap: "接入钉钉《海运运价智能台账》本地镜像",
-    items: ["santos 的价格怎么样", "加勒比线 40HQ 最便宜到多少", "运价库里现在总共有多少条报价"],
+    items: [
+      { text: "santos 的价格怎么样", prompt: "在本地运价台账镜像中检索，按目的港、船司、柜型汇总报价并注明有效期；只报台账里真实存在的条目，查不到就明说，不要用市场价或记忆补数。\n检索目标：santos 的价格怎么样" },
+      { text: "加勒比线 40HQ 最便宜到多少", prompt: "在本地运价台账镜像中检索，按目的港、船司、柜型汇总报价并注明有效期；只报台账里真实存在的条目，查不到就明说，不要用市场价或记忆补数。\n检索目标：加勒比线 40HQ 最便宜到多少" },
+    ],
   },
   {
     title: "看市场行情", cap: "联网多源调研公开运价与船期，逐页核实并标注可信度，出带来源链接的报告",
-    items: ["上海到桑托斯现在公开市场报多少", "宁波到金斯堡最近有没有新船期", "我们台账上 santos 的价在市场算什么水平"],
+    items: [
+      { text: "上海到桑托斯现在公开市场报多少", prompt: "围绕指定业务目标检索多个可信公开来源，交叉核对信息，整理可用资源、关键结论、发布日期和来源链接。明确标注无法核实或可能过期的信息。\n检索目标：上海到桑托斯现在公开市场报多少" },
+      { text: "我们台账上 santos 的价在市场算什么水平", prompt: "围绕指定业务目标检索多个可信公开来源，交叉核对信息，整理可用资源、关键结论、发布日期和来源链接。明确标注无法核实或可能过期的信息。\n检索目标：我们台账上 santos 的价在市场算什么水平" },
+    ],
   },
   {
     title: "管邮件", cap: "检索收件箱 + 逐封总结并给下一步建议",
-    items: ["我今天有哪些未读邮件", "总结一下 juan@acme.com 发来的询盘邮件", "把未读邮件都总结一下，导出成文件"],
+    items: [
+      { text: "我今天有哪些未读邮件", prompt: "检索本地收件箱，逐封给出发件人、主题、一句话摘要和下一步建议；需要回复或导出时先给草稿或清单等我确认，不要编造邮件里没有的内容。\n检索目标：我今天有哪些未读邮件" },
+      { text: "把未读邮件都总结一下，导出成文件", prompt: "检索本地收件箱，逐封给出发件人、主题、一句话摘要和下一步建议；需要回复或导出时先给草稿或清单等我确认，不要编造邮件里没有的内容。\n检索目标：把未读邮件都总结一下，导出成文件" },
+    ],
   },
   {
     title: "跟进客户", cap: "联系人检索 + 今日到期提醒 + 记跟进（写操作需确认）",
-    items: ["我今天该跟进谁", "帮我查公司名带「物流」的联系人", "给 juan@acme.com 记一条跟进：已发送报价，等待回复"],
+    items: [
+      { text: "我今天该跟进谁", prompt: "在联系人库与跟进记录里检索，给出匹配对象、最近跟进时间与状态；要写入跟进记录时先把内容给我确认。查不到就明说，不要猜测或张冠李戴。\n检索目标：我今天该跟进谁" },
+      { text: "帮我查公司名带「物流」的联系人", prompt: "在联系人库与跟进记录里检索，给出匹配对象、最近跟进时间与状态；要写入跟进记录时先把内容给我确认。查不到就明说，不要猜测或张冠李戴。\n检索目标：帮我查公司名带「物流」的联系人" },
+    ],
   },
   {
     title: "准备发信", cap: "写开发信草稿 + 入队（不自动发送，需你在发送中心点开始）",
-    items: ["给 ACME 的 Juan 写一封西语开发信", "发送队列现在还有多少没发出去"],
+    items: [
+      { text: "给 ACME 的 Juan 写一封西语开发信", prompt: "撰写开发信草稿或查看发送队列状态；草稿先给我过目，只能入队不能自动发送，开始发送必须我自己在发送中心确认。写内容前先查库里的联系人与公司信息。\n检索目标：给 ACME 的 Juan 写一封西语开发信" },
+      { text: "发送队列现在还有多少没发出去", prompt: "撰写开发信草稿或查看发送队列状态；草稿先给我过目，只能入队不能自动发送，开始发送必须我自己在发送中心确认。写内容前先查库里的联系人与公司信息。\n检索目标：发送队列现在还有多少没发出去" },
+    ],
   },
   {
     title: "账号与公司", cap: "发信账号健康检查 + 公司网络背调",
-    items: ["我现在有几个发信账号能用", "给 ACME 这家公司做个背调", "把 Acme、Beta、Gamma 这三家都背调一遍"],
+    items: [
+      { text: "我现在有几个发信账号能用", prompt: "检查发信账号的健康状态，或对指定公司做公开网络背调；账号问题给出原因与修复建议，背调只依据可查到的公开信息并标注可信度，查不到的部分明确说查不到。\n检索目标：我现在有几个发信账号能用" },
+      { text: "给 ACME 这家公司做个背调", prompt: "检查发信账号的健康状态，或对指定公司做公开网络背调；账号问题给出原因与修复建议，背调只依据可查到的公开信息并标注可信度，查不到的部分明确说查不到。\n检索目标：给 ACME 这家公司做个背调" },
+    ],
   },
 ];
-
-/** 本轮调用过的工具 → 「接下来可以问」引导（让能力被连续体验到） */
-const FOLLOW_UPS: Record<string, string[]> = {
-  quote_search: ["按最便宜的船司给客户写一封开发信", "把这条航线的报价按柜型对比一下"],
-  market_research: ["这个价格在我们台账里算什么水平", "按公开市场价给客户写一封报价信"],
-  search_contacts: ["给这位联系人记一条跟进", "查一下这个人的往来邮件记录"],
-  inbox_search: ["把最值得回复的三封总结一下", "帮我起草一封回复给最新那封询盘"],
-  email_summarize: ["按同样标准总结其他未读邮件", "把这条建议对应的跟进记到联系人上"],
-  reminders_due: ["给第一位联系人记一条跟进", "逾期最久的那位最近有什么邮件往来"],
-  queue_status: ["哪个发信账号在报错，帮我看看", "把待发客户里的第一家背调一下"],
-  accounts_status: ["异常的那个账号怎么修", "现在队列里还有多少没发出去"],
-  company_backcheck: ["根据背调写一封开发信", "把这个公司的人从客户库里找出来"],
-  send_queue_add: ["发送队列现在什么状态", "再给下一家也准备一封"],
-  export_artifact: ["把刚才的内容再导出一份 csv", "继续总结剩下的未读邮件"],
-  start_batch_task: ["等结果出来后，给评级最高的那家写封开发信", "发送队列现在什么状态"],
-};
 
 function readConvFromHash(): string | undefined {
   const raw = window.location.hash;
@@ -859,41 +775,42 @@ const SLASH_HELP = `可用命令：\n${SLASH_COMMANDS.map(c => `${c.cmd} — ${c
  * 链路：invoke("agent:chat") 立即拿 ID → 事件流 agent:chunk/done/error 逐字渲染 → 消息落库。
  */
 export function AssistantPage() {
-  const [messages, setMessages] = useState<Msg[]>([]);
-  const [sending, setSending] = useState(false);
-  const [convLoading, setConvLoading] = useState(false);
-  const [configured, setConfigured] = useState(false);
+  /**
+   * 回合现场（消息流水 + 回合态）存在模块级 store 里，本组件只是它的一个视图：
+   * 换页、切会话、深链跳转都不会把在途气泡弄丢（规范 docs/agent-live-transcript-spec.md）。
+   */
+  const key = useActiveConvKey();
+  const {
+    messages, sending, loading: convLoading, approval, budgetAsk, queued,
+    sessionUsage, followUps, doneActions, ctx,
+  } = useConvState(key);
+  // 工具中文名来自注册表（经 agent:toolMeta）：到达后本组件批量刷新一次
+  useToolMetaVersion();
+  /** 端点是否配好：null = 还没读到（异步 IPC 在路上），此时什么都不提示，避免第一帧闪一条红条 */
+  const [configured, setConfigured] = useState<boolean | null>(null);
   /** 我方身份是否填全（缺了 AI 只能留 {{占位符}}） */
   const [identityOk, setIdentityOk] = useState(true);
   const [model, setModel] = useState("");
   const [thinking, setThinking] = useState(false);
+  /** 当前生效的端点档案 id：解析不出（纯手写 .env 且无同名档案）就不给开关，免得按了没反应 */
+  const [thinkingProfile, setThinkingProfile] = useState<string | null>(null);
+  const [thinkingBusy, setThinkingBusy] = useState(false);
+  /** 已配好的端点清单（模型胶囊点开就地换；只有一份时胶囊退化成纯标签） */
+  const [profiles, setProfiles] = useState<Array<{ id: string; name: string; active: boolean }>>([]);
   const [inputVal, setInputVal] = useState("");
-  const [approval, setApproval] = useState<ApprovalReq | null>(null);
   /** 审批卡上的「本会话内不再询问」勾选（仅低风险写工具可选，外发类永不出现该勾选项） */
   const [rememberApproval, setRememberApproval] = useState(false);
-  /** 本会话累计 token（端点回了 usage 才计；没回就整块不显示，不显示 0） */
-  const [sessionUsage, setSessionUsage] = useState<{ input: number; output: number } | null>(null);
   /** 回合进行中每秒跳一次，让折叠头的「正在处理 · Xs」动起 */
   const [, setTick] = useState(0);
-  /** 排队输入（单槽）：运行中敲的下一条，等本轮 done 后自动发出 */
-  const [queued, setQueued] = useState<string | null>(null);
-  const queuedRef = useRef<string | null>(null);
-  /** 自动发送的竞态守卫：停止/切会话自增，120ms 兑现时发现代数变了就放弃 */
-  const flushGenRef = useRef(0);
-  /** 页面上下文锚点（#/assistant?ctx=contact:12）：发给模型前由主进程解析成人话注记 */
-  const [ctx, setCtx] = useState<string | undefined>(() => readHashParam("ctx"));
-  /** 本轮调用过的工具 → 回答结束后生成「接下来可以问」引导 */
-  const turnToolsRef = useRef<string[]>([]);
-  const [followUps, setFollowUps] = useState<string[]>([]);
-  const turnUserRef = useRef("");
-  const turnTextRef = useRef("");
-  const followGenRef = useRef(0);
-  /** 动作卡：已执行过的（actionId → 回执短语）+ 待确认的写入动作 */
-  const [doneActions, setDoneActions] = useState<Record<string, string>>({});
+  /** 动作卡：待确认的写入动作（确认弹窗属于「这一屏」，不进现场） */
   const [pendingWrite, setPendingWrite] = useState<ActionDto | null>(null);
   const [writing, setWriting] = useState(false);
-  const convIdRef = useRef<string | undefined>(undefined);
-  const loadTokenRef = useRef(0);
+  /**
+   * 首页「建议行动」六张卡。null = 还没拿到（先显示骨架）；
+   * 拿到的是主进程读当天批次、按今天的数字填好槽的结果（纯本地，不等模型）；
+   * 万一取失败才落到下面那份写死的兜底 —— 宁可笼统，不空着。
+   */
+  const [cards, setCards] = useState<typeof CAPABILITIES | null>(null);
   /** 已自动发送过的 ?q=（防止 hashchange 回环重复发送） */
   const askedRef = useRef<string | null>(null);
   /** hashchange 回调拿不到最新闭包里的 handleSend，用 ref 转发 */
@@ -942,14 +859,53 @@ export function AssistantPage() {
     setPendingBelow(false);
   };
 
-  // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次
+  // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次。
+  // 两条查询并发发出去 —— 串行 await 会把「状态还不知道」的窗口拉长一倍，那段时间够闪一次红条。
   const refreshStatus = async () => {
-    const r = await window.api.invoke("agent:status") as
-      IpcResult<{ configured: boolean; model: string; thinking?: boolean; identityOk?: boolean }>;
+    const [r, s] = await Promise.all([
+      window.api.invoke("agent:status") as Promise<
+        IpcResult<{ configured: boolean; model: string; thinking?: boolean; identityOk?: boolean }>>,
+      window.api.invoke("ai:endpointStatus") as Promise<IpcResult<{
+        activeId: string | null;
+        profiles: Array<{ id: string; name: string; baseUrl: string; model: string }>;
+        endpoint: { baseUrl: string; model: string };
+      }>>,
+    ]);
     if (r?.success && r.data) {
       setConfigured(r.data.configured); setModel(r.data.model); setThinking(!!r.data.thinking);
       setIdentityOk(r.data.identityOk !== false);
+    } else {
+      setConfigured(false);   // 读失败也要落到「未配置」，不能永远停在未知态不提示
     }
+    // 生效档案与可选清单：思考开关要落到生效那一份，模型胶囊点开则用来就地换端点
+    if (s?.success && s.data) {
+      const cut = (u: string) => u.replace(/\/+$/, "");
+      const d = s.data;
+      const eff = d.activeId
+        ?? d.profiles.find(p => cut(p.baseUrl) === cut(d.endpoint.baseUrl) && p.model === d.endpoint.model)?.id
+        ?? null;
+      setThinkingProfile(eff);
+      setProfiles(d.profiles.map(p => ({ id: p.id, name: p.name, active: p.id === eff })));
+    }
+  };
+  /** 就地切思考：写档案 + 同步 .env（生效端点每次现读，不用重启） */
+  const toggleThinking = async (on: boolean) => {
+    if (!thinkingProfile) return;
+    setThinkingBusy(true);
+    const r = await window.api.invoke("ai:profileThinking", { id: thinkingProfile, thinking: on }) as
+      IpcResult<{ thinking?: boolean }>;
+    setThinkingBusy(false);
+    if (!r?.success) { message.error(r?.error || "切换失败"); return; }
+    void refreshStatus();
+  };
+  /** 就地换端点：激活即写生效参数并同步进程环境，下一轮对话就用它（不用重启） */
+  const switchProfile = async (id: string) => {
+    if (profiles.some(p => p.active && p.id === id)) return;
+    const r = await window.api.invoke("ai:profileActivate", id) as
+      IpcResult<{ configured: boolean; model: string; name: string }>;
+    if (!r?.success) { message.error(r?.error || "切换失败"); return; }
+    message.success(`已切到「${r.data?.name ?? id}」，立即生效`);
+    void refreshStatus();
   };
   useEffect(() => { void refreshStatus(); }, []);
 
@@ -960,60 +916,10 @@ export function AssistantPage() {
     return () => clearInterval(t);
   }, [sending]);
 
-  /** 加载指定会话（undefined = 新会话空态）；切换时中断进行中的生成
-   *  （用 ref 而非闭包 sending 判断：hashchange 回调捕获的是首帧闭包，state 已过期；
-   *    agent:stop 对无进行中回合幂等成功，多调无害） */
-  const loadConversation = async (id: string | undefined) => {
-    const token = ++loadTokenRef.current;
-    if (convIdRef.current) void window.api.invoke("agent:stop", convIdRef.current);
-    convIdRef.current = id;
-    setSending(false);
-    setApproval(null);
-    setCtx(readHashParam("ctx"));   // 会话切换时同步页面上下文 chip（hash 携带才保留）
-    setInputVal("");       // 切会话清空未发送的输入，避免串会话
-    queuedRef.current = null;   // 排队消息属于上一会话
-    setQueued(null);
-    flushGenRef.current++;      // 作废可能仍在倒计时的自动发送
-    setFollowUps([]);      // 引导条属于上一轮，切会话即失效
-    setDoneActions({});    // 动作卡状态不跨会话
-    setSessionUsage(null); // token 累计按会话算，切走即清零
-    setRememberApproval(false);
-    setPendingWrite(null);
-    setMessages([]);        // 立即清空，避免旧会话内容滞留
-    void refreshStatus();    // 期间可能在设置页换了端点
-    if (!id) { setConvLoading(false); return; }
-    setConvLoading(true);
-    const r = await window.api.invoke("agent:getConversation", id) as
-      IpcResult<Array<{ role: string; content: string; toolName?: string; argsJson?: string; resultJson?: string; createdAt?: string }>>;
-    if (token !== loadTokenRef.current) return;  // 已切去更新的会话 → 丢弃过期响应
-    setMessages(r?.success && r.data
-      ? r.data.map(m => {
-          if (m.role === "user") return { key: nextKey(), role: "user" as const, content: m.content };
-          if (m.role === "error") return { key: nextKey(), role: "ai" as const, content: m.content, error: true };
-          if (m.role === "tool") {
-            // 审计回放：重建为已完成的工具过程卡（产物/表格/草稿卡由 detail 复活）
-            return {
-              key: nextKey(), role: "tool" as const, content: "",
-              ts: m.createdAt ? Date.parse(m.createdAt.includes("T") ? m.createdAt : `${m.createdAt.replace(" ", "T")}Z`) : undefined,
-              chip: {
-                kind: "done" as const, tool: m.toolName,
-                args: fmtChipArgs(m.argsJson), brief: resultBrief(m.resultJson),
-                detail: m.resultJson,
-              },
-            };
-          }
-          return { key: nextKey(), role: "ai" as const, content: m.content };
-        })
-      : []);
-    setConvLoading(false);
-  };
-
-  // 首屏 + hash 变更（导航栏点击会话 / 其他页「问 AI」深链跳转）
+  // 挂载 / hash 变更：把视图指向对应会话的现场（现场本身在 store 里，切页切会话都不丢）
   useEffect(() => {
-    void loadConversation(readConvFromHash());
     const onHash = () => {
-      const id = readConvFromHash();
-      if (id !== convIdRef.current) void loadConversation(id);
+      openConversation(readConvFromHash(), readHashParam("ctx"));
       // ?q=…：由「问 AI」入口带来的问题 → 自动发送一次并从 hash 摘掉（刷新不重发）
       const q = readHashParam("q");
       if (q && askedRef.current !== q) {
@@ -1023,245 +929,75 @@ export function AssistantPage() {
         setTimeout(() => sendRef.current?.(q), 80);
       }
     };
-    window.addEventListener("hashchange", onHash);
     onHash();
+    window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 事件订阅：chunk 累积到「最后一条流式中的 ai 消息」；done 通知导航栏刷新（标题/排序）
+  /** 换会话即换一屏：未发送的输入、「不再询问」勾选、写入确认弹窗不跨会话（回合现场留在 store 里） */
+  const viewKeyRef = useRef(key);
   useEffect(() => {
-    const offChunk = window.api.on("agent:chunk", (data) => {
-      const d = data as { delta?: string };
-      turnTextRef.current += (d.delta ?? "");
-      setMessages(prev => {
-        const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i]!;
-          if (m.role === "ai" && m.streaming) {
-            next[i] = { ...m, loading: false, content: m.content + (d.delta ?? "") };
-            break;
-          }
-        }
-        return next;
-      });
-    });
-    const offDone = window.api.on("agent:done", (data) => {
-      const u = (data as { usage?: Msg["usage"] } | undefined)?.usage;
-      setMessages(prev => {
-        const next = prev.map(m => m.streaming ? { ...m, streaming: false, loading: false } : m);
-        if (u) {
-          for (let i = next.length - 1; i >= 0; i--) {
-            if (next[i]!.role === "ai") { next[i] = { ...next[i]!, usage: u }; break; }
-          }
-        }
-        return next;
-      });
-      if (u) {
-        setSessionUsage(p => ({
-          input: (p?.input ?? 0) + (u.input ?? 0),
-          output: (p?.output ?? 0) + (u.output ?? 0),
-        }));
-      }
-      setSending(false);
-      // 排队输入：本轮收尾后立即发出下一条（走 sendRef 复用完整入口，稍等 sending 落定）
-      const q = queuedRef.current;
-      if (q) {
-        queuedRef.current = null;
-        setQueued(null);
-        const gen = flushGenRef.current;
-        setTimeout(() => {
-          if (gen !== flushGenRef.current) return;   // 期间停止/切会话 → 放弃
-          sendRef.current?.(q);
-        }, 120);
-      }
-      // 用本轮真实调用过的工具生成下一步引导（能力连续可感）——规则兜底先出，不空窗
-      const used = [...new Set(turnToolsRef.current)];
-      setFollowUps(used.length === 0
-        ? ["我今天该跟进谁", "总结一下我的未读邮件"]
-        : used.slice(0, 2).flatMap(t => FOLLOW_UPS[t] ?? []).slice(0, 3));
-      turnToolsRef.current = [];
-      // 再异步用 AI 生成「追问」覆盖规则建议（带代数守卫，迟到结果不盖新一轮）
-      const gen = followGenRef.current;
-      const uText = turnUserRef.current, aText = turnTextRef.current;
-      void (async () => {
-        if (!aText.trim()) return;
-        const r = await window.api.invoke("ai:followUps", { userText: uText, aiText: aText }) as
-          { success: boolean; data?: string[] };
-        if (gen !== followGenRef.current) return;
-        if (r?.success && Array.isArray(r.data) && r.data.length) setFollowUps(r.data.slice(0, 3));
-      })();
-      window.dispatchEvent(new Event(CONVS_CHANGED));
-    });
-    const offError = window.api.on("agent:error", (data) => {
-      const d = data as { message?: string };
-      setMessages(prev => {
-        const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i]!;
-          if (m.role === "ai" && m.streaming) {
-            next[i] = { ...m, streaming: false, loading: false, error: true, content: d.message || "生成失败" };
-            break;
-          }
-        }
-        return next;
-      });
-      setSending(false);
-      // 出错不自动发排队消息：让用户看到错误后自己决定下一步
-      queuedRef.current = null;
-      setQueued(null);
-    });
-    // 过程行（结构化数据，纯状态行折进 ProcessChain，产物留在 ArtifactBlock）：calling 插入 → done 原地升级
-    const offTool = window.api.on("agent:toolCall", (data) => {
-      const d = data as { tool?: string; status?: string; args?: string; result?: string; callId?: string };
-      setMessages(prev => {
-        if (d.status === "reasoning") {
-          return insertBeforeStreamingBubble(prev, {
-            key: nextKey(), role: "tool", content: "",
-            chip: { kind: "reasoning", tool: d.tool, callId: d.callId, detail: d.result },
-          });
-        }
-        if (d.status === "calling") {
-          if (d.tool) turnToolsRef.current.push(d.tool);
-          return insertBeforeStreamingBubble(prev, {
-            key: nextKey(), role: "tool", content: "",
-            chip: { kind: "calling", tool: d.tool, callId: d.callId, args: fmtChipArgs(d.args) },
-          });
-        }
-        // done：先按 callId 精确配对（同名连发/并行不会错配），端点没给 callId 时退回同名倒找
-        const next = [...prev];
-        let idx = d.callId
-          ? next.findIndex(m => m.role === "tool" && m.chip?.kind === "calling" && m.chip.callId === d.callId)
-          : -1;
-        if (idx < 0) {
-          for (let i = next.length - 1; i >= 0; i--) {
-            const m = next[i]!;
-            if (m.role === "tool" && m.chip?.kind === "calling" && m.chip.tool === d.tool) { idx = i; break; }
-          }
-        }
-        if (idx >= 0) {
-          const prevChip = next[idx]!.chip!;
-          next[idx] = {
-            ...next[idx]!, ts: Date.now(),
-            chip: { kind: "done", tool: d.tool, callId: d.callId ?? prevChip.callId, args: prevChip.args, brief: resultBrief(d.result), detail: d.result },
-          };
-        }
-        return next;
-      });
-    });
-    // 任务清单快照：一整轮只有一张卡，原地覆盖（切到新一轮才另起一张）
-    const offPlan = window.api.on("agent:plan", (data) => {
-      const items = (data as { items?: PlanStep[] } | undefined)?.items;
-      const steps = Array.isArray(items) ? items : [];
-      setMessages(prev => {
-        let turnStart = 0;
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i]!.role === "user") { turnStart = i + 1; break; }
-        }
-        let idx = -1;
-        for (let i = prev.length - 1; i >= turnStart; i--) {
-          if (prev[i]!.plan) { idx = i; break; }
-        }
-        if (idx < 0) {
-          return steps.length
-            ? insertBeforeStreamingBubble(prev, { key: nextKey(), role: "tool", content: "", plan: steps })
-            : prev;
-        }
-        if (!steps.length) return prev.filter((_, i) => i !== idx);   // 空快照 → 清单收起
-        const next = [...prev];
-        next[idx] = { ...next[idx]!, plan: steps };
-        return next;
-      });
-    });
-    // 写操作审批：出就地确认卡 + 开一条续跑气泡（续跑增量落到它上面）
-    const offApproval = window.api.on("agent:approval", (data) => {
-      const d = data as { approvalId?: string; conversationId?: string; items?: ApprovalReq["items"] };
-      setApproval({ approvalId: d.approvalId ?? "", conversationId: d.conversationId, items: d.items ?? [] });
-      setRememberApproval(false);
-      setMessages(prev => [...prev, { key: nextKey(), role: "ai" as const, content: "", loading: true, streaming: true }]);
-    });
-    return () => { offChunk(); offDone(); offError(); offTool(); offPlan(); offApproval(); };
-  }, []);
+    if (viewKeyRef.current === key) return;
+    viewKeyRef.current = key;
+    setInputVal("");
+    setRememberApproval(false);
+    setPendingWrite(null);
+    void refreshStatus();   // 期间可能在设置页换了端点或切了思考
+  }, [key]);
 
-  /** 实际发起一轮对话（正文 + ctx 锚点） */
-  const doSend = async (text: string) => {
-    setSending(true);
-    setFollowUps([]);
-    turnUserRef.current = text;
-    turnTextRef.current = "";
-    followGenRef.current++;
-    turnToolsRef.current = [];
-    const aiKey = nextKey();
-    setMessages(prev => [...prev, { key: nextKey(), role: "user", content: text }, { key: aiKey, role: "ai", content: "", loading: true, streaming: true }]);
-    const r = await window.api.invoke("agent:chat", { conversationId: convIdRef.current, text, context: ctx }) as
-      IpcResult<{ conversationId: string; messageId: string }>;
-    if (!r?.success) {
-      setMessages(prev => prev.map(m => m.key === aiKey ? { ...m, streaming: false, loading: false, error: true, content: r?.error || "发起失败" } : m));
-      setSending(false);
-      return;
-    }
-    if (r.data && readConvFromHash() !== r.data.conversationId) {
-      convIdRef.current = r.data.conversationId;
-      gotoConversation(r.data.conversationId);   // 回写 hash → 导航栏高亮新会话
-    }
-    window.dispatchEvent(new Event(CONVS_CHANGED)); // 新会话立即可见（标题已在主进程生成）
-  };
+  // 首页「建议行动」：进空态时读当天批次并填上今天的数字（纯本地，毫秒级；拿不到就用写死那份兜底）
+  // 只在真要显示六张卡时取，带历史的会话不该白跑一趟
+  const showCards = messages.length === 0 && !convLoading;
+  useEffect(() => {
+    if (!showCards) return;
+    let alive = true;
+    void (async () => {
+      const r = await window.api.invoke("agent:suggestions") as
+        IpcResult<Array<{ title: string; cap: string; items: Array<{ text: string; prompt: string }> }>>;
+      if (alive) setCards(r?.success && Array.isArray(r.data) && r.data.length ? r.data : CAPABILITIES);
+    })();
+    return () => { alive = false; };
+  }, [showCards]);
 
-  /** 入口：斜杠命令本地解析（/help、/新对话、/缺口 就地处理，不发起请求） */
+  /** 入口：斜杠命令本地解析（/help、/新对话、/缺口 就地处理，不发起请求），其余交给 store 发起回合 */
   const handleSend = async (raw: string): Promise<void> => {
     const t = raw.trim();
     if (!t) return;
     if (sending) {
       // 排队输入：斜杠命令不排队（语义依赖空闲输入），普通问题单槽排队等本轮结束
-      if (t.startsWith("/")) {
-        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: "等这轮回答结束后再使用快捷命令。" }]);
-        return;
-      }
-      queuedRef.current = t;
-      setQueued(t);
+      if (t.startsWith("/")) { pushLocalText(key, "等这轮回答结束后再使用快捷命令。"); return; }
+      enqueue(key, t);
       return;
     }
     if (t.startsWith("/")) {
       const hit = SLASH_COMMANDS.find(c => t === c.cmd || t.startsWith(`${c.cmd} `));
-      if (!hit) {
-        const unknown = t.split(/\s+/)[0];
-        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `未知命令 ${unknown}。${SLASH_HELP}` }]);
-        return;
-      }
-      if (hit.cmd === "/help") {
-        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: SLASH_HELP }]);
-        return;
-      }
-      if (hit.cmd === "/新对话") {
-        window.location.hash = "#/assistant";
-        void loadConversation(undefined);
-        return;
-      }
+      if (!hit) { pushLocalText(key, `未知命令 ${t.split(/\s+/)[0]}。${SLASH_HELP}`); return; }
+      if (hit.cmd === "/help") { pushLocalText(key, SLASH_HELP); return; }
+      if (hit.cmd === "/新对话") { window.location.hash = "#/assistant"; resetDraft(); return; }
       if (hit.cmd === "/缺口") {
         const r = await window.api.invoke("agent:listGaps", 20) as IpcResult<
           Array<{ wanted: string; workaround?: string | null; hits: number; lastSeenAt: string }>
         >;
         if (!r?.success) {
-          setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `读取能力缺口失败：${r?.error || "未知错误"}`, error: true }]);
+          pushLocal(key, { key: nextKey(), role: "tool", content: `读取能力缺口失败：${r?.error || "未知错误"}`, error: true });
           return;
         }
         const gaps = r.data ?? [];
-        const text = gaps.length === 0
-          ? "还没有登记过能力缺口 —— 助手碰到做不到的诉求时会自动记在这里，被提到越多的越该优先补。"
-          : "已登记的能力缺口（按被抱怨次数）：\n"
-            + gaps.map((g, i) => `${i + 1}. ${g.wanted}  ×${g.hits}  ${g.workaround ? `（绕行：${g.workaround}）` : ""}`).join("\n");
-        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: text }]);
+        pushLocal(key, {
+          key: nextKey(), role: "tool",
+          content: gaps.length === 0
+            ? "还没有登记过能力缺口 —— 助手碰到做不到的诉求时会自动记在这里，被提到越多的越该优先补。"
+            : "已登记的能力缺口（按被抱怨次数）：\n"
+              + gaps.map((g, i) => `${i + 1}. ${g.wanted}  ×${g.hits}  ${g.workaround ? `（绕行：${g.workaround}）` : ""}`).join("\n"),
+        });
         return;
       }
       const arg = t.slice(hit.cmd.length).trim();
-      if (!arg && !hit.noArg) {
-        setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `用法：${hit.desc}` }]);
-        return;
-      }
-      void doSend(hit.template!(arg));
+      if (!arg && !hit.noArg) { pushLocalText(key, `用法：${hit.desc}`); return; }
+      void sendTurn(key, hit.template!(arg));
       return;
     }
-    void doSend(t);
+    void sendTurn(key, t);
   };
   // 每次渲染同步最新版本，供 hashchange 回调（首帧闭包）调用
   useEffect(() => { sendRef.current = handleSend; });
@@ -1271,31 +1007,22 @@ export function AssistantPage() {
     ? SLASH_COMMANDS.filter(c => c.cmd.startsWith(inputVal.split(/\s+/)[0]!)).slice(0, 6)
     : [];
 
+  /** 停止只管当前会话：审批卡、排队、请示卡一并收掉（现场本身不动，已生成的内容留着） */
   const handleStop = () => {
-    setApproval(null);
     setRememberApproval(false);
-    queuedRef.current = null;
-    setQueued(null);
-    if (convIdRef.current) void window.api.invoke("agent:stop", convIdRef.current);
+    stopTurn(key);
   };
 
-  /** 审批结论回传：成功则等续跑流（DONE 收尾）；失败提示并释放输入 */
+  /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
     if (!approval) return;
-    const a = approval;
-    setApproval(null);
     // 「不再询问」只在整批同工具且 policy 允许豁免时生效（外发类永不满足条件）
-    const tools = [...new Set(a.items.map(i => i.tool ?? ""))];
+    const tools = [...new Set(approval.items.map(i => i.tool ?? ""))];
     const rememberTool = approved && rememberApproval
-      && tools.length === 1 && !!tools[0] && a.items.every(i => i.autoApprovable)
+      && tools.length === 1 && !!tools[0] && approval.items.every(i => i.autoApprovable)
       ? tools[0] : undefined;
     setRememberApproval(false);
-    const r = await window.api.invoke("agent:resolveApproval", { approvalId: a.approvalId, approved, rememberTool }) as
-      IpcResult<{ resumed: boolean }>;
-    if (!r?.success) {
-      setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `审批失败：${r?.error || "未知错误"}` }]);
-      setSending(false);
-    }
+    await submitApproval(key, approved, rememberTool);
   };
 
   /** 结果卡动作：跳转直接走，提示即续问，写入弹确认（显 diff） */
@@ -1315,15 +1042,15 @@ export function AssistantPage() {
     setWriting(false);
     setPendingWrite(null);
     if (!r?.success) {
-      setDoneActions(prev => ({ ...prev, [a.id!]: "失败" }));
-      setMessages(prev => [...prev, { key: nextKey(), role: "tool", content: `${a.label}失败：${r?.error || "未知错误"}` }]);
+      markAction(key, a.id, "失败");
+      pushLocalText(key, `${a.label}失败：${r?.error || "未知错误"}`);
       return;
     }
-    setDoneActions(prev => ({ ...prev, [a.id!]: "已完成" }));
-    setMessages(prev => [...prev, {
+    markAction(key, a.id, "已完成");
+    pushLocal(key, {
       key: nextKey(), role: "tool", content: r.data?.message ?? `已${a.label}`,
       ...(r.data?.target ? { link: r.data.target } : {}),
-    }]);
+    });
   };
 
   // ── 渲染派生数据：消息流 → 段（过程折一段、产物与清单各自独立）──────
@@ -1410,27 +1137,7 @@ export function AssistantPage() {
 
   return (
     <div className="relative flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
-      {/* 页头 */}
-      <div className="flex items-center justify-between pb-3">
-        <Space>
-          <h2 className="text-lg font-bold text-gray-800 m-0">AI 助手</h2>
-          <Tag color={configured ? "green" : "red"}>{configured ? (model || "已接入") : "未配置端点"}</Tag>
-          {configured && (
-            <Tooltip title="在「设置 → 模型与端点」切换端点或思考模式，保存即生效，不用重启">
-              <Tag color={thinking ? "blue" : "default"}>{thinking ? "思考中" : "直答"}</Tag>
-            </Tooltip>
-          )}
-          {sessionUsage && ((sessionUsage.input ?? 0) > 0 || (sessionUsage.output ?? 0) > 0) && (
-            <Tooltip title="本会话累计 token（端点实测回报值，切会话清零；设置页可看全应用累计）">
-              <Tag color="default" className="!text-gray-400">
-                {fmtTokens(sessionUsage.input)} 入 · {fmtTokens(sessionUsage.output)} 出
-              </Tag>
-            </Tooltip>
-          )}
-        </Space>
-      </div>
-
-      {!configured && (
+      {configured === false && (
         <Alert
           type="error" showIcon className="mb-2"
           message="未配置模型端点，助手无法回答"
@@ -1482,21 +1189,28 @@ export function AssistantPage() {
               <div className="text-base font-semibold text-gray-700 mt-3">Hi，我是 Prospector 助手</div>
               <div className="text-xs text-gray-400 mt-1">已接入运价 / 邮件 / 客户 / 跟进 / 发信 11 项能力，写操作一律先弹确认</div>
             </div>
-            {/* 能力面板：把已接入的工具摊开成「能干什么」，点一条即发问 */}
+            {/* 能力面板：标题与分组写死，条目按当前数据现算（AI 版到位后再就地换掉），点一条即发问 */}
             {/* 窄窗口自动降为单列；宽度富余时三列，字号随视口线性缩放 */}
             <div className="w-full max-w-[min(64rem,92%)] grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-              {CAPABILITIES.map(g => (
+              {cards === null && CAPABILITIES.map(g => (
+                // 数据还在路上：先占同款骨架，尺寸与真卡一致，填内容时不推版面
+                <div key={g.title} className="border border-gray-100 rounded-lg p-3 bg-white">
+                  <div className="text-[13px] font-semibold text-gray-300">{g.title}</div>
+                  <Skeleton active title={false} className="mt-1.5" paragraph={{ rows: 2, width: ["78%", "54%"] }} />
+                </div>
+              ))}
+              {cards?.map(g => (
                 <div key={g.title} className="border border-gray-100 rounded-lg p-3 bg-white">
                   <div className="text-[clamp(12px,0.55vw+9px,14px)] font-semibold text-gray-800">{g.title}</div>
                   <div className="text-[clamp(10px,0.4vw+8px,12px)] text-gray-400 mb-1.5 leading-snug">{g.cap}</div>
                   {g.items.map(q => (
                     <div
-                      key={q}
+                      key={q.text}
                       className="text-[clamp(11px,0.45vw+9px,13px)] text-teal-700 hover:bg-teal-50 rounded px-1.5 py-1 -mx-1.5 cursor-pointer truncate"
-                      title={q}
-                      onClick={() => void handleSend(q)}
+                      title={q.text}
+                      onClick={() => void handleSend(q.prompt)}
                     >
-                      {q}
+                      {q.text}
                     </div>
                   ))}
                 </div>
@@ -1620,16 +1334,24 @@ export function AssistantPage() {
         )}
         {ctx && (
           <div className="pb-2">
-            <Tag closable color="cyan" onClose={() => setCtx(undefined)}>
+            <Tag closable color="cyan" onClose={() => setConvCtx(key, undefined)}>
               当前上下文 · {ctxLabel(ctx)}（问题将围绕它回答）
             </Tag>
           </div>
         )}
         {queued && (
           <div className="pb-2">
-            <Tag closable color="blue" onClose={() => { queuedRef.current = null; setQueued(null); }}>
+            <Tag closable color="blue" onClose={() => clearQueued(key)}>
               已排队 · {queued.length > 24 ? `${queued.slice(0, 24)}…` : queued} · 回答结束后自动发出
             </Tag>
+          </div>
+        )}
+        {budgetAsk && !sending && (
+          <div className="mb-2 flex items-center gap-3 max-w-[720px] border border-teal-200 bg-teal-50/60 rounded-lg px-3 py-2">
+            <span className="text-[12.5px] text-gray-700 flex-1">这轮先告一段落 — 要接着做的话我随时继续。</span>
+            <Button type="primary" size="small" style={{ fontSize: 12 }}
+              onClick={() => handleSend("接着把上一条没做完的做完，基于已查到的数据即可，别重复查。")}>接着做</Button>
+            <Button size="small" style={{ fontSize: 12 }} onClick={() => setBudgetAsk(key, false)}>先这样</Button>
           </div>
         )}
         <Sender
@@ -1648,6 +1370,48 @@ export function AssistantPage() {
             }
           }}
         />
+        {/* 聊天框的延伸标签：两枚胶囊骑在输入框下沿（白底压住那一小段边线），点一下就切 */}
+        {/* 容器常驻并占好行高，胶囊本身等状态读到再出现 —— 否则它们"从无到有"会把输入区顶一下 */}
+        <div className="relative z-10 -mt-1.5 pb-0.5 min-h-[19px] flex items-center gap-1.5 pl-2.5">
+          {configured && thinkingProfile && (
+            <Tooltip title="先想再答：对话里能看到它在想什么；代价是更慢、token 更多">
+              <button type="button" disabled={thinkingBusy}
+                onClick={() => { void toggleThinking(!thinking); }}
+                className={`flex items-center gap-1.5 h-[19px] px-2 rounded-full border bg-white text-[11px] leading-none transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.04)]
+                  ${thinking ? "border-teal-300 text-teal-700" : "border-gray-200 text-gray-500 hover:border-teal-200 hover:text-teal-600"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${thinking ? "bg-teal-500" : "bg-gray-300"}`} />
+                思考
+              </button>
+            </Tooltip>
+          )}
+          {configured && model && (profiles.length > 1 ? (
+            <Dropdown trigger={["click"]} menu={{
+              items: profiles.map(p => ({
+                key: p.id,
+                label: <span>{p.name}{p.active && <span className="text-teal-600 ml-1.5">●</span>}</span>,
+              })),
+              onClick: ({ key }) => { void switchProfile(String(key)); },
+            }}>
+              <span className="flex items-center gap-1 h-[19px] px-2 rounded-full border border-gray-200 bg-white text-[11px] leading-none text-gray-500 cursor-pointer transition-colors hover:border-teal-200 hover:text-teal-600 shadow-[0_1px_2px_rgba(0,0,0,0.04)] max-w-[240px]">
+                <span className="font-mono truncate" title={model}>{model}</span>
+                <DownOutlined style={{ fontSize: 7 }} />
+              </span>
+            </Dropdown>
+          ) : (
+            <Tooltip title="当前生效的模型；要多配几个端点就能在这里就地切换">
+              <span className="flex items-center h-[19px] px-2 rounded-full border border-gray-200 bg-white text-[11px] leading-none text-gray-400 max-w-[240px] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+                <span className="font-mono truncate" title={model}>{model}</span>
+              </span>
+            </Tooltip>
+          ))}
+          {sessionUsage && ((sessionUsage.input ?? 0) > 0 || (sessionUsage.output ?? 0) > 0) && (
+            <Tooltip title="本会话累计 token（端点实测回报值；切页切会话都留着，设置页可看全应用累计）">
+              <span className="ml-auto shrink-0 font-normal text-[10.5px] text-gray-300 tabular-nums">
+                {fmtTokens(sessionUsage.input)} 入 · {fmtTokens(sessionUsage.output)} 出
+              </span>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       {/* 动作卡写入确认：展示字段 diff，确认后才执行主进程留存的闭包 */}

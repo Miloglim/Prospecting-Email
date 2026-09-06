@@ -6,6 +6,8 @@ import {
 } from "antd";
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { RichTextEditor } from "../../components/RichTextEditor";
+import { toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
+import { CONVS_CHANGED } from "../../lib/agent-route";
 
 interface EmailAccount {
   id: number; email: string; provider: string;
@@ -24,10 +26,6 @@ interface SendSchedule {
 
 interface RuntimeConfig {
   fromName: string;
-  bodyName: string;
-  signature: string;
-  /** 助手身份（注入每轮对话）：我方公司 / 职位 / 业务口径 / 固定角色 */
-  identity?: { company?: string; title?: string; business?: string; persona?: string };
   schedule: SendSchedule;
   test: { email: string; company: string; enabled: boolean; dryRun: boolean };
   crm: { followupDays: Record<string, number>; todoAdvanceDays: number; autoArchiveDays: number };
@@ -39,6 +37,7 @@ const SECTIONS = [
   { id: "sec-mail", label: "邮件发送" },
   { id: "sec-api", label: "API 与服务" },
   { id: "sec-crm", label: "客户跟进" },
+  { id: "sec-data", label: "数据" },
   { id: "sec-advanced", label: "高级" },
 ];
 
@@ -166,13 +165,13 @@ function RangeRow({ label, min, max, onSaveMin, onSaveMax, hint }: {
 
 // ── 分区卡片 ──
 function SettingCard({ icon, title, required, children, status }: {
-  icon: React.ReactNode; title: string; required?: boolean; children: React.ReactNode; status?: React.ReactNode;
+  icon?: React.ReactNode; title: string; required?: boolean; children: React.ReactNode; status?: React.ReactNode;
 }) {
   return (
     <div className={`border border-gray-200 bg-white ${required ? "border-l-2 border-l-teal-400" : ""}`}>
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-gray-600 flex items-center gap-1.5">
-          <span className="opacity-50">{icon}</span> {title}
+          {icon ? <span className="opacity-50">{icon}</span> : null} {title}
         </h3>
         <span className="text-[11px]">{status}</span>
       </div>
@@ -306,8 +305,7 @@ function SearchKeyCard() {
   );
 
   return (
-    <SettingCard icon="" title="联网检索源"
-      status={on("EXA_API_KEY") || on("TAVILY_API_KEY") ? <Tag color="green">已配置</Tag> : <Tag color="orange">未配置</Tag>}>
+    <SettingCard icon="" title="联网检索源">
       <div className="text-[11px] text-gray-400 mb-1">
         「公司背调」和「航线行情调研」靠它查公开网页：两把密钥填一把就够（Exa 优先，无结果自动回落 Tavily）。
         密钥存项目根目录 .env，界面不回显，保存后无需重启。
@@ -338,16 +336,13 @@ function UpdateChecker() {
   const [progress, setProgress] = useState(0);
   const [speedInfo, setSpeedInfo] = useState("");
   const [downloaded, setDownloaded] = useState(false);
-  const [expanded, setExpanded] = useState(false);
 
-  // 版本列表
+  // 版本数据（仅用于当前版本号与通道展示）
   const [versionData, setVersionData] = useState<VersionListData | null>(null);
-  const [loadingVersions, setLoadingVersions] = useState(false);
   const [channel, setChannel] = useState<"stable" | "prerelease">("stable");
 
-  // 加载版本列表
+  // 加载当前版本/通道
   const loadVersions = async () => {
-    setLoadingVersions(true);
     try {
       const r = await window.api.invoke("update:listVersions") as {
         success: boolean; data?: VersionListData; error?: string;
@@ -357,7 +352,6 @@ function UpdateChecker() {
         setChannel(r.data.channel);
       }
     } catch { /* 静默 */ }
-    setLoadingVersions(false);
   };
 
   // 切换通道
@@ -428,9 +422,7 @@ function UpdateChecker() {
     await window.api.invoke("update:install");
   };
 
-  const releases = versionData?.releases || [];
   const hasUpdate = pendingVersion && !downloaded;
-  const isLatest = !hasUpdate && !downloaded && !!versionData;
 
   return (
     <div className="space-y-3">
@@ -486,59 +478,6 @@ function UpdateChecker() {
           <div className="text-[10px] text-gray-400">{speedInfo || "准备下载…"}</div>
         </div>
       )}
-
-      {/* 版本列表 */}
-      <div className="border-t border-gray-100 pt-2">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-            版本历史
-          </span>
-          <button
-            onClick={() => { setExpanded(!expanded); if (!expanded) loadVersions(); }}
-            className="text-[10px] text-gray-400 hover:text-gray-600"
-          >
-            {expanded ? "收起" : `展开 (${releases.length || "…"})`}
-          </button>
-        </div>
-
-        {expanded && (
-          loadingVersions ? (
-            <div className="text-[11px] text-gray-400 py-2">加载中…</div>
-          ) : releases.length === 0 ? (
-            <div className="text-[11px] text-gray-400 py-2">无法获取版本列表</div>
-          ) : (
-            <div className="space-y-1 max-h-[280px] overflow-y-auto">
-              {releases.map((rel, i) => (
-                <div key={rel.version}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded text-[11px] ${
-                    rel.isCurrent
-                      ? "bg-teal-50 border border-teal-200"
-                      : i % 2 === 0 ? "bg-gray-50/50" : ""
-                  }`}
-                >
-                  <span className={`font-mono font-medium w-16 flex-shrink-0 ${rel.isCurrent ? "text-teal-700" : "text-gray-800"}`}>
-                    v{rel.version}
-                  </span>
-                  <Tag color={rel.prerelease ? "orange" : "blue"} className="!m-0 !text-[9px] !leading-none !py-px">
-                    {rel.prerelease ? "pre" : "stable"}
-                  </Tag>
-                  <span className="text-gray-400 flex-1 truncate">
-                    {rel.publishedAt ? new Date(rel.publishedAt).toLocaleDateString("zh-CN") : ""}
-                  </span>
-                  {rel.isCurrent ? (
-                    <span className="text-[10px] text-teal-600 font-medium">当前</span>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-
-      {/* 自动更新说明 */}
-      <div className="text-[10px] text-gray-400 pt-1 border-t border-gray-100">
-        启动 10 秒后自动检查，之后每 4 小时轮询 · 有新版本时自动提示
-      </div>
     </div>
   );
 }
@@ -569,7 +508,7 @@ function estimateSendPlan(o: SendPlanInput, now: Date) {
   return { groups, cadenceSec: cadence, ratePerHour, activeSec, winHours, finish };
 }
 
-/** 从 now 起、只在发信窗口内消耗所需时长，推算完成时刻（本机时区=北京时） */
+/** 从 now 起、只在发信窗口内消耗所需时长，推算完成时刻（跟操作系统时区） */
 function advanceWithinWindows(from: Date, needSec: number, startH: number, endH: number): Date {
   const cross = startH >= endH; // 跨天窗口（如 21 → 8）
   const inWin = (h: number) => cross ? (h >= startH || h < endH) : (h >= startH && h < endH);
@@ -608,21 +547,109 @@ interface ToolCallLog {
   createdAt: string;
 }
 
-const AUDIT_TOOL_LABELS: Record<string, string> = {
-  quote_search: "查询运价", search_contacts: "检索联系人", record_followup: "记录跟进",
-  inbox_search: "检索邮件", email_summarize: "总结邮件", company_backcheck: "公司背调",
-  generate_draft: "撰写开发信", send_queue_add: "加入发信队列",
-  queue_status: "发送进度", reminders_due: "到期提醒", accounts_status: "账号健康", reasoning: "思考",
-};
+/** 审计页工具名展示：注册表派生（tool-meta 缓存），不再维护本地清单；
+ *  reasoning 是思考伪通道，注册表里没有，本地特判 */
+function auditToolLabel(v: string): string {
+  return v === "reasoning" ? "思考" : toolLabelText(v);
+}
+
+/**
+ * 异常红标的「已忽略水位」：agent_tool_calls.id 自增，拿 id 当水位最稳。
+ * 刻意放模块级而非组件 state —— 切去别的页面再回来，刚忽略掉的旧异常不该重新亮一次。
+ */
+let auditIgnoredBelowId = 0;
+
+interface ConversationMeta { id: string; title: string; createdAt: string; updatedAt: string; messageCount: number }
+
+/** AI 会话的集中清理：侧栏只能一条条删，这里勾选批量删或一键清空。默认收起；删除不可恢复。 */
+function AgentConversationCard() {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["agentConversations"],
+    queryFn: async () => {
+      const r = await window.api.invoke("agent:listConversations") as { success: boolean; data?: ConversationMeta[] };
+      return r?.success ? (r.data ?? []) : [];
+    },
+  });
+  const list = data ?? [];
+
+  const delMut = useMutation({
+    mutationFn: (ids: string[]) => window.api.invoke("agent:deleteConversations", ids) as
+      Promise<{ success: boolean; data?: { deleted: number }; error?: string }>,
+    onSuccess: (r) => {
+      if (!r?.success) { message.error(r?.error || "删除失败"); return; }
+      message.success(`已删除 ${r.data?.deleted ?? 0} 条会话`);
+      setSelected([]);
+      qc.invalidateQueries({ queryKey: ["agentConversations"] });
+      window.dispatchEvent(new Event(CONVS_CHANGED));   // 侧栏历史同步
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : "删除失败"),
+  });
+
+  const fmt = (iso: string) => (iso || "").replace("T", " ").slice(0, 16);
+  const columns = [
+    { title: "标题", dataIndex: "title", key: "title", ellipsis: true,
+      render: (v: string) => <span className="text-[12px] text-gray-700">{v || "（无标题）"}</span> },
+    { title: "消息", dataIndex: "messageCount", key: "messageCount", width: 60, align: "right" as const,
+      render: (v: number) => <span className="text-[11px] text-gray-400">{v}</span> },
+    { title: "更新时间", dataIndex: "updatedAt", key: "updatedAt", width: 120,
+      render: (v: string) => <span className="text-[11px] text-gray-400">{fmt(v)}</span> },
+  ];
+
+  return (
+    <SettingCard icon="" title={`归档会话 · ${list.length}`}
+      status={<button onClick={() => setOpen(o => !o)} className="text-[11px] text-gray-400 hover:text-gray-600">
+        {open ? "收起" : "展开"}
+      </button>}>
+      <div className="text-[11px] text-gray-400 mb-2">
+        左侧栏只能一条条删；这里勾选后批量删，或一键清空全部对话。删除不可恢复。
+      </div>
+      {open && (
+        <>
+          <Table<ConversationMeta>
+            className="row-select-table"
+            dataSource={list}
+            rowKey="id"
+            columns={columns}
+            size="small"
+            loading={isLoading}
+            pagination={{ pageSize: 8, hideOnSinglePage: true }}
+            rowSelection={{ selectedRowKeys: selected, onChange: keys => setSelected(keys as string[]) }}
+            locale={{ emptyText: "还没有 AI 会话 — 在「新对话」里聊过之后会出现在这里" }}
+          />
+          <div className="pt-2 flex items-center gap-2">
+            <Popconfirm title={`删除选中的 ${selected.length} 条会话？`} disabled={!selected.length}
+              onConfirm={() => delMut.mutate(selected)}>
+              <Button size="small" danger disabled={!selected.length} loading={delMut.isPending}
+                icon={<DeleteOutlined />}>删除选中（{selected.length}）</Button>
+            </Popconfirm>
+            <Popconfirm title={`清空全部 ${list.length} 条会话？`} disabled={!list.length}
+              onConfirm={() => delMut.mutate(list.map(x => x.id))}>
+              <Button size="small" disabled={!list.length} loading={delMut.isPending}>清空全部</Button>
+            </Popconfirm>
+          </div>
+        </>
+      )}
+    </SettingCard>
+  );
+}
 
 function AgentAuditCard() {
+  /** 明细是排障时才看的，默认收起；收起时连轮询一起停，别白刷库 */
+  const [open, setOpen] = useState(false);
+  const [, bumpIgnored] = useState(0);   // 忽略动作改的是模块级水位，靠它触发一次重算
+  // 工具中文名来自注册表（经 agent:toolMeta）：到达后刷新一次
+  useToolMetaVersion();
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["agentToolCalls"],
     queryFn: async () => {
       const r = await window.api.invoke("agent:toolCalls", 60) as { success: boolean; data?: ToolCallLog[] };
       return r?.success ? (r.data ?? []) : [];
     },
-    refetchInterval: 30_000,
+    // 收起时也要能发现新异常（否则忽略一次就永远不提醒了），只把频率降下来：读的是本地库 limit 60
+    refetchInterval: open ? 30_000 : 120_000,
   });
 
   const approvalTag = (a: string) =>
@@ -634,7 +661,7 @@ function AgentAuditCard() {
     { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 150,
       render: (v: string) => <span className="text-[11px] text-gray-400">{(v || "").replace("T", " ").slice(0, 19)}</span> },
     { title: "工具", dataIndex: "toolName", key: "toolName", width: 110,
-      render: (v: string) => AUDIT_TOOL_LABELS[v] || v },
+      render: (v: string) => auditToolLabel(v) },
     { title: "副作用", dataIndex: "sideEffect", key: "sideEffect", width: 70,
       render: (v: string) => v === "write" ? <Tag color="orange">写</Tag> : <Tag color="default">读</Tag> },
     { title: "参数摘要", dataIndex: "argsPreview", key: "argsPreview", ellipsis: true,
@@ -645,7 +672,14 @@ function AgentAuditCard() {
   ];
 
   const writes = (data ?? []).filter(d => d.sideEffect === "write").length;
-  const errors = (data ?? []).filter(d => d.error).length;
+  const errorRows = (data ?? []).filter(d => d.error);
+  /** 忽略过的旧异常不再打扰；只有比水位更新的异常才算「新检测到」 */
+  const freshErrors = errorRows.filter(d => d.id > auditIgnoredBelowId);
+  const ignoreErrors = () => {
+    if (!errorRows.length) return;
+    auditIgnoredBelowId = Math.max(auditIgnoredBelowId, ...errorRows.map(d => d.id));
+    bumpIgnored(n => n + 1);
+  };
 
   /** 诊断包导出：出错时点一下，生成日志+配置快照（密钥已掩码）的 md 发给开发者 */
   const [diag, setDiag] = useState<{ running: boolean; name?: string; path?: string; error?: string }>({ running: false });
@@ -665,30 +699,46 @@ function AgentAuditCard() {
 
   return (
     <SettingCard icon="" title="AI 活动记录"
-      status={errors > 0 ? <Tag color="red">{errors} 条异常</Tag> : undefined}>
-      <div className="text-[11px] text-gray-400 mb-2">
-        最近 {data?.length ?? 0} 次工具调用（其中写操作 {writes} 次，全部经人工确认）。30 秒自动刷新。
-      </div>
-      <Table<ToolCallLog>
-        dataSource={data ?? []}
-        rowKey="id"
-        columns={columns}
-        size="small"
-        loading={isLoading}
-        pagination={{ pageSize: 8, hideOnSinglePage: true }}
-        locale={{ emptyText: "暂无记录 — 在「新对话」里让助手查价/查联系人后会出现在这里" }}
-      />
-      <div className="pt-2 flex items-center gap-2 flex-wrap">
-        <Button size="small" icon={<SyncOutlined spin={isFetching} />} onClick={() => void refetch()}>刷新</Button>
-        <Button size="small" loading={diag.running} onClick={() => { void exportDiag(); }}>导出诊断包</Button>
-        {diag.name && (
-          <span className="text-[11px] text-gray-400">
-            {diag.name}
-            <a className="ml-1.5" onClick={() => { void window.api.invoke("agent:openPath", { path: diag.path }); }}>打开位置</a>
-          </span>
+      status={<Space size={6}>
+        {freshErrors.length > 0 && (
+          <Tooltip title="双击忽略这批异常；再检测到新的才会重新提醒">
+            <Tag color="red" className="!my-0" style={{ cursor: "pointer" }} onDoubleClick={ignoreErrors}>
+              {freshErrors.length} 条异常
+            </Tag>
+          </Tooltip>
         )}
-        {diag.error && <span className="text-[11px] text-red-400">{diag.error}</span>}
+        <button onClick={() => setOpen(o => !o)} className="text-[11px] text-gray-400 hover:text-gray-600">
+          {open ? "收起" : "展开"}
+        </button>
+      </Space>}>
+      <div className="text-[11px] text-gray-400 mb-2">
+        最近 {data?.length ?? 0} 次工具调用（其中写操作 {writes} 次，全部经人工确认）
+        {open ? "。展开期间 30 秒自动刷新。" : "，点开看明细。"}
       </div>
+      {open && (
+        <Table<ToolCallLog>
+          dataSource={data ?? []}
+          rowKey="id"
+          columns={columns}
+          size="small"
+          loading={isLoading}
+          pagination={{ pageSize: 8, hideOnSinglePage: true }}
+          locale={{ emptyText: "暂无记录 — 在「新对话」里让助手查价/查联系人后会出现在这里" }}
+        />
+      )}
+      {open && (
+        <div className="pt-2 flex items-center gap-2 flex-wrap">
+          <Button size="small" icon={<SyncOutlined spin={isFetching} />} onClick={() => void refetch()}>刷新</Button>
+          <Button size="small" loading={diag.running} onClick={() => { void exportDiag(); }}>导出诊断包</Button>
+          {diag.name && (
+            <span className="text-[11px] text-gray-400">
+              {diag.name}
+              <a className="ml-1.5" onClick={() => { void window.api.invoke("agent:openPath", { path: diag.path }); }}>打开位置</a>
+            </span>
+          )}
+          {diag.error && <span className="text-[11px] text-red-400">{diag.error}</span>}
+        </div>
+      )}
     </SettingCard>
   );
 }
@@ -781,8 +831,7 @@ function ProviderCard() {
   };
 
   return (
-    <SettingCard icon="" title="模型与端点"
-      status={st ? <Tag color={st.configured ? "green" : "red"}>{st.configured ? "已接入" : "未配置端点"}</Tag> : undefined}>
+    <SettingCard icon="" title="模型与端点">
       <div className="text-[11px] text-gray-500 mb-2 leading-relaxed">
         {st?.activeId
           ? <>当前生效：<b>{profiles.find(p => p.id === st.activeId)?.name ?? st.activeId}</b> · {st.endpoint.baseUrl} · 模型 {st.endpoint.model || "未填"}</>
@@ -812,6 +861,19 @@ function ProviderCard() {
           },
           { title: "模型", dataIndex: "model", key: "model", width: 130,
             render: (v: string) => <span className="text-[11px] font-mono">{v || "—"}</span> },
+          { title: "思考", dataIndex: "thinking", key: "thinking", width: 56,
+            render: (v: boolean, r) => (
+              <Tooltip title={v ? "先想再答：对话里能看到它在想什么，代价是更慢、token 更多" : "直答：不出思考过程"}>
+                <Switch size="small" checked={v} onChange={async (on) => {
+                  const res = await window.api.invoke("ai:profileThinking", { id: r.id, thinking: on }) as
+                    { success: boolean; error?: string; data?: { active?: boolean } };
+                  if (!res?.success) { message.error(res?.error || "设置失败"); return; }
+                  // 改的不是正在用的那份端点：只记在档案上，启用时才落地，得说一句清楚
+                  if (res.data?.active === false) message.info(`已记在「${r.name}」上，启用该端点后生效`);
+                  refresh();
+                }} />
+              </Tooltip>
+            ) },
           { title: "密钥", dataIndex: "hasKey", key: "hasKey", width: 60,
             render: (v: boolean) => v ? <Tag color="green" className="!my-0">已配</Tag> : <Tag className="!my-0">未配</Tag> },
           {
@@ -871,7 +933,7 @@ function ProviderCard() {
 
       <Modal open={formOpen} title={editing ? "编辑服务商" : "添加服务商"} okText="保存"
         cancelText="取消" maskClosable={false}
-        onOk={submitForm} onCancel={() => setFormOpen(false)} destroyOnClose>
+        onOk={submitForm} onCancel={() => setFormOpen(false)} destroyOnHidden>
         <Form form={form} layout="vertical" size="small" className="pt-1">
           {!editing && (
             <Form.Item label="快速模板">
@@ -910,6 +972,8 @@ export function SettingsPage() {
   const [form] = Form.useForm();
   const qc = useQueryClient();
   const [activeSection, setActiveSection] = useState("sec-general");
+  const [accountsOpen, setAccountsOpen] = useState(true);
+  const railLockRef = useRef(0);
 
   const { data: accountData } = useQuery({
     queryKey: ["accounts"],
@@ -957,32 +1021,56 @@ export function SettingsPage() {
     return off;
   }, [qc]);
 
-  // 滚动高亮分区 — 找距离视口顶部最近的可见 section
+  // 滚动高亮分区 — 高亮「越过阅读线(视口 35%)的最后一个」section
   useEffect(() => {
-    const handle = () => {
-      let bestId = SECTIONS[0]!.id;
-      let bestDist = Infinity;
+    const lastId = SECTIONS[SECTIONS.length - 1]!.id;
+    const pick = (scroller: HTMLElement | null) => {
+      if (Date.now() < railLockRef.current) return;   // 点圆点后的平滑滚动期间不抢高亮
+      const line = window.innerHeight * 0.35;
+      let current = SECTIONS[0]!.id;
       for (const s of SECTIONS) {
         const el = document.getElementById(s.id);
-        if (!el) continue;
-        const top = el.getBoundingClientRect().top;
-        // 只考虑顶部在视口内的（上方为负），取绝对值最小的
-        const dist = Math.abs(top);
-        if (top < window.innerHeight * 0.6 && dist < bestDist) {
-          bestDist = dist;
-          bestId = s.id;
-        }
+        if (el && el.getBoundingClientRect().top <= line) current = s.id;
       }
-      setActiveSection(bestId);
+      // 仅当容器真的滚到底、且末段仍未越过阅读线时才补亮最后一个；否则会误吞「数据」等短区块
+      if (scroller && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) {
+        const lastEl = document.getElementById(lastId);
+        if (lastEl && lastEl.getBoundingClientRect().top > line) current = lastId;
+      }
+      setActiveSection(current);
     };
-    // 滚动发生在 antd Content 容器（overflow:auto），scroll 不冒泡，需 capture 阶段捕获
-    document.addEventListener("scroll", handle, { capture: true, passive: true });
-    handle(); // 初始执行
-    return () => document.removeEventListener("scroll", handle, { capture: true } as EventListenerOptions);
+    // 滚动发生在 antd Content 容器（overflow:auto），scroll 不冒泡，需 capture 阶段捕获；事件 target 即真正的滚动容器
+    const onScroll = (e: Event) => {
+      const t = e.target as HTMLElement | Document | null;
+      const scroller = t && t !== document && typeof (t as HTMLElement).scrollTop === "number" ? (t as HTMLElement) : null;
+      pick(scroller);
+    };
+    // 用户手动滚动 → 立刻解除锁定，恢复正常跟随
+    const unlock = () => { railLockRef.current = 0; };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    document.addEventListener("wheel", unlock, { passive: true });
+    document.addEventListener("touchstart", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    pick(null); // 初始执行
+    return () => {
+      document.removeEventListener("scroll", onScroll, { capture: true } as EventListenerOptions);
+      document.removeEventListener("wheel", unlock);
+      document.removeEventListener("touchstart", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
   }, []);
 
   const scrollTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    railLockRef.current = Date.now() + 800;   // 平滑滚动期间锁住高亮，避免被 spy 抢走
+    setActiveSection(id);
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.remove("is-located");
+      void el.offsetWidth;                     // 重启 CSS 动画
+      el.classList.add("is-located");
+      el.addEventListener("animationend", () => el.classList.remove("is-located"), { once: true });
+    }
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const accountColumns = [
@@ -1060,7 +1148,7 @@ export function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-6xl gap-8">
       {/* 主内容 */}
-      <div className="min-w-[600px] flex-1 space-y-8">
+      <div className="min-w-[560px] max-w-[820px] flex-1 space-y-8">
         {/* ═══ 通用 ═══ */}
         <div id="sec-general" className="settings-section">
           <div className="text-[13px] font-bold mb-3 text-gray-800">通用</div>
@@ -1089,12 +1177,21 @@ export function SettingsPage() {
           <div className="text-[13px] font-bold mb-3 text-gray-800">邮件发送</div>
 
           {/* 发信账号 */}
-          <SettingCard icon="" title="发信账号"
-            status={<Button size="small" icon={<PlusOutlined />} onClick={() => { setEditingAccount(null); form.resetFields(); setAddOpen(true); }}>+ 添加账号</Button>}
+          <SettingCard icon="" title={`发信账号 · ${accounts.length}`}
+            status={<Space size={6}>
+              <button onClick={() => setAccountsOpen(o => !o)} className="text-[11px] text-gray-400 hover:text-gray-600">{accountsOpen ? "收起" : "管理"}</button>
+              <Button size="small" onClick={() => { setEditingAccount(null); form.resetFields(); setAddOpen(true); }}>+ 添加账号</Button>
+            </Space>}
           >
-            <Table dataSource={accounts} columns={accountColumns} rowKey="id"
-              size="small" pagination={false} locale={{ emptyText: "还没有发信账号" }}
-              className="mb-2" />
+            {accountsOpen ? (
+              <Table dataSource={accounts} columns={accountColumns} rowKey="id"
+                size="small" pagination={false} locale={{ emptyText: "还没有发信账号" }}
+                className="mb-2" />
+            ) : (
+              <div className="py-1.5 text-[11px] text-gray-500">
+                共 {accounts.length} 个发信账号，点右上「管理」查看、编辑或验证。
+              </div>
+            )}
           </SettingCard>
 
           {/* 发信限额 */}
@@ -1114,38 +1211,15 @@ export function SettingsPage() {
             )}
           </SettingCard>
 
-          {/* 发信人信息 = 也是助手身份：这几项会注入每轮对话，决定它用谁的口吻写信、怎么落款 */}
-          <SettingCard icon="" title="发信人身份"
-            status={<Tag color="blue" className="!text-[10px]">助手写信时用它</Tag>}>
+          {/* 发件人名称 = 也是助手自称：注入每轮对话，客户收件箱可见 */}
+          <SettingCard icon="" title="发件人名称">
             <SettingRow label="发件人名称" value={config?.fromName || ""}
               onSave={v => saveConfigMut.mutate({ fromName: String(v) })}
               placeholder="收件人看到的发件人名称" hint="账号名优先" />
-            <SettingRow label="自称" value={config?.bodyName || ""}
-              onSave={v => saveConfigMut.mutate({ bodyName: String(v) })}
-              placeholder="正文中的自称，如 Zayne" hint="用于正文落款" />
-            <SettingRow label="正文署名" value={config?.signature || ""}
-              onSave={v => saveConfigMut.mutate({ signature: String(v) })}
-              placeholder="邮件正文末尾的署名（公司 / 电话 / 邮箱 / 地址）" />
-            <div className="text-[11px] text-gray-400 mt-1 mb-2 pl-1">下面四项只给 AI 助手看，不影响发信格式：</div>
-            <SettingRow label="我方公司" value={config?.identity?.company || ""}
-              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, company: String(v) } })}
-              placeholder="如 运去哪 YQN / Milogin Freight" />
-            <SettingRow label="我的职位" value={config?.identity?.title || ""}
-              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, title: String(v) } })}
-              placeholder="如 航线经理 / 海外销售" />
-            <SettingRow label="业务口径" value={config?.identity?.business || ""}
-              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, business: String(v) } })}
-              placeholder="主营航线与服务，如 拉美整箱海运为主，CMA/MSC 常报，可提供门到门" />
-            <SettingRow label="助手角色" value={config?.identity?.persona || ""}
-              onSave={v => saveConfigMut.mutate({ identity: { ...config?.identity, persona: String(v) } })}
-              placeholder="固定扮演的角色与分寸，如 我代表我方与客户谈舱位与报价；未确认的价格不得承诺" />
-            <div className="text-[10px] text-amber-600 mt-1">
-              未填「自称 / 我方公司 / 署名」时，AI 起草的邮件只能留 {'{{占位符}}'}。
-            </div>
           </SettingCard>
 
-          {/* 发送规则 — 模拟人工 */}
-          <SettingCard icon="" title="发送规则 — 模拟人工">
+          {/* 发送规则 */}
+          <SettingCard icon="" title="发送规则">
             {/* 发送时段 */}
             <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mt-2 mb-1">发送时段</div>
             <div className="flex items-center gap-2.5 py-1.5 min-h-[30px]">
@@ -1159,12 +1233,12 @@ export function SettingsPage() {
               onSave={v => {
                 const h = parseInt(String(v).slice(0, 2), 10);
                 if (!isNaN(h) && h >= 0 && h <= 23) saveSched({ startHour: h });
-              }} placeholder="北京时，如 09" />
+              }} placeholder="本地时，如 09" />
             <SettingRow label="结束时段" value={sched ? `${String(sched.endHour).padStart(2, "0")}:00` : "08:00"} type="text"
               onSave={v => {
                 const h = parseInt(String(v).slice(0, 2), 10);
                 if (!isNaN(h) && h >= 0 && h <= 23) saveSched({ endHour: h });
-              }} placeholder="北京时，次日结束如 08" hint="跨天" />
+              }} placeholder="本地时，次日结束如 08" hint="跨天" />
 
             {/* 发送参数 */}
             <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mt-3 mb-1">发送参数</div>
@@ -1220,6 +1294,7 @@ export function SettingsPage() {
           <ProviderCard />
           <SearchKeyCard />
           <KbDispatchCard />
+          <AgentConversationCard />
           <AgentAuditCard />
         </div>
 
@@ -1271,7 +1346,7 @@ export function SettingsPage() {
         </div>
 
         {/* ═══ 数据 ═══ */}
-        <div className="settings-section">
+        <div id="sec-data" className="settings-section">
           <div className="text-[13px] font-bold mb-3 text-gray-800">数据</div>
           <SettingCard icon="" title="导出数据库">
             <div className="text-[11px] text-gray-400 mb-3">将联系人数据和跟进记录导出为 CSV 文件，可用 Excel 打开。</div>

@@ -257,6 +257,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         subject: msg.subject,
         bodyPreview: msg.bodyText.slice(0, 500),
         classification,
+        to: msg.to.join(", "),
         cc: msg.cc.join(", "),
         myRole,
         matchedContactId: contact?.id || null,
@@ -273,6 +274,7 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         subject: msg.subject,
         bodyPreview: msg.bodyText.slice(0, 500),
         classification,
+        to: msg.to.join(", "),
         cc: msg.cc.join(", "),
         myRole,
         matchedContactId: contact?.id || null,
@@ -380,6 +382,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       const myRole = toArr.some(a => (a.address || "").toLowerCase() === myEmail) ? "to"
         : ccArr.some(a => (a.address || "").toLowerCase() === myEmail) ? "cc" : null;
       const ccList = ccArr.map(a => a.address || "").filter(Boolean).join(", ");
+      const toList = toArr.map(a => a.address || "").filter(Boolean).join(", ");
 
       // 元数据阶段：正文留空，正文懒加载时再补（避免每封拉 source 卡顿）
       const contact = InboxService.matchContact(fromEmail);
@@ -399,7 +402,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         accountId, messageId: msgId,
         fromEmail, fromName, subject,
         bodyPreview: "", classification,
-        cc: ccList, myRole,
+        to: toList, cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         relatedContactIds,
         receivedAt: date,
@@ -411,7 +414,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         id: 0, accountId, messageId: msgId,
         fromEmail, fromName, subject,
         bodyPreview: "", classification,
-        cc: ccList, myRole,
+        to: toList, cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         relatedContactIds,
         isRead: 0, receivedAt: date,
@@ -613,6 +616,8 @@ async function detectSent(accountId: number): Promise<number> {
         fromEmail: account.email, fromName: account.displayName || null, subject,
         bodyPreview: `发给: ${recipientsStr}`, // 元数据占位，正文懒加载时再补
         classification: "sent",
+        to: toArr.map(a => a.address || "").filter(Boolean).join(", "),
+        cc: ccArr.map(a => a.address || "").filter(Boolean).join(", "),
         matchedContactId: primaryContactId,
         relatedContactIds: contactIds.join(","),
         isRead: 0, receivedAt: env.date ? new Date(env.date as string | Date).toISOString() : new Date().toISOString(),

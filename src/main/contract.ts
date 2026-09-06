@@ -140,6 +140,8 @@ export const IPC = {
     GET_CONVERSATION:    chan(PREFIX.AGENT, "getConversation"),
     RENAME_CONVERSATION: chan(PREFIX.AGENT, "renameConversation"),
     DELETE_CONVERSATION: chan(PREFIX.AGENT, "deleteConversation"),
+    /** 批量删除会话（设置页「归档会话」勾选后一次删） */
+    DELETE_CONVERSATIONS: chan(PREFIX.AGENT, "deleteConversations"),
     /** 写操作审批结论回填（approved → 恢复执行；rejected → 模型收到拒绝消息） */
     RESOLVE_APPROVAL: chan(PREFIX.AGENT, "resolveApproval"),
     /** AI 活动审计：最近 N 条工具调用记录（设置页展示） */
@@ -156,6 +158,10 @@ export const IPC = {
     EXPORT_DIAGNOSTICS: chan(PREFIX.AGENT, "exportDiagnostics"),
     /** 能力缺口台账清单（按被抱怨次数降序；/缺口 命令查看） */
     LIST_GAPS: chan(PREFIX.AGENT, "listGaps"),
+    /** 首页「AI 建议行动」：同步拿本地规则版，AI 版算好后走 agent:suggestions 事件替换 */
+    SUGGESTIONS: chan(PREFIX.AGENT, "suggestions"),
+    /** 工具元数据（UI 中文名 + 追问引导），渲染端不再维护第二份工具清单 */
+    TOOL_META: chan(PREFIX.AGENT, "toolMeta"),
   },
   RATES: {
     /** 从快照文件全量刷新本地运价镜像 */

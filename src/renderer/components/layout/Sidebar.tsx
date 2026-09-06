@@ -8,6 +8,8 @@ import {
 import { Dropdown, Input, Modal } from "antd";
 import { useAppContext } from "../../AppContext";
 import { DiamondLogo } from "../DiamondLogo";
+import { CONVS_CHANGED, gotoConversation } from "../../lib/agent-route";
+import { drop as dropConv, useRunningConvIds } from "../../hooks/useAgentTranscript";
 
 interface NavItem {
   key: string;
@@ -35,8 +37,8 @@ const NAV_ROWS_H = 138; // 三行导航 ≈46px/行，折叠↔恢复的滞回�
 
 interface ConvMeta { id: string; title: string; createdAt: string; updatedAt: string }
 
-/** AssistantPage 数据变更后广播，导航栏监听刷新 */
-export const CONVS_CHANGED = "agent:convs-changed";
+// 路由胶水（广播事件名 / 切会话写 hash）已提到 lib/agent-route，回合现场那里也要用；此处 re-export 兼容旧引用
+export { CONVS_CHANGED, gotoConversation };
 
 /** 活动会话由 hash 参数驱动：#/assistant?c=<id>（与全项目 hash 深链惯例一致），
  *  导航栏与页面各读各的，天然同步、零共享状态 */
@@ -44,10 +46,6 @@ function readActiveConv(): string | undefined {
   const raw = window.location.hash;
   const qs = raw.includes("?") ? raw.split("?")[1] : "";
   return new URLSearchParams(qs).get("c") || undefined;
-}
-
-export function gotoConversation(id: string | undefined): void {
-  window.location.hash = id ? `#/assistant?c=${id}` : "#/assistant";
 }
 
 function groupOf(iso: string): string {
@@ -79,6 +77,8 @@ function ConversationsPanel({ collapsed, onMetrics, onTuck }: {
   collapsed: boolean; onMetrics: (scroll: number, view: number) => void; onTuck: (down: boolean) => void;
 }) {
   const [convs, setConvs] = useState<ConvMeta[]>([]);
+  /** 正在跑回合的会话：标题前挂呼吸点，切到别的页面也知道助手还在干活 */
+  const running = useRunningConvIds();
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTopRef = useRef(0);
   // 当前会话由 router state 派生：navigate()（pushState）不触发 hashchange，读旧 URL 会亮错行；
@@ -126,6 +126,7 @@ function ConversationsPanel({ collapsed, onMetrics, onTuck }: {
       okText: "删除", okType: "danger", cancelText: "取消",
       onOk: async () => {
         await window.api.invoke("agent:deleteConversation", c.id);
+        dropConv(c.id);   // 回合现场缓存一并清掉（否则同 id 复用会读到脏现场）
         if (readActiveConv() === c.id) gotoConversation(undefined);
         window.dispatchEvent(new Event(CONVS_CHANGED));
       },
@@ -172,6 +173,7 @@ function ConversationsPanel({ collapsed, onMetrics, onTuck }: {
                 style={convRowStyle(activeId === c.id)}
                 onClick={() => gotoConversation(c.id)}
               >
+                {running.includes(c.id) && <span className="conv-running-dot" />}
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {c.title}
                 </span>

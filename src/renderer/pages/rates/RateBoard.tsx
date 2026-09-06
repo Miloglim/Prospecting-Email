@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Checkbox, Input, Select, Space, Table, Tag, Tooltip, App as AntApp } from "antd";
-import { SearchOutlined, SyncOutlined, DollarOutlined, GlobalOutlined } from "@ant-design/icons";
+import { SearchOutlined, SyncOutlined, DollarOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { askAssistant } from "../../lib/ask-ai";
-import { DiamondLogo } from "../../components/DiamondLogo";
 
 interface RateStatus {
   total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
@@ -92,28 +90,6 @@ export function RateBoard() {
           )}
         </Space>
         <Space>
-          <Tooltip title="联网调研该航线的公开市场运价与船期：多源检索 → 逐页核实 → 标注可信度 → 出带来源链接的报告。查的是外面的市场价，不是本地台账。">
-            <Button size="small" icon={<GlobalOutlined />}
-              onClick={() => askAssistant({
-                question: (() => {
-                  const parts = [lane && `${lane}航线`, container, pod && `到 ${pod}`].filter(Boolean);
-                  return parts.length
-                    ? `调研一下${parts.join(" ")}的公开市场运价和船期行情，多源核实后给结论，并和台账价对照着说`
-                    : "我要调研一条航线的公开市场运价和船期行情";
-                })(),
-              })}>市场调研</Button>
-          </Tooltip>
-          <Tooltip title="把当前筛选条件带进对话，AI 直接按这批条件查价并给结论">
-            <Button size="small" icon={<DiamondLogo size={14} state="static" />}
-              onClick={() => askAssistant({
-                question: (() => {
-                  const parts = [lane && `${lane}航线`, container, carrier && `${carrier}船司`, pod && `到 ${pod}`].filter(Boolean);
-                  return parts.length
-                    ? `查一下 ${parts.join(" ")} 的运价，按船司和柜型汇总，附有效期`
-                    : "运价镜像库里现在有哪些航线和船司的报价？";
-                })(),
-              })}>问 AI</Button>
-          </Tooltip>
           <Tooltip title="从快照文件刷新镜像（快照由同步任务写入 data/rates-snapshot.json）">
             <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
               loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步台账</Button>
@@ -146,7 +122,7 @@ export function RateBoard() {
       {/* 运价表 */}
       <Table
         dataSource={rows}
-        rowKey={(_, i) => String(i)}
+        rowKey={(r: QuoteDto, i?: number) => `${i ?? 0}|${r.podRaw}|${r.carrier}|${r.container}|${r.validFrom}|${r.sourceGroup}|${r.msgTime}`}
         loading={isLoading}
         size="small"
         pagination={{ pageSize: 50, showSizeChanger: false, size: "small", showTotal: t => `${t} 条` }}

@@ -182,14 +182,20 @@ export function setProfileKey(id: string, value: string): Result<void> {
   return okResult(undefined);
 }
 
-/** 切换思考模式：写 profile 并同时更新生效端点的 AGENT_THINKING */
+/** 切换思考模式：写 profile；若这份档案就是当前生效端点，同步更新 .env 的 AGENT_THINKING */
 export function setProfileThinking(id: string, thinking: boolean): Result<ProfileDto> {
   const s = readStore();
   const p = s.profiles.find(x => x.id === id);
   if (!p) return failResult(`端点不存在: ${id}`);
   p.thinking = thinking;
   writeStore(s);
-  if (s.activeId === id) upsertEnv("AGENT_THINKING", thinking ? "1" : "");
+  // 没有 active 指针时（.env 手写配置被收编成档案的那份），逐字相同即是生效端点，改它同样要落地
+  const e = readActiveEndpoint();
+  const envKeyEnv = (process.env.AGENT_KEY_ENV || "").trim();
+  const mirrorsEnv = !s.activeId && !!e.baseUrl
+    && normalizeBaseUrl(p.baseUrl) === normalizeBaseUrl(e.baseUrl)
+    && p.model === e.model && (!envKeyEnv || envKeyEnv === p.keyEnv);
+  if (s.activeId === id || mirrorsEnv) upsertEnv("AGENT_THINKING", thinking ? "1" : "");
   return okResult(toDto(s, p));
 }
 

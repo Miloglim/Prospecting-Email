@@ -119,7 +119,7 @@ export function Dashboard() {
               { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 150,
                 render: (v: string) => <span className="text-[11px] text-gray-500">{fmtTime(v)}</span> },
             ]}
-            rowKey={(_, i) => String(i)}
+            rowKey={(r: any) => String(r.id ?? `${r.createdAt}|${r.type}|${r.contactEmail ?? ""}`)}
             size="small"
             pagination={false}
           />

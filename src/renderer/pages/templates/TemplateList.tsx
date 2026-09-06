@@ -365,6 +365,7 @@ export function TemplateList() {
             }) as { success: boolean; data?: string; error?: string };
             if (!r?.success) { message.error(r?.error || "生成失败"); return; }
             // 解析 "SUBJECT: xxx\n\n正文" 格式
+            // 注：与主进程 agent/parser.ts 的 parseDraft 同源；跨 bundle 不共享，改动需同步
             const text = r.data || "";
             const m = text.match(/^SUBJECT:\s*([^\n]+)\s*\n+([\s\S]*)$/i);
             const subject = m ? m[1]!.trim() : "关于您的货运需求";

@@ -4,6 +4,7 @@ import * as Agent from "../services/agent.service";
 import * as BgTask from "../services/bg-task.service";
 import * as Diagnostics from "../services/diagnostics.service";
 import * as Gaps from "../services/gap.service";
+import * as Suggestions from "../services/suggestion.service";
 import { isInsideArtifactDir } from "../services/artifact.service";
 import { failResult, okResult } from "../errors";
 import { Log } from "../logger";
@@ -43,6 +44,9 @@ export function registerAgentIPC() {
   // 端点就绪状态（供对话页角标与提示）
   ipcMain.handle(IPC.AGENT.STATUS, () => Agent.status());
 
+  // 工具元数据（UI 中文名 + 追问引导）：渲染端经此取，不再各自维护清单
+  ipcMain.handle(IPC.AGENT.TOOL_META, () => Agent.toolMeta());
+
   // 会话管理（左侧历史列表）
   ipcMain.handle(IPC.AGENT.LIST_CONVERSATIONS, () => Agent.listConversations());
 
@@ -54,6 +58,10 @@ export function registerAgentIPC() {
 
   ipcMain.handle(IPC.AGENT.DELETE_CONVERSATION, (_e, conversationId: string) =>
     Agent.deleteConversation(conversationId));
+
+  // 批量删除会话（设置页「归档会话」勾选后一次删）
+  ipcMain.handle(IPC.AGENT.DELETE_CONVERSATIONS, (_e, ids: string[]) =>
+    Agent.deleteConversations(ids));
 
   // AI 活动审计：最近工具调用记录（设置页）
   ipcMain.handle(IPC.AGENT.TOOL_CALLS, (_e, limit?: number) => Agent.listToolCalls(limit));
@@ -88,4 +96,7 @@ export function registerAgentIPC() {
 
   // 能力缺口台账（/缺口 命令查看，按被抱怨次数降序）
   ipcMain.handle(IPC.AGENT.LIST_GAPS, (_e, limit?: number) => Gaps.listGaps(limit ?? 20));
+
+  // 首页「AI 建议行动」：只读当天批次并填上今天的数字（毫秒级，不等模型）
+  ipcMain.handle(IPC.AGENT.SUGGESTIONS, () => Suggestions.suggestions());
 }

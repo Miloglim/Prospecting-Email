@@ -1,25 +1,25 @@
 import * as path from "path";
 import * as crypto from "crypto";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, count } from "drizzle-orm";
 import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 import { EVENTS } from "../events";
 import { getDb, saveDatabase } from "../db";
-import { agentConversations, agentMessages, agentToolCalls } from "../db/schema/agent";
+import { agentConversations, agentMessages, agentToolCalls, agentFacts } from "../db/schema/agent";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { inboxMessages } from "../db/schema/inbox";
 import {
   runHarnessTurn, resolveApproval, rejectPendingFor, hasPending, clearAutoApprove,
-  type PushFn, type ChatMsg, type TurnOutcome,
+  DEFAULT_PROFILE, type PushFn, type TurnOutcome,
 } from "./agent/harness";
+import { toolLabelMap, toolFollowUpMap } from "./agent/manifest";
+import { reflectOnNumbers, selfCorrectNumbers } from "./agent/reflector";
 
 type TurnOutcomeUsage = TurnOutcome["usage"];
 import { executeAction, dropActionsForConversation } from "./agent/actions";
-import { chat as llmChat } from "./ai.service";
 import { readActiveEndpoint } from "./endpoint.service";
-import { identityGaps } from "./agent/identity";
 
 export type { PushFn };
 
@@ -46,11 +46,13 @@ export function tokenTotals(): Result<TokenTotals> {
   return okResult({ ...totals });
 }
 
-/** 每次请求携带的历史条数上限（system 除外），防上下文膨胀 */
-const HISTORY_LIMIT = 30;
+/** 每次请求携带的历史条数上限在记忆模块维护（agent/memory.ts），此处仅转出口 */
+export { HISTORY_LIMIT } from "./agent/memory";
+import { loadConversation } from "./agent/memory";
 
-/** 单回合墙钟硬上限：模型端点挂起/流停滞时看门狗强制中断，杜绝永久加载态 */
-const TURN_HARD_LIMIT_MS = 150_000;
+/** 静默上限：连续这么久没有任何事件产出（流增量/工具过程/任务进度）才强制中断，杜绝永久加载态；
+ *  有产出就重新计时 —— 只掐真挂起，不腰斩勤快干活的多步长任务 */
+const TURN_IDLE_LIMIT_MS = 150_000;
 
 // ── Provider 配置 ────────────────────────────────────────
 
@@ -75,9 +77,14 @@ export function status(): Result<{ configured: boolean; model: string; baseUrl: 
   return okResult({
     configured: c.configured, model: c.model, baseUrl: c.baseUrl,
     thinking: readActiveEndpoint().thinking,
-    // 身份缺失时草稿只能留占位符，界面据此提示去补
-    identityOk: identityGaps().length === 0,
+    // 身份已固定为运去哪 agent 助手（恒有效），字段保留供前端状态聚合
+    identityOk: true,
   });
+}
+
+/** 工具元数据（UI 中文名 + 追问引导）：从注册表派生，渲染端不再维护第二份工具清单 */
+export function toolMeta(): Result<{ labels: Record<string, string>; followUps: Record<string, string[]> }> {
+  return okResult({ labels: toolLabelMap(), followUps: toolFollowUpMap() });
 }
 
 // ── 会话读写 ─────────────────────────────────────────────
@@ -100,45 +107,6 @@ function appendMessage(convId: string, role: "user" | "assistant" | "error", con
   db.insert(agentMessages).values({ conversationId: convId, role, content, createdAt: nowIso() }).run();
   db.update(agentConversations).set({ updatedAt: nowIso() }).where(eq(agentConversations.id, convId)).run();
   saveDatabase();
-}
-
-/**
- * 读会话消息（asc）进上下文，三级记忆：
- *   近端：最近 HISTORY_LIMIT 条原文（短期记忆，完整保留）
- *   中段：超出部分压成一条「此前对话摘要」注入（会话摘要层），不再硬截断丢失
- *   摘要生成：用生效端点做一次性小请求；生成失败则退化为「前情省略」标记（不阻塞对话）
- */
-async function loadHistory(convId: string): Promise<ChatMsg[]> {
-  const rows = getDb().select().from(agentMessages)
-    .where(eq(agentMessages.conversationId, convId))
-    .orderBy(asc(agentMessages.id)).all()
-    .filter(r => r.role === "user" || r.role === "assistant");   // error 卡片只给人看，不进模型
-  if (rows.length <= HISTORY_LIMIT) {
-    return rows.map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
-  }
-  const dropped = rows.slice(0, rows.length - HISTORY_LIMIT);
-  const recent = rows.slice(-HISTORY_LIMIT).map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
-  const summary = await summarizeEarlier(convId, dropped);
-  return [{ role: "user", content: `【系统注入·此前对话摘要（${dropped.length} 条已压缩，不必再提）】
-${summary}` }, ...recent];
-}
-
-/** 轻任务 LLM 调用：会话压缩摘要等单发小任务（将来可路由到便宜档模型） */
-function callLightweight(system: string, user: string): Promise<Result<string>> {
-  return llmChat(system, user);
-}
-
-/** 压缩超限中段：走轻任务端点（同端点小请求），200 字以内中文要点；失败给占位而非报错 */
-async function summarizeEarlier(convId: string, dropped: Array<{ role: string; content: string }>): Promise<string> {
-  const text = dropped.map(m => `${m.role === "user" ? "用户" : "助手"}: ${m.content.slice(0, 400)}`).join("\n").slice(0, 8000);
-  try {
-    const r = await callLightweight(
-      "你是对话压缩器。把以下多轮对话压成不超过 200 字的中文要点：已讨论的结论、已查到的关键数据、用户的偏好与未决事项。只输出要点本身。",
-      text,
-    );
-    if (r.success) return r.data;
-  } catch { /* 摘要失败不阻塞对话 */ }
-  return `（本会话此前另有 ${dropped.length} 条消息，压缩失败已省略；如需回顾请重新说明要点）`;
 }
 
 // ── 对外：发起对话 / 停止 / 审批回执 ─────────────────────────────
@@ -223,47 +191,86 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
   void (async () => {
     state.running = true;
     state.abort = new AbortController();
-    // 墙钟看门狗：端点挂起/流停滞时最迟 TURN_HARD_LIMIT_MS 强制中断，
-    // 消灭「永久转圈」。用户手动停止走同一 abort 通道，用 timedOut 区分语义。
+    // 静默看门狗：只在「连续 TURN_IDLE_LIMIT_MS 没有任何事件产出」时强制中断（端点真挂起），
+    // 每次推送都重新计时 —— 合法的多步长任务不再被整回合墙钟腰斩。手动停止走同一 abort 通道。
     let timedOut = false;
-    const watchdog = setTimeout(() => {
-      timedOut = true;
-      Log.warn("agent.chat", `回合超时强制中断 conv=${conversationId.slice(0, 8)}（${TURN_HARD_LIMIT_MS / 1000}s）`);
-      state.abort?.abort();
-    }, TURN_HARD_LIMIT_MS);
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        Log.warn("agent.chat", `回合静默超时强制中断 conv=${conversationId.slice(0, 8)}（${TURN_IDLE_LIMIT_MS / 1000}s 无输出）`);
+        state.abort?.abort();
+      }, TURN_IDLE_LIMIT_MS);
+    };
+    armIdle();
+    /** 带心跳的推送器：任何产出都算"还在干活" */
+    const touchPush: PushFn = (channel, data) => { armIdle(); push(channel, data); };
     const cfg = getProviderConfig();
     Log.debug("agent.chat", `回合开始 conv=${conversationId.slice(0, 8)} model=${cfg.model || "（未填）"}`);
     try {
       let answer = "";
+      let toolOutputs: string[] = [];
       let outcomeUsage: TurnOutcomeUsage | undefined;
+      let cappedFlag = false;
       {
         // harness 自带系统提示词（L0 规则）与工具集；历史只带 user/assistant 正文
-        const outcome = await runHarnessTurn({
+        const outcome = await runHarnessTurn(DEFAULT_PROFILE, {
           baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
-          history: await loadHistory(conversationId),
-          conversationId, push, signal: state.abort.signal,
+          history: await loadConversation(conversationId),
+          conversationId, push: touchPush, signal: state.abort.signal,
           contextNote: resolveContextNote(input.context),
         });
         if (outcome.kind === "approval") { outcomeUsage = outcome.usage; return; } // 写操作等人工确认；续跑收尾在 resolveApprovalRequest
         answer = outcome.text;
+        toolOutputs = outcome.toolOutputs ?? [];
         outcomeUsage = outcome.usage;
+        if (outcome.capped) cappedFlag = true;
         if (outcome.usage) {
           totals.requests += outcome.usage.requests; totals.input += outcome.usage.input;
           totals.output += outcome.usage.output; totals.cached += outcome.usage.cached; totals.turns += 1;
           Log.info("agent.usage", `conv=${conversationId.slice(0, 8)} 调用${outcome.usage.requests}次 in=${outcome.usage.input} out=${outcome.usage.output} 缓存命中=${outcome.usage.cached}`);
         }
       }
+      // 反思校验：正文里的数量必须回溯得到本轮工具返回；对不上先自纠一次，
+      // 纠后仍对不上就文末附注 —— 绝不静默放行，也不做校验死循环。
+      // 只在本轮真调过工具时校验（纯闲聊没有数据依据，查了全是误伤）。
+      // 用户输入里出现过的数字天然豁免（如用户自己说"8714 个联系人"，不能被纠成「若干」）。
+      if (answer && toolOutputs.length && !state.abort.signal.aborted) {
+        const bad = reflectOnNumbers(answer, toolOutputs, [text]);
+        if (bad.length) {
+          Log.warn("agent.reflect", `conv=${conversationId.slice(0, 8)} 数量回溯不过（${bad.join("、")}），尝试自纠`);
+          const fixed = await selfCorrectNumbers(answer, bad, toolOutputs);
+          if (fixed && reflectOnNumbers(fixed, toolOutputs, [text]).length === 0) {
+            // 自纠成功：落库与推送各留一份终稿；推送只发一行更正说明，不整篇重发
+            answer = fixed;
+            const delta = `\n\n（已按工具数据更正正文中的：${bad.slice(0, 3).join("、")}。）`;
+            push(EVENTS.AGENT_CHUNK, { conversationId, delta });
+            Log.info("agent.reflect", `conv=${conversationId.slice(0, 8)} 自纠成功，正文已替换`);
+          } else {
+            const delta = `\n\n（注：正文中「${bad.slice(0, 3).join("、")}」等数量未能与工具数据核对一致，请以工具结果卡为准。）`;
+            answer += delta;
+            push(EVENTS.AGENT_CHUNK, { conversationId, delta });
+          }
+        }
+      }
       if (answer) appendMessage(conversationId, "assistant", answer);
-      push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: state.abort.signal.aborted, usage: outcomeUsage });
+      push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: state.abort.signal.aborted, usage: outcomeUsage, ...(cappedFlag ? { capped: true } : {}) });
     } catch (err: unknown) {
       const aborted = (err as { name?: string })?.name === "AbortError";
       if (timedOut) {
         // 看门狗触发：明确告诉用户是端点卡住被强制中断，而非正常"停止"
-        const msg = `模型响应超时，已强制中断（超过 ${Math.round(TURN_HARD_LIMIT_MS / 1000)} 秒无输出）。可在「设置」换用更稳定的端点。`;
+        const msg = `模型响应超时，已强制中断（超过 ${Math.round(TURN_IDLE_LIMIT_MS / 1000)} 秒无输出）。可在「设置」换用更稳定的端点。`;
         appendMessage(conversationId, "error", msg);
         push(EVENTS.AGENT_ERROR, { conversationId, message: msg });
       } else if (aborted) {
         push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: true });
+      } else if ((err as { name?: string })?.name === "MaxTurnsExceededError"
+        || /max\s*turns/i.test(err instanceof Error ? err.message : "")) {
+        // 回合步数用尽 = 程序内部刹车，不该是报错脸：续一句自然收尾，按完成处理
+        Log.warn("agent.chat", `conv=${conversationId.slice(0, 8)} 达 maxTurns，优雅收尾`);
+        push(EVENTS.AGENT_CHUNK, { conversationId, delta: "\n\n这轮先说到这里 — 要接着做的话，回一句「继续」即可。" });
+        push(EVENTS.AGENT_DONE, { conversationId, messageId, stopped: false });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         Log.error("agent.chat", "模型调用失败", err instanceof Error ? (err.stack ?? msg) : msg);
@@ -272,7 +279,7 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
         push(EVENTS.AGENT_ERROR, { conversationId, message: shown });
       }
     } finally {
-      clearTimeout(watchdog);
+      clearTimeout(idleTimer);
       state.running = false;
       state.abort = null;
     }
@@ -301,13 +308,16 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
   if (!hasPending(approvalId)) return failResult("审批已不存在（可能已停止或重启作废）");
   const cfg = getProviderConfig();
   if (!cfg.configured) return failResult("未配置模型端点：请到「设置 → 模型与端点」配置并启用一个端点");
-  // 续跑同样受墙钟保护 + 异常显式推送，避免 rejected promise 被吞、UI 永远等待
+  // 续跑同样用静默计时保护（有产出就续命，只掐真挂起）+ 异常显式推送，避免 rejected promise 被吞、UI 永远等待
   const ac = new AbortController();
-  const watchdog = setTimeout(() => ac.abort(), TURN_HARD_LIMIT_MS);
+  let resumeIdle: ReturnType<typeof setTimeout> | undefined;
+  const armResume = () => { clearTimeout(resumeIdle); resumeIdle = setTimeout(() => ac.abort(), TURN_IDLE_LIMIT_MS); };
+  armResume();
+  const touchPush: PushFn = (channel, data) => { armResume(); push(channel, data); };
   try {
     const outcome = await resolveApproval(approvalId, !!input.approved, {
       baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
-      history: [], conversationId: "", push, signal: ac.signal,
+      history: [], conversationId: "", push: touchPush, signal: ac.signal,
     }, input.rememberTool?.trim());
     if (outcome.kind === "approval") return okResult({ resumed: false });
     if (outcome.text) appendMessage(outcome.conversationId, "assistant", outcome.text);
@@ -315,7 +325,7 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
       totals.requests += outcome.usage.requests; totals.input += outcome.usage.input;
       totals.output += outcome.usage.output; totals.cached += outcome.usage.cached; totals.turns += 1;
     }
-    push(EVENTS.AGENT_DONE, { conversationId: outcome.conversationId, messageId: "", stopped: false, usage: outcome.usage });
+    push(EVENTS.AGENT_DONE, { conversationId: outcome.conversationId, messageId: "", stopped: false, usage: outcome.usage, ...(outcome.capped ? { capped: true } : {}) });
     return okResult({ resumed: true });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -323,7 +333,7 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
     push(EVENTS.AGENT_ERROR, { conversationId: "", message: ac.signal.aborted ? "续跑超时，已中断" : `续跑失败: ${msg}` });
     return failResult(msg);
   } finally {
-    clearTimeout(watchdog);
+    clearTimeout(resumeIdle);
   }
 }
 
@@ -334,18 +344,38 @@ export interface ConversationMeta {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /** 消息条数：管理页用来判断哪段值得留、哪段可以清 */
+  messageCount: number;
 }
 
 export function listConversations(): Result<ConversationMeta[]> {
-  const rows = getDb().select().from(agentConversations)
+  const db = getDb();
+  const rows = db.select().from(agentConversations)
     .orderBy(desc(agentConversations.updatedAt)).all();
-  return okResult(rows.map(r => ({ id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt })));
+  // 每个会话的消息条数（含错误卡，不含 system——system 本来就不落库）
+  const counts = db.select({ conversationId: agentMessages.conversationId, n: count() })
+    .from(agentMessages).groupBy(agentMessages.conversationId).all();
+  const countByConv = new Map(counts.map(c => [c.conversationId, Number(c.n ?? 0)]));
+  return okResult(rows.map(r => ({
+    id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt,
+    messageCount: countByConv.get(r.id) ?? 0,
+  })));
+}
+
+/** 批量删除会话：复用单条删除（连同消息/事实/运行态/审批豁免/未点击动作卡一起清） */
+export function deleteConversations(ids: string[]): Result<{ deleted: number }> {
+  const list = (ids ?? []).filter((x): x is string => typeof x === "string" && !!x.trim());
+  if (!list.length) return failResult("参数错误: 至少选择一个会话");
+  for (const id of list) deleteConversation(id);
+  return okResult({ deleted: list.length });
 }
 
 export interface MessageDto {
   role: string; content: string; createdAt: string;
   /** role=tool 时回带：来自 agent_tool_calls 的审计回放（前端重建过程/产物卡） */
   toolName?: string; argsJson?: string; resultJson?: string;
+  /** role=tool 且本次调用失败（参数校验错/执行错）：前端据此画失败态而非「已{动词}」 */
+  error?: string;
 }
 
 /** 两套时间戳统一按 UTC 解析：消息表是 ISO（…T…Z），审计表默认 CURRENT_TIMESTAMP（无时区） */
@@ -369,6 +399,7 @@ export function getMessages(conversationId: string): Result<MessageDto[]> {
     ...calls.map(c => ({
       role: "tool", content: "", createdAt: c.createdAt, _t: tsOf(c.createdAt),
       toolName: c.toolName, argsJson: c.argsJson ?? undefined, resultJson: c.resultJson ?? undefined,
+      error: c.error ?? undefined,
     })),
   ].sort((a, b) => a._t - b._t);
   return okResult(merged.map(({ _t, ...m }) => m));
@@ -392,6 +423,7 @@ export function deleteConversation(conversationId: string): Result<void> {
   if (!conversationId) return failResult("参数错误: conversationId 必填");
   const db = getDb();
   db.delete(agentMessages).where(eq(agentMessages.conversationId, conversationId)).run();
+  db.delete(agentFacts).where(eq(agentFacts.conversationId, conversationId)).run();
   db.delete(agentConversations).where(eq(agentConversations.id, conversationId)).run();
   saveDatabase();
   runtime.delete(conversationId);

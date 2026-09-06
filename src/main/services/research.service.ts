@@ -8,11 +8,11 @@
 //  1) 每条数据必须带来源链接 + 发布/更新日期，缺一项就在可信度上降级；
 //  2) 搜索摘要只是线索 —— 没抓到页面正文的数字不得进结论，只进「需注意」清单；
 //  3) 结论里的每个数字都要能回溯到被抓到的证据，回溯不过的整条剔除（不许用模型自身知识补写）；
-//  4) 抓取失败不硬抓：同一 URL 只试一次，失败即计入覆盖缺口；
+//  4) 抓取失败不硬抓：4xx（反爬/不存在）与空页面只试一次；瞬时失败（网络/超时/5xx/429）重试一次，
+//     仍失败即计入覆盖缺口；
 //  5) 不同口径（柜型、是否含附加费）不得直接比大小 —— 口径单独成列，不合并。
 import { netFetch } from "../net-proxy";
 import { searchWeb, chatJson, hasSearchSource, type SearchHit } from "./ai.service";
-import { writeArtifact, type ArtifactMeta } from "./artifact.service";
 import { okResult, failResult, type Result } from "../errors";
 
 // ── 场景定义 ──────────────────────────────────────────────────────
@@ -218,6 +218,16 @@ export function unverifiableNumbers(text: string, evidenceTexts: string[]): stri
   return bad;
 }
 
+/** 未经核实的数字一律打码：只有回溯到被抓到的页面，数字才有资格出现在模型可见文本里 */
+export function maskUnverified(text: string): string {
+  return String(text || "").replace(/\d[\d,]*/g, m => {
+    const v = Number(m.replace(/,/g, ""));
+    if (!Number.isFinite(v)) return m;
+    if (v < 100 || (v >= 1900 && v <= 2100)) return m;   // 柜数/天数/年份不打码
+    return "×××";
+  });
+}
+
 /** 检索词模板（方法论 Step 1）：中英文并行，替换成明确日期区间 */
 export function laneQueries(p: ResolvedPorts, opts: { container?: string; weeks: number; today: Date }): string[] {
   const d = opts.today;
@@ -296,8 +306,9 @@ function bj(at: Date): string {
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 const PAGE_CHARS = 3000;
-const FETCH_MAX = 5;          // 一轮最多抓 5 页：再多就是自找超时
-const FETCH_TIMEOUT = 12_000;
+const FETCH_MAX = 8;          // 一轮最多抓 8 页（并行抓，行情页保底见 pick 逻辑）
+const FETCH_TIMEOUT = 20_000;
+const RETRY_DELAY = 1_500;
 
 function stripHtml(html: string): string {
   return String(html)
@@ -308,8 +319,8 @@ function stripHtml(html: string): string {
     .replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim().slice(0, PAGE_CHARS);
 }
 
-/** 抓一页正文；失败即返回错误（同一 URL 不重试，降级为线索） */
-export async function fetchPage(url: string): Promise<Result<string>> {
+/** 只试一次的单次抓取（重试语义在 fetchPage） */
+async function fetchOnce(url: string): Promise<Result<string>> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
   try {
@@ -322,6 +333,19 @@ export async function fetchPage(url: string): Promise<Result<string>> {
   } catch (err) {
     return failResult(err instanceof Error ? err.message.slice(0, 80) : "抓取失败");
   } finally { clearTimeout(timer); }
+}
+
+/** 4xx（反爬/不存在）与空页面重试无意义；其余（网络异常/超时中止/5xx/429）值得再试一次 */
+function transientFetchError(error: string): boolean {
+  return !/^HTTP 4\d\d/.test(error) && !error.includes("页面正文过短");
+}
+
+/** 抓一页正文；瞬时失败自动重试一次，重试仍败或 4xx 即降级为线索 */
+export async function fetchPage(url: string): Promise<Result<string>> {
+  const first = await fetchOnce(url);
+  if (first.success || !transientFetchError(first.error)) return first;
+  await new Promise(r => setTimeout(r, RETRY_DELAY));
+  return fetchOnce(url);
 }
 
 /** 端口名规范化（中英文/UNLOCODE 之间互相补齐）；端点没配或失败时退回原样切分 */
@@ -360,12 +384,14 @@ function scheduleSentence(text: string): string {
 
 /**
  * 跑一个调研场景（目前只有 ocean-lane）。
- * 不做的事：不写业务库、不发送任何东西、不改运价镜像 —— 产出只是报告文件 + 结构化摘要。
+ * 不做的事：不写业务库、不发送任何东西、不改运价镜像 —— 产出只是报告正文 + 结构化摘要。
+ * 报告不在这里落盘：调研一成功就自动写文件会在回合中段「抢跑」，用户没点头之前一个字不落盘；
+ * 要存成文件由 market_research 工具注册「保存调研报告」动作卡，用户点击才写（见 tools.ts）。
  */
 export async function runResearchScene(
   input: LaneInput,
   deps: { mirrorCompare?: (podEn: string, podCn: string) => string | null } = {},
-): Promise<Result<{ out: ResearchOutput; artifact: ArtifactMeta }>> {
+): Promise<Result<{ out: ResearchOutput }>> {
   const pol = String(input.pol || "").trim();
   const pod = String(input.pod || "").trim();
   if (!pol || !pod) return failResult("缺少起运港或目的港：这两项必须由用户提供，其余可用默认值");
@@ -406,8 +432,16 @@ export async function runResearchScene(
       });
     }
   }
-  // 权威来源优先抓取，其余留作线索
-  const pick = [...evs].sort((a, b) => a.tier - b.tier).slice(0, FETCH_MAX);
+  // 权威来源优先抓取，但带行情信号的页面保底 3 个名额 —— 桑托斯实测里真带价格的
+  // 货代行情页全是 tier5，纯按 tier 排序根本进不了抓取集，报告就会断粮
+  const hint = (ev: Evidence) => /运价|海运费|运费|报价|freight|rate|price/i.test(`${ev.title} ${ev.snippet.slice(0, 300)}`);
+  const byTier = [...evs].sort((a, b) => a.tier - b.tier);
+  const pickedUrls = new Set<string>();
+  for (const ev of [...byTier.filter(hint).slice(0, 3), ...byTier]) {
+    if (pickedUrls.size >= FETCH_MAX) break;
+    pickedUrls.add(ev.url);
+  }
+  const pick = evs.filter(e => pickedUrls.has(e.url)).sort((a, b) => a.tier - b.tier);
   await Promise.all(pick.map(async ev => {
     const r = await fetchPage(ev.url);
     if (r.success) {
@@ -456,15 +490,16 @@ export async function runResearchScene(
     const text = String(c?.text || "").trim().slice(0, 200);
     if (!text) continue;
     const refs = (Array.isArray(c?.refs) ? (c.refs as unknown[]) : []).map(v => Number(v)).filter(n => Number.isInteger(n) && n >= 1 && n <= verified.length);
-    if (!refs.length) { dropped.push(text + "（未标注来源）"); continue; }
+    if (!refs.length) { dropped.push(maskUnverified(text) + "（未标注来源）"); continue; }
     const texts = refs.map(n => (verified[n - 1]!.ev.text || verified[n - 1]!.ev.snippet));
     const bad = unverifiableNumbers(text, texts);
-    if (bad.length) { dropped.push(`${text}（数字 ${bad.join("、")} 在引用资料里找不到）`); continue; }
+    if (bad.length) { dropped.push(`${maskUnverified(text)}（数字 ${bad.map(maskUnverified).join("、")} 在引用资料里找不到）`); continue; }
     conclusions.push({ text, refs });
   }
 
   const gaps = [
-    ...unverified.slice(0, 6).map(r => `未核实（只拿到搜索摘要，页面没抓到）：${r.source} — ${r.value}`),
+    // 未核实数字一律打码：护栏不进模型兜不住——聊天模型曾从 gaps 摘要捞数字拼进回答外发
+    ...unverified.slice(0, 6).map(r => `未核实（只拿到搜索摘要，页面没抓到，数字已打码）：${maskUnverified(r.source)} — ${maskUnverified(r.value)}`),
     ...evs.filter(e => e.fetchError).slice(0, 4).map(e => `抓取失败：${e.domain} — ${e.fetchError}（船司班期页普遍反爬，已降级为线索）`),
     ...(verified.length ? [] : ["本轮没有任何一条资料通过页面核实，不给数字结论"]),
     `权威指数覆盖情况未确认时（SCFI/CCFI/Drewry/FBX 是否含该航线），本报告不代其发声`,
@@ -477,8 +512,6 @@ export async function runResearchScene(
     route, window, container: input.container, scope: scope === "both" ? "运价 + 船期" : scope === "rates" ? "运价" : "船期",
     conclusions: conclusions.slice(0, 5), rates: verified.slice(0, 10), schedules, gaps, dropped, mirror, at: today,
   });
-  const w = writeArtifact(`航线调研 ${route}`, "md", report);
-  if (!w.success) return failResult(w.error);
 
   return okResult({
     out: {
@@ -487,6 +520,5 @@ export async function runResearchScene(
       rates: verified.slice(0, 10), schedules, gaps, report,
       evidenceCount: { hits: evs.length, fetched: pick.filter(e => e.fetched).length },
     },
-    artifact: w.data,
   });
 }

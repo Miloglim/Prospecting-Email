@@ -272,17 +272,19 @@ export function setInboxPushFn(fn: (channel: string, data: unknown) => void) {
 
 // ── 抓取 ──
 
-export async function fetchInbox(accountId?: number): Promise<Result<InboxMessageRow[]>> {
+export async function fetchInbox(accountId?: number, excludeIds?: number[]): Promise<Result<InboxMessageRow[]>> {
   Log.debug("inbox.fetch", `accountId=${accountId}`);
 
   if (!imapFetchFn) {
     return failResult("IMAP 抓取函数未配置");
   }
 
-  // 默认抓取所有活跃账号
-  const accounts = accountId
+  // 默认抓取所有活跃账号（excludeIds = 本轮失败退避中的账号，见 startAutoFetch）
+  let accounts = accountId
     ? getDb().select().from(emailAccounts).where(eq(emailAccounts.id, accountId)).all()
     : getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+  if (!accountId && excludeIds?.length) accounts = accounts.filter(a => !excludeIds.includes(a.id));
+  if (!accounts.length) return okResult([]);
 
   const allNew: InboxMessageRow[] = [];
 
@@ -779,13 +781,25 @@ export function startAutoFetch(intervalMs = 5 * 60 * 1000) {
   Log.info("inbox.auto", `每 ${intervalMs / 1000}s 自动抓取`);
   // P1-4: 轮询防重入 — 上一轮没跑完（如超大积压/慢连接）时跳过本轮，避免并发抓取同账号
   let autoRunning = false;
+  // 失败退避：被限流的账号越撞限得越狠 —— 连败 ≥3 降频到每 4 轮、≥12 降频到每 12 轮；成功一轮自动恢复
+  let autoTick = 0;
   fetchInterval = setInterval(() => {
     if (autoRunning) {
       Log.warn("inbox.auto", "上一轮抓取未结束，本轮跳过");
       return;
     }
     autoRunning = true;
-    fetchInbox()
+    autoTick++;
+    let exclude: number[] = [];
+    try {
+      exclude = getDb()
+        .select({ id: emailAccounts.id, f: emailAccounts.fetchFailCount })
+        .from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all()
+        .filter(a => a.f >= 3 && autoTick % (a.f >= 12 ? 12 : 4) !== 0)
+        .map(a => a.id);
+      if (exclude.length) Log.info("inbox.auto", `失败退避：跳过 ${exclude.length} 个连败账号（本第 ${autoTick} 轮）`);
+    } catch { /* 查不到就照常全量 */ }
+    fetchInbox(undefined, exclude)
       .catch(err => {
         Log.error("inbox.auto", "自动抓取失败", err instanceof Error ? err.stack : undefined);
       })

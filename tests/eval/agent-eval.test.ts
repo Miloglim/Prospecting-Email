@@ -5,7 +5,8 @@ import * as path from "path";
 import * as fs from "fs";
 import { EVAL_CARDS, type EvalCard } from "./agent-tasks";
 import * as schema from "../../src/main/db/schema";
-import { eq } from "drizzle-orm";
+import { BASE_SCHEMA_SQL } from "../../src/main/db/schema-sql";
+import { eq, asc } from "drizzle-orm";
 
 // ═══════════════════════════════════════════════════════════════════
 // Agent 归因评测跑批（live 专用：AGENT_EVAL=live 才执行，常规 vitest 自动跳过）
@@ -21,6 +22,12 @@ type TurnUsage = { requests: number; input: number; output: number; cached: numb
 type Collected = {
   tools: ToolEv[]; text: string; approvals: number;
   error?: string; done: boolean; usage?: TurnUsage;
+  /** 带 failed 标记落场的工具（失败态卡链路：不该有却出现 = 失败泄入对话流） */
+  failedTools: string[];
+  /** 按轮切分的工具调用序列（末轮工具禁查判据用） */
+  turnTools: string[][];
+  /** 按轮切分的回答文本（末轮判定用 ev.text = 最后一轮） */
+  turnTexts: string[];
 };
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>> | null = null;
@@ -38,56 +45,10 @@ vi.mock("../../src/main/logger", () => ({
 // 被测链路（在 mock 之后 import 才安全：vitest 提升 import，这里靠动态获取）
 const agentSvc = await import("../../src/main/services/agent.service");
 
-const DDL = `
-CREATE TABLE email_accounts (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, email text NOT NULL UNIQUE,
-  provider text DEFAULT 'smtp' NOT NULL, smtp_host text, smtp_port integer,
-  imap_host text, imap_port integer, encrypted_pass text NOT NULL,
-  display_name text, signature text,
-  consecutive_fails integer DEFAULT 0 NOT NULL, circuit_open_at text, circuit_reset_after text,
-  last_fetch_error text, last_fetch_at text, fetch_fail_count integer DEFAULT 0 NOT NULL,
-  is_active integer DEFAULT 1 NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE companies (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, name text NOT NULL, domain text, industry text,
-  country text, size text, backcheck_data text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE contacts (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, email text NOT NULL UNIQUE, company_id integer,
-  first_name text, last_name text, title text, phone text, linkedin text, country text,
-  client_type text, language text, stage text DEFAULT 'cold', status text DEFAULT '', tags text,
-  extra text DEFAULT '{}', assignee text DEFAULT '', source text DEFAULT 'manual', source_detail text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE interactions (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, contact_id integer NOT NULL, type text NOT NULL,
-  direction text NOT NULL, channel text DEFAULT 'email' NOT NULL, subject text, body_preview text,
-  message_id text, account_id integer, metadata text, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE rate_quotes (
-  record_id text PRIMARY KEY NOT NULL, pol text, pod_raw text NOT NULL, lane text, carrier text,
-  container text, container_raw text, ocean_usd integer, validity_raw text, valid_from text, valid_to text,
-  free_days text, shortfall_fee text, note text, source_group text, sender text, msg_time text,
-  image_name text, synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE agent_conversations (
-  id text PRIMARY KEY NOT NULL, title text DEFAULT '新对话' NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE agent_messages (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL,
-  role text NOT NULL, content text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE agent_tool_calls (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL, tool_name text NOT NULL,
-  side_effect text NOT NULL, args_json text, result_json text, approval text NOT NULL, error text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-CREATE TABLE inbox_messages (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, account_id integer NOT NULL, message_id text,
-  from_email text NOT NULL, from_name text, subject text, body_preview text, classification text,
-  cc text, my_role text, matched_contact_id integer, related_contact_ids text,
-  is_read integer DEFAULT 0 NOT NULL, received_at text NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
-`;
-
 async function newSandbox(): Promise<Driz> {
   if (!SQLLIB) SQLLIB = await initSqlJs({ locateFile: f => path.resolve(process.cwd(), "node_modules/sql.js/dist", f) });
   const raw: SqlJsDatabase = new SQLLIB.Database();
-  raw.run(DDL);
+  raw.run(BASE_SCHEMA_SQL);
   const db = drizzle(raw, { schema });
   h.db = db;
   // ── 种子数据 ──
@@ -163,6 +124,13 @@ function judge(card: EvalCard, ev: Collected, db: Driz): Verdict {
   if (ev.error && !ev.done) return { pass: false, attribution: "infra", note: ev.error.slice(0, 80) };
   void db;
 
+  // 失败态卡链路：本回合出现的工具失败会带 failed 标记落场（UI 画失败卡）。
+  // company_backcheck 在搜索密钥未配时诚实报「源不可用」属合法路径，不算泄入。
+  const leaked = ev.failedTools.map(s => s.split(":")[0]!.trim()).filter(t => t !== "company_backcheck");
+  if (leaked.length) {
+    return { pass: false, attribution: "infra", note: `工具失败：${[...new Set(ev.failedTools)].join(" | ").slice(0, 400)}` };
+  }
+
   if (card.knownGap) {
     const met = (card.expect.toolsAny ?? []).some(t => calledTools.includes(t));
     return met
@@ -188,6 +156,12 @@ function judge(card: EvalCard, ev: Collected, db: Driz): Verdict {
     let i = 0;
     for (const t of calledTools) if (t === e.toolsOrder[i]) i++;
     if (i < e.toolsOrder.length) return { pass: false, attribution: "model-tool-misuse", note: `工具链不完整: 需 ${e.toolsOrder.join("→")}，实际 ${calledTools.join("→") || "无"}` };
+  }
+  // 末轮工具禁查（记忆注入验证）：事实已随历史注入，末轮还查 = 注入没起作用或模型没理会
+  if (e.finalToolsNone) {
+    const last = ev.turnTools[ev.turnTools.length - 1] ?? [];
+    const hit = e.finalToolsNone.filter(t => last.includes(t));
+    if (hit.length) return { pass: false, attribution: "model-tool-misuse", note: `事实已注入上下文仍重查：${hit.join(",")}` };
   }
   if (e.answerNone && (!e.noneOnlyIfNoTools || calledTools.length === 0) && rx(e.answerNone)) {
     return { pass: false, attribution: "answer-quality", note: "输出命中禁止模式（疑似编造）" };
@@ -216,19 +190,26 @@ let sandbox: Driz;
 /** 每张卡开跑时的跟进备注基线（种子自带一条），写操作落库校验按增量判断 */
 let baselineNotes = 0;
 
-const TURN_TIMEOUT_MS = 100_000;
+const TURN_TIMEOUT_MS = 150_000;
 
 async function runCard(card: EvalCard): Promise<Collected> {
   sandbox = await newSandbox();
   baselineNotes = sandbox.select().from(schema.interactions).all().filter(r => r.type === "note").length;
-  const ev: Collected = { tools: [], text: "", approvals: 0, done: false };
+  const ev: Collected = { tools: [], text: "", approvals: 0, done: false, failedTools: [], turnTools: [[]], turnTexts: [] };
   let settle: () => void = () => {};
-  const fin = new Promise<void>(r => { settle = r; });
+  const fin = () => new Promise<void>(r => { settle = r; });
 
   const push = (channel: string, data: unknown) => {
     const d = data as Record<string, unknown>;
     if (channel === "agent:chunk") ev.text += String(d.delta ?? "");
-    else if (channel === "agent:toolCall" && d.status === "calling") ev.tools.push({ tool: String(d.tool), status: "calling" });
+    else if (channel === "agent:toolCall") {
+      if (d.status === "calling") {
+        ev.tools.push({ tool: String(d.tool), status: "calling" });
+        ev.turnTools[ev.turnTools.length - 1]!.push(String(d.tool));
+      } else if (d.status === "done" && d.failed) {
+        ev.failedTools.push(`${String(d.tool)}: ${String(d.result ?? "").slice(0, 400)}`);   // 失败态卡链路：带原因落场
+      }
+    }
     else if (channel === "agent:done") {
       ev.usage = (d as { usage?: TurnUsage }).usage;
       ev.done = true; settle();
@@ -244,9 +225,23 @@ async function runCard(card: EvalCard): Promise<Collected> {
 
   await new Promise(r0 => setTimeout(r0, 3000)); // 免费档限流节流
   const r = agentSvc.chat(push, { text: card.prompt, context: card.context });
-  if (!r.success) { ev.error = r.error; ev.done = true; }
-  await Promise.race([fin, new Promise(r2 => setTimeout(r2, TURN_TIMEOUT_MS))]);
-  if (!ev.done && !ev.error) ev.error = `评测等待超时（${TURN_TIMEOUT_MS / 1000}s，回合未收到 done/error）`;
+  if (!r.success) { ev.error = r.error; ev.done = true; return ev; }
+  const conversationId = (r.data as { conversationId?: string } | undefined)?.conversationId;
+  await Promise.race([fin(), new Promise(r2 => setTimeout(r2, TURN_TIMEOUT_MS))]);
+  if (!ev.done && !ev.error) ev.error = `评测等待超时（${TURN_TIMEOUT_MS / 1000}s，首回合未收到 done/error）`;
+
+  // 多轮追问：同一会话依次发送（记忆注入/上下文连续性验证）
+  for (const fu of card.followUps ?? []) {
+    if (ev.error) break;
+    ev.turnTexts.push(ev.text); ev.text = "";
+    ev.turnTools.push([]);
+    ev.done = false;
+    await new Promise(r0 => setTimeout(r0, 3000)); // 免费档限流节流
+    const r2 = agentSvc.chat(push, { conversationId, text: fu });
+    if (!r2.success) { ev.error = r2.error; break; }
+    await Promise.race([fin(), new Promise(r2t => setTimeout(r2t, TURN_TIMEOUT_MS))]);
+    if (!ev.done && !ev.error) ev.error = `评测等待超时（${TURN_TIMEOUT_MS / 1000}s，追问轮未收到 done/error）`;
+  }
   return ev;
 }
 
@@ -274,6 +269,15 @@ describe.skipIf(!LIVE)("Agent 归因评测（live）", () => {
       if (!ev.text.trim()) { v.pass = false; v.attribution = "answer-quality"; v.note = "空回答"; }
     }
     results.push({ id: card.id, group: card.group, pass: v.pass, attribution: v.attribution, note: v.note, tools: ev.tools.map(t => t.tool).join("→"), ms: Date.now() - t0, ...(ev.usage ? { usage: ev.usage } : {}) });
+    // infra 卡自动带审计明细：超时/失败类不用再猜模型到底发了什么参数
+    if (v.attribution === "infra" && sandbox) {
+      try {
+        const calls = sandbox.select().from(schema.agentToolCalls)
+          .orderBy(asc(schema.agentToolCalls.id)).all().slice(-14);
+        console.log(`🔬 ${card.id} infra 诊断（最近 ${calls.length} 条审计）：\n` + calls.map(c =>
+          `· ${c.toolName}  err=${c.error ?? "-"}  args=${(c.argsJson || "").slice(0, 160)}`).join("\n"));
+      } catch { /* 沙箱不可用时静默 */ }
+    }
     // 限流卡：记录不判失败（免费档批量必触发 429，能力结论以非限流卡为准）
     if (v.attribution === "ratelimited") {
       console.log(`⚠ ${card.id} 被端点限流(429)，本轮不计`);

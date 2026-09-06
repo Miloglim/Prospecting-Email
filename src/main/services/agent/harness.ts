@@ -14,7 +14,8 @@ import { Log } from "../../logger";
 import { EVENTS } from "../../events";
 import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.service";
 import { netFetch } from "../../net-proxy";
-import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, type ToolCtx, type PlanItem } from "./tools";
+import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, isToolRuntimeError, isEnvelopeFailure, type ToolCtx, type PlanItem } from "./tools";
+import { toolRoutesBlock, pickTools } from "./manifest";
 import { canAutoApprove } from "./policy";
 import { identityBlock } from "./identity";
 
@@ -29,17 +30,8 @@ export const AGENT_INSTRUCTIONS = [
   "身份（严格）：你对外一律自称「Prospector 助手」。无论底层接入哪个模型或网关，都不得自称、臆造或暗示任何底座模型名/版本/厂商（例如 Agnes、Gemini、Sapiens 等一律不提）；" +
     "被问到「你是什么模型 / 谁开发的 / 用的哪家 API」时，只回答「我是 Prospector 助手」，不透露底座，也不要编造。",
   "你已接入本地数据工具：",
-  "· search_contacts 检索联系人；quote_search 查询海运运价镜像；inbox_search 检索收件箱邮件；",
-  "· market_research 联网调研某航线的公开市场运价与船期（多源检索→逐页核实→标注可信度→出带来源链接的报告）；",
-  "· email_summarize 总结单封邮件并给下一步建议（先 inbox_search 拿 id）；",
-  "· reminders_due 到期/逾期跟进提醒（「今天该跟进谁」必查）；queue_status 发信队列进度；accounts_status 发信账号健康；",
-  "· company_backcheck 公司网络背调（外部搜索，需已配置搜索密钥）；generate_draft 撰写开发信草稿（只出文本）；",
-  "· record_followup 记录跟进（写，需确认）；send_queue_add 把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）；" +
-  "· import_contacts 批量导入客户信息入库（写，需确认；用户粘贴任意格式名单/表格/签名时，你负责整理成 contacts 数组再调用，绝不要反问「用 CSV 还是 JSON」这类格式问题——邮箱是唯一键，无效或已存在会跳过不覆盖）；" +
-  "· update_plan 维护对话里的任务清单卡（只更新界面，不读写任何业务数据）；" +
-  "· export_artifact 把整理好的内容导出成文件（md 或 csv，落盘到 outputs/agent，界面出现文件卡）；" +
-  "· start_batch_task 批量后台任务（对话里出进度卡、可取消、不阻塞）：多家公司批量背调 / 各写开发信草稿，或多封邮件批量总结（kind=email_summary，传 messageIds）；" +
-  "· report_gap 登记能力缺口（开发期需求台账，只写台账不碰业务）。",
+  // 工具清单由注册表（agent/manifest.ts）派生 —— 加工具不再需要改这份提示词
+  toolRoutesBlock(),
   "写操作一步到位：record_followup / generate_draft / send_queue_add 都会自己按 contact（邮箱/姓名/公司名）" +
     "在库里定位收件人。用户说「给 juan@acme.com 记一条跟进」就直接调用它，" +
     "不要先 search_contacts 再调（多一次调用就多一次掉链子的机会）。",
@@ -54,6 +46,18 @@ export const AGENT_INSTRUCTIONS = [
   "用户要「把未读邮件都总结一下」「总结这批邮件」等涉及 ≥3 封邮件的汇总时，先 inbox_search 拿 id，再调用 start_batch_task（kind=email_summary、传 messageIds）起后台总结任务，" +
   "绝不要用 email_summarize 一封封循环（那会撞每轮调用次数上限、只能做几封）；单封才用 email_summarize，单家公司仍用 company_backcheck / generate_draft。" +
   "起后台后告诉用户进度卡就在对话里、可随时看、不耽误继续聊别的。",
+  "未读邮件意图路由：用户问「我有哪些未读 / 今日邮件 / 邮件清单」——直接 inbox_search({ unreadOnly:true, limit:30 })，" +
+    "回答围绕这批量做；**禁止**用 queue_status / accounts_status / reminders_due 去回答邮件类问题，那些是别的意图。",
+  "数字硬校验（重要）：回答里出现的任何数量（几封 / 几条 / 几个 / 总共多少）都必须来自本轮工具返回的 total 或数组长度原值，" +
+    "禁止凭印象、估算或记忆作答。结果里若带 complete:false 或 notice 提示未取全，必须明说「已显示前 N 条，共 M 条」，不许把 N 当 M。" +
+    "被 budget_exhausted 拦下时，如实报出已经查到的部分数字并说「其余未查」，绝不补估。" +
+    "同一轮里若两次数字打架，以最后一次**完整**查询为准，并明确告诉用户「更正：之前说的 X 不准确，实际 Y」，不要静默改口。",
+  "歧义列候选：用户说「那封 X / 这个客户」而检索命中多条（例如 COSCO 加勒比有 8/22、9/1、9/8 三个周期），" +
+    "必须列候选（id + 主题 + 日期）让用户点选，不许自己挑「最近一封」当答案。",
+  "长清单防截断：邮件清单/长表在正文里最多列 15 行；超过就只列最新 15 行 + 一句「另有 N 封，需要的话可以导出成文件」，" +
+    "别硬撑一整张长表把输出截断。",
+  "少查一步：inbox_search 加了 classification 命中为空时，**放宽一次**（去掉 classification 或传空）再查即可；" +
+    "同一轮不要连环换多种过滤条件把工具预算烧光。",
   "L0 规则：涉及客户、联系人、跟进状态、收件箱邮件的事实性问题，必须先调用工具，仅基于工具返回的数据回答；",
   "运价/舱位价格问题必须调用 quote_search，且提醒用户镜像价为参考价、以船司实时报价为准；工具无数据时明确说「镜像库暂无该航线报价」，不得编造价格。" +
     "库内条数、最低价、有哪些航线船司这类统计问题同样必须先调用（没有筛选条件就传空对象），禁止凭记忆或凭常识作答。",
@@ -78,6 +82,11 @@ export const AGENT_INSTRUCTIONS = [
     "正文只做结论：最低/最高价、条目数、关键提醒（**粗体**标关键值）；单条结论用一句话即可。",
   "写操作被用户拒绝后，最终回答必须明确说「未记录/未执行/已取消」并说明原因，" +
     "不得只复述拒绝之前已完成的动作，让用户误以为已经写进去了。",
+  "工具返回统一带 ok 字段：ok:false 表示这一次没办成。读它的 error.message 与 notice，" +
+    "决定改一个参数重试一次还是换条路子——禁止拿一模一样的参数原样重试（那只会重复失败）。",
+  "工具参数必须是合法 JSON。若收到 Invalid JSON input for tool 的错误，说明参数结构写坏了：" +
+    "立即换**更简单**的参数结构再试一次——少一层嵌套、缩短每格文本、去掉引号等特殊字符，" +
+    "或改用 md 格式把整块内容放进 content 一个字段里。绝不用一模一样的参数再试第二次。",
   "纯写作、翻译、润色、寒暄类请求（如「用英文写一段自我介绍」「把这封改得更客气」）直接作答，" +
     "不要为此调用任何检索工具。",
   "写邮件/回信类的取材优先级：上下文里已给的邮件正文 > 已有对话内容 > 工具。" +
@@ -90,6 +99,9 @@ export const AGENT_INSTRUCTIONS = [
     "禁止自己数条数、换算时区或推断状态；工具没给的就写「未取到」，不要填空。",
   "不要自建汇总表：数据列表由界面表格卡呈现；正文只写结论。若确实要归纳，只允许引用工具已返回的字段，" +
     "不得为凑齐行列补出新的数字、时间或状态。",
+  "内部限制永不出口：工具配额、连续失败熔断、回合步数上限都是程序内部机制，" +
+    "对用户不说「次数/上限/限制/配额/工具不可用」这类话。受限时的正确姿势＝把已取到的结果先完整交付，" +
+    "没做完的部分用一句自然的话带过（如「其余的下条接着查」），禁止把受限原因讲给用户听。",
   "回答风格：简洁、专业、中文优先（涉及邮件文案时按用户要求语言输出）。",
 ].join("\n");
 
@@ -105,13 +117,37 @@ export interface HarnessOptions {
   contextNote?: string;
 }
 
+/**
+ * Agent 角色 = 一份配置：系统提示词工厂 + 工具子集 + 步数上限。
+ * 新增角色不复制/修改内核 —— 加一个 profile 即可；不填 toolNames 用注册表全集。
+ */
+export interface AgentProfile {
+  name: string;
+  maxTurns: number;
+  /** 要挂载的工具名（注册表内的子集）；缺省 = 全部 */
+  toolNames?: string[];
+  /** 系统指令工厂：每次回合现拼（身份档案等改完即时生效） */
+  buildInstructions(): string;
+}
+
+/** 默认角色：Prospector 业务助手（全量工具） */
+export const DEFAULT_PROFILE: AgentProfile = {
+  name: "prospector-assistant",
+  maxTurns: 16,
+  buildInstructions: () => AGENT_INSTRUCTIONS + identityBlock(),
+};
+
 export interface TurnOutcome {
   kind: "done" | "approval";
   text: string;
   conversationId: string;
   approvalId?: string;
+  /** done 且本轮被 maxTurns 截断：活没排完，前端据此出「继续吗」请示卡 */
+  capped?: boolean;
   /** 本回合真实 token 结算；端点没回 usage 时为 undefined（宁可没有，也不猜数） */
   usage?: { requests: number; input: number; output: number; cached: number };
+  /** 本轮各工具输出（截断留存）：只供反思层做数字回溯，不回放进模型上下文 */
+  toolOutputs?: string[];
 }
 
 type TurnUsageLike = NonNullable<TurnOutcome["usage"]>;
@@ -133,6 +169,7 @@ interface PendingApproval {
   state: RunState<any, any>;
   agent: Agent<any, any>;
   ctx: ToolCtx;
+  maxTurns: number;
 }
 
 const pendingApprovals = new Map<string, PendingApproval>();
@@ -246,6 +283,12 @@ function makeClient(baseUrl: string, apiKey: string): OpenAI {
           Object.assign(body, extras);
           // 流式默认不回报 token 用量；加上后 DeepSeek/vLLM/OpenAI 会在末帧给 usage
           if (body.stream === true && !body.stream_options) body.stream_options = { include_usage: true };
+          // 输出上限必须给足：工具参数 JSON 被端点默认上限截断 → Invalid JSON input for tool，
+          // 这类故障发生在 execute 之前、熔断够不着，模型会同参重试到撞墙（规范 §2.2 的根因修）
+          const maxOut = Number(process.env.AGENT_MAX_OUTPUT_TOKENS || 16384);
+          if (Number.isFinite(maxOut) && maxOut > 0 && body.max_tokens == null && body.max_completion_tokens == null) {
+            body[endpointFamily(baseUrl) === "google" ? "max_completion_tokens" : "max_tokens"] = maxOut;
+          }
           init = { ...init, body: JSON.stringify(body) };
           if (process.env.AGENT_DEBUG_BODY === "1") {
             // 成本核算用：落盘真实请求体（含 tools 定义），离线复放即可量到精确 token
@@ -293,23 +336,24 @@ export function hasPending(approvalId: string): boolean {
 }
 
 /** 发起一轮带工具的流式执行；遇 write 工具中断时返回 approval 态，等 resolveApproval 续跑 */
-export async function runHarnessTurn(o: HarnessOptions): Promise<TurnOutcome> {
+export async function runHarnessTurn(profile: AgentProfile, o: HarnessOptions): Promise<TurnOutcome> {
   disableTracingOnce();
   const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
   const ctx: ToolCtx = { conversationId: o.conversationId, push: o.push, counts: new Map(), failures: new Map() };
-  const tools = buildHarnessTools(ctx);
+  // 工具子集：按角色配置从全量里挑；未配置 = 全量
+  const tools = pickTools(buildHarnessTools(ctx), profile.toolNames);
   // 身份档案每次现读：在设置里改完「助手身份」立刻生效，不用重启应用
-  let instructions = AGENT_INSTRUCTIONS + identityBlock();
+  let instructions = profile.buildInstructions();
   if (o.contextNote) {
     instructions += `\n\n当前页面上下文（用户正停留在此页面，相关问题优先围绕它回答）：${o.contextNote}`;
   }
   const agent = new Agent<any, any>({
-    name: "prospector-assistant",
+    name: profile.name,
     instructions,
     tools,
     model,
   });
-  return streamRun(agent, ctx, o, undefined);
+  return streamRun(agent, ctx, o, undefined, profile.maxTurns);
 }
 
 /** 人工审批结论回填 → 恢复执行（拒绝时模型会收到 reject 消息并据此回复）。
@@ -335,11 +379,28 @@ export async function resolveApproval(
       auditRejected(p.ctx, String(item.name ?? "unknown"), typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments));
     }
   }
-  return streamRun(p.agent, p.ctx, bound, p.state);
+  return streamRun(p.agent, p.ctx, bound, p.state, p.maxTurns);
 }
 
 /** 推给前端的结果 JSON 上限：太小会让长草稿把 actions 截掉（JSON 不完整 → 整张卡消失） */
 const RESULT_CAP = 24_000;
+
+/**
+ * 工具输出统一剥成纯文本再推前端。
+ * SDK 的 FunctionCallResultItem.output 是联合类型：有时是纯字符串，有时被包成
+ * {type:"text",text:"…"} 内容包（或其数组）。实测后者被整包 JSON.stringify 后，
+ * 前端只看到一坨裸 JSON、表格卡与动作按钮全部解析失败。这里剥壳还原文本：
+ * 字符串原样；内容包取其 text（数组则拼接）；其余对象兜底序列化。
+ */
+export function toolOutputText(o: unknown): string {
+  if (typeof o === "string") return o;
+  if (Array.isArray(o)) return o.map(toolOutputText).join("");
+  if (o && typeof o === "object") {
+    const p = o as { type?: unknown; text?: unknown };
+    if (p.type === "text" && typeof p.text === "string") return p.text;
+  }
+  return JSON.stringify(o ?? "");
+}
 
 type RunItemLite = {
   type?: string; name?: string; callId?: string; arguments?: string;
@@ -363,12 +424,13 @@ async function resumeIfAutoApproved(
   agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
   state: { getInterruptions(): Array<Record<string, unknown>>; approve(item: unknown): void },
   interruptions: Array<Record<string, unknown>>,
+  maxTurns: number,
 ): Promise<TurnOutcome | null> {
   if (!interruptions.length) return null;
   if (!interruptions.every(i => isAutoApproved(o.conversationId, String(i.name ?? "")))) return null;
   for (const item of interruptions) state.approve(item);
   Log.info("agent.harness", `会话 ${o.conversationId.slice(0, 8)} 免确认续跑（${interruptions.length} 项写操作）`);
-  return streamRun(agent, ctx, o, state as unknown as RunState<any, any>);
+  return streamRun(agent, ctx, o, state as unknown as RunState<any, any>, maxTurns);
 }
 
 /**
@@ -376,10 +438,11 @@ async function resumeIfAutoApproved(
  * 前端契约与流式路径完全一致，只是没有逐字效果。
  */
 async function collectRunResult(
-  r: RunResultLite, agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
+  r: RunResultLite, agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions, maxTurns: number,
 ): Promise<TurnOutcome> {
   const items = r.output ?? [];
   const callName = new Map<string, string>();
+  const toolOutputs: string[] = [];
   let text = "";
   for (const it of items) {
     if (it.type === "function_call") {
@@ -392,12 +455,14 @@ async function collectRunResult(
     } else if (it.type === "function_call_output") {
       const name = (it.callId && callName.get(it.callId)) || it.name || "";
       if (name === PLAN_TOOL) continue;   // 清单只以快照形式呈现，不留过程行
-      const out = typeof it.output === "string" ? it.output : JSON.stringify(it.output ?? "");
+      const out = toolOutputText(it.output);
       noteToolOutcome(ctx, (it.callId && callName.get(it.callId)) || it.name, out);
+      if (toolOutputs.length < 40) toolOutputs.push(out.slice(0, 8000));
       o.push(EVENTS.AGENT_TOOL_CALL, {
         conversationId: o.conversationId,
         tool: name, callId: it.callId,
         status: "done", result: out.slice(0, RESULT_CAP),
+        failed: isToolRuntimeError(out) || isEnvelopeFailure(out),   // 失败卡不再画成「已{动词}」绿勾
       });
     } else if (it.type === "message") {
       const t = (it.content ?? []).map(c => c.text ?? "").join("");
@@ -408,10 +473,10 @@ async function collectRunResult(
 
   const interruptions = r.state.getInterruptions();
   if (interruptions.length > 0) {
-    const auto = await resumeIfAutoApproved(agent, ctx, o, r.state, interruptions);
+    const auto = await resumeIfAutoApproved(agent, ctx, o, r.state, interruptions, maxTurns);
     if (auto) return auto;
     const approvalId = crypto.randomUUID();
-    pendingApprovals.set(approvalId, { state: r.state as unknown as RunState<any, any>, agent, ctx });
+    pendingApprovals.set(approvalId, { state: r.state as unknown as RunState<any, any>, agent, ctx, maxTurns });
     o.push(EVENTS.AGENT_APPROVAL, {
       conversationId: o.conversationId, approvalId,
       items: interruptions.map(i => ({
@@ -420,16 +485,17 @@ async function collectRunResult(
       })),
     });
     Log.info("agent.harness", `（非流式）写操作待审批 ${approvalId.slice(0, 8)}`);
-    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: readUsage(r.usage) };
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: readUsage(r.usage), toolOutputs };
   }
 
   if (text) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: text });
-  return { kind: "done", text, conversationId: o.conversationId, usage: sumStreamUsage() ?? readUsage(r.usage) };
+  return { kind: "done", text, conversationId: o.conversationId, usage: sumStreamUsage() ?? readUsage(r.usage), toolOutputs };
 }
 
 async function streamRun(
   agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
   resumeState: RunState<any, any> | undefined,
+  maxTurns: number,
 ): Promise<TurnOutcome> {
   // Gemini 的 OpenAI 兼容层要求回放 function call 时带回 extra_content.google.thought_signature，
   // 而 SDK 的流式分支只累积 name/arguments/callId（把签名丢了 → 第 2 轮直接 400）；
@@ -439,14 +505,14 @@ async function streamRun(
 
   if (!streaming) {
     const r = await run(agent, (resumeState ?? o.history) as never, {
-      stream: false, signal: o.signal, maxTurns: 8,
+      stream: false, signal: o.signal, maxTurns,
     }) as unknown as RunResultLite;
-    return collectRunResult(r, agent, ctx, o);
+    return collectRunResult(r, agent, ctx, o, maxTurns);
   }
 
   if (!resumeState) lastStreamUsage.length = 0;      // 新回合才清零；审批续跑接着上一段累计，否则用量只剩后半截
   const raw = await run(agent, (resumeState ?? o.history) as never, {
-    stream: true, signal: o.signal, maxTurns: 8,
+    stream: true, signal: o.signal, maxTurns,
   });
   const result = raw as unknown as AsyncIterable<unknown> & {
     state: RunState<any, any>; finalOutput?: unknown; usage?: unknown;
@@ -461,24 +527,64 @@ async function streamRun(
    *  旧实现按 'raw_response_event'/'run_item_streamed' 匹配，SDK 从无这些类型 → 事件全部静默丢失。
    */
   const callName = new Map<string, string>();
+  const toolOutputs: string[] = [];
   let text = "";
-  for await (const unknownEv of result) {
+  /**
+   * 逐字思考：chat-completions 适配器把每个原始 chunk 以 {type:'model', event:chunk} 透传成
+   * raw_model_stream_event，但它自己只消费 delta.content —— delta.reasoning（OpenAI 方言）被它
+   * 攒到整段结束才合成一个 reasoning item，delta.reasoning_content（DeepSeek/Qwen/vLLM 网关键名）
+   * 干脆丢掉，前端于是看不到 agent 在想什么。这里直接读原始 chunk 的推理增量，≥120ms 合并一次
+   * 推给前端（逐 token 一发会把 IPC 打穿）；边界事件（正文开始、工具调用、思考定块、循环收尾）
+   * 前先冲缓冲，保证顺序不乱。
+   */
+  const THINK_FLUSH_MS = 120;
+  let thinkBuf = "";
+  let lastThinkPushAt = 0;
+  const flushThink = () => {
+    if (!thinkBuf) return;
+    o.push(EVENTS.AGENT_TOOL_CALL, {
+      conversationId: o.conversationId, tool: "reasoning", status: "reasoning_delta",
+      delta: thinkBuf.slice(0, 4000),
+    });
+    thinkBuf = "";
+    lastThinkPushAt = Date.now();
+  };
+  // maxTurns 刹车识别：SDK 在步数用尽时从迭代器抛错，但此刻已产出的增量都已推给前端——
+  // 用守卫生成器把异常截下，循环后按「完成但受限」交付（上层据此出请示卡），其余错误原样上抛
+  let iterErr: unknown = null;
+  const guarded = (async function* () {
+    try { yield* result as unknown as AsyncIterable<unknown>; } catch (e) { iterErr = e; }
+  })();
+  let maxTurnsHit = false;
+  for await (const unknownEv of guarded) {
     const e = unknownEv as {
-      type?: string; data?: { type?: string; delta?: unknown; choices?: Array<{ delta?: { content?: string } }> };
+      type?: string; data?: {
+        type?: string; delta?: unknown;
+        choices?: Array<{ delta?: { content?: string } }>;
+        event?: { choices?: Array<{ delta?: { content?: string; reasoning?: string; reasoning_content?: string } }> };
+      };
       name?: string;
       item?: { rawItem?: { type?: string; name?: string; callId?: string; arguments?: string; output?: unknown; rawContent?: Array<{ text?: string }> } };
     };
     if (e.type === "raw_model_stream_event") {
       const d = e.data;
+      const rawDelta = (d?.event ?? d)?.choices?.[0]?.delta as { reasoning?: string; reasoning_content?: string } | undefined;
+      const think = rawDelta?.reasoning ?? rawDelta?.reasoning_content;
+      if (typeof think === "string" && think) {
+        thinkBuf += think;
+        if (Date.now() - lastThinkPushAt >= THINK_FLUSH_MS) flushThink();
+      }
       const delta = d?.type === "output_text_delta" && typeof d.delta === "string" ? d.delta
         : d?.choices?.[0]?.delta?.content;
       if (delta) {
+        flushThink();          // 开始出正文 = 这段思考到此为止
         text += delta;
         o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta });
       }
     } else if (e.type === "run_item_stream_event") {
       const ri = e.item?.rawItem;
       if (e.name === "tool_called" && ri) {
+        flushThink();
         if (ri.callId && ri.name) callName.set(ri.callId, ri.name);
         if (ri.name === PLAN_TOOL) { pushPlanEvent(o.push, o.conversationId, ri.arguments); continue; }
         o.push(EVENTS.AGENT_TOOL_CALL, {
@@ -488,20 +594,32 @@ async function streamRun(
       } else if (e.name === "tool_output" && ri) {
         const name = (ri.callId && callName.get(ri.callId)) || ri.name || "";
         if (name === PLAN_TOOL) continue;   // 清单只以快照形式呈现，不留过程行
-        const out = typeof ri.output === "string" ? ri.output : JSON.stringify(ri.output ?? "");
+        const out = toolOutputText(ri.output);
         // SDK 层校验失败走不到 execute/audit，只能在这里补记，否则熔断对这类故障失明
         noteToolOutcome(ctx, name, out);
+        if (toolOutputs.length < 40) toolOutputs.push(out.slice(0, 8000));
         // result 供前端渲染「数据表格卡 + 动作卡」（模型上下文走 SDK 内部通道，与此无关）。
         // 上限要够大：截断会让 JSON 不合法 → 整张卡消失；actions 又在末尾，长草稿会被切掉。
         o.push(EVENTS.AGENT_TOOL_CALL, {
           conversationId: o.conversationId, tool: name, callId: ri.callId, status: "done",
           result: out.slice(0, RESULT_CAP),
+          failed: isToolRuntimeError(out) || isEnvelopeFailure(out),   // 失败卡不再画成「已{动词}」绿勾
         });
       } else if (e.name === "reasoning_item_created" && ri) {
+        flushThink();          // 定稿块之前先把在途增量交付，前端才不会把同一段思考画成两张卡
         const think = (ri.rawContent ?? []).map(c => c.text ?? "").join("\n").trim();
         if (think) o.push(EVENTS.AGENT_TOOL_CALL, { conversationId: o.conversationId, tool: "reasoning", callId: ri.callId, status: "reasoning", result: think.slice(0, 1500) });
       }
     }
+  }
+  flushThink();   // 收尾（含抛错退出）：残留在途思考，别让最后一张思考卡停在半截
+
+  if (iterErr) {
+    const isMaxTurns = (iterErr as { name?: string })?.name === "MaxTurnsExceededError"
+      || /max\s*turns/i.test(iterErr instanceof Error ? iterErr.message : String(iterErr));
+    if (!isMaxTurns || !text) throw iterErr;
+    maxTurnsHit = true;
+    Log.warn("agent.harness", `达 maxTurns，交付本轮已产出的 ${text.length} 字`);
   }
 
   // ⚠ v0.17 的 RunState 暴露 getInterruptions() 方法而非 interruptions 属性——
@@ -512,10 +630,10 @@ async function streamRun(
   };
   const interruptions = state.getInterruptions();
   if (interruptions.length > 0) {
-    const auto = await resumeIfAutoApproved(agent, ctx, o, state, interruptions);
+    const auto = await resumeIfAutoApproved(agent, ctx, o, state, interruptions, maxTurns);
     if (auto) return auto;
     const approvalId = crypto.randomUUID();
-    pendingApprovals.set(approvalId, { state: result.state, agent, ctx });
+    pendingApprovals.set(approvalId, { state: result.state, agent, ctx, maxTurns });
     o.push(EVENTS.AGENT_APPROVAL, {
       conversationId: o.conversationId,
       approvalId,
@@ -525,11 +643,11 @@ async function streamRun(
       })),
     });
     Log.info("agent.harness", `写操作待审批 ${approvalId.slice(0, 8)}（${interruptions.length} 项）`);
-    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: sumStreamUsage() ?? readUsage(result.usage) };
+    return { kind: "approval", text, conversationId: o.conversationId, approvalId, usage: sumStreamUsage() ?? readUsage(result.usage), toolOutputs };
   }
 
   const finalText = text || String((result as { finalOutput?: unknown }).finalOutput ?? "");
   // 兜底：本轮一个字都没流出来但拿到了完整最终文本（模型/端点差异）→ 整段补推，前端不留空骨架
   if (!text && finalText) o.push(EVENTS.AGENT_CHUNK, { conversationId: o.conversationId, delta: finalText });
-  return { kind: "done", text: finalText, conversationId: o.conversationId, usage: sumStreamUsage() ?? readUsage(result.usage) };
+  return { kind: "done", text: finalText, conversationId: o.conversationId, ...(maxTurnsHit ? { capped: true } : {}), usage: sumStreamUsage() ?? readUsage(result.usage), toolOutputs };
 }

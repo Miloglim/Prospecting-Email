@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   searchContactsSchema, recordFollowupSchema, quoteSearchSchema, inboxSearchSchema,
   emailSummarizeSchema, generateDraftSchema, sendQueueAddSchema, isToolRuntimeError,
-  marketResearchSchema, splitRoute,
+  marketResearchSchema, splitRoute, exportArtifactSchema,
 } from "../../src/main/services/agent/tools";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -90,5 +90,13 @@ describe("内置调研能力的参数宽进与航线拆分", () => {
     expect(splitRoute("Ningbo → Santos")).toEqual({ pol: "Ningbo", pod: "Santos" });
     expect(splitRoute("Shanghai to Santos")).toEqual({ pol: "Shanghai", pod: "Santos" });
     expect(splitRoute("桑托斯")).toEqual({ pol: "", pod: "" });      // 拆不出来 → 交回上层追问
+  });
+
+  it("export_artifact 参数扁平化：rows 未知字段被剥离不炸、title 缺失/null 归一为未填", () => {
+    const parsed = exportArtifactSchema.parse({
+      format: "csv", rows: [["航线", 3200]], title: null,
+    }) as { title?: string; rows?: unknown };
+    expect(parsed.rows).toBeUndefined();     // rows 协议已废：未知字段剥离（zod strip），不再硬拒
+    expect(parsed.title).toBeUndefined();    // null → 未填（execute 有「导出内容」兜底）
   });
 });

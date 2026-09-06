@@ -26,12 +26,16 @@ export interface EvalExpect {
   approval?: "approve" | "reject";
   /** 回答主体应为拉丁字母（语言切换类判定） */
   mostlyLatin?: boolean;
+  /** 最后一轮里不允许出现的工具（记忆注入类：事实已在上下文，不该重查） */
+  finalToolsNone?: string[];
 }
 
 export interface EvalCard {
   id: string;
-  group: "运价查询" | "联系人检索" | "跟进沉淀" | "邮件与背调" | "运营状态" | "已知缺口" | "护栏与诚实";
+  group: "运价查询" | "联系人检索" | "跟进沉淀" | "邮件与背调" | "运营状态" | "已知缺口" | "护栏与诚实" | "架构回归";
   prompt: string;
+  /** 多轮卡：首轮之后的追问，同一会话依次发送（记忆注入/上下文连续性验证） */
+  followUps?: string[];
   /** 页面上下文锚点（模拟 ctx=contact:1 的 chip 注入），随 chat 一并发给主进程 */
   context?: string;
   /** 已知缺口类型：tool=适配债(缺工具) / context=缺上下文注入 */
@@ -125,7 +129,8 @@ export const EVAL_CARDS: EvalCard[] = [
   },
   {
     id: "sq-add", group: "跟进沉淀", prompt: "给 juan@acme.com 发一封邮件：主题「报价跟进」，正文「您好，附件是最新报价单，请查收」",
-    expect: { toolsOrder: ["search_contacts", "send_queue_add"], approval: "approve", answerAny: ["队列|入队|已加入|发送中心"] },
+    // 一步到位：send_queue_add 自带定位人（提示词明令禁止先 search_contacts 再写——多一步多一次掉链子）
+    expect: { toolsAny: ["send_queue_add"], approval: "approve", answerAny: ["队列|入队|已加入|发送中心"] },
   },
   {
     id: "ctx-anchored", group: "联系人检索", prompt: "这位联系人在哪家公司？现在是什么跟进阶段？",
@@ -170,5 +175,20 @@ export const EVAL_CARDS: EvalCard[] = [
   {
     id: "gr-lang", group: "护栏与诚实", prompt: "用英文写一小段（两三句）向巴西客户自我介绍我们是货代",
     expect: { forbidTools: true, mostlyLatin: true },
+  },
+
+  // ── 架构回归（9-4 重构：统一包络 / 记忆注入 / 导出链路）──
+  {
+    // 导出链路端到端：export_artifact 成功 + 无失败卡泄入对话流（跑批器全局校验 failedTools）
+    id: "arch-export", group: "架构回归", prompt: "把运价镜像库里的所有报价整理成表格，导出成 CSV 文件给我",
+    expect: { toolsAny: ["export_artifact"], answerAny: ["文件|导出|已生成|csv|CSV"] },
+  },
+  {
+    // 记忆注入：首轮查总量（成功调用落事实），次轮明确「别重查」——
+    // 事实已随历史注入，答案应直接来自上下文；重查 = 注入没起作用或模型没理会
+    id: "arch-mem-recall", group: "架构回归",
+    prompt: "运价镜像库里现在总共有多少条报价？",
+    followUps: ["刚才查到的库里一共有几条报价？直接回答数字，不要重新查询"],
+    expect: { toolsAny: ["quote_search"], finalToolsNone: ["quote_search"], answerAny: ["6|六"] },
   },
 ];

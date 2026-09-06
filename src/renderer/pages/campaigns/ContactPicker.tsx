@@ -193,6 +193,7 @@ export function ContactPicker({ value, onChange, onNext }: {
       {/* 高密度虚拟表格 */}
       <div ref={boxRef} className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden bg-white">
         <Table<PickRow>
+          className="row-select-table"
           size="small"
           virtual
           dataSource={filtered}

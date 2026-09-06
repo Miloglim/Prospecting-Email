@@ -48,4 +48,32 @@ export const agentGaps = sqliteTable("agent_gaps", {
 
 export type AgentGapRow = typeof agentGaps.$inferSelect;
 
+/** Agent 会话内的「工具事实」记忆：每次工具调用成功后抽一行（共 N 条 / 已导出 X / 已入队 Y…）。
+ *  加载历史时注入最近若干条 —— 上一轮查过的数据下一轮不必重查（工具结果从不进消息历史）。 */
+export const agentFacts = sqliteTable("agent_facts", {
+  id:             integer("id").primaryKey({ autoIncrement: true }),
+  conversationId: text("conversation_id").notNull(),
+  toolName:       text("tool_name").notNull(),
+  fact:           text("fact").notNull(),
+  createdAt:      text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentFactRow = typeof agentFacts.$inferSelect;
+
+/**
+ * 首页「AI 建议行动」的每日批次（每天一批，读的时候按当天数据填槽）。
+ * template 存的是带 {slot} 占位的模板而不是成品句子 —— 数字与人名每次显示时现填，
+ * 昨天的「9 封未读」今天不会还挂在卡上；填不上的槽（值为 0/空）那条建议直接跳过。
+ */
+export const agentSuggestions = sqliteTable("agent_suggestions", {
+  id:        integer("id").primaryKey({ autoIncrement: true }),
+  day:       text("day").notNull(),          // 归属日（北京时间 YYYY-MM-DD）
+  groupName: text("group_name").notNull(),  // 六个分区标题之一
+  template:  text("template").notNull(),    // 带 {slot} 占位的建议文本
+  source:    text("source").notNull(),      // ai（模型生成）| rule（本地兜底）
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentSuggestionRow = typeof agentSuggestions.$inferSelect;
+
 export type InsertAgentToolCallRow = typeof agentToolCalls.$inferInsert;

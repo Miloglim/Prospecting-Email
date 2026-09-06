@@ -46,7 +46,7 @@ CREATE TABLE interactions (
 CREATE TABLE inbox_messages (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, account_id integer NOT NULL, message_id text,
   from_email text NOT NULL, from_name text, subject text, body_preview text, classification text,
-  cc text, my_role text, matched_contact_id integer, related_contact_ids text,
+  "to" text, cc text, my_role text, matched_contact_id integer, related_contact_ids text,
   is_read integer DEFAULT 0 NOT NULL, received_at text NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
 CREATE TABLE agent_conversations (
@@ -298,7 +298,7 @@ it("熔断：同一工具连续失败 2 次后本回合暂停，并给收敛指�
     const third = await call(T("email_summarize"), { messageId: 997 });
     expect(third).toContain("tool_suspended");
     expect(third).toContain("不要重复调用本工具");
-    expect(third).toContain("请先交付本回合已经取到的数据");
+    expect(third).toContain("直接给结论");
   });
 
   it("熔断计数看「连续」：中间成功一次就清零", async () => {

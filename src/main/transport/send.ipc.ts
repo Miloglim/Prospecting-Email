@@ -38,6 +38,59 @@ function inlineImagesToCid(html: string): { html: string; attachments: Array<{ f
 }
 
 
+// ── SMTP 连接池（按账号缓存）─────────────────────────────────────
+// 旧实现每发一封都新建连接（TCP+TLS+AUTH 全套握手），大批次整批耗时被握手放大。
+// 改为 pooled transporter 按账号复用（maxConnections:1 与全局串行调度匹配）：
+// 缓存键含 host/port/密码指纹 → 账号改配置自动重建，不会拿旧凭据硬发；
+// 发送成功保留连接，发送失败立即剔除（下次重连新鲜连接，坏连接不会反复失败）。
+type PooledTransporter = {
+  sendMail: (opts: Record<string, unknown>) => Promise<{ messageId?: string }>;
+  close: () => void;
+};
+const transporterPool = new Map<number, { transporter: PooledTransporter; key: string }>();
+
+function passFingerprint(pass: string): string {
+  let h = 5381;
+  for (let i = 0; i < pass.length; i++) h = ((h << 5) + h + pass.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function acquireTransporter(account: { id: number; email: string; smtpHost: string | null; smtpPort: number | null }, pass: string): PooledTransporter {
+  const port = account.smtpPort || 587;
+  const key = `${account.smtpHost}|${port}|${passFingerprint(pass)}`;
+  const hit = transporterPool.get(account.id);
+  if (hit && hit.key === key) return hit.transporter;
+  if (hit) {
+    try { hit.transporter.close(); } catch { /* 已断 */ }
+    transporterPool.delete(account.id);
+    Log.debug("send.pool", `账号 ${account.email} 配置变更，重建连接`);
+  }
+  const transporter = nodemailer.createTransport({
+    host: account.smtpHost || "",
+    port,
+    secure: port === 465,
+    requireTLS: true, // P0-3: 587/25 等端口强制 STARTTLS，拒绝明文发信（465 隐式 TLS 不受影响）
+    auth: { user: account.email, pass },
+    pool: true, maxConnections: 1, maxMessages: 100,
+    connectionTimeout: 15000, socketTimeout: 15000,
+  }) as unknown as PooledTransporter;
+  transporterPool.set(account.id, { transporter, key });
+  return transporter;
+}
+
+function evictTransporter(accountId: number, why: string): void {
+  const hit = transporterPool.get(accountId);
+  if (!hit) return;
+  try { hit.transporter.close(); } catch { /* 已断 */ }
+  transporterPool.delete(accountId);
+  Log.debug("send.pool", `剔除连接（${why}）`);
+}
+
+/** 池化连接被服务端闲置掐断的典型报错：不算真失败，换新连接重试一次 */
+function idleConnectionError(msg: string): boolean {
+  return /idle|connection|socket|ECONNRESET|EPIPE|timed?\s?out/i.test(msg);
+}
+
 /** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
 async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<{ messageId: string | null }>> {
   const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, item.accountId)).get();
@@ -46,21 +99,11 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
   const passRes = getDecryptedPassword(account.id);
   if (!passRes.success) return failResult("账号密码解密失败: " + passRes.error);
 
-  const port = account.smtpPort || 587;
-  const transporter = nodemailer.createTransport({
-    host: account.smtpHost || "",
-    port,
-    secure: port === 465,
-    requireTLS: true, // P0-3: 587/25 等端口强制 STARTTLS，拒绝明文发信（465 隐式 TLS 不受影响）
-    auth: { user: account.email, pass: passRes.data },
-    connectionTimeout: 15000, socketTimeout: 15000,
-  });
-
   try {
     const config = loadConfig();
     const displayName = account.displayName || config.fromName || "";
     const emails = item.recipients.map(r => r.email);
-    const signature = (account.signature || config.signature || "").trim();
+    const signature = (account.signature || "").trim();
     const body = item.body || "Hello, I hope this email finds you well.\n\nBest regards";
 
     const from = displayName ? `"${displayName}" <${account.email}>` : account.email;
@@ -70,29 +113,42 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     const ccList = (item.cc || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
     const ccField = ccList.length > 0 ? { cc: ccList } : {};
 
-    let info: { messageId?: string } | null = null;
+    let mailOptions: Record<string, unknown>;
     if (isHtml(body) || isHtml(signature)) {
       const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
       const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
       const { html, attachments } = inlineImagesToCid(bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""));
-      info = await transporter.sendMail({
+      mailOptions = {
         from, bcc: emails, ...ccField, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
         html,
         attachments,
-      });
+      };
     } else {
-      info = await transporter.sendMail({
+      mailOptions = {
         from, bcc: emails, ...ccField, subject,
         text: body + (signature ? `\n\n${signature}` : ""),
-      });
+      };
+    }
+
+    let info: { messageId?: string } | null = null;
+    try {
+      info = await acquireTransporter(account, passRes.data).sendMail(mailOptions);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      evictTransporter(account.id, msg.slice(0, 60));
+      // 池化连接闲置被掐：换新连接原参数重试一次，不计为发送失败（防误触连续失败/熔断）
+      if (idleConnectionError(msg)) {
+        Log.debug("send.pool", `闲置连接断开，重连重试：${msg.slice(0, 60)}`);
+        info = await acquireTransporter(account, passRes.data).sendMail(mailOptions);
+      } else {
+        return failResult(msg);
+      }
     }
     Log.debug("send.bcc", `${item.companyName}: ${emails.length} 人`);
     return okResult({ messageId: info?.messageId || null });
   } catch (err: unknown) {
     return failResult(err instanceof Error ? err.message : "发送失败");
-  } finally {
-    try { transporter.close(); } catch { /* 已关闭 */ }
   }
 }
 

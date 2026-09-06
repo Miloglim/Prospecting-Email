@@ -1,5 +1,11 @@
 {
-  "fromName": "",
+  "identity": {
+    "company": "",
+    "title": "海外销售",
+    "business": "",
+    "persona": ""
+  },
+  "fromName": "Zayne",
   "bodyName": "",
   "signature": "",
   "schedule": {

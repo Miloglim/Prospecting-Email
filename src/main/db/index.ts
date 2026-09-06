@@ -4,6 +4,7 @@ import * as schema from "./schema";
 import { DB_PATH } from "../config";
 import { Log } from "../logger";
 import { migrateTagsValue } from "./tags-migrate";
+import { BASE_SCHEMA_SQL } from "./schema-sql";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -63,148 +64,12 @@ export function closeDatabase(): void {
   dbInstance = null;
 }
 
-/** 应用启动时自动执行迁移。内嵌建表 SQL（幂等 CREATE TABLE IF NOT EXISTS） */
+/** 应用启动时自动执行迁移。建表 SQL 单一事实源在 schema-sql.ts（评测沙箱共用） */
 export function runMigrations(): void {
   if (!rawDb) throw new Error("数据库未初始化");
   const raw = rawDb;
 
-  const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS email_accounts (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  email text NOT NULL UNIQUE,
-  provider text DEFAULT 'smtp' NOT NULL,
-  smtp_host text, smtp_port integer,
-  imap_host text, imap_port integer,
-  encrypted_pass text NOT NULL, display_name text, signature text,
-  consecutive_fails integer DEFAULT 0 NOT NULL,
-  circuit_open_at text, circuit_reset_after text,
-  last_fetch_error text, last_fetch_at text,
-  fetch_fail_count integer DEFAULT 0 NOT NULL,
-  is_active integer DEFAULT 1 NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS companies (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  name text NOT NULL, domain text, industry text, country text, size text,
-  backcheck_data text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS contacts (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  email text NOT NULL UNIQUE,
-  company_id integer, first_name text, last_name text,
-  title text, phone text, linkedin text,
-  country text, client_type text, language text,
-  stage text DEFAULT 'cold',
-  status text DEFAULT '',
-  tags text,
-  extra text DEFAULT '{}',
-  assignee text DEFAULT '',
-  source text DEFAULT 'manual', source_detail text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS crm_relations (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  contact_id_a integer NOT NULL REFERENCES contacts(id),
-  contact_id_b integer NOT NULL REFERENCES contacts(id),
-  relation_type text NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS crm_stages (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  contact_id integer NOT NULL UNIQUE REFERENCES contacts(id),
-  stage text NOT NULL, notes text,
-  reminder_at text, reminder_note text,
-  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS inbox_messages (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  account_id integer NOT NULL REFERENCES email_accounts(id),
-  message_id text, from_email text NOT NULL, from_name text,
-  subject text, body_preview text, classification text,
-  cc text, my_role text,
-  matched_contact_id integer, related_contact_ids text,
-  is_read integer DEFAULT 0 NOT NULL,
-  received_at text NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS interactions (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  contact_id integer NOT NULL REFERENCES contacts(id),
-  type text NOT NULL, direction text NOT NULL,
-  channel text DEFAULT 'email' NOT NULL,
-  subject text, body_preview text, message_id text,
-  account_id integer REFERENCES email_accounts(id),
-  metadata text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS templates (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  name text NOT NULL, language text NOT NULL,
-  subject text NOT NULL, body text NOT NULL,
-  category text, stage text, version integer DEFAULT 1 NOT NULL,
-  is_active integer DEFAULT 1 NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS send_queue (
-  id text PRIMARY KEY NOT NULL,
-  batch_id text NOT NULL,
-  company_name text, company_id integer,
-  recipients text NOT NULL,
-  account_id integer NOT NULL, account_email text,
-  subject text, tpl_body text, contact_vars text,
-  status text DEFAULT 'pending' NOT NULL,
-  error text, sent_at text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agent_conversations (
-  id text PRIMARY KEY NOT NULL,
-  title text DEFAULT '新对话' NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agent_messages (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  conversation_id text NOT NULL REFERENCES agent_conversations(id),
-  role text NOT NULL, content text NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agent_tool_calls (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  conversation_id text NOT NULL,
-  tool_name text NOT NULL, side_effect text NOT NULL,
-  args_json text, result_json text,
-  approval text NOT NULL, error text,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE TABLE IF NOT EXISTS agent_gaps (
-  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-  wanted text NOT NULL, scene text, workaround text,
-  hits integer DEFAULT 1 NOT NULL,
-  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  last_seen_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
-CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
-CREATE INDEX IF NOT EXISTS idx_interactions_created_at ON interactions(created_at);
-CREATE INDEX IF NOT EXISTS idx_agent_messages_conv ON agent_messages(conversation_id);
-CREATE TABLE IF NOT EXISTS rate_quotes (
-  record_id text PRIMARY KEY NOT NULL,
-  pol text, pod_raw text NOT NULL,
-  lane text, carrier text,
-  container text, container_raw text,
-  ocean_usd integer,
-  validity_raw text, valid_from text, valid_to text,
-  free_days text, shortfall_fee text, note text,
-  source_group text, sender text, msg_time text, image_name text,
-  synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_rate_quotes_lane ON rate_quotes(lane);
-CREATE INDEX IF NOT EXISTS idx_rate_quotes_valid_to ON rate_quotes(valid_to);
-`.trim();
+  const SCHEMA_SQL = BASE_SCHEMA_SQL;
 
   const statements = SCHEMA_SQL.split(";").map(s => s.trim()).filter(s => s.length > 0);
   raw.exec(SCHEMA_SQL); // better-sqlite3 exec 支持多语句，一次执行
@@ -250,13 +115,14 @@ CREATE INDEX IF NOT EXISTS idx_rate_quotes_valid_to ON rate_quotes(valid_to);
     Log.info("db.migrate", "send_queue 表已添加 tpl_body/contact_vars/cc/tpl_name/country/language 列");
   } catch { /* 表不存在 → 忽略 */ }
 
-  // v4.3: inbox_messages 补 cc + my_role + related_contact_ids 列
+  // v4.3: inbox_messages 补 cc + my_role + related_contact_ids 列；v5.0.2 补 to（收件人，详情栏常驻显示）
   try {
     const icols = tableCols("inbox_messages");
     if (!icols.includes("cc")) raw.exec("ALTER TABLE inbox_messages ADD COLUMN cc text;");
     if (!icols.includes("my_role")) raw.exec("ALTER TABLE inbox_messages ADD COLUMN my_role text;");
     if (!icols.includes("related_contact_ids")) raw.exec("ALTER TABLE inbox_messages ADD COLUMN related_contact_ids text;");
-    Log.info("db.migrate", "inbox_messages 表已添加 cc/my_role/related_contact_ids 列");
+    if (!icols.includes("to")) raw.exec(`ALTER TABLE inbox_messages ADD COLUMN "to" text;`);
+    Log.info("db.migrate", "inbox_messages 表已补列（cc/my_role/related_contact_ids/to）");
   } catch { /* 表不存在 → 忽略 */ }
 
   // v4.0: contacts 表补 language 列

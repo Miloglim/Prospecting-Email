@@ -75,10 +75,10 @@ export const COUNTRIES: { code: string; label: string }[] = [
   { code: "Morocco", label: "摩洛哥" }, { code: "Ghana", label: "加纳" },
 ];
 const INTERACTION_COLORS: Record<string, string> = {
-  sent: "#2563eb", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800",
+  sent: "#2563eb", replied: "#22a644", bounced: "#d93025", autoreply: "#ff9800", cc: "#0891b2",
 };
 const INTERACTION_LABELS: Record<string, string> = {
-  sent: "已发送", replied: "已回复", bounced: "退信", autoreply: "自动回复", note: "跟进",
+  sent: "已发送", replied: "已回复", bounced: "退信", autoreply: "自动回复", cc: "抄送", note: "跟进",
 };
 
 /* ---------- 小工具 ---------- */

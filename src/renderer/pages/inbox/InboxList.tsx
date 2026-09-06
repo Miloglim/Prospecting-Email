@@ -15,6 +15,8 @@ interface InboxItem {
   subject: string | null; bodyPreview: string | null;
   classification: string | null; matchedContactId: number | null;
   isRead: number; receivedAt: string;
+  to?: string | null;
+  cc?: string | null;
   accountId?: number; messageId?: string | null;
   _accountEmail?: string | null;
   _contactStatus?: string | null;
@@ -506,7 +508,7 @@ export function InboxList() {
         })()}
 
         {/* 列表 */}
-        <div ref={listRef} className="thin-scroll" style={{ flex: 1, overflow: "auto" }}
+        <div ref={listRef} style={{ flex: 1, overflow: "auto" }}
           onScroll={e => {
             const top = e.currentTarget.scrollTop;
             const rowH = (view === "sender" && !senderFilter) ? SENDER_ROW_H : ROW_H;
@@ -634,6 +636,8 @@ export function InboxList() {
             <div className="selectable" style={{ borderBottom: "1px solid #e8e8e8", flexShrink: 0 }}>
               {[
                 ["发件人", `${sel_.fromName || ""} <${sel_.fromEmail}>`, true],
+                ["收件人", sel_.to || (sel_.classification === "sent" ? `${sel_.fromName || ""} <${sel_.fromEmail}>` : "—"), true],
+                ["抄送", sel_.cc || "—", true],
                 ["主题", sel_.subject || "无主题", true],
                 ["时间", new Date(sel_.receivedAt).toLocaleString("zh-CN"), false],
                 ["分类", sel_.classification || "other", false],
@@ -849,10 +853,6 @@ export function InboxList() {
         .body-pane{overflow:hidden!important}
         .body-iframe{width:100%!important;border:0!important;display:block!important}
         .body-preview{flex:1!important;padding:20px!important;font-size:14px!important;color:#555!important;white-space:pre-wrap!important;line-height:1.9!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;overflow-y:auto!important}
-        .thin-scroll::-webkit-scrollbar{width:6px}
-        .thin-scroll::-webkit-scrollbar-track{background:transparent}
-        .thin-scroll::-webkit-scrollbar-thumb{background:#d5d5d5;border-radius:3px}
-        .thin-scroll::-webkit-scrollbar-thumb:hover{background:#bbb}
       `}</style>
     </div>
   );

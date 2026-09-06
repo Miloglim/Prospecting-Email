@@ -4,6 +4,7 @@ import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { crmStages, crmRelations } from "../db/schema/crm";
 import { inboxMessages } from "../db/schema/inbox";
+import { emailAccounts } from "../db/schema/accounts";
 import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
@@ -362,17 +363,55 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   return okResult(undefined);
 }
 
-/** 查询联系人互动历史 */
+/**
+ * 查询联系人互动历史（详情抽屉时间线）。
+ * 与 crm.service.getDetail 的 timeline 同一套读时合并规则：
+ * interactions 只取 note/bounced/autoreply（sent/replied 由邮件行覆盖防双份）；
+ * 邮件全部取 inbox_messages（matchedContactId 或 relatedContactIds 含该联系人，抄送进来），
+ * bounce/autoreply 邮件行不重复进（由事件行表达）。历史数据无需回填，读时即一致。
+ */
 export async function getContactInteractions(id: number): Promise<Result<Array<{
-  type: string; direction: string; subject: string | null; bodyPreview: string | null; createdAt: string;
+  id: number | null; type: string; direction: string; fromEmail: string | null;
+  subject: string | null; bodyPreview: string | null; createdAt: string;
 }>>> {
   if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
-  const rows = getDb().select().from(interactions)
+  const interactionRows = getDb().select().from(interactions)
     .where(eq(interactions.contactId, id))
     .orderBy(desc(interactions.createdAt))
     .limit(50)
     .all();
-  return okResult(rows);
+  const eventRows = interactionRows
+    .filter(r => r.type === "note" || r.type === "bounced" || r.type === "autoreply")
+    .map(r => ({ id: r.id ?? null, type: r.type, direction: r.direction, fromEmail: null as string | null, subject: r.subject ?? null, bodyPreview: r.bodyPreview ?? null, createdAt: r.createdAt }));
+
+  const accountEmails = new Set(
+    getDb().select({ email: emailAccounts.email }).from(emailAccounts).all().map(a => a.email.toLowerCase()),
+  );
+  const contactEmail = (getDb().select({ email: contacts.email }).from(contacts).where(eq(contacts.id, id)).get()?.email || "").toLowerCase();
+
+  const emailEvents = getDb().select().from(inboxMessages)
+    .where(dsql`(${inboxMessages.matchedContactId} = ${id} OR instr(',' || COALESCE(${inboxMessages.relatedContactIds}, '') || ',', ',' || ${id} || ',') > 0)`)
+    .orderBy(desc(inboxMessages.receivedAt)).limit(60).all()
+    .map(e => {
+      const fromLower = (e.fromEmail || "").toLowerCase();
+      let direction: "inbound" | "outbound";
+      let type: "sent" | "replied" | "cc";
+      if (e.classification === "sent" || accountEmails.has(fromLower)) {
+        direction = "outbound"; type = "sent";
+      } else if (contactEmail && fromLower === contactEmail) {
+        direction = "inbound"; type = "replied";
+      } else {
+        direction = "inbound"; type = "cc";
+      }
+      return { id: e.id, type, direction, fromEmail: e.fromEmail, subject: e.subject, bodyPreview: e.bodyPreview, createdAt: e.receivedAt, classification: e.classification || "other" };
+    })
+    .filter(e => e.classification !== "bounce" && e.classification !== "autoreply")
+    .map(({ classification: _c, ...rest }) => rest);
+
+  const timeline = [...eventRows, ...emailEvents]
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    .slice(0, 80);
+  return okResult(timeline);
 }
 
 /** 更新联系人状态（send/inbox 引擎调用） */

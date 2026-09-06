@@ -4,7 +4,7 @@ import { CRED_LABEL } from "../../src/main/services/research.service";
 // ═══════════════════════════════════════════════════════════════════
 // 联网调研底座：方法论里「不靠提示词自觉」的那几条硬规则，全部落成可单测的纯函数
 // （来源分级、日期识别、金额抽取、交叉核对、结论数字回溯），外加一条
-// 打桩跑通整条管线的编排测试（检索 → 抓页 → 分级 → 成稿 → 落文件）。
+// 打桩跑通整条管线的编排测试（检索 → 抓页 → 分级 → 成稿，不自动落文件）。
 // ═══════════════════════════════════════════════════════════════════
 
 vi.mock("../../src/main/services/ai.service", () => ({
@@ -20,6 +20,7 @@ vi.mock("../../src/main/services/artifact.service", () => ({
 const R = await import("../../src/main/services/research.service");
 const A = await import("../../src/main/services/ai.service");
 const NP = await import("../../src/main/net-proxy");
+const ART = await import("../../src/main/services/artifact.service");
 
 /** 相对今天往前 N 天的日期串（测试不锁死真实时钟） */
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
@@ -129,7 +130,7 @@ describe("调研底座：整条管线（打桩，不联网）", () => {
       });
   }
 
-  it("抓得到的进明细表并标已核实；抓不到的进缺口；数字回溯不过的结论被剔除；报告落文件", async () => {
+  it("抓得到的进明细表并标已核实；抓不到的进缺口；数字回溯不过的结论被剔除；报告不自动落盘", async () => {
     stub({ amounts: ["3200", "3150"] });
     const r = await R.runResearchScene({ pol: "上海", pod: "桑托斯", container: "40HQ" });
     expect(r.success).toBe(true);
@@ -141,13 +142,15 @@ describe("调研底座：整条管线（打桩，不联网）", () => {
     expect(o!.rates.every(x => x.url.startsWith("http") && x.published !== "")).toBe(true);   // 每条都要链接与日期
     expect(o!.conclusions).toHaveLength(1);
     expect(o!.conclusions[0]!.text).toContain("3200");
-    expect(o!.dropped.join("|")).toContain("9,900");            // 编出来的数字被剔除
+    expect(o!.dropped.join("|")).not.toContain("9,900");        // 编出来的数字被剔除且打码（模型不能从 dropped 再捞回去）
+    expect(o!.dropped.join("|")).toContain("×××");
     expect(o!.dropped.join("|")).toContain("未标注来源");
     expect(o!.gaps.join("|")).toContain("msc.com");              // 抓取失败进覆盖缺口清单
     expect(o!.report).toContain("## 1. 关键结论");
     expect(o!.report).toContain("## 5. 建议下一步");
     expect(o!.report).toContain("以天计变化");
-    expect(r.success ? r.data.artifact.name : "").toBe("report.md");
+    // 落盘改为「点一下才写」：管线只成稿，一次 writeArtifact 都不许发生（写文件由 market_research 的动作卡触发）
+    expect((ART.writeArtifact as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(0);
   });
 
   it("检索源没配时前置拦住：一个请求都不发，只给指路文案", async () => {
@@ -172,5 +175,35 @@ describe("调研底座：整条管线（打桩，不联网）", () => {
     expect(r.success).toBe(false);
     expect(r.success ? "" : r.error).toContain("起运港");
     expect((A.searchWeb as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(before);
+  });
+});
+
+describe("调研韧性：未核实数字打码与瞬时失败重试", () => {
+  it("maskUnverified：≥100 的数字打码，年份与小数字豁免", () => {
+    expect(R.maskUnverified("桑托斯 6518/6500 USD，涨幅 12%")).toBe("桑托斯 ×××/××× USD，涨幅 12%");
+    expect(R.maskUnverified("2026-08-28 发布，40HQ 运价 3,200")).toBe("2026-08-28 发布，40HQ 运价 ×××");
+    expect(R.maskUnverified("等待 5 天，共 3 柜")).toBe("等待 5 天，共 3 柜");
+  });
+
+  it("fetchPage：瞬时失败（5xx）重试一次后成功；4xx 反爬不重试", async () => {
+    const nf = NP.netFetch as unknown as { mockImplementation: (fn: (url: string) => Promise<unknown>) => void };
+    let calls = 0;
+    nf.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) return { ok: false, status: 503, text: async () => "" };   // 瞬时失败
+      return { ok: true, status: 200, text: async () => `<html><body>${"x".repeat(200)}</body></html>` };
+    });
+    const ok = await R.fetchPage("https://example.com/a");
+    expect(ok.success).toBe(true);
+    expect(calls).toBe(2);
+
+    calls = 0;
+    nf.mockImplementation(async () => {
+      calls++;
+      return { ok: false, status: 403, text: async () => "" };   // 反爬
+    });
+    const bad = await R.fetchPage("https://example.com/b");
+    expect(bad.success).toBe(false);
+    expect(calls).toBe(1);   // 4xx 只试一次
   });
 });

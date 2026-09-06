@@ -857,10 +857,10 @@ export async function startDynamicSend(contactIds: number[], subject: string, bo
   return startQueue(qr.data, autoStart);
 }
 
-// 检查时间窗口（北京时间）
+// 检查时间窗口（跟操作系统时区：2026-09-06 用户拍板，不再固定北京时间）
 function inWindow(sched: typeof DEFAULT_SCHEDULE): boolean {
   if (!sched.timeWindowEnabled) return true;
-  const h = new Date(Date.now() + 8 * 3600000).getUTCHours(); // 北京时
+  const h = new Date().getHours(); // 本机时区小时
   return sched.startHour < sched.endHour
     ? h >= sched.startHour && h < sched.endHour
     : h >= sched.startHour || h < sched.endHour;
@@ -1074,15 +1074,13 @@ export function cancelSend(): Result<void> {
   push(EVENTS.SEND_PROGRESS, state);
   return okResult(undefined);
 }
-/** 预览模板渲染效果（用第一个联系人），附全局署名签名 */
+/** 预览模板渲染效果（用第一个联系人；签名随账号，预览不含） */
 export function previewTemplate(template: SendTemplate): Result<{ subject: string; body: string }> {
   const first = getDb().select().from(contacts).limit(1).get();
   if (!first) return failResult("没有联系人可预览");
-  const signature = (loadConfig().signature || "").trim();
-  const body = renderTemplate(template.body, first) + (signature ? `\n\n${signature}` : "");
   return okResult({
     subject: renderTemplate(template.subject, first),
-    body,
+    body: renderTemplate(template.body, first),
   });
 }
 

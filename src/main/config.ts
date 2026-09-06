@@ -43,8 +43,8 @@ const CONFIG_PATH = path.join(APP_ROOT, "send", "config.json");
 export interface SendSchedule {
   /** 时间窗口 */
   timeWindowEnabled: boolean;
-  startHour: number;   // 北京时 9
-  endHour: number;     // 北京时 8（次日）
+  startHour: number;   // 本机时区时（跟操作系统，非固定北京时）
+  endHour: number;     // 本机时区时（次日）
   /** 每组人数上限（同公司超过 N 拆多组） */
   groupSize: number;
   /** 组间暂停区间（秒）— 模拟人工一批批发 */
@@ -57,14 +57,8 @@ export interface RuntimeConfig {
   general?: { closeAction?: "tray" | "quit"; autoLaunch?: boolean };
   /** 全局发信日限额（从首次真实发送起 24h 重置） */
   sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number };
-  /** 助手身份档案：我方公司、职位、业务口径与固定角色（注入每轮对话） */
-  identity?: { company?: string; title?: string; business?: string; persona?: string };
-  /** 全局默认发件人名称（账号 displayName 优先） */
+  /** 全局默认发件人名称（账号 displayName 优先；亦为助手自称与落款） */
   fromName: string;
-  /** 邮件正文中的自称（如 Zayne），用于正文落款 */
-  bodyName: string;
-  /** 正文署名，追加到每封邮件末尾 */
-  signature: string;
   schedule: SendSchedule;
   /** 测试模式（发信测试用） */
   test: {
@@ -96,10 +90,7 @@ export const DEFAULT_SCHEDULE: SendSchedule = {
 };
 
 const DEFAULT_CONFIG: RuntimeConfig = {
-  identity: { company: "", title: "", business: "", persona: "" },
   fromName: "",
-  bodyName: "",
-  signature: "",
   schedule: DEFAULT_SCHEDULE,
   test: { email: "", company: "", enabled: false, dryRun: false },
   crm: {
@@ -155,7 +146,6 @@ export function loadConfig(): RuntimeConfig {
     ...raw,
     schedule: sched.success ? { ...DEFAULT_SCHEDULE, ...sched.data } : DEFAULT_SCHEDULE,
     test: test.success ? { ...DEFAULT_CONFIG.test, ...test.data } : DEFAULT_CONFIG.test,
-    identity: { ...DEFAULT_CONFIG.identity, ...(raw.identity || {}) },
     crm: { ...DEFAULT_CONFIG.crm, ...(raw.crm || {}), followupDays: { ...DEFAULT_CONFIG.crm.followupDays, ...(raw.crm?.followupDays || {}) } },
   };
 }

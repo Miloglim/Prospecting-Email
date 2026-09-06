@@ -31,7 +31,16 @@ export function lookupIdempotent(ctx: ToolCtx, toolName: string, args: unknown):
   prune();
   const hit = store.get(keyOf(ctx, toolName, args));
   if (!hit) return null;
-  return `${hit.result}\n（重复提交已按幂等处理：${TTL_MS / 60_000} 分钟内相同内容不再执行第二次）`;
+  const note = `重复提交已按幂等处理：${TTL_MS / 60_000} 分钟内相同内容不再执行第二次。`;
+  // 结果现在是统一包络 JSON：提示并进包络（往 JSON 尾部追文本会弄坏它）
+  try {
+    const o = JSON.parse(hit.result) as Record<string, unknown>;
+    if (o && typeof o === "object") {
+      const prev = typeof o.notice === "string" ? o.notice : "";
+      return JSON.stringify({ ...o, idempotent: true, notice: note + prev });
+    }
+  } catch { /* 非 JSON 历史结果走老路 */ }
+  return `${hit.result}\n（${note.slice(0, -1)}）`;
 }
 
 /** 仅成功结果才缓存，失败要允许重试 */

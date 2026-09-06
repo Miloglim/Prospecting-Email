@@ -5,9 +5,9 @@
 import { autoUpdater } from "electron-updater";
 import { ipcMain, app } from "electron";
 import type { BrowserWindow } from "electron";
-import * as https from "https";
 import { IPC } from "./contract";
 import { Log } from "./logger";
+import { netFetch } from "./net-proxy";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 小时
 const GITHUB_API = "https://api.github.com/repos/Miloglim/Prospecting-Email/releases";
@@ -16,39 +16,56 @@ let _win: BrowserWindow | null = null;
 let _checkTimer: ReturnType<typeof setInterval> | null = null;
 let _channel: "stable" | "prerelease" = "stable";
 
-// ── GitHub API 请求（轻量，不引入第三方库）─────────────────────────
-function ghGet(path: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(path);
-    const opts: https.RequestOptions = {
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method: "GET",
-      headers: {
-        "User-Agent": "prospecting-email",
-        "Accept": "application/vnd.github+json",
-      },
-      timeout: 15000,
-    };
-    // 私有仓库认证
-    const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-    if (token && opts.headers) (opts.headers as any)["Authorization"] = `Bearer ${token}`;
+// ── GitHub API 请求（走 netFetch：代理感知 + 容忍企业证书；裸 https 在办公网会 TLS 失败）──
+async function ghGet(url: string): Promise<any> {
+  const headers: Record<string, string> = {
+    "User-Agent": "prospecting-email",
+    "Accept": "application/vnd.github+json",
+  };
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await netFetch(url, { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  return res.json();
+}
 
-    const req = https.request(opts, (res) => {
-      let body = "";
-      res.on("data", (d) => { body += d; });
-      res.on("end", () => {
-        if (res.statusCode === 200) {
-          try { resolve(JSON.parse(body)); } catch { reject(new Error("JSON parse error")); }
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`));
-        }
-      });
-    });
-    req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("Request timeout")); });
-    req.end();
-  });
+/** 语义化版本比较：a<b 返回 -1，相等 0，a>b 返回 1（只比 major.minor.patch） */
+function cmpVer(a: string, b: string): number {
+  const pa = a.split("-")[0]!.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split("-")[0]!.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0, y = pb[i] ?? 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** 从 releases（GitHub 按发布倒序返回）挑当前通道下最新的一条 */
+function pickLatest(releases: any[]): { version: string; publishedAt: string; prerelease: boolean } | null {
+  const list = (releases || []).map((r: any) => ({
+    version: (r.tag_name || "").replace(/^v/i, ""),
+    publishedAt: r.published_at || "",
+    prerelease: !!r.prerelease,
+  })).filter((r) => r.version);
+  const pool = _channel === "prerelease" ? list : list.filter((r) => !r.prerelease);
+  return pool[0] ?? null;
+}
+
+/** 轮询用：比对最新发布与运行版本，更新则推送 update:available（dev/内网都能检测，不依赖 app-update.yml） */
+async function pollForUpdate(): Promise<void> {
+  try {
+    const releases = await ghGet(GITHUB_API + "?per_page=10");
+    const cur = app.getVersion();
+    const latest = pickLatest(releases);
+    if (latest && cmpVer(latest.version, cur) > 0) {
+      _win?.webContents.send("update:available", { version: latest.version, releaseDate: latest.publishedAt, prerelease: latest.prerelease });
+      Log.info("updater", `发现新版本 v${latest.version}（当前 v${cur}）`);
+    } else {
+      Log.debug("updater", `已是最新（当前 v${cur}${latest ? `，最新 v${latest.version}` : ""}）`);
+    }
+  } catch (e) {
+    Log.warn("updater", `检查更新失败: ${(e as Error).message}`);
+  }
 }
 
 // ── autoUpdater 事件 → 渲染进程 ──
@@ -107,18 +124,17 @@ function registerIPC() {
   });
 
   ipcMain.handle(IPC.UPDATE.CHECK, async () => {
+    // 让 electron-updater 先拉一次（打包后下载需要它缓存 updateInfo；dev/无 feed 时失败也无妨）
+    autoUpdater.allowPrerelease = _channel === "prerelease";
+    autoUpdater.allowDowngrade = false;
+    void autoUpdater.checkForUpdates().catch(() => { /* 静默 */ });
+    // 可靠检测走 GitHub API（代理感知，dev / 内网都可用）
     try {
-      // 设置 electron-updater 通道
-      autoUpdater.allowPrerelease = _channel === "prerelease";
-      autoUpdater.allowDowngrade = false;
-      const currentVersion = app.getVersion();
-      const result = await autoUpdater.checkForUpdates();
-      if (result?.updateInfo?.version) {
-        const remoteVersion = result.updateInfo.version.replace(/^v/i, "");
-        if (remoteVersion === currentVersion) {
-          return { success: true as const, data: null };
-        }
-        return { success: true as const, data: { version: result.updateInfo.version, available: true } };
+      const releases = await ghGet(GITHUB_API + "?per_page=10");
+      const cur = app.getVersion();
+      const latest = pickLatest(releases);
+      if (latest && cmpVer(latest.version, cur) > 0) {
+        return { success: true as const, data: { version: latest.version, available: true } };
       }
       return { success: true as const, data: null };
     } catch (e) {
@@ -174,15 +190,11 @@ export function initUpdater(mainWindow: BrowserWindow) {
   bindAutoUpdaterEvents();
   registerIPC();
 
-  // 启动后 10 秒自动检查（比旧 PE 稍晚，避开启动 IO 高峰）
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
-  }, 10_000);
+  // 启动后 10 秒自动检查（走 GitHub API，dev/内网都能检测）
+  setTimeout(() => { void pollForUpdate(); }, 10_000);
 
-  // 定期检查
-  _checkTimer = setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
-  }, CHECK_INTERVAL_MS);
+  // 每 4 小时轮询
+  _checkTimer = setInterval(() => { void pollForUpdate(); }, CHECK_INTERVAL_MS);
 }
 
 export function cleanupUpdater() {

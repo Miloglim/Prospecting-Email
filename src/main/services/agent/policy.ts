@@ -15,32 +15,15 @@ export interface ToolSpec {
   autoApprovable?: boolean;
 }
 
-export const TOOL_SPECS: Record<string, ToolSpec> = {
-  search_contacts:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 5 },
-  quote_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 5 },
-  inbox_search:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
-  email_summarize:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 6 },
-  company_backcheck:{ sideEffect: "read",  requiresApproval: false, budgetPerTurn: 1 },
-  // 联网调研：一次调用就跑完整套「多源检索→页面核实→交叉分级→成稿」，成本高，单轮最多 2 次
-  market_research:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
-  generate_draft:   { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
-  queue_status:     { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
-  reminders_due:    { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 3 },
-  accounts_status:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
-  // 元工具：只维护界面可见的任务清单，不读不写业务数据，故免审批；上限放宽防多步任务频繁刷新
-  update_plan:      { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 8 },
-  // P2 元能力：产物落盘（只写 outputs/agent，不碰业务数据）与后台批量任务（只读搜索+生成）
-  export_artifact:  { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
-  start_batch_task: { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 1 },
-  // 元能力：能力缺口登记（开发期需求探针，只写 agent_gaps 台账）
-  report_gap:       { sideEffect: "read",  requiresApproval: false, budgetPerTurn: 2 },
-  record_followup:  { sideEffect: "write", requiresApproval: true,  budgetPerTurn: 2, autoApprovable: true },
-  // 批量导入联系人：写库，须人工确认，不可会话豁免；一轮一次防重复提交
-  import_contacts:  { sideEffect: "write", requiresApproval: true,  budgetPerTurn: 1, autoApprovable: false },
-  // 入队 ≠ 发出：startDynamicSend 以 autoStart=false 仅建队列，真正发送仍需用户在发送中心点启动
-  // 永不 autoApprovable：外发动作每一次都要人工确认
-  send_queue_add:   { sideEffect: "write", requiresApproval: true,  budgetPerTurn: 1, autoApprovable: false },
-} as const;
+/**
+ * 工具策略元数据从注册表（manifest.ts）派生 —— 副作用分级/审批/预算的唯一事实源
+ * 在 manifest 里登记；这里不维护第二份清单。红线见 manifest 头部：
+ * write 类工具必须 requiresApproval；send_queue_add / import_contacts 永不豁免。
+ */
+import { TOOL_MANIFEST } from "./manifest";
+
+export const TOOL_SPECS: Record<string, ToolSpec> =
+  Object.fromEntries(TOOL_MANIFEST.map(m => [m.name, m.spec]));
 
 export function classifyTool(name: string): ToolSpec | undefined {
   return TOOL_SPECS[name];

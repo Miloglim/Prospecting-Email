@@ -100,6 +100,11 @@ function classifyMailError(err: unknown): string {
     return "认证失败：密码或第三方客户端授权码不正确/已失效";
   }
   if (code === "ETIMEDOUT" || /timeout|timed out/i.test(msg)) return "连接超时";
+  // ImapFlow 的 greeting 超时文本自带 "Maybe should use TLS?"，会被下面的 TLS 正则误判成握手问题——
+  // 真实语义是连上了但服务器不应答（多设备高频轮询、POP3 并发会话占坑被限流居多），单独归类说清楚
+  if (/greeting/i.test(msg)) {
+    return "服务器无响应（连接被限流：多设备高频轮询或 POP3 并发会话占坑常见，改用 IMAP 993 并降低轮询频率）";
+  }
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|getaddrinfo|EAI_AGAIN|socket hang up/i.test(msg + code)) {
     return `无法连接服务器${e?.hostname ? `（${e.hostname}）` : ""}`;
   }
