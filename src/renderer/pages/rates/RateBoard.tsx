@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Checkbox, Input, Select, Space, Table, Tag, Tooltip, App as AntApp } from "antd";
+import { Button, Input, Select, Space, Table, Tag, Tooltip, App as AntApp } from "antd";
 import { SearchOutlined, SyncOutlined, DollarOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -16,8 +16,6 @@ interface QuoteDto {
 
 interface IpcResult<T> { success: boolean; data?: T; error?: string }
 
-const LANES = ["加勒比", "南美东", "南美西", "墨西哥", "中美洲", "欧地"];
-const CARRIERS = ["CMA", "COSCO", "MSK", "HMM", "WHL", "MSC", "YML", "TSL", "EMC"];
 const CONTAINERS = ["20GP", "40GP", "40HQ", "NOR", "40GP+40HQ"];
 
 function fmtMsgTime(iso: string | null): string {
@@ -35,21 +33,26 @@ function fmtMsgTime(iso: string | null): string {
 export function RateBoard() {
   const { message } = AntApp.useApp();
   const qc = useQueryClient();
-  const [lane, setLane] = useState<string | undefined>();
-  const [carrier, setCarrier] = useState<string | undefined>();
   const [container, setContainer] = useState<string | undefined>();
-  const [includeExpired, setIncludeExpired] = useState(false);
   const [podInput, setPodInput] = useState("");
-  const [pod, setPod] = useState<string | undefined>(); // 防抖后的目的港关键词
+  const [pod, setPod] = useState<string | undefined>();     // 防抖后的目的港关键词
+  const [laneInput, setLaneInput] = useState("");
+  const [lane, setLane] = useState<string | undefined>();   // 防抖后的航线关键词（模糊）
+  const [carrierInput, setCarrierInput] = useState("");
+  const [carrier, setCarrier] = useState<string | undefined>(); // 防抖后的船司关键词（模糊）
 
-  // 目的港输入防抖 400ms
+  // 文本筛选统一防抖 400ms
   useEffect(() => {
-    const t = setTimeout(() => setPod(podInput.trim() || undefined), 400);
+    const t = setTimeout(() => {
+      setPod(podInput.trim() || undefined);
+      setLane(laneInput.trim() || undefined);
+      setCarrier(carrierInput.trim() || undefined);
+    }, 400);
     return () => clearTimeout(t);
-  }, [podInput]);
+  }, [podInput, laneInput, carrierInput]);
 
-  const filters = useMemo(() => ({ lane, carrier, container, pod, includeExpired, limit: 5000 }),
-    [lane, carrier, container, pod, includeExpired]);
+  const filters = useMemo(() => ({ lane, carrier, container, pod, limit: 5000 }),
+    [lane, carrier, container, pod]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rates", "list", filters],
@@ -81,11 +84,11 @@ export function RateBoard() {
             <DollarOutlined className="text-emerald-600 mr-1" />运价库
           </h2>
           <Tag color={st && st.total ? "green" : "default"}>
-            {st ? `${st.total} 条镜像 · ${st.active} 条有效` : "…"}
+            {st ? `${st.total} 条` : "…"}
           </Tag>
-          {st?.remoteHost && (
+          {st?.lastSyncAt && (
             <span className="text-[11px] text-gray-400">
-              远程库 {st.remoteHost}{st.lastSyncAt ? ` · 上次同步 ${new Date(st.lastSyncAt).toLocaleString("zh-CN")}` : " · 尚未同步"}
+              上次同步 {new Date(st.lastSyncAt).toLocaleString("zh-CN")}
             </span>
           )}
           {st?.lastError && (
@@ -104,21 +107,16 @@ export function RateBoard() {
 
       {/* 筛选栏 */}
       <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-200 rounded-lg px-3 py-2">
-        <Select size="small" placeholder="航线" allowClear style={{ width: 110 }}
-          value={lane} onChange={v => setLane(v)}
-          options={LANES.map(l => ({ value: l, label: l }))} />
-        <Select size="small" placeholder="船司" allowClear style={{ width: 90 }}
-          value={carrier} onChange={v => setCarrier(v)}
-          options={CARRIERS.map(c => ({ value: c, label: c }))} />
+        <Input size="small" placeholder="航线" allowClear
+          style={{ width: 100 }} value={laneInput} onChange={e => setLaneInput(e.target.value)} />
+        <Input size="small" placeholder="船司" allowClear
+          style={{ width: 90 }} value={carrierInput} onChange={e => setCarrierInput(e.target.value)} />
         <Select size="small" placeholder="柜型" allowClear style={{ width: 120 }}
           value={container} onChange={v => setContainer(v)}
           options={CONTAINERS.map(c => ({ value: c, label: c }))} />
         <Input size="small" prefix={<SearchOutlined className="text-gray-300" />}
-          placeholder="目的港关键词（如 SANTOS / KINGSTON）" allowClear
+          placeholder="目的港关键词（如 santos / KINGSTON）" allowClear
           style={{ width: 240 }} value={podInput} onChange={e => setPodInput(e.target.value)} />
-        <Checkbox checked={includeExpired} onChange={e => setIncludeExpired(e.target.checked)}>
-          <span className="text-[11px] text-gray-500">含已过期</span>
-        </Checkbox>
         {rows.length >= 5000 && (
           <span className="text-[10px] text-amber-600">命中过多，按价格升序仅显示前 5000 条，请细化筛选</span>
         )}

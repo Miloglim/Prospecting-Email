@@ -19,8 +19,8 @@ const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 10) 
 const PAGE_SIZE = 500;
 const ROW_CAP = 20_000;
 
-/** 友好提示：镜像拉取失败时给用户的一句话（细节进日志） */
-const REMOTE_DOWN_HINT = "运价库连接失败：请确认公司电脑已开机、运价服务已启动，且本机与公司电脑在同一局域网。";
+/** 同步失败提示（短句；排查细节只进日志） */
+const REMOTE_DOWN_HINT = "网络连接失败";
 
 /** 柜型归一化：脏值映射到标准码；组合价（斜杠分隔多种柜型）拼为 "A+B" */
 export function normalizeContainer(raw: string | null): string | null {
@@ -195,12 +195,12 @@ export function startAutoSync(): void {
   if (autoTimer) clearInterval(autoTimer);
   autoTimer = setInterval(() => {
     void sync().then(r => {
-      if (!r.success) Log.debug("rates.auto", `自动同步未成功：${r.error}`);
+      if (!r.success) Log.debug("rates.auto", `自动同步失败：${r.error}`);
     });
   }, AUTO_MINUTES * 60_000);
   setTimeout(() => {
     void sync().then(r => {
-      if (!r.success) Log.debug("rates.auto", `启动同步未成功：${r.error}`);
+      if (!r.success) Log.debug("rates.auto", `启动同步失败：${r.error}`);
     });
   }, 5_000);
 }
@@ -218,7 +218,7 @@ function quoteConds(f: QuoteFilters) {
   const conds = [];
   // 航线模糊匹配：库里是「加勒比/南美东…」受控枚举，like 兼容「加勒比线」这类口语后缀
   if (f.lane) conds.push(like(rateQuotes.lane, `%${f.lane}%`));
-  if (f.carrier) conds.push(eq(rateQuotes.carrier, f.carrier.toUpperCase()));
+  if (f.carrier) conds.push(like(rateQuotes.carrier, `%${f.carrier}%`));   // 模糊 + ASCII 大小写不敏感（zim→ZIM）
   if (f.pod) conds.push(like(rateQuotes.podRaw, `%${f.pod}%`));
   if (f.container) conds.push(or(eq(rateQuotes.container, f.container), like(rateQuotes.container, `%${f.container}%`)));
   if (!f.includeExpired) {
