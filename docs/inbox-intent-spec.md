@@ -50,3 +50,18 @@ cooperation / follow_up / other`；null = 未识别。迁移照 v5.0.3 模式自
 ## 5. 不做的事
 
 不自动回复；不做二级以上意图细分（五档够用）；不阻塞收信；不回填已有人工标记。
+
+## 6. 状态变更：自动识别已移除（2026-09-06）
+
+用户拍板「AI 静默自动打标签」收益弱，整链路移除：
+
+- 删：收信落库后的 queueIntent 自动触发、「其他」页 AI 重扫按钮 + `inbox:aiRescanOther`
+  IPC、`intent.service.ts` 全部识别逻辑（规则+LLM+AI 兜底 other→replied）、intent-rules 单测。
+- 留：`inbox_messages.intent` 列（将来 agent 打标签的写入落点）、规范本文存档。
+- 追加删除（2026-09-06 二次拍板）：UI 意图徽标与筛选 chips 一并移除——识别争议大、错误率高，
+  不值得为展示错误数据留 UI。agent 工具侧 inbox_search 的 intentFilter 参数保留
+  （将来 agent 确认式打标签后仍用它查询）。
+
+**将来方向（用户定调）**：等 agent 与程序对接完整后，改为交互式——用户问
+「现在有哪些邮件很重要」，agent 识别后列出候选并**询问用户确认**，确认后才由
+agent 打意图标签。AI 永不静默写入，与写操作审批红线同构。

@@ -63,8 +63,6 @@ export const IPC = {
     LIST:          chan(PREFIX.INBOX, "list"),
     FETCH:         chan(PREFIX.INBOX, "fetch"),
     CLASSIFY:      chan(PREFIX.INBOX, "classify"),
-    /** AI 重扫「其他」桶未分类邮件（手动触发，单批≤50） */
-    AI_RESCAN:     chan(PREFIX.INBOX, "aiRescanOther"),
     MARK_READ:     chan(PREFIX.INBOX, "markRead"),
     DELETE:        chan(PREFIX.INBOX, "delete"),
     DELETE_BOUNCE: chan(PREFIX.INBOX, "deleteBounce"),

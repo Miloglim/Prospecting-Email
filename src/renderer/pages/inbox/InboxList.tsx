@@ -31,15 +31,6 @@ const TYPE: Record<string, { label: string; dot: string }> = {
   other: { label: "其他", dot: "#8b8b8b" },
 };
 
-// 意图徽标（收信意图识别，见 docs/inbox-intent-spec.md）
-const INTENT: Record<string, { label: string; dot: string }> = {
-  price_inquiry: { label: "询价", dot: "#0d9488" },
-  schedule_request: { label: "船期", dot: "#2563eb" },
-  cooperation: { label: "合作", dot: "#7c3aed" },
-  follow_up: { label: "跟进", dot: "#8b8b8b" },
-};
-const INTENT_KEYS = ["all", "price_inquiry", "schedule_request", "cooperation", "follow_up"] as const;
-
 const FILTERS = [
   { key: "all", label: "全部" },
   { key: "sent", label: "已发送", dot: "#2563eb" },
@@ -93,7 +84,6 @@ export function InboxList() {
   const qc = useQueryClient();
   const [sid, setSid] = useState<number | null>(null);
   const [filter, setFilter] = useState("all");
-  const [intentFilter, setIntentFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [body, setBody] = useState<string | null>(null);
   const [bl, setBl] = useState(false);
@@ -167,14 +157,6 @@ export function InboxList() {
     mutationFn: (ids: number[]) => Promise.all(ids.map(id => window.api.invoke("inbox:delete", id))),
     onSuccess: () => { setSid(null); setSel(new Set()); qc.invalidateQueries({ queryKey: ["inbox"] }); },
   });
-  const rescanMut = useMutation({
-    mutationFn: () => window.api.invoke("inbox:aiRescanOther") as
-      Promise<{ success: boolean; data?: { scanned: number; promoted: number; remaining: number }; error?: string }>,
-    onSuccess: (r) => {
-      if (!r?.success) { console.error(r?.error); return; }
-      qc.invalidateQueries({ queryKey: ["inbox"] });
-    },
-  });
   const delBounceMut = useMutation({
     mutationFn: () => window.api.invoke("inbox:deleteBounce"),
     onSuccess: (r: unknown) => {
@@ -191,7 +173,6 @@ export function InboxList() {
 
   let items = data?.success ? data.data || [] : [];
   if (filter !== "all") items = items.filter(i => i.classification === filter);
-  if (intentFilter !== "all") items = items.filter(i => i.intent === intentFilter);
   if (search.trim()) {
     const q = search.toLowerCase();
     items = items.filter(i => (i.subject || "").toLowerCase().includes(q) || i.fromEmail.toLowerCase().includes(q) || (i.fromName || "").toLowerCase().includes(q));
@@ -516,49 +497,6 @@ export function InboxList() {
           })}
         </div>
 
-        {/* 意图筛选（回复类邮件才有意义）：有任一意图数据或已选中时显示 */}
-        {filter === "replied" && (() => {
-          const hasIntent = (data?.data ?? []).some((i: InboxItem) => i.intent && i.intent !== "other");
-          if (!hasIntent && intentFilter === "all") return null;
-          return (
-            <div style={{ display: "flex", gap: 4, padding: "4px 8px 0", flexShrink: 0, overflowX: "auto" }}>
-              {INTENT_KEYS.map(k => {
-                const on = intentFilter === k;
-                const n = k === "all" ? (data?.data ?? []).filter((i: InboxItem) => i.intent && i.intent !== "other").length
-                  : (data?.data ?? []).filter((i: InboxItem) => i.intent === k).length;
-                if (k !== "all" && n === 0) return null;
-                const meta = k === "all" ? null : INTENT[k];
-                return (
-                  <button key={k} onClick={() => setIntentFilter(k)}
-                    style={{ display: "flex", alignItems: "center", gap: 3, padding: "1px 8px", fontSize: 10, cursor: "pointer",
-                      border: `1px solid ${on ? "#0d9488" : "#e5e5e5"}`, borderRadius: 10, background: on ? "#0d948810" : "#fff",
-                      color: on ? "#0d9488" : "#666", flexShrink: 0, transition: "all .12s", whiteSpace: "nowrap" }}>
-                    {meta && <span style={{ fontSize: 8, color: meta.dot, lineHeight: 1 }}>●</span>}
-                    {k === "all" ? "全部意图" : meta!.label}
-                    <span style={{ fontSize: 9, color: "#bbb" }}>{n}</span>
-                  </button>
-                );
-              })}
-            </div>
-          );
-        })()}
-
-        {/* 其他页：AI 重扫未分类（规则+LLM 兜底一级分类，见 docs/inbox-intent-spec.md） */}
-        {filter === "other" && (() => {
-          const cnt = (data?.data ?? []).filter((i: InboxItem) => i.classification === "other" && !i.intent).length;
-          if (cnt === 0) return null;
-          return (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", flexShrink: 0 }}>
-              <button onClick={() => rescanMut.mutate()} disabled={rescanMut.isPending}
-                style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 9px", fontSize: 10.5, cursor: rescanMut.isPending ? "wait" : "pointer",
-                  border: "1px solid #0d9488", borderRadius: 5, background: "#fff", color: "#0d9488", transition: "all .12s" }}>
-                {rescanMut.isPending ? "识别中…" : `AI 识别 ${cnt} 封未分类`}
-              </button>
-              <span style={{ fontSize: 10, color: "#bbb" }}>规则+AI 兜底，真人回复会移入「回复」并标意图</span>
-            </div>
-          );
-        })()}
-
         {/* 退信删除 */}
         {filter === "bounce" && (() => {
           const cnt = new Set(items.filter(i => i.matchedContactId != null).map(i => i.matchedContactId)).size;
@@ -647,9 +585,6 @@ export function InboxList() {
                       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 1 }}>
                         <span style={{ fontSize: 11, color: "#999", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{i.fromName || i.fromEmail}</span>
                         {i.classification && i.classification !== "other" && <span style={{ fontSize: 9, padding: "0 6px", borderRadius: 10, background: t.dot + "15", color: t.dot, flexShrink: 0 }}>{t.label}</span>}
-                        {(() => { const it = i.intent ? INTENT[i.intent] : null; return it ? (
-                          <span style={{ fontSize: 9, padding: "0 6px", borderRadius: 10, background: it.dot + "15", color: it.dot, flexShrink: 0 }}>{it.label}</span>
-                        ) : null; })()}
                       </div>
                       {/* 已匹配 + 联系人状态（始终显示） */}
                       {(() => {

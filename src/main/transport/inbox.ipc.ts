@@ -3,7 +3,6 @@ import * as tls from "tls";
 import * as net from "net";
 import { IPC } from "../contract";
 import * as InboxService from "../services/inbox.service";
-import * as IntentService from "../services/intent.service";
 import { Log } from "../logger";
 import { failResult, okResult, type Result } from "../errors";
 import { getDb } from "../db";
@@ -266,10 +265,6 @@ async function doPop3Fetch(accountId: number): Promise<Result<InboxService.Inbox
         receivedAt: msg.date,
       }).run();
       await InboxService.writeBodyForLastInsert(msg.bodyHtml); // 正文落盘文件
-      // 异步意图识别（replied）+ AI 兜底一级分类（other）；不阻塞收信，fire-and-forget
-      if (classification === "replied" || classification === "other") {
-        IntentService.queueIntent(Number(ins.lastInsertRowid));
-      }
 
       parsed.push({
         id: 0, accountId,
@@ -415,10 +410,6 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
       }).run();
       if (msgId) existing.add(msgId);
       inserted++;
-      // 异步意图识别 + AI 兜底一级分类（同 IMAP 路径）
-      if (classification === "replied" || classification === "other") {
-        IntentService.queueIntent(Number(popIns.lastInsertRowid));
-      }
 
       parsed.push({
         id: 0, accountId, intent: null, messageId: msgId,
@@ -790,13 +781,6 @@ export function registerInboxIPC() {
 
   ipcMain.handle(IPC.INBOX.LIST, async () => {
     return InboxService.listInbox();
-  });
-
-  // AI 重扫「其他」桶：规则+LLM 补意图，顺带兜底一级分类（手动触发，单批≤50）
-  ipcMain.handle(IPC.INBOX.AI_RESCAN, async () => {
-    const r = await IntentService.rescanOther(50);
-    const remaining = IntentService.countUnscannedOther();
-    return okResult({ ...r, remaining });
   });
   ipcMain.handle(IPC.INBOX.FETCH, async (_e, accountId?: number) => {
     await InboxService.fetchInbox(accountId);
