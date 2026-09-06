@@ -1111,7 +1111,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
           "回答格式（固定，勿自由发挥）：正文第一句原样采用 answer 字段（可微调语气，数字与船司不改）；明细表已由界面渲染成表格卡，正文禁止再手写表格或逐行复述报价——否则用户会看到两张表。",
           "用户要「面向客户的运价表/报价表」时：把 customerTable 的 Markdown 原样贴进正文，这就是交付物；用户没明说「导出文件」就不要调 export_artifact。"
             + (stdRows.length
-              ? "customerTable 已是标准化透视表（列：船司/起运港/目的港/20GP/40HQ&HC/40NOR/Freetime/Transit/有效期），港口已归一（航线级报价已展开到具体港），直接贴不要改列。"
+              ? "customerTable 已是标准化透视表（列：船司/起运港/目的港/20GP/40HQ&HC/40NOR/Freetime/Transit/有效期/报价单链接），港口已归一（航线级报价已展开到具体港），直接贴不要改列；报价单链接指向船司报价截图，可提示用户点击查看。"
               : "customerTable 列固定：船司/起运港/目的港/柜型/价格/有效期，不带内部备注。"),
           "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
         );

@@ -14,6 +14,8 @@ export interface StandardRate {
   p20: number | null; p40: number | null; pNor: number | null; pBase: number | null;
   freetime: string | null; transit: string | null; remark: string | null;
   validFrom: string | null; validTo: string | null; etd: string | null;
+  /** 报价截图（board_server /images/ 的局域网链接，已 URL 编码） */
+  images: string[];
   ports: string[]; laneLevel: boolean;
 }
 interface StandardDoc {
@@ -105,9 +107,12 @@ export function queryStandard(pod: string, opts: { carrier?: string; lane?: stri
 /** 标准化行 → 面向客户的 Markdown 表（列固定，机械生成） */
 export function standardToMarkdown(rows: StandardRate[], max = 15): string {
   const usd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "—");
-  const head = ["| 船司 | 起运港 | 目的港 | 20GP | 40HQ&HC | 40NOR | Freetime | Transit | 有效期 |",
-    "|---|---|---|---|---|---|---|---|---|"];
+  const img = (r: StandardRate) => r.images.length
+    ? `[截图](${r.images[0]})${r.images.length > 1 ? `+${r.images.length - 1}` : ""}`
+    : "—";
+  const head = ["| 船司 | 起运港 | 目的港 | 20GP | 40HQ&HC | 40NOR | Freetime | Transit | 有效期 | 报价单 |",
+    "|---|---|---|---|---|---|---|---|---|---|"];
   const body = rows.slice(0, max).map(r =>
-    `| ${r.carrier} | ${r.pol || "—"} | ${r.pod} | ${usd(r.p20)} | ${usd(r.p40)} | ${usd(r.pNor)} | ${r.freetime ?? "—"} | ${r.transit ?? "—"} | ${r.validFrom || r.validTo ? `${r.validFrom ?? "?"}~${r.validTo ?? "?"}` : "—"} |`);
+    `| ${r.carrier} | ${r.pol || "—"} | ${r.pod} | ${usd(r.p20)} | ${usd(r.p40)} | ${usd(r.pNor)} | ${r.freetime ?? "—"} | ${r.transit ?? "—"} | ${r.validFrom || r.validTo ? `${r.validFrom ?? "?"}~${r.validTo ?? "?"}` : "—"} | ${img(r)} |`);
   return [...head, ...body].join("\n");
 }

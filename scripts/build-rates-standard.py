@@ -26,6 +26,8 @@ ROOT = os.path.dirname(HERE)
 PORTMAP = os.path.join(ROOT, "src", "main", "services", "rates-portmap.json")
 DEFAULT_DB = os.path.join(ROOT, "docs", "local_board", "freight_rate.db")
 DEFAULT_OUT = os.path.join(ROOT, "data", "rates-standard.json")
+# 报价截图由 board_server 提供（/images/<文件名>），与运价服务同机
+IMAGES_BASE = (os.environ.get("RATES_REMOTE_URL") or "http://192.168.189.229:8788").rstrip("/")
 
 LANE_AS_POD = None  # 由 portmap lanes 填充
 
@@ -99,7 +101,7 @@ def pivot(rows):
     """同 (船司,起运港,目的港原文,航线,有效期) 的多条柜型行 → 一行三列价。"""
     groups = defaultdict(lambda: {"p20": None, "p40": None, "pNor": None, "pBase": None,
                                   "freetimes": set(), "transits": set(), "remarks": set(),
-                                  "etd": None})
+                                  "images": [], "etd": None})
     order = []
     for r in rows:
         key = (r["carrier"], r["pol"], r["podRaw"], r["lane"], r["validFrom"], r["validTo"])
@@ -126,6 +128,8 @@ def pivot(rows):
             g["remarks"].add(r["remark"][:120])
         if r["etd"] and not g["etd"]:
             g["etd"] = r["etd"]
+        if r.get("image") and r["image"] not in g["images"]:
+            g["images"].append(r["image"])
     out = []
     for key in order:
         carrier, pol, podRaw, lane, vf, vt = key
@@ -137,6 +141,7 @@ def pivot(rows):
             "transit": "/".join(sorted(g["transits"])) or None,
             "remark": "；".join(sorted(g["remarks"])) or None,
             "validFrom": vf, "validTo": vt, "etd": g["etd"],
+            "images": [f"{IMAGES_BASE}/images/{__import__('urllib.parse', fromlist=['quote']).quote(u)}" for u in g["images"]],
         })
     return out
 
@@ -152,9 +157,9 @@ def main():
     cur = db.cursor()
     rows = []
     unresolved = {}
-    for (carrier, pol, pod, route, ct, usd, vf, vt, etd, fd, remark, mtext, status) in cur.execute(
+    for (carrier, pol, pod, route, ct, usd, vf, vt, etd, fd, remark, mtext, status, image) in cur.execute(
         "SELECT carrier,pol,pod,route,container_type,freight_usd,valid_from,valid_to,etd,"
-        "free_days,remark,message_text,status FROM freight_rates WHERE status='当前生效'"
+        "free_days,remark,message_text,status,image_url FROM freight_rates WHERE status='当前生效'"
     ):
         price = None
         if usd not in (None, ""):
@@ -178,6 +183,7 @@ def main():
             "remark": (remark or "").strip(),
             "etd": etd,
             "validFrom": vf, "validTo": vt,
+            "image": image,
             "_ports": pod_ports, "_laneLevel": lane_level,
         })
 
