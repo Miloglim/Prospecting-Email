@@ -59,7 +59,14 @@ export function registerAgentIPC() {
   ipcMain.handle(IPC.AGENT.DELETE_CONVERSATION, (_e, conversationId: string) =>
     Agent.deleteConversation(conversationId));
 
-  // 批量删除会话（设置页「归档会话」勾选后一次删）
+  // 移入归档（侧栏「删除」的实际动作；数据保留，设置页可恢复或彻底删）
+  ipcMain.handle(IPC.AGENT.ARCHIVE_CONVERSATION, (_e, conversationId: string) =>
+    Agent.archiveConversation(conversationId));
+  ipcMain.handle(IPC.AGENT.UNARCHIVE_CONVERSATION, (_e, conversationId: string) =>
+    Agent.unarchiveConversation(conversationId));
+  ipcMain.handle(IPC.AGENT.LIST_ARCHIVED_CONVERSATIONS, () => Agent.listArchivedConversations());
+
+  // 批量彻底删除会话（设置页「归档会话」勾选后一次删）
   ipcMain.handle(IPC.AGENT.DELETE_CONVERSATIONS, (_e, ids: string[]) =>
     Agent.deleteConversations(ids));
 

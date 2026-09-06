@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as crypto from "crypto";
-import { eq, asc, desc, count } from "drizzle-orm";
+import { eq, asc, desc, count, isNull, isNotNull, and } from "drizzle-orm";
 import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
@@ -351,15 +351,51 @@ export interface ConversationMeta {
 export function listConversations(): Result<ConversationMeta[]> {
   const db = getDb();
   const rows = db.select().from(agentConversations)
+    .where(isNull(agentConversations.archivedAt))          // 归档会话只出现在设置页归档区
     .orderBy(desc(agentConversations.updatedAt)).all();
-  // 每个会话的消息条数（含错误卡，不含 system——system 本来就不落库）
+  return okResult(withMessageCounts(rows));
+}
+
+/** 归档区列表（设置页「归档会话」）：只回 archivedAt 非空的会话 */
+export function listArchivedConversations(): Result<ConversationMeta[]> {
+  const db = getDb();
+  const rows = db.select().from(agentConversations)
+    .where(isNotNull(agentConversations.archivedAt))
+    .orderBy(desc(agentConversations.archivedAt)).all();
+  return okResult(withMessageCounts(rows));
+}
+
+/** 会话元数据 + 消息条数（list 两个出口共用） */
+function withMessageCounts(rows: Array<{ id: string; title: string; createdAt: string; updatedAt: string }>): ConversationMeta[] {
+  const db = getDb();
   const counts = db.select({ conversationId: agentMessages.conversationId, n: count() })
     .from(agentMessages).groupBy(agentMessages.conversationId).all();
   const countByConv = new Map(counts.map(c => [c.conversationId, Number(c.n ?? 0)]));
-  return okResult(rows.map(r => ({
+  return rows.map(r => ({
     id: r.id, title: r.title, createdAt: r.createdAt, updatedAt: r.updatedAt,
     messageCount: countByConv.get(r.id) ?? 0,
-  })));
+  }));
+}
+
+/** 移入归档（侧栏「删除」的实际动作）：不删任何数据，设置页可恢复或彻底清除 */
+export function archiveConversation(conversationId: string): Result<void> {
+  if (!conversationId) return failResult("参数错误: conversationId 必填");
+  getDb().update(agentConversations).set({ archivedAt: nowIso() })
+    .where(and(eq(agentConversations.id, conversationId), isNull(agentConversations.archivedAt))).run();
+  saveDatabase();
+  runtime.delete(conversationId);
+  Log.debug("agent.archive", conversationId.slice(0, 8));
+  return okResult(undefined);
+}
+
+/** 从归档恢复到侧栏 */
+export function unarchiveConversation(conversationId: string): Result<void> {
+  if (!conversationId) return failResult("参数错误: conversationId 必填");
+  getDb().update(agentConversations).set({ archivedAt: null })
+    .where(eq(agentConversations.id, conversationId)).run();
+  saveDatabase();
+  Log.debug("agent.unarchive", conversationId.slice(0, 8));
+  return okResult(undefined);
 }
 
 /** 批量删除会话：复用单条删除（连同消息/事实/运行态/审批豁免/未点击动作卡一起清） */

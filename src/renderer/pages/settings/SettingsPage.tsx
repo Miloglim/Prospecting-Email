@@ -561,31 +561,47 @@ let auditIgnoredBelowId = 0;
 
 interface ConversationMeta { id: string; title: string; createdAt: string; updatedAt: string; messageCount: number }
 
-/** AI 会话的集中清理：侧栏只能一条条删，这里勾选批量删或一键清空。默认收起；删除不可恢复。 */
+/** 归档会话：侧栏「删除」的会话落在这里。可恢复回侧栏，或彻底删除（不可恢复）。默认收起。 */
 function AgentConversationCard() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
-    queryKey: ["agentConversations"],
+    queryKey: ["agentArchivedConversations"],
     queryFn: async () => {
-      const r = await window.api.invoke("agent:listConversations") as { success: boolean; data?: ConversationMeta[] };
+      const r = await window.api.invoke("agent:listArchivedConversations") as { success: boolean; data?: ConversationMeta[] };
       return r?.success ? (r.data ?? []) : [];
     },
   });
   const list = data ?? [];
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["agentArchivedConversations"] });
+    qc.invalidateQueries({ queryKey: ["agentConversations"] });
+    window.dispatchEvent(new Event(CONVS_CHANGED));   // 侧栏历史同步
+  };
 
   const delMut = useMutation({
     mutationFn: (ids: string[]) => window.api.invoke("agent:deleteConversations", ids) as
       Promise<{ success: boolean; data?: { deleted: number }; error?: string }>,
     onSuccess: (r) => {
       if (!r?.success) { message.error(r?.error || "删除失败"); return; }
-      message.success(`已删除 ${r.data?.deleted ?? 0} 条会话`);
+      message.success(`已彻底删除 ${r.data?.deleted ?? 0} 条会话`);
       setSelected([]);
-      qc.invalidateQueries({ queryKey: ["agentConversations"] });
-      window.dispatchEvent(new Event(CONVS_CHANGED));   // 侧栏历史同步
+      invalidate();
     },
     onError: (e) => message.error(e instanceof Error ? e.message : "删除失败"),
+  });
+
+  const restoreMut = useMutation({
+    mutationFn: (id: string) => window.api.invoke("agent:unarchiveConversation", id) as
+      Promise<{ success: boolean; error?: string }>,
+    onSuccess: (r) => {
+      if (!r?.success) { message.error(r?.error || "恢复失败"); return; }
+      message.success("已恢复到左侧栏");
+      invalidate();
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : "恢复失败"),
   });
 
   const fmt = (iso: string) => (iso || "").replace("T", " ").slice(0, 16);
@@ -596,6 +612,11 @@ function AgentConversationCard() {
       render: (v: number) => <span className="text-[11px] text-gray-400">{v}</span> },
     { title: "更新时间", dataIndex: "updatedAt", key: "updatedAt", width: 120,
       render: (v: string) => <span className="text-[11px] text-gray-400">{fmt(v)}</span> },
+    { title: "", key: "op", width: 70, align: "right" as const,
+      render: (_: unknown, row: ConversationMeta) => (
+        <button className="text-[11px] text-teal-600 hover:text-teal-700"
+          onClick={() => restoreMut.mutate(row.id)}>恢复</button>
+      ) },
   ];
 
   return (
@@ -604,7 +625,7 @@ function AgentConversationCard() {
         {open ? "收起" : "展开"}
       </button>}>
       <div className="text-[11px] text-gray-400 mb-2">
-        左侧栏只能一条条删；这里勾选后批量删，或一键清空全部对话。删除不可恢复。
+        左侧栏「删除」的会话都归档在这里：可单条恢复；勾选后彻底删除，或一键清空。彻底删除不可恢复。
       </div>
       {open && (
         <>
@@ -617,17 +638,17 @@ function AgentConversationCard() {
             loading={isLoading}
             pagination={{ pageSize: 8, hideOnSinglePage: true }}
             rowSelection={{ selectedRowKeys: selected, onChange: keys => setSelected(keys as string[]) }}
-            locale={{ emptyText: "还没有 AI 会话 — 在「新对话」里聊过之后会出现在这里" }}
+            locale={{ emptyText: "归档区是空的 — 左侧栏「删除」的会话会出现在这里" }}
           />
           <div className="pt-2 flex items-center gap-2">
-            <Popconfirm title={`删除选中的 ${selected.length} 条会话？`} disabled={!selected.length}
+            <Popconfirm title={`彻底删除选中的 ${selected.length} 条会话？删除后不可恢复。`} disabled={!selected.length}
               onConfirm={() => delMut.mutate(selected)}>
               <Button size="small" danger disabled={!selected.length} loading={delMut.isPending}
-                icon={<DeleteOutlined />}>删除选中（{selected.length}）</Button>
+                icon={<DeleteOutlined />}>彻底删除选中（{selected.length}）</Button>
             </Popconfirm>
-            <Popconfirm title={`清空全部 ${list.length} 条会话？`} disabled={!list.length}
+            <Popconfirm title={`清空全部 ${list.length} 条归档会话？删除后不可恢复。`} disabled={!list.length}
               onConfirm={() => delMut.mutate(list.map(x => x.id))}>
-              <Button size="small" disabled={!list.length} loading={delMut.isPending}>清空全部</Button>
+              <Button size="small" disabled={!list.length} loading={delMut.isPending}>清空归档</Button>
             </Popconfirm>
           </div>
         </>

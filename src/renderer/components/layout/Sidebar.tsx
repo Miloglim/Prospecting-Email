@@ -122,10 +122,10 @@ function ConversationsPanel({ collapsed, onMetrics, onTuck }: {
   const confirmDelete = (c: ConvMeta) => {
     Modal.confirm({
       title: `删除会话「${c.title}」？`,
-      content: "该会话的全部消息将被清除，不可恢复。",
+      content: "会话将移入归档（设置 → AI 助手 → 归档会话），可恢复或彻底清除。",
       okText: "删除", okType: "danger", cancelText: "取消",
       onOk: async () => {
-        await window.api.invoke("agent:deleteConversation", c.id);
+        await window.api.invoke("agent:archiveConversation", c.id);
         dropConv(c.id);   // 回合现场缓存一并清掉（否则同 id 复用会读到脏现场）
         if (readActiveConv() === c.id) gotoConversation(undefined);
         window.dispatchEvent(new Event(CONVS_CHANGED));

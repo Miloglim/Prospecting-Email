@@ -133,6 +133,14 @@ export function runMigrations(): void {
     }
   } catch { /* 忽略 */ }
 
+  // v5.0.3: agent_conversations 补 archived_at（侧栏删除=移入归档；彻底删除只在设置页归档区）
+  try {
+    if (!tableCols("agent_conversations").includes("archived_at")) {
+      raw.exec("ALTER TABLE agent_conversations ADD COLUMN archived_at text;");
+      Log.info("db.migrate", "agent_conversations 表已添加 archived_at 列");
+    }
+  } catch { /* 忽略 */ }
+
   // v4.x: stage 大小写归一化
   try {
     let n = 0;

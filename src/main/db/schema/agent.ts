@@ -7,6 +7,8 @@ export const agentConversations = sqliteTable("agent_conversations", {
   title:     text("title").notNull().default("新对话"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  /** 归档时间（null=未归档）：侧栏删除=移入归档；彻底删除只在设置页归档区 */
+  archivedAt: text("archived_at"),
 });
 
 /** Agent 消息（仅存 user/assistant 正文；system 提示词不落库，运行时拼接） */

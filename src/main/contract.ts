@@ -140,7 +140,12 @@ export const IPC = {
     GET_CONVERSATION:    chan(PREFIX.AGENT, "getConversation"),
     RENAME_CONVERSATION: chan(PREFIX.AGENT, "renameConversation"),
     DELETE_CONVERSATION: chan(PREFIX.AGENT, "deleteConversation"),
-    /** 批量删除会话（设置页「归档会话」勾选后一次删） */
+    /** 移入归档（侧栏「删除」的实际动作；设置页归档区可恢复或彻底删） */
+    ARCHIVE_CONVERSATION: chan(PREFIX.AGENT, "archiveConversation"),
+    UNARCHIVE_CONVERSATION: chan(PREFIX.AGENT, "unarchiveConversation"),
+    /** 归档区列表（设置页「归档会话」只回已归档） */
+    LIST_ARCHIVED_CONVERSATIONS: chan(PREFIX.AGENT, "listArchivedConversations"),
+    /** 批量彻底删除会话（设置页「归档会话」勾选后一次删） */
     DELETE_CONVERSATIONS: chan(PREFIX.AGENT, "deleteConversations"),
     /** 写操作审批结论回填（approved → 恢复执行；rejected → 模型收到拒绝消息） */
     RESOLVE_APPROVAL: chan(PREFIX.AGENT, "resolveApproval"),
