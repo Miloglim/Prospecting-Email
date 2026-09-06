@@ -41,6 +41,7 @@ CREATE TABLE interactions (
 CREATE TABLE inbox_messages (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, account_id integer NOT NULL, message_id text,
   from_email text NOT NULL, from_name text, subject text, body_preview text, classification text,
+   intent text,
   cc text, my_role text, matched_contact_id integer, related_contact_ids text,
   is_read integer DEFAULT 0 NOT NULL, received_at text NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);

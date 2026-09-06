@@ -11,6 +11,8 @@ export const inboxMessages = sqliteTable("inbox_messages", {
   subject:           text("subject"),
   bodyPreview:       text("body_preview"),
   classification:    text("classification"),
+  /** 意图（仅 replied/other 相关）：price_inquiry | schedule_request | cooperation | follow_up | other；null=未识别 */
+  intent:            text("intent"),
   to:                text("to"),
   cc:                text("cc"),
   myRole:            text("my_role"),

@@ -417,6 +417,7 @@ export const inboxSearchSchema = z.object({
   query: optStr(120).describe("关键词，匹配发件人邮箱/主题/正文摘要；不传则返回最近邮件"),
   classification: z.string().max(20).nullable().optional()
     .describe("按系统分类过滤：inquiry=询盘 reply=回复 bounce=退信 auto_reply=自动回复；其他值视为不过滤"),
+  intentFilter: optStr(20).describe("按意图过滤（可单用）：price_inquiry=询价 schedule_request=船期 cooperation=合作 follow_up=跟进；「有哪些询价」类问题优先用它"),
   unreadOnly: optBool().describe("只看未读，默认 false"),
   limit: optInt().describe("返回条数，默认 10，按时间倒序"),
 });
@@ -917,12 +918,15 @@ export function buildHarnessTools(ctx: ToolCtx) {
         conds.push(or(like(inboxMessages.fromEmail, q), like(inboxMessages.subject, q), like(inboxMessages.bodyPreview, q)));
       }
       if (INBOX_CLASSES.includes(cls)) conds.push(eq(inboxMessages.classification, cls));
+      const intentF = (args.intentFilter ?? "").trim();
+      if (intentF) conds.push(eq(inboxMessages.intent, intentF));
       // 「未读」指待我处理的来信：我方自己发出的副本（classification=sent）也是 is_read=0，
       // 不排除会把"我发出去的邮件"算成未读，计数与清单一起失真（用户实测抓到过）
       if (args.unreadOnly) conds.push(eq(inboxMessages.isRead, 0), ne(inboxMessages.classification, "sent"));
       const rows = getDb().select({
         id: inboxMessages.id, fromName: inboxMessages.fromName, fromEmail: inboxMessages.fromEmail,
         subject: inboxMessages.subject, classification: inboxMessages.classification,
+        intent: inboxMessages.intent,
         isRead: inboxMessages.isRead, receivedAt: inboxMessages.receivedAt,
         matchedContactId: inboxMessages.matchedContactId,
       }).from(inboxMessages)
@@ -1021,7 +1025,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const row = getDb().select({
         id: inboxMessages.id, fromName: inboxMessages.fromName, fromEmail: inboxMessages.fromEmail,
         subject: inboxMessages.subject, bodyPreview: inboxMessages.bodyPreview,
-        classification: inboxMessages.classification, isRead: inboxMessages.isRead,
+        classification: inboxMessages.classification, intent: inboxMessages.intent,
+        isRead: inboxMessages.isRead,
         matchedContactId: inboxMessages.matchedContactId,
       }).from(inboxMessages).where(eq(inboxMessages.id, args.messageId)).get();
       if (!row) {
@@ -1108,7 +1113,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
           }));
         }
       }
-      return okOut({ ...summary, ...(actions.length ? { actions } : {}) });
+      // 询价联动：识别为询价的邮件，提示先查台账价再起草（quote_search → 草稿引用台账价）
+      const quoteHint = row.intent === "price_inquiry"
+        ? { notice: "这是询价邮件：起草回复前先用 quote_search 查该航线的台账价，把参考价写进草稿（注明以船司实时报价为准）。" }
+        : {};
+      return okOut({ ...summary, ...quoteHint, ...(actions.length ? { actions } : {}) });
     },
   });
 

@@ -141,6 +141,14 @@ export function runMigrations(): void {
     }
   } catch { /* 忽略 */ }
 
+  // v5.0.3: inbox_messages 补 intent（收信意图识别 + AI 兜底一级分类，见 docs/inbox-intent-spec.md）
+  try {
+    if (!tableCols("inbox_messages").includes("intent")) {
+      raw.exec("ALTER TABLE inbox_messages ADD COLUMN intent text;");
+      Log.info("db.migrate", "inbox_messages 表已添加 intent 列");
+    }
+  } catch { /* 忽略 */ }
+
   // v4.x: stage 大小写归一化
   try {
     let n = 0;
