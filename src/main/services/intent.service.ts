@@ -2,7 +2,7 @@
 // 两级分类同一次 LLM 调用：一级（是否真人回复）只兜底规则的 other 桶；
 // 二级（回复意图）只作用于 replied。AI 永远只兜底、永不覆盖规则高置信结论。
 // 红线：bounce 永不进本流程；intent IS NULL 才落值（人工意志优先）；不自动回复。
-import { and, eq, isNull, desc } from "drizzle-orm";
+import { and, eq, isNull, desc, sql } from "drizzle-orm";
 import { getDb, saveDatabase } from "../db";
 import { inboxMessages } from "../db/schema/inbox";
 import { Log } from "../logger";
@@ -104,11 +104,18 @@ export function queueIntent(id: number): void {
   void resolveIntent(id);
 }
 
-/** 存量重扫：「其他」桶里 intent 为空的邮件，单批上限 50，串行识别（手动触发，不静默跑） */
+/** 存量重扫：「其他」桶里 intent 为空的邮件，单批上限 50，串行识别（手动触发，不静默跑）。
+ *  选池必须排除无正文邮件：resolveIntent 对它们有守卫（没证据宁可不识别），
+ *  若放进来，它们会被静默跳过且 intent 保持空——下次点击选中的还是同一批，
+ *  重扫被永远堵死、真正可识别的邮件轮不到（2026-09-06 实锤：前 50 全是无正文）。 */
 export async function rescanOther(limit = 50): Promise<{ scanned: number; promoted: number }> {
   const rows = getDb().select({ id: inboxMessages.id })
     .from(inboxMessages)
-    .where(and(eq(inboxMessages.classification, "other"), isNull(inboxMessages.intent)))
+    .where(and(
+      eq(inboxMessages.classification, "other"),
+      isNull(inboxMessages.intent),
+      sql`TRIM(COALESCE(${inboxMessages.bodyPreview}, '')) != ''`,
+    ))
     .orderBy(desc(inboxMessages.receivedAt))
     .limit(Math.min(limit, 50))
     .all();
@@ -122,10 +129,14 @@ export async function rescanOther(limit = 50): Promise<{ scanned: number; promot
   return { scanned: rows.length, promoted };
 }
 
-/** 存量重扫前的计数（按钮文案用） */
+/** 存量重扫前的计数（按钮文案用）——与选池同口径：只数有正文、真正可识别的 */
 export function countUnscannedOther(): number {
   return getDb().select({ id: inboxMessages.id })
     .from(inboxMessages)
-    .where(and(eq(inboxMessages.classification, "other"), isNull(inboxMessages.intent)))
+    .where(and(
+      eq(inboxMessages.classification, "other"),
+      isNull(inboxMessages.intent),
+      sql`TRIM(COALESCE(${inboxMessages.bodyPreview}, '')) != ''`,
+    ))
     .all().length;
 }

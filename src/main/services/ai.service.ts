@@ -129,11 +129,21 @@ export async function chat(system: string, user: string): Promise<Result<string>
 export async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
   const r = await chat(system, user);
   if (!r.success) return r;
+  const cleaned = r.data.replace(/```json|```/g, "").trim();
   try {
-    // 兼容端点偶尔在 JSON 外包裹 ```json ... ``` 的情况
-    const cleaned = r.data.replace(/```json|```/g, "").trim();
     return okResult(JSON.parse(cleaned) as T);
   } catch {
+    // 模型常在 JSON 外带垃圾（照抄提示词示例的「输出：」前缀、解释文字等）——
+    // 直接 parse 失败时降级为「抽取首个完整 JSON 值」（对象或数组），抽不到才算真失败。
+    // 实锤：agnes-2.5-flash 回 `输出：{"reply":false,...}`，到手的分类结果被整条扔掉。
+    const obj = /\{[\s\S]*\}/.exec(cleaned);
+    if (obj) {
+      try { return okResult(JSON.parse(obj[0]) as T); } catch { /* 对象体本身坏了，再试数组 */ }
+    }
+    const arr = /\[[\s\S]*\]/.exec(cleaned);
+    if (arr) {
+      try { return okResult(JSON.parse(arr[0]) as T); } catch { /* 数组体也坏了 */ }
+    }
     Log.error("ai.json", "JSON 解析失败", r.data.slice(0, 500));
     return failResult("AI 返回格式不正确，请重试");
   }

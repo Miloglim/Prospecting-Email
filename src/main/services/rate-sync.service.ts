@@ -80,40 +80,42 @@ function pick(row: Record<string, unknown>, keys: string[]): string | null {
 
 /**
  * 远程行 → 归一化镜像行（纯函数，不触库，供单测）。
- * 字段别名容错（board_server 侧命名与本地 schema 不完全一致）：
- * container_type|container_raw|container → containerRaw，freight_usd|ocean_usd → oceanUsd，pod_raw|pod → podRaw。
- * 柜型归一 / 有效期解析复用 normalizeContainer / parseValidity；远程已给 valid_from/valid_to 则直采。
+ * 键名以实测为准（docs/运价接口字段对接说明.md，2026-09-06 从线上服务抓取核对）：
+ * route→航线 lane、remark→备注、dead_freight→亏舱费、message_time→消息时间、
+ * content_key→稳定记录键、freight_usd 为字符串（"6815.00"）、container_type 可为 null。
+ * 柜型归一 / 有效期解析复用 normalizeContainer / parseValidity；
+ * valid_from/valid_to 独立采信（缺一边才用本地解析补）。
  * 无目的港的行无业务意义，返回 null 跳过。
  */
 export function mapRemoteRow(row: Record<string, unknown>, fallbackId: string): InsertRateQuoteRow | null {
   const pod = pick(row, ["pod_raw", "pod"]);
   if (!pod) return null;
   const containerRaw = pick(row, ["container_type", "container_raw", "container"]);
-  const msgTime = pick(row, ["msg_time"]);
+  const msgTime = pick(row, ["message_time", "msg_time"]);
   const vf = pick(row, ["valid_from"]);
   const vt = pick(row, ["valid_to"]);
-  const parsed = vf && vt ? { validFrom: vf, validTo: vt } : parseValidity(pick(row, ["validity_raw"]), msgTime);
+  const parsed = parseValidity(pick(row, ["validity_raw"]), msgTime);
   const usdRaw = pick(row, ["freight_usd", "ocean_usd"]);
   const usd = usdRaw != null ? Number(usdRaw.replace(/[,\s]/g, "")) : NaN;
   return {
-    recordId: pick(row, ["record_id"]) || fallbackId,
+    recordId: pick(row, ["content_key", "record_id"]) || fallbackId,
     pol: pick(row, ["pol"]),
     podRaw: pod,
-    lane: pick(row, ["lane"]),
+    lane: pick(row, ["route", "lane"]),
     carrier: pick(row, ["carrier"]),
     container: normalizeContainer(containerRaw),
     containerRaw,
     oceanUsd: Number.isFinite(usd) ? Math.round(usd) : null,
     validityRaw: pick(row, ["validity_raw"]),
-    validFrom: parsed.validFrom,
-    validTo: parsed.validTo,
+    validFrom: vf ?? parsed.validFrom,
+    validTo: vt ?? parsed.validTo,
     freeDays: pick(row, ["free_days"]),
-    shortfallFee: pick(row, ["shortfall_fee", "shortfall"]),
-    note: pick(row, ["note"]),
+    shortfallFee: pick(row, ["dead_freight", "shortfall_fee", "shortfall"]),
+    note: pick(row, ["remark", "note"]),
     sourceGroup: pick(row, ["source_group"]),
     sender: pick(row, ["sender"]),
     msgTime,
-    imageName: pick(row, ["image_name"]),
+    imageName: pick(row, ["image_url", "image_name"]),
     syncedAt: new Date().toISOString(),
   };
 }
@@ -143,7 +145,9 @@ export async function sync(): Promise<Result<{ imported: number }>> {
     while (offset < total && offset < ROW_CAP) {
       let res: Response;
       try {
-        res = await netFetch(`${base}/api/rates?limit=${PAGE_SIZE}&offset=${offset}`, { headers: { Accept: "application/json" } });
+        // 只拉当前生效（被覆盖的历史不进镜像，防旧价污染 quote_search）；中文参数必须 URL 编码
+        const status = encodeURIComponent("当前生效");
+        res = await netFetch(`${base}/api/rates?status=${status}&limit=${PAGE_SIZE}&offset=${offset}`, { headers: { Accept: "application/json" } });
       } catch (err) {
         const d = err instanceof Error ? err.message.slice(0, 80) : "网络不可达";
         lastError = `${REMOTE_DOWN_HINT}（${d}）`;
