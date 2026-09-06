@@ -500,7 +500,10 @@ const renderedLen = (t: string, values: Map<string, string> | undefined) =>
   t.replace(/\{([a-zA-Z0-9_.]+)\}/g, (_, p: string) => "一".repeat(Math.max(1, values?.get(p)?.length ?? 4))).length;
 
 /**
- * 准入校验。任何一条不合格的句子先丢掉；某区凑不满 5 条 → 整版判 null（宁可全用规则版）。
+ * 准入校验（按区分池）：结构级失败（JSON/组数/标题）整版判废；
+ * 单区凑不满 5 条 → 该区跳过（读路径就地补规则版），其余区照常收下 ——
+ * 「管邮件 3 条过准入」不应连累另外五个区的 AI 产出（实测日志翻过车）。
+ * 逐条丢弃计数改为按区统计，日志不再张冠李戴。
  * 实测模型会自己拿 132-12 算出「能用 120 条」、把「逾期 5 位」写成「逾期 5 天」、
  * 把 Santos 翻成「桑托斯」—— 这三类在这里都被挡住。
  */
@@ -515,12 +518,13 @@ export function parseBatch(
   if (!Array.isArray(arr)) { if (why) why.msg = "输出不是数组"; return null; }
   if (arr.length !== GROUP_TITLES.length) { if (why) why.msg = `分组数 ${arr.length} ≠ ${GROUP_TITLES.length}`; return null; }
   const out: Array<{ title: GroupTitle; templates: string[] }> = [];
-  const dropped = { len: 0, hardNum: 0, slot: 0 };   // 逐条丢弃计数：全版被拒时据此定位是哪道门太紧
+  const skipped: string[] = [];
   for (const [i, item] of arr.entries()) {
     const title = GROUP_TITLES[i]!;
     const o = item as { title?: unknown; items?: unknown };
     if (typeof o?.title !== "string" || o.title.trim() !== title) { if (why) why.msg = `第 ${i + 1} 区标题不匹配（应为「${title}」）`; return null; }
     if (!Array.isArray(o.items)) { if (why) why.msg = `第 ${i + 1} 区 items 不是数组`; return null; }
+    const dropped = { len: 0, hardNum: 0, slot: 0 };   // 丢弃计数按区统计，日志可定位到具体是哪道门
     const ok: string[] = [];
     for (const x of o.items) {
       if (typeof x !== "string") continue;
@@ -529,15 +533,16 @@ export function parseBatch(
       if (len < 8 || len > 32) { dropped.len++; continue; }                          // 卡上一行放得下：提示词要 8–26，收到 32 是容忍模型略超
       if (hasHardNumber(t)) { dropped.hardNum++; continue; }                          // 数量必须走槽位，不许写死
       const names = [...t.matchAll(/\{([a-zA-Z0-9_.]+)\}/g)].map(m => m[1]!);
-      if (!names.length || names.some(n => !SLOT_BY_PATH.has(n))) { dropped.slot++; continue; }  // 槽名必须照抄白名单
+      if (!names.length || names.some(n => !SLOT_BY_PATH.has(n))) { dropped.slot++; continue; }  // 槽名必须照抄白名单（没有槽位也算槽名违规）
       if (!ok.includes(t)) ok.push(t);
     }
     if (ok.length < 5) {
-      if (why) why.msg = `「${title}」仅 ${ok.length} 条过准入（需 ≥5）；丢弃统计: 长度${dropped.len}/写死数字${dropped.hardNum}/槽名${dropped.slot}`;
-      return null;
+      skipped.push(`「${title}」仅${ok.length}条(长度${dropped.len}/写死数字${dropped.hardNum}/槽名${dropped.slot})`);
+      continue;
     }
     out.push({ title, templates: ok.slice(0, MAX_PER_GROUP) });
   }
+  if (skipped.length && why) why.msg = `未过准入的区改用规则版：${skipped.join("；")}`;
   return out;
 }
 
@@ -571,6 +576,7 @@ async function generate(force: boolean): Promise<void> {
       const why: { msg?: string } = {};
       const parsed = parseBatch(r.data, slotValues(snap), why);
       if (!parsed) { Log.debug("suggest.batch", `产出不合规，先用规则版（${why.msg ?? "未知原因"}）`); return; }
+      if (!parsed.length) { Log.debug("suggest.batch", `六个区全未过准入，先用规则版（${why.msg ?? "未知原因"}）`); return; }
       const rows = parsed.flatMap(g => g.templates.map(t => ({
         day, groupName: g.title, template: t, source: "ai",
       })));
@@ -581,7 +587,8 @@ async function generate(force: boolean): Promise<void> {
         sql`${agentSuggestions.day} < ${beijingDay(Date.now() - 7 * DAY)}`,
       ).run();                                        // 只留最近 7 天，别让表长
       saveDatabase();
-      Log.info("suggest.batch", `当天建议批次已生成：${rows.length} 条模板`);
+      // 未过准入的区不落库 → 读路径就地补规则版（按区分池，失败区不连累其他区）
+      Log.info("suggest.batch", `当天建议批次已生成：${rows.length} 条模板${why.msg ? `（${why.msg}）` : ""}`);
     } catch (err) {
       Log.debug("suggest.batch", `异常，先用规则版：${msg(err)}`);
     } finally {

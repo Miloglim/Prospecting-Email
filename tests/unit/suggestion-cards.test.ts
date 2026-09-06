@@ -111,23 +111,35 @@ describe("AI 批次的准入", () => {
     expect(parseBatch(`按你的数据排的：\n\`\`\`json\n${JSON.stringify(varied)}\n\`\`\`\n请查收`)).toHaveLength(6);
   });
 
-  it("写死裸数字的句子逐条丢弃，某区因此凑不满 5 条 → 整版判废", () => {
+  it("写死裸数字逐条丢弃：全部区凑不满 5 条 → 返回空数组（读路径全落规则版）", () => {
     const hard = varied.map(g => ({ ...g, items: g.items.map(i => i.replace(/\{[a-zA-Z0-9_.]+\}/g, "1200")) }));
-    expect(parseBatch(JSON.stringify(hard), values)).toBeNull();
+    expect(parseBatch(JSON.stringify(hard), values)).toEqual([]);
   });
 
-  it("自己编的槽名（{overdue}）不被接受", () => {
+  it("自己编的槽名（{overdue}）不被接受：全部区落空 → 空数组", () => {
     expect(parseBatch(JSON.stringify(GROUP_TITLES.map(title => ({
       title, items: ["{overdue} 位逾期的先看哪个好", "{unread} 封未读要总结吗", "{total} 个联系人查谁呢",
         "台账 {expired} 条过期怎么列", "{topPod} 现在最便宜到多少呢", "{broken} 这个账号怎么了修",
       ]
-    }))), values)).toBeNull();
+    }))), values)).toEqual([]);
   });
 
-  it("组数不对 / 标题错位 / 条数太少 / 根本不是 JSON —— 一律判废", () => {
+  it("按区分池：单区凑不满 5 条只弃该区，其余区保留（实测日志翻过车的场景）", () => {
+    const why: { msg?: string } = {};
+    const mixed = varied.map((g, i) => i === 2
+      ? { title: g.title, items: ["查一下今天有没有未读邮件", "未读 3 封里有没有询盘", "把垃圾邮件清一清吧",
+          "帮我把订阅邮件退订", `${g.title}时先看{quotes.topPod}这条线行吗`, `${g.title}要不要从{contacts.total}个联系人里挑`, `未读{inbox.unread}封里${g.title}先看谁`] }
+      : g);
+    const parsed = parseBatch(JSON.stringify(mixed), values, why);
+    expect(parsed).toHaveLength(5);                                // 只有第 3 区（管邮件）落空
+    expect(parsed!.some(g => g.title === mixed[2]!.title)).toBe(false);
+    expect(why.msg).toContain("未过准入的区改用规则版");
+    expect(why.msg).toContain(`「${mixed[2]!.title}」仅3条`);       // 丢弃统计按区，不再张冠李戴
+  });
+
+  it("结构级失败仍整版判废", () => {
     expect(parseBatch(JSON.stringify(varied.slice(0, 5)), values)).toBeNull();
     expect(parseBatch(JSON.stringify(varied.map((g, i) => (i === 2 ? { ...g, title: "查运价" } : g))), values)).toBeNull();
-    expect(parseBatch(JSON.stringify(GROUP_TITLES.map(title => ({ title, items: ["我今天该跟进谁呀呀"] }))), values)).toBeNull();
     expect(parseBatch("我的建议是：查运价、看行情、管邮件", values)).toBeNull();
   });
 
@@ -176,7 +188,7 @@ describe("长度按「填完之后」判（占位符本身很长，量原文会�
   });
   it("填完仍然超长的模板丢掉", () => {
     const long = sixWith(t => `${t}${"{quotes.topPod}"}那条线的公开市场行情和我们的台账价相比到底算什么水平呢麻烦帮我详细对比一下看看`);
-    expect(parseBatch(JSON.stringify(long), values)).toBeNull();
+    expect(parseBatch(JSON.stringify(long), values)).toEqual([]);   // 全区超长 → 空数组（读路径全落规则版）
   });
 });
 
