@@ -7,6 +7,8 @@ import { z } from "zod";
 import { eq, like, or, and, desc, ne, sql, count, inArray } from "drizzle-orm";
 import { tool } from "@openai/agents";
 import { getDb, getRawDb, saveDatabase } from "../../db";
+import { loadConfig, saveConfig } from "../../config";
+import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -14,7 +16,7 @@ import { inboxMessages } from "../../db/schema/inbox";
 import { emailAccounts } from "../../db/schema/accounts";
 import { agentToolCalls } from "../../db/schema/agent";
 import { Log } from "../../logger";
-import { okResult, failResult } from "../../errors";
+import { okResult, failResult, type Result } from "../../errors";
 import { checkBudget, ToolBudgetError } from "./policy";
 import { getBody, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
@@ -499,6 +501,135 @@ function safeParse(s: string): unknown {
   try { return JSON.parse(s); } catch { return s; }
 }
 
+// ── 控制面：配置快照与受控补丁（docs/agent-control-plane-spec.md）────────
+// 密钥/端点密钥/检索源令牌永不进快照（红线）。
+export function programConfigSnapshot() {
+  const c = loadConfig();
+  const ep = readActiveEndpoint();
+  // 账号查询容错：无库环境（单测）返回空表，不阻塞快照其余部分
+  let accounts: Array<{ email: string; displayName: string | null; isActive: number | null; lastFetchError: string | null }> = [];
+  try {
+    accounts = getDb().select({
+      email: emailAccounts.email, displayName: emailAccounts.displayName,
+      isActive: emailAccounts.isActive, lastFetchError: emailAccounts.lastFetchError,
+    }).from(emailAccounts).all();
+  } catch { /* DB 未初始化 */ }
+  return {
+    schedule: {
+      timeWindowEnabled: c.schedule.timeWindowEnabled,
+      startHour: c.schedule.startHour, endHour: c.schedule.endHour,
+      groupSize: c.schedule.groupSize,
+      groupDelayMinSeconds: c.schedule.groupDelayMinSeconds,
+      groupDelayMaxSeconds: c.schedule.groupDelayMaxSeconds,
+    },
+    sendQuota: c.sendQuota ?? null,
+    testMode: { enabled: c.test.enabled, dryRun: c.test.dryRun },
+    identity: { ...readIdentity() },   // 仅 fromName 可配；公司身份恒定
+    crm: { ...c.crm },
+    accounts: accounts.map(a => ({
+      email: a.email, displayName: a.displayName || null,
+      isActive: !!a.isActive, lastFetchError: a.lastFetchError || null,
+    })),
+    endpoint: { model: ep.model || null, baseUrl: ep.baseUrl || null, family: endpointFamily(ep.baseUrl) },
+  };
+}
+
+function parseBool(v: string): boolean {
+  const s = v.trim().toLowerCase();
+  if (["true", "1", "yes", "是", "开", "on"].includes(s)) return true;
+  if (["false", "0", "no", "否", "关", "off"].includes(s)) return false;
+  throw new Error(`不是布尔值：${v}`);
+}
+function intIn(min: number, max: number) {
+  return (v: string): number => {
+    const n = Number(v.trim());
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`需 ${min}-${max} 的整数，收到 ${v}`);
+    return n;
+  };
+}
+function strMax(max: number) {
+  return (v: string): string => {
+    const s = v.trim();
+    if (s.length > max) throw new Error(`超过 ${max} 字`);
+    return s;
+  };
+}
+
+/** 域 → 字段白名单与校验器；不在表里的键一律拒绝（防弱模型瞎传） */
+const CONFIG_PATCHERS: Record<string, Record<string, (v: string) => number | boolean | string>> = {
+  schedule: {
+    timeWindowEnabled: parseBool, startHour: intIn(0, 23), endHour: intIn(0, 23),
+    groupSize: intIn(1, 500), groupDelayMinSeconds: intIn(0, 86_400), groupDelayMaxSeconds: intIn(0, 86_400),
+  },
+  quota: { dailyLimit: intIn(1, 100_000) },
+  test: { enabled: parseBool, dryRun: parseBool, email: strMax(80), company: strMax(80) },
+  crm: {
+    "followupDays.reaching": intIn(1, 365), "followupDays.quoting": intIn(1, 365),
+    "followupDays.trial": intIn(1, 365), "followupDays.cooperating": intIn(1, 365),
+    "followupDays.lost": intIn(1, 365), "followupDays.other": intIn(1, 365),
+    todoAdvanceDays: intIn(0, 60), autoArchiveDays: intIn(0, 365),
+  },
+  // 注意：config.json 里的 identity{company/title/business/persona} 是历史死字段，
+  // readIdentity() 只认 fromName（公司身份写死在 identity.ts）——白名单只开 fromName。
+  identity: { fromName: strMax(40) },
+};
+
+/**
+ * 应用配置补丁。kvs = 多行 "key=value"（弱模型友好，不传嵌套 JSON）。
+ * 返回 before/after 差异供确认卡与回答展示；任一行非法 → 整批拒绝（不半改）。
+ */
+export function applyConfigPatch(domain: string, kvs: string):
+  Result<{ changed: Array<{ field: string; from: unknown; to: unknown }> }> {
+  const patchers = CONFIG_PATCHERS[domain];
+  if (!patchers) {
+    return failResult(`不支持的配置域「${domain}」，可用：${Object.keys(CONFIG_PATCHERS).join("/")}`);
+  }
+  const c = loadConfig();
+  const target: Record<string, unknown> =
+    domain === "schedule" ? { ...c.schedule } :
+    domain === "quota" ? { ...(c.sendQuota ?? { dailyLimit: 1500, firstSendAt: null, sentToday: 0 }) } :
+    domain === "test" ? { ...c.test } :
+    domain === "crm" ? { ...c.crm, followupDays: { ...c.crm.followupDays } } :
+    { fromName: c.fromName };
+  const changed: Array<{ field: string; from: unknown; to: unknown }> = [];
+  for (const line of kvs.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq < 0) return failResult(`行格式应为 key=value：${t}`);
+    const key = t.slice(0, eq).trim();
+    const raw = t.slice(eq + 1).trim();
+    const p = patchers[key];
+    if (!p) return failResult(`「${domain}」没有字段 ${key}，可用：${Object.keys(patchers).join("/")}`);
+    let val: unknown;
+    try { val = p(raw); } catch (e) { return failResult(e instanceof Error ? e.message : String(e)); }
+    const from = key.includes(".")
+      ? (target[key.split(".")[0]!] as Record<string, unknown>)[key.split(".")[1]!]
+      : target[key];
+    if (from === val) continue;
+    if (key.includes(".")) {
+      const [a, b] = key.split(".");
+      (target[a!] as Record<string, unknown>)[b!] = val;
+    } else target[key] = val;
+    changed.push({ field: key, from, to: val });
+  }
+  if (!changed.length) return failResult("没有需要修改的字段（值与当前一致或 kvs 为空）");
+  // 落盘
+  if (domain === "schedule") c.schedule = target as unknown as typeof c.schedule;
+  else if (domain === "quota") c.sendQuota = target as unknown as typeof c.sendQuota;
+  else if (domain === "test") c.test = target as unknown as typeof c.test;
+  else if (domain === "crm") c.crm = target as unknown as typeof c.crm;
+  else c.fromName = String(target.fromName ?? c.fromName);
+  saveConfig(c);
+  return okResult({ changed });
+}
+
+/** 联系人 tags JSON → 字符串数组（容错） */
+const tagsArr = (s: string | null | undefined): string[] => {
+  try { const a = JSON.parse(s || "[]"); return Array.isArray(a) ? a.filter(x => typeof x === "string") : []; }
+  catch { return []; }
+};
+
 export function buildHarnessTools(ctx: ToolCtx) {
   // 身份档案：一处读，供单封与批量两处成信时自落款（免得留 {{firstName}} 占位）
   const sender = readIdentity();
@@ -566,6 +697,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
            ), merged AS (SELECT cid, MAX(at) AS last_at FROM last_act GROUP BY cid)
            SELECT c.id AS id, c.email AS email, c.first_name AS firstName, c.last_name AS lastName,
                   c.country AS country, c.stage AS stage, c.status AS status, cp.name AS companyName,
+                  c.title AS title, c.tags AS tags, c.extra AS extra,
                   m.last_at AS lastFollowupAt
            FROM contacts c
            LEFT JOIN merged m ON m.cid = c.id
@@ -577,12 +709,16 @@ export function buildHarnessTools(ctx: ToolCtx) {
           id: number; email: string; firstName: string | null; lastName: string | null;
           country: string | null; stage: string | null; status: string | null;
           companyName: string | null; lastFollowupAt: string | null;
+          title: string | null; tags: string | null; extra: string | null;
         }>;
         out = staleRows.map(r => ({
           id: r.id,
           name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
           email: r.email, company: r.companyName, country: r.country,
-          stage: r.stage, status: r.status, lastFollowupAt: r.lastFollowupAt ?? null,
+          stage: r.stage, status: r.status,
+          title: r.title, tags: tagsArr(r.tags),
+          preferences: (() => { try { const e = JSON.parse(r.extra || "{}"); return Array.isArray(e.preferences) ? e.preferences : []; } catch { return []; } })(),
+          lastFollowupAt: r.lastFollowupAt ?? null,
         }));
       } else {
         const baseRows = getDb()
@@ -590,6 +726,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
             id: contacts.id, email: contacts.email,
             firstName: contacts.firstName, lastName: contacts.lastName,
             country: contacts.country, stage: contacts.stage, status: contacts.status,
+            title: contacts.title, tags: contacts.tags, extra: contacts.extra,
             companyName: companies.name,
           })
           .from(contacts)
@@ -603,6 +740,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
           name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
           email: r.email, company: r.companyName, country: r.country,
           stage: r.stage, status: r.status,
+          title: r.title, tags: tagsArr(r.tags),
+          preferences: (() => { try { const e = JSON.parse(r.extra || "{}"); return Array.isArray(e.preferences) ? e.preferences : []; } catch { return []; } })(),
           lastFollowupAt: latest.get(r.id) ?? null,
         }));
       }
@@ -770,6 +909,140 @@ export function buildHarnessTools(ctx: ToolCtx) {
         say: `已删除 ${r.data.deleted} 个联系人${r.data.companiesRemoved ? `（含 ${r.data.companiesRemoved} 个空壳公司自动清理）` : ""}：${sample}${total > 5 ? ` 等 ${total} 人` : ""}。`,
         notice: "已删除不可恢复。若用户后续要找回，只能从备份导入。提醒用户相关往来记录已一并删除。",
       });
+    },
+  });
+
+  const readProgramConfig = tool({
+    name: "read_program_config",
+    description: "读取程序当前运行配置：发信时段/组间暂停/每组人数、日限额、测试模式、身份档案、"
+      + "CRM 跟进天数、发信账号清单、生效端点（不含任何密钥）。用户问「程序怎么配的/为什么这个点不发/"
+      + "限额多少」时必须先调本工具，禁止凭印象回答。要改配置用 update_program_config。",
+    parameters: z.object({}),
+    execute: async () => {
+      const gateNote = gate(ctx, "read_program_config");
+      if (gateNote) return gateNote;
+      const snap = programConfigSnapshot();
+      audit(ctx, "read_program_config", "read", undefined, snap, "auto");
+      return finishRead(ctx, "read_program_config", {}, okOut({
+        config: snap,
+        notice: "这是只读快照。用户要改配置时调用 update_program_config（会弹确认），不要自己承诺已改。",
+      }));
+    },
+  });
+
+  const updateProgramConfig = tool({
+    name: "update_program_config",
+    description: "修改程序配置（写操作，执行前弹人工确认，永不豁免）。"
+      + 'domain 取 schedule/quota/test/crm/identity；kvs 为多行 key=value（如 "startHour=9\nendHour=18"）。'
+      + "字段白名单：schedule=timeWindowEnabled/startHour/endHour/groupSize/groupDelayMinSeconds/groupDelayMaxSeconds；"
+      + "quota=dailyLimit；test=enabled/dryRun/email/company；crm=followupDays.<阶段>/todoAdvanceDays/autoArchiveDays；"
+      + "identity=fromName（公司身份恒定不可改）。"
+      + "端点/密钥/检索源不在本工具射程——用户要改那些，引导去设置页。"
+      + "先 read_program_config 拿现值，只传要改的键；确认被拒则如实告知未改。",
+    parameters: z.object({
+      domain: z.string().describe("配置域：schedule/quota/test/crm/identity"),
+      kvs: z.string().describe("多行 key=value，只写要改的键"),
+    }),
+    needsApproval: toolMeta("update_program_config")!.spec.requiresApproval,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "update_program_config");
+      if (gateNote) return gateNote;
+      const r = applyConfigPatch(String(args.domain ?? "").trim(), String(args.kvs ?? ""));
+      if (!r.success) {
+        audit(ctx, "update_program_config", "write", args, undefined, "approved", r.error);
+        return failOut("invalid_patch", r.error);
+      }
+      audit(ctx, "update_program_config", "write", args, r.data, "approved");
+      return okOut({
+        changed: r.data.changed,
+        say: `已修改 ${r.data.changed.length} 项配置：` +
+          r.data.changed.map((xx: { field: string; from: unknown; to: unknown }) => `${xx.field} ${String(xx.from)} → ${String(xx.to)}`).join("；"),
+        notice: "配置即时生效，无需重启。若用户问为什么，说明改的是哪个域。",
+      });
+    },
+  });
+
+  const updateContact = tool({
+    name: "update_contact",
+    description: "更新一位联系人的档案字段（写操作，需确认）。可改：title/phone/country/clientType"
+      + "(agent|direct)/tags(逗号分隔)/preference(偏好备注，追加进 extra.preferences 数组)。"
+      + "定位用 contactId 或 contact（邮箱/姓名/公司名）。不改 status/stage（状态由收信与 CRM 管）。"
+      + "从邮件里读到的客户偏好（语种/航线/柜型习惯）应落到 preference，别只写跟进流水。",
+    parameters: z.object({
+      contactId: optInt().describe("联系人 id（有它就不必填 contact）"),
+      contact: optStr(80).describe("邮箱/姓名/公司名任一"),
+      title: optStr(60), phone: optStr(40), country: optStr(40),
+      clientType: optStr(10).describe("agent 或 direct"),
+      tags: optStr(120).describe("逗号分隔标签，如 reaching,重点"),
+      preference: optStr(200).describe("偏好备注，追加写入 extra.preferences"),
+    }),
+    needsApproval: toolMeta("update_contact")!.spec.requiresApproval,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "update_contact");
+      if (gateNote) return gateNote;
+      const target = pickTarget(args);
+      if (!target.ok) {
+        const why = target.why === "ambiguous"
+          ? `「${args.contact}」匹配到多位联系人，请用 contactId 指定：${candidatesText(target.candidates)}`
+          : `库里找不到「${args.contact ?? `#${args.contactId}`}」`;
+        audit(ctx, "update_contact", "write", args, undefined, "approved", why);
+        return failOut(target.why, why);
+      }
+      const id = target.person.id;
+      const row = getDb().select().from(contacts).where(eq(contacts.id, id)).get();
+      if (!row) return failOut("notfound", "联系人已不存在");
+      const set: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+      const changed: string[] = [];
+      if (args.title != null) { set.title = args.title; changed.push(`职位→${args.title}`); }
+      if (args.phone != null) { set.phone = args.phone; changed.push(`电话→${args.phone}`); }
+      if (args.country != null) { set.country = args.country; changed.push(`国家→${args.country}`); }
+      if (args.clientType != null) {
+        if (!["agent", "direct"].includes(args.clientType)) return failOut("invalid", "clientType 只能是 agent 或 direct");
+        set.clientType = args.clientType; changed.push(`客户类型→${args.clientType}`);
+      }
+      if (args.tags != null) {
+        const arr = args.tags.split(/[,，]/).map(s => s.trim()).filter(Boolean).slice(0, 6);
+        set.tags = JSON.stringify(arr); changed.push(`标签→${arr.join("/") || "清空"}`);
+      }
+      if (args.preference != null) {
+        let extra: Record<string, unknown> = {};
+        try { extra = JSON.parse(row.extra || "{}"); } catch { /* 坏 JSON 当空 */ }
+        const prefs = Array.isArray(extra.preferences) ? extra.preferences as string[] : [];
+        if (!prefs.includes(args.preference)) prefs.push(args.preference);
+        extra.preferences = prefs.slice(-10);
+        set.extra = JSON.stringify(extra); changed.push("偏好已追加");
+      }
+      if (!changed.length) return failOut("noop", "没有要改的字段");
+      getDb().update(contacts).set(set).where(eq(contacts.id, id)).run();
+      saveDatabase();
+      invalidateCache("update_contact");
+      audit(ctx, "update_contact", "write", args, { id, changed }, "approved");
+      return okOut({ id, changed, say: `已更新联系人 #${id}：${changed.join("；")}` });
+    },
+  });
+
+  const emailReadFull = tool({
+    name: "email_read_full",
+    description: "按 messageId 读取一封邮件的完整信息：全文正文（懒加载，含 IMAP 原文）、"
+      + "发件人/收件人/抄送、时间、分类、意图、附件文件名。用户要「原文/全文/完整内容」时用；"
+      + "只要摘要用 email_summarize。正文超长会截断并标注。",
+    parameters: z.object({ messageId: z.number().int().describe("inbox_search 返回的 id") }),
+    execute: async (args) => {
+      const gateNote = gate(ctx, "email_read_full");
+      if (gateNote) return gateNote;
+      const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, args.messageId)).get();
+      if (!row) return failOut("not_found", `邮件 #${args.messageId} 不存在，先 inbox_search 拿 id`);
+      const bodyR = await getBody(args.messageId);
+      const full = bodyR.success ? bodyR.data : (row.bodyPreview || "");
+      const CAP = 12_000;
+      audit(ctx, "email_read_full", "read", args, { id: row.id, len: full.length }, "auto");
+      return finishRead(ctx, "email_read_full", args, okOut({
+        id: row.id, from: row.fromEmail, fromName: row.fromName,
+        to: row.to || null, cc: row.cc || null, subject: row.subject,
+        receivedAt: row.receivedAt, classification: row.classification, intent: row.intent || null,
+        body: full.slice(0, CAP),
+        ...(full.length > CAP ? { notice: `正文共 ${full.length} 字，已截断到 ${CAP} 字；要存档用 export_artifact。` } : {}),
+      }));
     },
   });
 
@@ -1639,7 +1912,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
   });
 
   return [
-    searchContacts, recordFollowup, deleteContacts, quoteSearch, marketResearch, inboxSearch, emailSummarize,
+    searchContacts, recordFollowup, deleteContacts, readProgramConfig, updateProgramConfig,
+    updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
   ];

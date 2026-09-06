@@ -30,6 +30,27 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2, autoApprovable: false },
   },
   {
+    name: "read_program_config", label: "读取程序配置",
+    route: "读取程序运行配置（发信时段/限额/测试模式/身份档案/CRM 参数/账号/生效端点）；用户问程序怎么配的、为什么这个点不发信，先查它；",
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 2 },
+  },
+  {
+    name: "update_program_config", label: "修改程序配置",
+    route: "修改程序配置（写、需确认、永不豁免）；用户说「把发信窗口改成…」「限额调到…」时用；",
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2, autoApprovable: false },
+  },
+  {
+    name: "update_contact", label: "更新联系人资料",
+    route: "更新联系人档案字段（职位/电话/国家/客户类型/标签/偏好备注，写、需确认）；",
+    followUps: ["把刚才邮件里提到的偏好也记进 TA 的档案"],
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4, autoApprovable: true },
+  },
+  {
+    name: "email_read_full", label: "读取邮件全文",
+    route: "按 id 读取一封邮件的完整正文与收发信息（用户要原文/全文/导出前先看全文时用）；",
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 3 },
+  },
+  {
     name: "quote_search", label: "查询运价",
     route: "查询海运运价镜像；",
     followUps: ["按最便宜的船司给客户写一封开发信", "把这条航线的报价按柜型对比一下"],
