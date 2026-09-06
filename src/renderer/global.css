@@ -21,13 +21,37 @@ body {
   color: #bbb;
 }
 
-/* 滚动条 — 全局唯一样式（纵向 + 横向统一）：细、浅灰、悬停加深 */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* 滚动条 — 全局唯一样式（纵向+横向、antd 表格/Markdown 表格/所有容器统一）：
+   命中区 10px、视觉 4px 细胶囊（border+clip 撑命中区）、淡灰常显、hover 加深 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #d5d5d5; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #bfbfbf; }
+::-webkit-scrollbar-thumb {
+  background: #e2e2e2;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c4c4c4;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
 ::-webkit-scrollbar-corner { background: transparent; }
-/* 隐藏滚动条直到 hover（可选，保留轻量可见的默认态） */
+/* 会话消息列表：antd-x 自带方形滚动条（thumb 圆角 = borderRadiusSM），压成全局同款胶囊 */
+.ant-bubble-list::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+.ant-bubble-list::-webkit-scrollbar-thumb {
+  background: #e2e2e2;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+.ant-bubble-list::-webkit-scrollbar-thumb:hover {
+  background: #c4c4c4;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
 
 /* 自定义标题栏 — 无边框窗口 */
 .titlebar-drag { -webkit-app-region: drag; z-index: 1100; position: relative; }
@@ -264,7 +288,10 @@ body {
 
 /* ── 助手数据表格卡（工具结果渲染的 antd Table）：白底灰线 + 外阴影成卡 ── */
 .chat-table-card {
-  display: inline-block;
+  /* 块级 + 贴内容宽：表格卡必须独占一行，永不与相邻的过程标识/文本同排
+     （曾用 inline-block，行内流里会跟前面的过程行挤在一排，表格位置异变） */
+  display: block;
+  width: fit-content;
   max-width: 100%;
   background: #fff;
   border-radius: 8px;
@@ -283,6 +310,20 @@ body {
    表格一横滚两侧就各立一条灰竖块糊住边缘列——卡片表没有固定列，这阴影无价值，关掉 */
 .chat-table-card .ant-table-container::before,
 .chat-table-card .ant-table-container::after { display: none !important; }
+/* 表格卡内的滚动条再压薄一档（全局 10px 在矮表格里太占空间）：命中 8px、视觉 2px */
+.chat-table-card ::-webkit-scrollbar { width: 8px; height: 8px; }
+.chat-table-card ::-webkit-scrollbar-thumb {
+  background: #e6e6e6;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+.chat-table-card ::-webkit-scrollbar-thumb:hover {
+  background: #c8c8c8;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
 
 /* ── Agent 过程时间线（ThoughtChain small 再压缩）──
    组件默认按"内容卡"设计：节点圆 20px、行距 12px、内容带边框白卡——对日志流太重。

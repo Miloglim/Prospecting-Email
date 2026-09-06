@@ -436,7 +436,7 @@ function ArtifactBlock({ chip, done, onAction }: {
   const rows = asRows(chip.detail);
   const brief = chip.brief || (rows ? `${rows.length} 条结果` : "");
   const header = (
-    <div className="inline-flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5">
+    <div className="flex w-fit items-center gap-1.5 text-[12px] text-gray-400 mb-1.5">
       <CheckCircleOutlined style={{ color: "#52c41a", fontSize: 11 }} />
       <span>已{toolLabel(chip.tool)}{brief && <span className="text-gray-400"> · {brief}</span>}</span>
     </div>
@@ -637,7 +637,7 @@ function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: 
   return (
     <div className="py-0.5 max-w-[720px]">
       <div
-        className={`inline-flex items-center gap-1.5 text-[12px] text-gray-400 ${live ? "" : "cursor-pointer select-none"}`}
+        className={`flex w-fit items-center gap-1.5 text-[12px] text-gray-400 ${live ? "" : "cursor-pointer select-none"}`}
         onClick={() => !live && setOpen(o => !o)}
       >
         {live ? <LoadingOutlined spin style={{ fontSize: 11 }} /> : <CheckCircleOutlined style={{ fontSize: 11, color: "#52c41a" }} />}
@@ -859,6 +859,20 @@ export function AssistantPage() {
     setPendingBelow(false);
   };
 
+  /** 发送即回底：不管用户当时停在哪，都跳到底部等结果（instant，smooth 会让人感觉追不上）。
+   *  此刻用户消息/骨架还没渲染（send 在 store 里 patch），滚一次；
+   *  下一帧内容上屏后再滚一次兜底；atBottom 复位后 autoScroll 继续跟随流式增量。 */
+  const jumpToBottomNow = () => {
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setAtBottom(true);
+    setPendingBelow(false);
+    requestAnimationFrame(() => {
+      const el2 = scrollerRef.current;
+      if (el2) el2.scrollTop = el2.scrollHeight;
+    });
+  };
+
   // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次。
   // 两条查询并发发出去 —— 串行 await 会把「状态还不知道」的窗口拉长一倍，那段时间够闪一次红条。
   const refreshStatus = async () => {
@@ -994,9 +1008,11 @@ export function AssistantPage() {
       }
       const arg = t.slice(hit.cmd.length).trim();
       if (!arg && !hit.noArg) { pushLocalText(key, `用法：${hit.desc}`); return; }
+      jumpToBottomNow();
       void sendTurn(key, hit.template!(arg));
       return;
     }
+    jumpToBottomNow();
     void sendTurn(key, t);
   };
   // 每次渲染同步最新版本，供 hashchange 回调（首帧闭包）调用
