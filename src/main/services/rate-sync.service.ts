@@ -205,7 +205,7 @@ export function startAutoSync(): void {
   }, 5_000);
 }
 
-export interface QuoteFilters { lane?: string; carrier?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number }
+export interface QuoteFilters { lane?: string; carrier?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[] }
 
 export interface QuoteDto {
   podRaw: string; lane: string | null; carrier: string | null; container: string | null;
@@ -219,7 +219,12 @@ function quoteConds(f: QuoteFilters) {
   // 航线模糊匹配：库里是「加勒比/南美东…」受控枚举，like 兼容「加勒比线」这类口语后缀
   if (f.lane) conds.push(like(rateQuotes.lane, `%${f.lane}%`));
   if (f.carrier) conds.push(like(rateQuotes.carrier, `%${f.carrier}%`));   // 模糊 + ASCII 大小写不敏感（zim→ZIM）
-  if (f.pod) conds.push(like(rateQuotes.podRaw, `%${f.pod}%`));
+  if (f.pod) {
+    // 港口归一展开：pod=SANTOS 也要命中 podRaw=「南美东」/区域码 的航线级行
+    const podConds = [like(rateQuotes.podRaw, `%${f.pod}%`)];
+    for (const extra of f.podExtra ?? []) podConds.push(eq(rateQuotes.podRaw, extra));
+    conds.push(or(...podConds));
+  }
   if (f.container) conds.push(or(eq(rateQuotes.container, f.container), like(rateQuotes.container, `%${f.container}%`)));
   if (!f.includeExpired) {
     conds.push(or(gte(rateQuotes.validTo, todayBeijing()), isNull(rateQuotes.validTo)));

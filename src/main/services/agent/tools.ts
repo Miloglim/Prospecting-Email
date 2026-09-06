@@ -9,6 +9,7 @@ import { tool } from "@openai/agents";
 import { getDb, getRawDb, saveDatabase } from "../../db";
 import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
+import { queryStandard, standardToMarkdown, resolveQueryPod, podRawExpansion } from "../rates-standard";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -1058,11 +1059,16 @@ export function buildHarnessTools(ctx: ToolCtx) {
         const t = (v ?? "").trim();
         return t || undefined;                    // 空串与 null 都按「不过滤」处理
       };
+      const podQ = trimmed(args.pod);
+      // 港口归一：用户任意写法→标准港名；并把航线级/区域级 podRaw 展开进过滤
+      // （查 SANTOS 时 podRaw=「南美东」「WCSA」的行也要命中，否则漏掉航线级报价）
+      const canon = podQ ? resolveQueryPod(podQ) : undefined;
       const filters = {
         // 去掉口语后缀（「加勒比线」「南美东航线」→ 加勒比 / 南美东），配合 like 模糊匹配
         lane: trimmed(args.lane)?.replace(/航线$/, "").replace(/线$/, "").trim() || undefined,
         carrier: trimmed(args.carrier)?.toUpperCase(),
-        pod: trimmed(args.pod),
+        pod: podQ,
+        podExtra: canon ? podRawExpansion(canon) : undefined,
         // 脏柜型归一（40HC→40HQ 等），识别不了则原样大写透传
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
         includeExpired: args.includeExpired ?? undefined,
@@ -1077,14 +1083,19 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
       // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
-      const customerTable = r.data.length
-        ? [
-          "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
-          "|---|---|---|---|---|---|",
-          ...r.data.slice(0, 15).map(q =>
-            `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
-        ].join("\n")
-        : "";
+      // 客户表格优先用标准化层（data/rates-standard.json，柜型已透视成 20/40/NOR 三列、港口已归一）；
+      // 无该文件时回退用镜像行拼表。两条路都是机械生成，模型只许原样贴。
+      const stdRows = podQ ? queryStandard(podQ, { carrier: filters.carrier, lane: filters.lane }) : [];
+      const customerTable = stdRows.length
+        ? standardToMarkdown(stdRows)
+        : (r.data.length
+          ? [
+            "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
+            "|---|---|---|---|---|---|",
+            ...r.data.slice(0, 15).map(q =>
+              `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
+          ].join("\n")
+          : "");
       const cheapest = r.data[0] ?? null;
       const answer = cheapest
         ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
@@ -1098,13 +1109,17 @@ export function buildHarnessTools(ctx: ToolCtx) {
         else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
         noticeLines.push(
           "回答格式（固定，勿自由发挥）：正文第一句原样采用 answer 字段（可微调语气，数字与船司不改）；明细表已由界面渲染成表格卡，正文禁止再手写表格或逐行复述报价——否则用户会看到两张表。",
-          "用户要「面向客户的运价表/报价表」时：把 customerTable 的 Markdown 原样贴进正文（列固定：船司/起运港/目的港/柜型/价格/有效期，不带内部备注），这就是交付物；用户没明说「导出文件」就不要调 export_artifact。",
+          "用户要「面向客户的运价表/报价表」时：把 customerTable 的 Markdown 原样贴进正文，这就是交付物；用户没明说「导出文件」就不要调 export_artifact。"
+            + (stdRows.length
+              ? "customerTable 已是标准化透视表（列：船司/起运港/目的港/20GP/40HQ&HC/40NOR/Freetime/Transit/有效期），港口已归一（航线级报价已展开到具体港），直接贴不要改列。"
+              : "customerTable 列固定：船司/起运港/目的港/柜型/价格/有效期，不带内部备注。"),
           "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
         );
       }
       const out = {
         total, count: r.data.length, quotes: r.data,
         answer, customerTable,
+        ...(stdRows.length ? { standardCount: stdRows.length } : {}),
         notice: noticeLines.join("\n"),
         ...(total > 0 && r.data.length >= total ? { complete: true } : {}),
         ...(total === 0 ? { empty: true } : {}),
