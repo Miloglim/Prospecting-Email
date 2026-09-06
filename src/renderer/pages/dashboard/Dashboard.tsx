@@ -1,8 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Statistic, Row, Col, Table, Tag, Tooltip, App as AntApp } from "antd";
+import { Card, Statistic, Row, Col, Table, Tag, App as AntApp } from "antd";
 import {
-  UserOutlined, SendOutlined, MessageOutlined, WarningOutlined,
-  SyncOutlined, DollarOutlined,
+  UserOutlined, SendOutlined, MessageOutlined, WarningOutlined, DollarOutlined,
 } from "@ant-design/icons";
 
 interface DashboardStats {
@@ -104,8 +103,6 @@ export function Dashboard() {
         </Card>
       )}
 
-      {/* 运价库 — AI 表格台账本地镜像 */}
-      <RateLibrary />
 
       {/* 最近活动 */}
       {stats?.recentActivity && stats.recentActivity.length > 0 && (
@@ -129,59 +126,6 @@ export function Dashboard() {
       {/* 今日任务 — 待跟进 */}
       <TodayTasks />
     </div>
-  );
-}
-
-interface RateStatus {
-  total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
-  remoteHost: string; lastError: string | null;
-}
-
-/** 运价库卡片 — 展示 AI 表格《海运运价智能台账》本地镜像的健康度，一键刷新 */
-function RateLibrary() {
-  const { message } = AntApp.useApp();
-  const qc = useQueryClient();
-  const { data } = useQuery({
-    queryKey: ["rates", "status"],
-    queryFn: () => window.api.invoke("rates:status") as Promise<{ success: boolean; data?: RateStatus }>,
-    refetchInterval: 60_000,
-  });
-  const syncMut = useMutation({
-    mutationFn: () => window.api.invoke("rates:sync") as Promise<{ success: boolean; data?: { imported: number }; error?: string }>,
-    onSuccess: (r) => {
-      r?.success ? message.success(`台账已刷新，镜像 ${r.data?.imported} 条`) : message.error(r?.error || "同步失败");
-      qc.invalidateQueries({ queryKey: ["rates"] });
-    },
-  });
-
-  const st = data?.success ? data.data : null;
-  if (!st) return null;
-  const stale = st.lastSyncAt == null || Date.now() - new Date(st.lastSyncAt).getTime() > 26 * 3600_000;
-
-  return (
-    <Card
-      size="small"
-      title={<span className="flex items-center gap-2"><DollarOutlined />运价库</span>}
-      extra={
-        <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
-          loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步运价库</Button>
-      }
-    >
-      <Row gutter={16} align="middle">
-        <Col span={6}><Statistic title="镜像报价" value={st.total} suffix="条" /></Col>
-        <Col span={6}><Statistic title="有效期内" value={st.active} suffix="条"
-          valueStyle={{ color: st.total && !st.active ? "#ef4444" : undefined }} /></Col>
-        <Col span={12}>
-          <div className="text-[11px] text-gray-400 leading-relaxed">
-            远程库 {st.remoteHost || "—"}{st.lastSyncAt
-              ? <> · 上次同步 {new Date(st.lastSyncAt).toLocaleString("zh-CN")}
-                {stale && <Tag color="orange" className="ml-2 text-[9px] my-0">超过 26h 未同步</Tag>}</>
-              : <Tag color="red" className="text-[9px] my-0">尚未同步成功 — 请点「同步运价库」或检查公司电脑服务</Tag>}
-            {st.lastError && <div className="text-[10px] text-red-500">{st.lastError}</div>}
-          </div>
-        </Col>
-      </Row>
-    </Card>
   );
 }
 
