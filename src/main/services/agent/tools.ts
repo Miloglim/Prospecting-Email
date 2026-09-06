@@ -1074,20 +1074,45 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }
       // total=满足条件的真总数（评测发现只给截断行数会让模型反复重试凑数直至 max turns）
       const total = countQuotes(filters);
+      // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
+      // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
+      const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
+      const customerTable = r.data.length
+        ? [
+          "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
+          "|---|---|---|---|---|---|",
+          ...r.data.slice(0, 15).map(q =>
+            `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
+        ].join("\n")
+        : "";
+      const cheapest = r.data[0] ?? null;
+      const answer = cheapest
+        ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
+        : "";
+      // 逐条件拼 notice：收敛信号 + 固定格式指令（弱模型对工具返回里的指令最服帖）
+      const noticeLines: string[] = [];
+      if (total === 0) {
+        noticeLines.push("镜像库中没有满足条件的报价。请直接如实告知用户「镜像库暂无该航线报价」，不要重复调用本工具。");
+      } else {
+        if (r.data.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${r.data.length} 条，回答时必须注明。`);
+        else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
+        noticeLines.push(
+          "回答格式（固定，勿自由发挥）：正文第一句原样采用 answer 字段（可微调语气，数字与船司不改）；明细表已由界面渲染成表格卡，正文禁止再手写表格或逐行复述报价——否则用户会看到两张表。",
+          "用户要「面向客户的运价表/报价表」时：把 customerTable 的 Markdown 原样贴进正文（列固定：船司/起运港/目的港/柜型/价格/有效期，不带内部备注），这就是交付物；用户没明说「导出文件」就不要调 export_artifact。",
+          "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
+        );
+      }
       const out = {
         total, count: r.data.length, quotes: r.data,
-        // 收敛信号：数据已完整时显式声明，防模型按航线/船司逐扇出重复查询（评测 rate-table 实锤 11 连击）
-        ...(total > 0 && r.data.length >= total ? { complete: true, notice: "命中数据已全部返回，无需再调用本工具，直接作答" } : {}),
-        // 空结果显式引导：直接如实回答，不要换参数重试
-        ...(total === 0 ? { empty: true, notice: "镜像库中没有满足条件的报价。请直接如实告知用户「镜像库暂无该航线报价」，不要重复调用本工具。" } : {}),
-        // 「数条数/比价」类问题模型容易反复重查（rate-count 实测 6 连击撞 max turns）：
-        // 直接把结论算好给它复述，比让它自己数数组长度可靠
+        answer, customerTable,
+        notice: noticeLines.join("\n"),
+        ...(total > 0 && r.data.length >= total ? { complete: true } : {}),
+        ...(total === 0 ? { empty: true } : {}),
         ...(total > 0 ? {
           say: `共 ${total} 条` + (args.lane || args.pod || args.carrier || args.container
             ? `（当前筛选条件下的命中数）` : `（镜像库全量）`)
             + `，其中返回明细 ${r.data.length} 条${r.data.length ? `，最低 ${r.data[0]!.oceanUsd ?? "-"} USD` : ""}`,
         } : {}),
-        // 有命中 → 「把价格变成动作」的提示卡（点一下续问，产物留在对话里）
         ...(total > 0 ? {
           actions: [
             promptAction("按这批价写一封报价信", "根据刚才查到的运价，选最便宜的那条给客户写一封报价信，注明有效期和「以船司实时报价为准」的提醒"),
@@ -1770,7 +1795,9 @@ export function buildHarnessTools(ctx: ToolCtx) {
   const exportArtifact = tool({
     name: "export_artifact",
     description: "把整理好的内容导出成文件给用户带走（落盘到 outputs/agent，对话里出现文件卡，可「打开位置」「复制路径」）。"
-      + "用户说「导出 / 生成文件 / 整理成表格」时调用本工具，完整内容写进文件，不要在回答正文里再贴一遍全文。"
+      + "**仅当用户明确要求「导出/生成文件/存成文件」时才调用**——对话里能直接交付的内容（如贴在正文里的表格）一律不落盘；"
+      + "不确定用户要不要文件时，先在对话里给出内容并问一句，不要直接生成。"
+      + "确要导出时完整内容写进文件，不要在回答正文里再贴一遍全文。"
       + "md 格式用 content 传 Markdown 正文；csv 格式把表格写成 content 里的多行 TSV 文本"
       + "（首行表头，每行一条记录，字段间用制表符分隔）。参数只有这三个扁平字段，越简单越不容易写坏 JSON。本工具只写产物目录，不碰任何业务数据。",
     parameters: exportArtifactSchema,
