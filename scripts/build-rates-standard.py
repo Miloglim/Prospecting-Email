@@ -45,17 +45,17 @@ def load_portmap():
 
 
 def resolve_pod(pod_raw, lane, lane_ports, alias_index, region_to_lane, lanes):
-    """脏 pod → (标准港集合, 是否航线/区域级)。"""
+    """脏 pod → (标准港集合, 是否航线/区域级, 是否词表命中)。兜底原样的行 matched=False。"""
     raw = (pod_raw or "").strip()
     up = raw.upper()
     if not raw:
-        return [], False
+        return [], False, True
     # 1) pod 直接是航线名（如「南美东」）→ 展开成该航线全部港
     if raw in lanes:
-        return list(lane_ports.get(raw, [])), True
+        return list(lane_ports.get(raw, [])), True, True
     # 2) pod 是区域码（WCSA/MXESE…）→ 先映射到航线再展开
     if up in region_to_lane:
-        return list(lane_ports.get(region_to_lane[up], [])), True
+        return list(lane_ports.get(region_to_lane[up], [])), True, True
     # 3) 逐港别名子串匹配（处理多港串 / 带代码 / 带括号）
     hits = []
     for alias, canon in alias_index.items():
@@ -69,9 +69,9 @@ def resolve_pod(pod_raw, lane, lane_ports, alias_index, region_to_lane, lanes):
                 if canon not in hits:
                     hits.append(canon)
     if hits:
-        return hits, False
-    # 4) 未收录 → 原样作为一个"港"，仍可精确匹配
-    return [up], False
+        return hits, False, True
+    # 4) 未收录 → 原样作为一个"港"，仍可精确匹配（但计入 LLM 清洗清单）
+    return [up], False, False
 
 
 FT_RE = re.compile(r"(\d{1,3})\s*(?:天|FT|FREE\s*DAYS|FREE\s*DAY)", re.I)
@@ -151,6 +151,7 @@ def main():
     db = sqlite3.connect(db_path)
     cur = db.cursor()
     rows = []
+    unresolved = {}
     for (carrier, pol, pod, route, ct, usd, vf, vt, etd, fd, remark, mtext, status) in cur.execute(
         "SELECT carrier,pol,pod,route,container_type,freight_usd,valid_from,valid_to,etd,"
         "free_days,remark,message_text,status FROM freight_rates WHERE status='当前生效'"
@@ -161,7 +162,10 @@ def main():
                 price = round(float(str(usd).replace(",", "")))
             except ValueError:
                 price = None
-        pod_ports, lane_level = resolve_pod(pod, route, lane_ports, alias_index, region_to_lane, lanes)
+        pod_ports, lane_level, matched = resolve_pod(pod, route, lane_ports, alias_index, region_to_lane, lanes)
+        # 规则认不出的脏 pod（词表外别名/区域码/拼错）→ 喂给 LLM 清洗的候选清单
+        if not matched:
+            unresolved[pod.strip()] = unresolved.get(pod.strip(), 0) + 1
         rows.append({
             "carrier": (carrier or "未注明").strip(),
             "pol": (pol or "").strip(),
@@ -194,12 +198,25 @@ def main():
         "lanes": lanes,
         "lanePorts": {k: v for k, v in lane_ports.items()},
         "rates": pivoted,
+        # ── 喂给 LLM 的清洗清单（规则层的口子，见下）────────────────
+        # 规则层只认词表内的写法；这些是词表外的脏 pod（按出现次数降序）。
+        # 清洗闭环：把清单交给 LLM 逐个判定「属于哪个标准港/哪条航线」→ 把结果
+        # 以 alias 形式回填 rates-portmap.json → 重跑本脚本。词表长一次，规则层
+        # 就永久多吃一类写法，LLM 只在新词出现时才需要参与。
+        "unresolvedPods": sorted(
+            [{"raw": k, "count": v} for k, v in unresolved.items()],
+            key=lambda x: -x["count"]),
+        "unspecifiedContainerRows": sum(1 for r in rows if not r["container"]),
     }
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1)
     lane_level_n = sum(1 for r in pivoted if r["laneLevel"])
     print(f"OK: {len(pivoted)} 行透视 → {out_path}（其中航线/区域级 {lane_level_n} 行，查具体港时会展开命中）")
+    if doc["unresolvedPods"]:
+        top = ", ".join(f"{u['raw']}×{u['count']}" for u in doc["unresolvedPods"][:8])
+        print(f"待 LLM 清洗的未收录 pod {len(doc['unresolvedPods'])} 种（共 {sum(u['count'] for u in doc['unresolvedPods'])} 行）：{top}")
+        print("→ 把判定结果以 alias 回填 rates-portmap.json 后重跑本脚本")
 
 
 if __name__ == "__main__":
