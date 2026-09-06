@@ -1,55 +1,26 @@
-import * as fs from "fs";
-import * as path from "path";
 import { and, eq, like, gte, isNull, or, sql } from "drizzle-orm";
-import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { getDb, saveDatabase } from "../db";
 import { rateQuotes, type InsertRateQuoteRow } from "../db/schema/rates";
 import { okResult, failResult, type Result } from "../errors";
+import { netFetch } from "../net-proxy";
 
 // ── 运价同步服务 ──────────────────────────────────────────────────
-// 链路：钉钉 AI 表格《海运运价智能台账》 →（千问办公定时任务 dws 全量拉取）→
-//       data/rates-snapshot.json（dws record query 原样输出） → 本服务解析归一化 →
-//       rate_quotes 镜像表（全量刷新）。程序只读镜像，不回写表格。
+// 链路（v5.0.3 起）：钉钉台账（公司电脑心跳入库）→ board_server 局域网 HTTP →
+//       本服务分页拉取 + 归一化 → rate_quotes 镜像表（全量刷新）。
+// 程序只读镜像，不回写。服务地址为程序内置参数（RATES_REMOTE_URL 可覆盖，无 UI 配置），
+// 连接不上时给出简单提示；镜像保留上次同步成功的数据，失败不删旧。
+// 规范：docs/rates-remote-source-spec.md
 
-const SNAPSHOT_PATH = (process.env.RATES_SNAPSHOT_PATH || "").trim()
-  || path.join(APP_ROOT, "data", "rates-snapshot.json");
+/** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
+const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "http://192.168.189.229:8788";
+/** 自动同步间隔（分钟），RATES_REMOTE_MINUTES 可覆盖，最小 1 */
+const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 10) || 10);
+const PAGE_SIZE = 500;
+const ROW_CAP = 20_000;
 
-/** 源表字段 ID → 语义（源自 dws field get 实测，改表结构时需同步更新） */
-const F = {
-  pol: "rj3c4Dc",          // 起运港
-  pod: "M6UMJ2Y",          // 目的港
-  lane: "xAfTdzf",         // 航线
-  carrier: "Gc7HG8P",      // 船司
-  container: "4Ye7pSe",    // 柜型
-  oceanUsd: "RDG9zEx",     // 海运费USD
-  validity: "32NW82C",     // 有效期船期
-  freeDays: "kBm7poh",     // 目免
-  shortfall: "QZeL9Dr",    // 亏舱费
-  note: "uFJRuSd",         // 备注
-  sourceGroup: "I0vGzUV",  // 来源群
-  sender: "1NU3Dkx",       // 发送人
-  msgTime: "HbQfZtf",      // 消息时间
-  image: "F5UZCQj",        // 运价图片（附件，仅取文件名）
-} as const;
-
-interface DwsRecord { recordId?: string; cells?: Record<string, unknown> }
-
-/** dws 单元格的三种形态：字符串 / {name, id}选项对象 / 附件数组 → 统一取文本 */
-function cellText(v: unknown): string | null {
-  if (v == null) return null;
-  if (typeof v === "string") return v.trim() || null;
-  if (typeof v === "number") return String(v);
-  if (Array.isArray(v)) {
-    const first = v[0] as { filename?: string } | undefined;
-    return first?.filename ?? null;
-  }
-  if (typeof v === "object") {
-    const o = v as { name?: string };
-    return o.name ?? null;
-  }
-  return String(v);
-}
+/** 友好提示：镜像拉取失败时给用户的一句话（细节进日志） */
+const REMOTE_DOWN_HINT = "运价库连接失败：请确认公司电脑已开机、运价服务已启动，且本机与公司电脑在同一局域网。";
 
 /** 柜型归一化：脏值映射到标准码；组合价（斜杠分隔多种柜型）拼为 "A+B" */
 export function normalizeContainer(raw: string | null): string | null {
@@ -92,79 +63,142 @@ export function parseValidity(raw: string | null, msgTime: string | null): { val
   return { validFrom: from, validTo: to };
 }
 
-/** 快照 JSON → 归一化行数组（纯函数，不触库，供单测） */
-export function parseSnapshot(json: unknown): InsertRateQuoteRow[] {
-  const root = (json ?? {}) as { data?: { records?: DwsRecord[] }; records?: DwsRecord[] };
-  const records = root.data?.records ?? root.records ?? [];
-  const out: InsertRateQuoteRow[] = [];
-  records.forEach((r, i) => {
-    const cells = r.cells;
-    const pod = cellText(cells?.[F.pod]);
-    if (!pod) return; // 无目的港的行无业务意义
-    const containerRaw = cellText(cells?.[F.container]);
-    const msgTime = cellText(cells?.[F.msgTime]);
-    const { validFrom, validTo } = parseValidity(cellText(cells?.[F.validity]), msgTime);
-    const usdRaw = cellText(cells?.[F.oceanUsd]);
-    const usd = usdRaw != null ? Number(usdRaw.replace(/[,\s]/g, "")) : NaN;
-    out.push({
-      recordId: r.recordId || `local-${i}`,
-      pol: cellText(cells?.[F.pol]),
-      podRaw: pod,
-      lane: cellText(cells?.[F.lane]),
-      carrier: cellText(cells?.[F.carrier]),
-      container: normalizeContainer(containerRaw),
-      containerRaw,
-      oceanUsd: Number.isFinite(usd) ? Math.round(usd) : null,
-      validityRaw: cellText(cells?.[F.validity]),
-      validFrom, validTo,
-      freeDays: cellText(cells?.[F.freeDays]),
-      shortfallFee: cellText(cells?.[F.shortfall]),
-      note: cellText(cells?.[F.note]),
-      sourceGroup: cellText(cells?.[F.sourceGroup]),
-      sender: cellText(cells?.[F.sender]),
-      msgTime,
-      imageName: cellText(cells?.[F.image]),
-      syncedAt: new Date().toISOString(),
-    });
-  });
-  return out;
+/** 远程行 → 文本（数字/字符串都收；空串归 null） */
+function rText(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+/** 别名容错：远程行字段名按序取第一个非空值 */
+function pick(row: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = rText(row[k]);
+    if (v != null) return v;
+  }
+  return null;
+}
+
+/**
+ * 远程行 → 归一化镜像行（纯函数，不触库，供单测）。
+ * 字段别名容错（board_server 侧命名与本地 schema 不完全一致）：
+ * container_type|container_raw|container → containerRaw，freight_usd|ocean_usd → oceanUsd，pod_raw|pod → podRaw。
+ * 柜型归一 / 有效期解析复用 normalizeContainer / parseValidity；远程已给 valid_from/valid_to 则直采。
+ * 无目的港的行无业务意义，返回 null 跳过。
+ */
+export function mapRemoteRow(row: Record<string, unknown>, fallbackId: string): InsertRateQuoteRow | null {
+  const pod = pick(row, ["pod_raw", "pod"]);
+  if (!pod) return null;
+  const containerRaw = pick(row, ["container_type", "container_raw", "container"]);
+  const msgTime = pick(row, ["msg_time"]);
+  const vf = pick(row, ["valid_from"]);
+  const vt = pick(row, ["valid_to"]);
+  const parsed = vf && vt ? { validFrom: vf, validTo: vt } : parseValidity(pick(row, ["validity_raw"]), msgTime);
+  const usdRaw = pick(row, ["freight_usd", "ocean_usd"]);
+  const usd = usdRaw != null ? Number(usdRaw.replace(/[,\s]/g, "")) : NaN;
+  return {
+    recordId: pick(row, ["record_id"]) || fallbackId,
+    pol: pick(row, ["pol"]),
+    podRaw: pod,
+    lane: pick(row, ["lane"]),
+    carrier: pick(row, ["carrier"]),
+    container: normalizeContainer(containerRaw),
+    containerRaw,
+    oceanUsd: Number.isFinite(usd) ? Math.round(usd) : null,
+    validityRaw: pick(row, ["validity_raw"]),
+    validFrom: parsed.validFrom,
+    validTo: parsed.validTo,
+    freeDays: pick(row, ["free_days"]),
+    shortfallFee: pick(row, ["shortfall_fee", "shortfall"]),
+    note: pick(row, ["note"]),
+    sourceGroup: pick(row, ["source_group"]),
+    sender: pick(row, ["sender"]),
+    msgTime,
+    imageName: pick(row, ["image_name"]),
+    syncedAt: new Date().toISOString(),
+  };
 }
 
 let lastSync: { at: string; imported: number; source: string } | null = null;
+let lastError: string | null = null;
+let syncing = false;
+let autoTimer: ReturnType<typeof setInterval> | null = null;
 
 /** 北京时间今日 YYYY-MM-DD（valid_to 为日期文本，字典序比较即可判过期） */
 function todayBeijing(): string {
   return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 }
 
-/** 从快照文件全量刷新本地镜像 */
-export function sync(): Result<{ imported: number; exportedAt?: string }> {
-  Log.debug("rates.sync", SNAPSHOT_PATH);
-  if (!fs.existsSync(SNAPSHOT_PATH)) {
-    return failResult(`快照文件不存在：${SNAPSHOT_PATH}（请先由同步任务导出，或配置 RATES_SNAPSHOT_PATH）`);
-  }
-  let rows: InsertRateQuoteRow[];
-  let exportedAt: string | undefined;
+/**
+ * 从远程运价库全量刷新本地镜像（分页拉全量 → 归一化 → 删旧插新）。
+ * 拉取失败不动本地镜像（保留上次成功数据），返回带友好提示的失败。
+ */
+export async function sync(): Promise<Result<{ imported: number }>> {
+  if (syncing) return failResult("上一次同步仍在进行中，请稍候");
+  syncing = true;
   try {
-    const json = JSON.parse(fs.readFileSync(SNAPSHOT_PATH, "utf-8")) as { exportedAt?: string };
-    exportedAt = json.exportedAt;
-    rows = parseSnapshot(json);
-  } catch (err) {
-    Log.error("rates.sync", "快照解析失败", err instanceof Error ? err.stack : String(err));
-    return failResult("快照文件解析失败，请检查格式");
+    const base = REMOTE_BASE.replace(/\/$/, "");
+    const rows: InsertRateQuoteRow[] = [];
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    while (offset < total && offset < ROW_CAP) {
+      let res: Response;
+      try {
+        res = await netFetch(`${base}/api/rates?limit=${PAGE_SIZE}&offset=${offset}`, { headers: { Accept: "application/json" } });
+      } catch (err) {
+        const d = err instanceof Error ? err.message.slice(0, 80) : "网络不可达";
+        lastError = `${REMOTE_DOWN_HINT}（${d}）`;
+        Log.warn("rates.sync", `远程库不可达：${d}`);
+        return failResult(REMOTE_DOWN_HINT);
+      }
+      if (!res.ok) {
+        lastError = `运价服务返回 HTTP ${res.status}（${base}）`;
+        Log.warn("rates.sync", lastError);
+        return failResult(`运价服务响应异常（HTTP ${res.status}），请联系数据管理员检查服务。`);
+      }
+      let json: { ok?: boolean; total?: number; rows?: Record<string, unknown>[] };
+      try { json = await res.json() as typeof json; }
+      catch { lastError = "运价服务返回格式异常"; return failResult("运价服务返回格式异常，请联系数据管理员。"); }
+      const list = Array.isArray(json.rows) ? json.rows : [];
+      total = Number.isFinite(Number(json.total)) ? Number(json.total) : offset + list.length;
+      for (let i = 0; i < list.length; i++) {
+        const m = mapRemoteRow(list[i]!, `remote-${offset + i}`);
+        if (m) rows.push(m);
+      }
+      if (list.length === 0) break;
+      offset += list.length;
+    }
+    if (!rows.length) {
+      lastError = "远程库没有有效运价行";
+      return failResult("运价库暂无有效数据（远程行目的港全为空或接口结构不符）。");
+    }
+    const db = getDb();
+    db.delete(rateQuotes).run();
+    for (let i = 0; i < rows.length; i += 100) {
+      db.insert(rateQuotes).values(rows.slice(i, i + 100)).run();
+    }
+    saveDatabase();
+    lastSync = { at: new Date().toISOString(), imported: rows.length, source: base };
+    lastError = null;
+    Log.info("rates.sync", `镜像刷新 ${rows.length} 条（远程 ${base}）`);
+    return okResult({ imported: rows.length });
+  } finally {
+    syncing = false;
   }
-  if (rows.length === 0) return failResult("快照中无有效运价行（目的港全部为空？）");
+}
 
-  const db = getDb();
-  db.delete(rateQuotes).run();
-  // 分块插入，避免单条语句变量数过多
-  for (let i = 0; i < rows.length; i += 100) {
-    db.insert(rateQuotes).values(rows.slice(i, i + 100)).run();
-  }
-  saveDatabase();
-  lastSync = { at: new Date().toISOString(), imported: rows.length, source: SNAPSHOT_PATH };
-  Log.info("rates.sync", `镜像刷新 ${rows.length} 条（exportedAt=${exportedAt ?? "n/a"}）`);
-  return okResult({ imported: rows.length, exportedAt });
+/** 自动同步：启动后 5 秒拉一次，之后按 AUTO_MINUTES 轮询；失败只记日志不打扰用户 */
+export function startAutoSync(): void {
+  if (autoTimer) clearInterval(autoTimer);
+  autoTimer = setInterval(() => {
+    void sync().then(r => {
+      if (!r.success) Log.debug("rates.auto", `自动同步未成功：${r.error}`);
+    });
+  }, AUTO_MINUTES * 60_000);
+  setTimeout(() => {
+    void sync().then(r => {
+      if (!r.success) Log.debug("rates.auto", `启动同步未成功：${r.error}`);
+    });
+  }, 5_000);
 }
 
 export interface QuoteFilters { lane?: string; carrier?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number }
@@ -215,18 +249,18 @@ export function countQuotes(f: QuoteFilters): number {
 
 export function status(): Result<{
   total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
-  snapshotExists: boolean; snapshotMtime: string | null;
+  remoteHost: string; lastError: string | null;
 }> {
   const rows = getDb().select({ validTo: rateQuotes.validTo }).from(rateQuotes).all();
   const today = todayBeijing();
-  let snapMtime: string | null = null;
-  try { snapMtime = fs.statSync(SNAPSHOT_PATH).mtime.toISOString(); } catch { /* 无快照 */ }
+  let host = REMOTE_BASE;
+  try { host = new URL(REMOTE_BASE).host; } catch { /* 保底原样 */ }
   return okResult({
     total: rows.length,
     active: rows.filter(r => !r.validTo || r.validTo >= today).length,
     lastSyncAt: lastSync?.at ?? null,
     lastImported: lastSync?.imported ?? null,
-    snapshotExists: snapMtime != null,
-    snapshotMtime: snapMtime,
+    remoteHost: host,
+    lastError,
   });
 }

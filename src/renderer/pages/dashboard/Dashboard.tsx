@@ -134,7 +134,7 @@ export function Dashboard() {
 
 interface RateStatus {
   total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
-  snapshotExists: boolean; snapshotMtime: string | null;
+  remoteHost: string; lastError: string | null;
 }
 
 /** 运价库卡片 — 展示 AI 表格《海运运价智能台账》本地镜像的健康度，一键刷新 */
@@ -156,16 +156,16 @@ function RateLibrary() {
 
   const st = data?.success ? data.data : null;
   if (!st) return null;
-  const stale = st.snapshotMtime == null || Date.now() - new Date(st.snapshotMtime).getTime() > 26 * 3600_000;
+  const stale = st.lastSyncAt == null || Date.now() - new Date(st.lastSyncAt).getTime() > 26 * 3600_000;
 
   return (
     <Card
       size="small"
       title={<span className="flex items-center gap-2"><DollarOutlined />运价库</span>}
       extra={
-        <Tooltip title="从快照文件刷新本地镜像（快照由钉钉 AI 表格同步任务导出）">
+        <Tooltip title="从公司电脑的运价服务刷新本地镜像（每 10 分钟自动同步一次）">
           <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
-            loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步台账</Button>
+            loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步运价库</Button>
         </Tooltip>
       }
     >
@@ -175,11 +175,11 @@ function RateLibrary() {
           valueStyle={{ color: st.total && !st.active ? "#ef4444" : undefined }} /></Col>
         <Col span={12}>
           <div className="text-[11px] text-gray-400 leading-relaxed">
-            {st.snapshotExists
-              ? <>快照文件 {st.snapshotMtime ? new Date(st.snapshotMtime).toLocaleString("zh-CN") : "—"}
-                {stale && <Tag color="orange" className="ml-2 text-[9px] my-0">快照超过 26h 未更新</Tag>}</>
-              : <Tag color="red" className="text-[9px] my-0">尚无快照文件 — 需同步任务产出 data/rates-snapshot.json</Tag>}
-            {st.lastSyncAt && <div className="text-[10px]">本会话上次同步：{new Date(st.lastSyncAt).toLocaleTimeString("zh-CN")}（{st.lastImported} 条）</div>}
+            远程库 {st.remoteHost || "—"}{st.lastSyncAt
+              ? <> · 上次同步 {new Date(st.lastSyncAt).toLocaleString("zh-CN")}
+                {stale && <Tag color="orange" className="ml-2 text-[9px] my-0">超过 26h 未同步</Tag>}</>
+              : <Tag color="red" className="text-[9px] my-0">尚未同步成功 — 请点「同步运价库」或检查公司电脑服务</Tag>}
+            {st.lastError && <div className="text-[10px] text-red-500">{st.lastError}</div>}
           </div>
         </Col>
       </Row>

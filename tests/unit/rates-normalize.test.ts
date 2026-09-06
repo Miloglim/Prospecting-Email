@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalizeContainer, parseValidity, parseSnapshot,
+  normalizeContainer, parseValidity, mapRemoteRow,
 } from "../../src/main/services/rate-sync.service";
 
 describe("normalizeContainer — 柜型脏值归一", () => {
@@ -52,72 +52,61 @@ describe("parseValidity — 有效期文本解析", () => {
   });
 });
 
-describe("parseSnapshot — dws 快照 → 归一化行", () => {
-  // 2026-08-31 从《海运运价智能台账》实拉的记录形态（含选项对象/附件数组/文本数字）
-  const snapshot = {
-    data: {
-      records: [
-        {
-          recordId: "wYpsoB24bg",
-          cells: {
-            rj3c4Dc: "蛇口",
-            M6UMJ2Y: "KINGSTON/CAUCEDO",
-            xAfTdzf: { id: "dpMwinj0H2", name: "加勒比" },
-            Gc7HG8P: { id: "oKkdYLNPZN", name: "CMA" },
-            "4Ye7pSe": { id: "NIhCmDotkS", name: "20GP" },
-            RDG9zEx: "10200",
-            "32NW82C": "9.1-9.7",
-            uFJRuSd: "9/07开 CMA CGM DIGNITY",
-            I0vGzUV: "CMA/EMC/PIL交流群",
-            "1NU3Dkx": "Mandy李龙艳",
-            HbQfZtf: "2026-08-31T12:33:00+08:00",
-            F5UZCQj: [{ filename: "达飞加勒比运价表_20260831.png", url: "https://…" }],
-          },
-        },
-        {
-          recordId: "g2XWbgI7Bd",
-          cells: {
-            M6UMJ2Y: "PANAMA (MANZANILLO PA/BALBOA/COLON FREE ZONE)",
-            "4Ye7pSe": { name: "40'HC" },
-            RDG9zEx: "10,400",
-          },
-        },
-        { recordId: "empty-pod", cells: { xAfTdzf: { name: "加勒比" } } }, // 无目的港 → 丢弃
-      ],
-    },
+describe("mapRemoteRow — board_server 行 → 归一化镜像行", () => {
+  // board_server /api/rates 的行形态（字段名与本地 schema 不一致，靠别名容错）
+  const fullRow = {
+    record_id: "wYpsoB24bg",
+    pol: "蛇口",
+    pod: "KINGSTON/CAUCEDO",
+    lane: "加勒比",
+    carrier: "CMA",
+    container_type: "20GP",
+    freight_usd: 10200,
+    validity_raw: "9.1-9.7",
+    valid_from: "2026-09-01",
+    valid_to: "2026-09-07",
+    free_days: "9/07开 CMA CGM DIGNITY",
+    shortfall_fee: "RMB3000",
+    note: "9/07开 CMA CGM DIGNITY",
+    source_group: "CMA/EMC/PIL交流群",
+    sender: "Mandy李龙艳",
+    msg_time: "2026-08-31T12:33:00+08:00",
+    image_name: "达飞加勒比运价表_20260831.png",
   };
 
-  const rows = parseSnapshot(snapshot);
+  it("完整行：直采 valid_from/valid_to，数字运价照收", () => {
+    const r = mapRemoteRow(fullRow, "remote-0")!;
+    expect(r.recordId).toBe("wYpsoB24bg");
+    expect(r.podRaw).toBe("KINGSTON/CAUCEDO");
+    expect(r.lane).toBe("加勒比");
+    expect(r.carrier).toBe("CMA");
+    expect(r.container).toBe("20GP");
+    expect(r.oceanUsd).toBe(10200);
+    expect(r.validFrom).toBe("2026-09-01");
+    expect(r.validTo).toBe("2026-09-07");
+    expect(r.sourceGroup).toBe("CMA/EMC/PIL交流群");
+    expect(r.sender).toBe("Mandy李龙艳");
+    expect(r.imageName).toBe("达飞加勒比运价表_20260831.png");
+  });
 
-  it("过滤无目的港行", () => {
-    expect(rows).toHaveLength(2);
+  it("别名容错：container_type/freight_usd/pod 都能取到；缺 valid_* 时本地解析 validity_raw", () => {
+    const r = mapRemoteRow({
+      pod_raw: "PANAMA (MANZANILLO PA/BALBOA)",
+      container_type: "40'HC",
+      freight_usd: "10,400",
+      validity_raw: "9.1-9.7",
+      msg_time: "2026-08-31T12:33:00+08:00",
+    }, "remote-1")!;
+    expect(r.container).toBe("40HQ");
+    expect(r.containerRaw).toBe("40'HC");
+    expect(r.oceanUsd).toBe(10400);
+    expect(r.validFrom).toBe("2026-09-01");
+    expect(r.validTo).toBe("2026-09-07");
+    expect(r.lane).toBeNull();
   });
-  it("完整记录：选项对象/附件/数字文本全部归位", () => {
-    const r0 = rows[0]!;
-    expect(r0.recordId).toBe("wYpsoB24bg");
-    expect(r0.lane).toBe("加勒比");
-    expect(r0.carrier).toBe("CMA");
-    expect(r0.container).toBe("20GP");
-    expect(r0.oceanUsd).toBe(10200);
-    expect(r0.validFrom).toBe("2026-09-01");
-    expect(r0.validTo).toBe("2026-09-07");
-    expect(r0.imageName).toBe("达飞加勒比运价表_20260831.png");
-    expect(r0.sourceGroup).toBe("CMA/EMC/PIL交流群");
-    expect(r0.sender).toBe("Mandy李龙艳");
-  });
-  it("稀疏记录容错 + 千分位价格 + 柜型变体归一", () => {
-    const r1 = rows[1]!;
-    expect(r1.container).toBe("40HQ");
-    expect(r1.containerRaw).toBe("40'HC");
-    expect(r1.oceanUsd).toBe(10400);
-    expect(r1.lane).toBeNull();
-    expect(r1.validTo).toBeNull();
-  });
-  it("无 recordId 时生成兜底主键", () => {
-    const loose = parseSnapshot({ records: [{ cells: { M6UMJ2Y: "XPORT" } }] });
-    expect(loose[0]!.recordId).toBe("local-0");
-  });
-  it("顶层直接是 records 数组的包装也兼容", () => {
-    expect(parseSnapshot({ records: [{ recordId: "a", cells: { M6UMJ2Y: "P" } }] })).toHaveLength(1);
+
+  it("无目的港的行返回 null 跳过；无 record_id 用兜底主键", () => {
+    expect(mapRemoteRow({ lane: "加勒比" }, "remote-2")).toBeNull();
+    expect(mapRemoteRow({ pod: "XPORT" }, "remote-3")!.recordId).toBe("remote-3");
   });
 });

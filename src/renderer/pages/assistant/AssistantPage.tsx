@@ -1228,8 +1228,8 @@ export function AssistantPage() {
             roles={{
               user: {
                 placement: "end",
-                avatar: { icon: <UserOutlined />, style: { background: "#1a1a1a" } },
-                styles: { content: { background: "#00bfa5", color: "#fff" } },
+                // 无头像（装饰最小化）；气泡用极淡主色底 + 深青字，不再重底白字
+                styles: { content: { background: "rgba(0, 191, 165, 0.08)", color: "#0f766e" } },
               },
               ai: {
                 placement: "start",

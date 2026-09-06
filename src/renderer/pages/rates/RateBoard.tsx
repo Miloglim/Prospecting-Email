@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 interface RateStatus {
   total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
-  snapshotExists: boolean; snapshotMtime: string | null;
+  remoteHost: string; lastError: string | null;
 }
 
 interface QuoteDto {
@@ -83,16 +83,21 @@ export function RateBoard() {
           <Tag color={st && st.total ? "green" : "default"}>
             {st ? `${st.total} 条镜像 · ${st.active} 条有效` : "…"}
           </Tag>
-          {st?.snapshotExists && (
+          {st?.remoteHost && (
             <span className="text-[11px] text-gray-400">
-              快照 {st.snapshotMtime ? new Date(st.snapshotMtime).toLocaleString("zh-CN") : "—"} 导出
+              远程库 {st.remoteHost}{st.lastSyncAt ? ` · 上次同步 ${new Date(st.lastSyncAt).toLocaleString("zh-CN")}` : " · 尚未同步"}
             </span>
+          )}
+          {st?.lastError && (
+            <Tooltip title={st.lastError}>
+              <Tag color="red">同步异常</Tag>
+            </Tooltip>
           )}
         </Space>
         <Space>
-          <Tooltip title="从快照文件刷新镜像（快照由同步任务写入 data/rates-snapshot.json）">
+          <Tooltip title="从公司电脑的运价服务刷新本地镜像（每 10 分钟自动同步一次）">
             <Button size="small" icon={<SyncOutlined spin={syncMut.isPending} />}
-              loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步台账</Button>
+              loading={syncMut.isPending} onClick={() => syncMut.mutate()}>同步运价库</Button>
           </Tooltip>
         </Space>
       </div>
