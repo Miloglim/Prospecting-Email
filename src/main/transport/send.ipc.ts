@@ -2,6 +2,7 @@ import { ipcMain, BrowserWindow } from "electron";
 import * as nodemailer from "nodemailer";
 import { IPC } from "../contract";
 import * as SendService from "../services/send.service";
+import * as CampaignService from "../services/campaign.service";
 import { Log } from "../logger";
 import { failResult, okResult, type Result } from "../errors";
 import { getDb } from "../db";
@@ -207,6 +208,20 @@ export function registerSendIPC() {
       if (bad.length > 0) return failResult(`抄送邮箱格式错误: ${bad.join(", ")}`);
     }
     return SendService.startDynamicSend(input.contactIds, input.subject, input.body, input.autoStart !== false, cc || undefined);
+  });
+
+  // ── 发信任务（Campaign，docs/smart-send-spec.md）────────────────
+  ipcMain.handle(IPC.SEND.CAMPAIGNS, () => CampaignService.getCampaignOverview());
+  ipcMain.handle(IPC.SEND.CAMPAIGN_DETAIL, (_e, id: string) => {
+    if (!id?.trim()) return failResult("缺少任务 id");
+    return CampaignService.getCampaignDetail(id.trim());
+  });
+  ipcMain.handle(IPC.SEND.CAMPAIGN_CONTROL, (_e, input: { campaignId?: string; action?: string }) => {
+    const action = (input?.action ?? "").trim().toLowerCase();
+    if (!["pause", "resume", "stop"].includes(action)) return failResult("action 仅支持 pause/resume/stop");
+    if (!input?.campaignId?.trim()) return failResult("缺少任务 id");
+    const status = action === "pause" ? "paused" : action === "resume" ? "running" : "stopped";
+    return CampaignService.setCampaignStatus(input.campaignId.trim(), status);
   });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {

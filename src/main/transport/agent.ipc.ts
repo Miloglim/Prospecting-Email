@@ -5,6 +5,7 @@ import * as BgTask from "../services/bg-task.service";
 import * as Diagnostics from "../services/diagnostics.service";
 import * as Gaps from "../services/gap.service";
 import * as Suggestions from "../services/suggestion.service";
+import { initSuggestionBus } from "../services/suggestion-bus";
 import { isInsideArtifactDir } from "../services/artifact.service";
 import { failResult, okResult } from "../errors";
 import { Log } from "../logger";
@@ -104,6 +105,16 @@ export function registerAgentIPC() {
   // 能力缺口台账（/缺口 命令查看，按被抱怨次数降序）
   ipcMain.handle(IPC.AGENT.LIST_GAPS, (_e, limit?: number) => Gaps.listGaps(limit ?? 20));
 
-  // 首页「AI 建议行动」：只读当天批次并填上今天的数字（毫秒级，不等模型）
-  ipcMain.handle(IPC.AGENT.SUGGESTIONS, () => Suggestions.suggestions());
+  // 新对话「行动建议」流：本地候选实时拼装（规范 docs/suggestion-feed-spec.md）
+  // ctx 锚点（contact:12）随拉取传入命中候选置顶；rotate=「换一批」页码；热更新走 SUGGESTIONS_CHANGED 推送
+  ipcMain.handle(IPC.AGENT.SUGGESTIONS, (_e, ctx?: string, rotate?: number) =>
+    Suggestions.suggestions(typeof ctx === "string" ? ctx : undefined, Number.isInteger(rotate) && (rotate as number) > 0 ? (rotate as number) : 0));
+  // chip 被点击 → 当天不再推荐同一条（dismissed 记忆落盘）
+  ipcMain.handle(IPC.AGENT.DISMISS_SUGGESTION, (_e, key: unknown) => {
+    if (typeof key === "string" && key) Suggestions.dismiss(key);
+    return okResult(true);
+  });
+  // 热更新总线：数据事件 nudge → debounce 重算 → 推送（推送用 ctx-less 全局 feed；
+  // 带锚点的会话由渲染端收到事件后自行重拉，见 AssistantPage）
+  initSuggestionBus(() => Suggestions.feed(), push);
 }

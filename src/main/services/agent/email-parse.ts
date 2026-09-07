@@ -44,11 +44,36 @@ const pickNum = (re: RegExp, text: string): number | null => {
   const n = Number(v.replace(/[,，\s]/g, ""));
   return Number.isFinite(n) ? n : null;
 };
-/** 从「桑托斯 (BRSSZ, 圣保罗州)」这类串里单取五字 LOCODE */
+/** LOCODE 前两位必须是 ISO 国家码，否则「Porto de Ningbo」里的 PORTO 会被当成港口代码
+ *  （实测：葡语 Porto=港，正好五字母）。第二个坑是国名本身也是五字母且前两位撞国家码
+ *  （CHINA→CH、ITALY→IT、CHILE→CL…），一律进停用词表。抓不到就返回 null，不猜。 */
+const LOCODE_COUNTRIES = new Set([
+  "CN", "HK", "MO", "TW", "BR", "US", "CA", "MX", "PA", "CO", "CL", "PE", "EC", "UY", "AR", "PY", "BO", "VE",
+  "CR", "GT", "HN", "SV", "NI", "DO", "CU", "JM", "TT", "BS", "PR", "HT", "BZ",
+  "ES", "PT", "IT", "GR", "TR", "DE", "FR", "GB", "NL", "BE", "PL", "SE", "NO", "DK", "FI", "IE", "CZ", "AT",
+  "CH", "RO", "BG", "HR", "SI", "RS", "HU", "SK", "LT", "LV", "EE", "RU", "UA", "BY", "MD", "IS",
+  "AE", "SA", "QA", "KW", "BH", "OM", "JO", "LB", "IL", "IQ", "IR", "YE", "SY",
+  "EG", "MA", "DZ", "TN", "LY", "NG", "KE", "ZA", "TZ", "GH", "SN", "AO", "MZ", "SD",
+  "IN", "PK", "BD", "LK", "NP", "MM", "VN", "TH", "MY", "SG", "ID", "PH", "KH", "LA",
+  "KR", "JP", "AU", "NZ", "PG", "FJ",
+]);
+const LOCODE_STOPWORDS = new Set([
+  "CHINA", "INDIA", "GHANA", "KENYA", "LIBYA", "MALTA", "QATAR", "EGYPT", "ITALY", "CHILE",
+  "BENIN", "CONGO", "GREECE", "JORDAN", "SUDAN", "SYRIA", "YEMEN", "SPAIN", "PALAU", "SAMOA",
+  "BRAZIL", "PORTO", "SANTO", "CARGO", "SHIP", "PORTS",
+  // 五字母港名/城市名同样会撞国家码前缀：GENOA(GE 未列但防将来)、DOVER(DO)、SEOUL(SE)、
+  // CHIBA(CH)、MALMO(MA)、PERTH(PE) —— 真代码是 GBDOV/KRSEL/JPCBS 这种，不会写全名
+  "GENOA", "DOVER", "SEOUL", "CHIBA", "MALMO", "PERTH",
+]);
 const pickLocode = (segment: string | null): string | null => {
   if (!segment) return null;
-  const m = segment.toUpperCase().match(/\b([A-Z]{5})\b/);
-  return m?.[1] ?? null;
+  const up = segment.toUpperCase();
+  for (const m of up.matchAll(/(?<![A-Z0-9])([A-Z]{2}[A-Z0-9]{3})(?![A-Z0-9])/g)) {
+    const code = m[1]!;
+    if (LOCODE_STOPWORDS.has(code)) continue;
+    if (LOCODE_COUNTRIES.has(code.slice(0, 2))) return code;
+  }
+  return null;
 };
 
 export function parseEmailInquiry(bodyText: string): EmailInquiry {
@@ -58,8 +83,16 @@ export function parseEmailInquiry(bodyText: string): EmailInquiry {
     pick(/container\s*(?:type)?[:：]\s*([^\n（(]+)/i, t) ??
     pick(/(\d+\s*[×xX*]\s*\d{2}\s*['’]?\s*(?:GP|HQ|HC|NOR|OT|RF))/i, t) ??
     pick(/\b((?:20|40|45)\s*['’]?\s*(?:GP|HQ|HC|NOR|OT|RF))\b/i, t);
-  const polSeg = pick(/起运港[:：]\s*([^\n]+)/, t) ?? pick(/(?:\bPOL\b|port\s+of\s+loading|origin)[:：]\s*([^\n]+)/i, t);
-  const podSeg = pick(/目的港[:：]\s*([^\n]+)/, t) ?? pick(/(?:\bPOD\b|destination|port\s+of\s+discharge|to)[:：]\s*([^\n]+)/i, t);
+  // 「标签: 值」与「标签独行、值在下一行」两种形态都要认——HTML 邮件转纯文本后普遍是后者
+  // （实测 Three Logistics 询价信：Port of Discharge ⏎ Santos - BRSSZ (Santos, SP)）。
+  // 只认冒号形态会 pod=null → 回信查不到价、报价只能「稍后补」。
+  // 块形态要求标签独占一行，避免 "country of origin is…" 这类散文误抓。
+  const polSeg = pick(/起运港[:：]\s*([^\n]+)/, t)
+    ?? pick(/(?:\bPOL\b|port\s+of\s+loading|origin)[:：]\s*([^\n]+)/i, t)
+    ?? pick(/(?:^|\n)[ \t]*(?:起运港|装货港|port\s+of\s+loading|pol|origin)[ \t]*\n+[ \t]*([^\n]+)/i, t);
+  const podSeg = pick(/目的港[:：]\s*([^\n]+)/, t)
+    ?? pick(/(?:\bPOD\b|destination|port\s+of\s+discharge|to)[:：]\s*([^\n]+)/i, t)
+    ?? pick(/(?:^|\n)[ \t]*(?:目的港|卸货港|port\s+of\s+discharge|pod|destination|discharge\s+port)[ \t]*\n+[ \t]*([^\n]+)/i, t);
   return {
     container: normContainer(containerRaw),
     containerRaw: containerRaw?.trim() ?? null,

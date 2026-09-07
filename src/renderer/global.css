@@ -442,3 +442,16 @@ body {
 .conv-row .conv-more { opacity: 0; transition: opacity 0.15s ease; }
 .conv-row:hover .conv-more,
 .conv-row:focus-within .conv-more { opacity: 1; }
+
+/* ── 新对话建议流：chip 入场（淡入+上移 4px，逐条错开 40ms 由内联 animationDelay 给）
+      与 urgent 状态条呼吸（docs/suggestion-feed-spec.md §7「活着」的状态感）── */
+@keyframes chip-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chip-in { animation: chip-in 0.18s ease-out both; }
+@keyframes bar-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.breathe { animation: bar-breathe 2s ease-in-out infinite; }

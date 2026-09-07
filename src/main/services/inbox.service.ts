@@ -383,6 +383,13 @@ export async function fetchInbox(accountId?: number, excludeIds?: number[]): Pro
               // 更新联系人状态
               if (m.classification === "bounce") markAsBounced(cid);
               else updateContactStatus(cid, m.classification);
+              // 发信任务止损联动（docs/smart-send-spec.md §3.3）：回复/退订/bounce 止损，OOO 顺延。
+              // 惰性 import 防循环依赖；失败绝不影响收信主流程。
+              try {
+                const kind = m.classification === "bounce" ? "bounce"
+                  : m.classification === "autoreply" ? "autoreply" : "replied";
+                void import("./campaign.service").then(cm => cm.onContactSignal(cid, kind));
+              } catch { /* 止损联动失败不影响收信 */ }
             }
           }
         }

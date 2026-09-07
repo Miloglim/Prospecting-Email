@@ -1,9 +1,13 @@
 import { and, eq, like, gte, isNull, or, desc, sql, type Column } from "drizzle-orm";
+import * as fs from "fs";
+import * as path from "path";
+import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { getDb, saveDatabase } from "../db";
 import { rateQuotes, spaceQuotes, type InsertRateQuoteRow, type InsertSpaceQuoteRow } from "../db/schema/rates";
 import { okResult, failResult, type Result } from "../errors";
 import { netFetch } from "../net-proxy";
+import { nudge } from "./suggestion-bus";
 
 // ── 运价 / 舱位同步服务 ──────────────────────────────────────────
 // 链路：公司电脑台账（board_server，局域网 HTTP）→
@@ -124,6 +128,35 @@ function pick(row: Record<string, unknown>, keys: string[]): string | null {
 }
 
 /**
+ * 报价截图的文件名（或完整 URL）。真源这个字段换过名字：image_url / image_name / image_file /
+ * images[0].name 都出现过——只认前两个会把带图的行全丢成 null（实测公网台账 500 行里
+ * 341 行有 image_file，而 image_url 恒为 null）。images[] 里还带 missing 标记，
+ * 那是服务端在说「文件不在我这」，属于部署问题，这里照样收下文件名：等图补齐链接就活了。
+ */
+export function pickImageName(row: Record<string, unknown>): string | null {
+  const flat = pick(row, ["image_url", "image_name", "image_file"]);
+  if (flat) return flat;
+  const list = row.images;
+  if (Array.isArray(list)) {
+    for (const it of list) {
+      if (typeof it === "string") { const s = it.trim(); if (s) return s; continue; }
+      if (it && typeof it === "object") {
+        const o = it as Record<string, unknown>;
+        const n = rText(o.name) ?? rText(o.file) ?? rText(o.url);
+        if (n) return n;
+      }
+    }
+  }
+  return null;
+}
+
+/** 截图地址：真源给完整 URL 就原样用，给文件名才拼 board 的 /images/ 静态服务 */
+export function imageUrlOf(imageName: string | null, base: string): string | null {
+  if (!imageName) return null;
+  return /^https?:\/\//i.test(imageName) ? imageName : `${base}/images/${encodeURIComponent(imageName)}`;
+}
+
+/**
  * 远程行 → 归一化镜像行（纯函数，不触库，供单测）。
  * 键名以实测为准（docs/运价接口字段对接说明.md，2026-09-06 从线上服务抓取核对）：
  * route→航线 lane、remark→备注、dead_freight→亏舱费、message_time→消息时间、
@@ -162,7 +195,7 @@ export function mapRemoteRow(row: Record<string, unknown>, fallbackId: string): 
     sourceGroup: pick(row, ["source_group"]),
     sender: pick(row, ["sender"]),
     msgTime,
-    imageName: pick(row, ["image_url", "image_name"]),
+    imageName: pickImageName(row),
     syncedAt: new Date().toISOString(),
   };
 }
@@ -198,7 +231,7 @@ export function mapRemoteSpace(row: Record<string, unknown>, fallbackId: string)
     sourceGroup: pick(row, ["source_group"]),
     sender: pick(row, ["sender"]),
     msgTime: pick(row, ["message_time", "msg_time"]),
-    imageName: pick(row, ["image_url", "image_name"]),
+    imageName: pickImageName(row),
     status: pick(row, ["status"]),
     syncedAt: new Date().toISOString(),
   };
@@ -208,6 +241,136 @@ let lastSync: { at: string; imported: number; source: string } | null = null;
 let lastError: string | null = null;
 let syncing = false;
 let autoTimer: ReturnType<typeof setInterval> | null = null;
+
+// ── 镜像 diff：「可同步资讯」建议的原料（docs/suggestion-feed-spec.md §6）──
+// record_id 是服务端 content_key（内容变则键变），所以比价必须按 pod+船司+柜型 元组，
+// 不能按 record_id 对齐。sync 是全量删旧插新 → diff 必须在 delete 之前把旧批读出来。
+
+export interface RatesDiff {
+  syncedAt: string;
+  /** 旧批没有、新批出现的目的港（按 pod 聚合条数） */
+  addedPods: Array<{ podRaw: string; n: number }>;
+  /** 同 pod+船司+柜型 元组新价更低（各批取该元组最低价对比） */
+  priceDrops: Array<{ podRaw: string; carrier: string | null; container: string | null; oldUsd: number; newUsd: number }>;
+  /** valid_to 距今 ≤7 天（按 pod 聚合，minDays=最紧的一条） */
+  expiringSoon: Array<{ podRaw: string; n: number; minDays: number }>;
+  /** 舱位 etd/截关 ≤3 天（解析不出的行直接跳过，不猜） */
+  spacesClosing: Array<{ podRaw: string | null; vessel: string | null; etd: string | null; boxQty: string | null; days: number }>;
+}
+
+// 兼容两种来源：DB 旧批 select（字段非空）与新批 InsertRateQuoteRow（字段可选），统一放宽
+type DiffRateRow = { podRaw: string; carrier?: string | null; container?: string | null; oceanUsd?: number | null; validTo?: string | null };
+type DiffSpaceRow = { podRaw?: string | null; vessel?: string | null; etd?: string | null; cutoffRaw?: string | null; boxQty?: string | null };
+
+const tupleKey = (r: DiffRateRow) => `${r.podRaw}|${r.carrier ?? ""}|${r.container ?? ""}`;
+
+/** "9.21" / "09-21" / "2026-09-21" / ISO 都能吃的保守解析；解不出返回 null（绝不猜） */
+export function parseFlexDate(raw: string | null | undefined, now = new Date()): string | null {
+  const t = (raw ?? "").trim();
+  if (!t) return null;
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(t);
+  if (iso) return `${iso[1]}-${iso[2]!.padStart(2, "0")}-${iso[3]!.padStart(2, "0")}`;
+  const md = /^(\d{1,2})[./-](\d{1,2})$/.exec(t);
+  if (md) {
+    const y = now.getUTCFullYear();
+    const m = Number(md[1]); const d = Number(md[2]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const parsed = Date.parse(t);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : null;
+}
+
+// 纯日期差（用户口径的「N 天后」）：9/7 看 9/11 就是 4 天，不带时分秒的 ceil 膨胀
+const daysBetween = (toDate: string, now = new Date()): number => {
+  const today = now.toISOString().slice(0, 10);
+  return Math.round((Date.parse(`${toDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400_000);
+};
+
+/** 纯函数：新旧两批镜像 → diff。导出供单测。 */
+export function computeRatesDiff(
+  oldRates: DiffRateRow[], newRates: DiffRateRow[], newSpaces: DiffSpaceRow[], now = new Date(),
+): RatesDiff {
+  const today = now.toISOString().slice(0, 10);
+  // 元组取最低价：同元组多有效期行时，「能拿到的最便宜价」才是同步给客户的口径
+  const minBy = (rows: DiffRateRow[]) => {
+    const m = new Map<string, number>();
+    for (const r of rows) {
+      if (r.oceanUsd == null) continue;
+      const k = tupleKey(r);
+      const cur = m.get(k);
+      if (cur == null || r.oceanUsd < cur) m.set(k, r.oceanUsd);
+    }
+    return m;
+  };
+  const oldMin = minBy(oldRates);
+  const newMin = minBy(newRates);
+
+  const priceDrops: RatesDiff["priceDrops"] = [];
+  for (const [k, newUsd] of newMin) {
+    const oldUsd = oldMin.get(k);
+    if (oldUsd == null || newUsd >= oldUsd) continue;
+    const [podRaw, carrier, container] = k.split("|");
+    priceDrops.push({ podRaw: podRaw!, carrier: carrier || null, container: container || null, oldUsd, newUsd });
+  }
+  priceDrops.sort((a, b) => (b.oldUsd - b.newUsd) / b.oldUsd - (a.oldUsd - a.newUsd) / a.oldUsd);
+
+  const oldPods = new Set(oldRates.map(r => r.podRaw));
+  const addedByPod = new Map<string, number>();
+  for (const r of newRates) {
+    if (oldPods.has(r.podRaw)) continue;
+    addedByPod.set(r.podRaw, (addedByPod.get(r.podRaw) ?? 0) + 1);
+  }
+  const addedPods = [...addedByPod.entries()].map(([podRaw, n]) => ({ podRaw, n }))
+    .sort((a, b) => b.n - a.n);
+
+  const expByPod = new Map<string, { n: number; minDays: number }>();
+  for (const r of newRates) {
+    const vt = parseFlexDate(r.validTo, now);
+    if (!vt || vt < today) continue;
+    const days = daysBetween(vt, now);
+    if (days > 7) continue;
+    const cur = expByPod.get(r.podRaw) ?? { n: 0, minDays: days };
+    expByPod.set(r.podRaw, { n: cur.n + 1, minDays: Math.min(cur.minDays, days) });
+  }
+  const expiringSoon = [...expByPod.entries()].map(([podRaw, v]) => ({ podRaw, ...v }))
+    .sort((a, b) => a.minDays - b.minDays);
+
+  const spacesClosing: RatesDiff["spacesClosing"] = [];
+  for (const s of newSpaces) {
+    const d = parseFlexDate(s.cutoffRaw, now) ?? parseFlexDate(s.etd, now);
+    if (!d || d < today) continue;
+    const days = daysBetween(d, now);
+    if (days > 3) continue;
+    spacesClosing.push({ podRaw: s.podRaw ?? null, vessel: s.vessel ?? null, etd: s.etd ?? null, boxQty: s.boxQty ?? null, days });
+  }
+  spacesClosing.sort((a, b) => a.days - b.days);
+
+  return {
+    syncedAt: now.toISOString(),
+    addedPods: addedPods.slice(0, 5),
+    priceDrops: priceDrops.slice(0, 5),
+    expiringSoon: expiringSoon.slice(0, 5),
+    spacesClosing: spacesClosing.slice(0, 3),
+  };
+}
+
+const DIFF_PATH = () => path.join(APP_ROOT, "data", "rates-diff.json");
+let lastRatesDiff: RatesDiff | null = null;
+let diffLoaded = false;
+
+/** 最近一次同步的镜像 diff；超 24h 视为陈旧返回 null（重启后从 rates-diff.json 懒加载） */
+export function ratesDiff(): RatesDiff | null {
+  if (!diffLoaded) {
+    diffLoaded = true;
+    try {
+      const raw = JSON.parse(fs.readFileSync(DIFF_PATH(), "utf-8")) as RatesDiff;
+      if (raw && typeof raw.syncedAt === "string") lastRatesDiff = raw;
+    } catch { /* 没有文件 = 还没同步过 */ }
+  }
+  if (!lastRatesDiff) return null;
+  return Date.now() - Date.parse(lastRatesDiff.syncedAt) <= 24 * 3600_000 ? lastRatesDiff : null;
+}
+
 
 /** 北京时间今日 YYYY-MM-DD（valid_to 为日期文本，字典序比较即可判过期） */
 function todayBeijing(): string {
@@ -280,6 +443,11 @@ export async function sync(): Promise<Result<{ imported: number }>> {
       return failResult("运价库暂无有效数据（远程行目的港全为空或接口结构不符）。");
     }
     const db = getDb();
+    // diff 原料：删旧前把旧批读进内存（全量替换后旧价就没了）
+    const oldRates = db.select({
+      podRaw: rateQuotes.podRaw, carrier: rateQuotes.carrier, container: rateQuotes.container,
+      oceanUsd: rateQuotes.oceanUsd, validTo: rateQuotes.validTo,
+    }).from(rateQuotes).all();
     db.delete(rateQuotes).run();
     for (let i = 0; i < rates.rows.length; i += 100) {
       db.insert(rateQuotes).values(rates.rows.slice(i, i + 100)).run();
@@ -308,7 +476,24 @@ export async function sync(): Promise<Result<{ imported: number }>> {
     saveDatabase();
     lastSync = { at: new Date().toISOString(), imported: rates.rows.length, source: base };
     lastError = null;
-    Log.info("rates.sync", `镜像刷新：运价 ${rates.rows.length} 条、舱位 ${spaceImported} 条（远程 ${base}）`);
+    // 镜像 diff：「可同步资讯」建议的原料；算完落盘（重启后 24h 内仍可用）并推建议流重算
+    try {
+      const newSpaces = spaces.rows.length
+        ? spaces.rows.map(r => ({ podRaw: r.podRaw, vessel: r.vessel, etd: r.etd, cutoffRaw: r.cutoffRaw, boxQty: r.boxQty }))
+        : db.select({
+            podRaw: spaceQuotes.podRaw, vessel: spaceQuotes.vessel, etd: spaceQuotes.etd,
+            cutoffRaw: spaceQuotes.cutoffRaw, boxQty: spaceQuotes.boxQty,
+          }).from(spaceQuotes).all();
+      lastRatesDiff = computeRatesDiff(oldRates, rates.rows, newSpaces);
+      diffLoaded = true;
+      fs.mkdirSync(path.dirname(DIFF_PATH()), { recursive: true });
+      fs.writeFileSync(DIFF_PATH(), JSON.stringify(lastRatesDiff), "utf-8");
+      const d = lastRatesDiff;
+      Log.info("rates.sync", `镜像刷新：运价 ${rates.rows.length} 条、舱位 ${spaceImported} 条（远程 ${base}）；diff：降价 ${d.priceDrops.length} 新增港 ${d.addedPods.length} 将过期 ${d.expiringSoon.length} 临截关 ${d.spacesClosing.length}`);
+      nudge();
+    } catch (err) {
+      Log.warn("rates.sync", `diff 计算失败（不影响镜像）：${err instanceof Error ? err.message : String(err)}`);
+    }
     return okResult({ imported: rates.rows.length });
   } finally {
     syncing = false;
@@ -340,6 +525,8 @@ export interface QuoteDto {
   validityRaw: string | null; freeDays: string | null; shortfallFee: string | null; sender: string | null;
   /** 报价截图的 board_server 绝对 URL（无图为 null；接口未动，只拼现成的 /images/ 静态服务） */
   imageUrl: string | null;
+  /** 船期 ETD（源端文本，可能为空）：客户报价表的 ETD 列要用，追加在尾部不改展示列序 */
+  etd: string | null;
 }
 
 /** 条件查价（供 UI 与 agent 工具 quote_search 复用） */
@@ -398,6 +585,7 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
     // 尾键：详情抽屉字段（agent 表格卡只认前 7 键，加列不改展示序）
     validityRaw: rateQuotes.validityRaw, freeDays: rateQuotes.freeDays,
     shortfallFee: rateQuotes.shortfallFee, sender: rateQuotes.sender, imageName: rateQuotes.imageName,
+    etd: rateQuotes.etd,
   }).from(rateQuotes)
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(rateQuotes.oceanUsd)
@@ -407,7 +595,7 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
   const base = REMOTE_BASE.replace(/\/$/, "");
   return okResult(rows.map(({ imageName, ...rest }) => ({
     ...rest,
-    imageUrl: imageName ? `${base}/images/${encodeURIComponent(imageName)}` : null,
+    imageUrl: imageUrlOf(imageName, base),
   })));
 }
 
@@ -469,7 +657,7 @@ export function listSpaces(f: SpaceFilters): Result<SpaceDto[]> {
   const base = REMOTE_BASE.replace(/\/$/, "");
   return okResult(rows.map(({ imageName, ...rest }) => ({
     ...rest,
-    imageUrl: imageName ? `${base}/images/${encodeURIComponent(imageName)}` : null,
+    imageUrl: imageUrlOf(imageName, base),
   })));
 }
 

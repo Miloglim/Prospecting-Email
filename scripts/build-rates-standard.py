@@ -27,7 +27,8 @@ PORTMAP = os.path.join(ROOT, "src", "main", "services", "rates-portmap.json")
 DEFAULT_DB = os.path.join(ROOT, "docs", "local_board", "freight_rate.db")
 DEFAULT_OUT = os.path.join(ROOT, "data", "rates-standard.json")
 # 报价截图由 board_server 提供（/images/<文件名>），与运价服务同机
-IMAGES_BASE = (os.environ.get("RATES_REMOTE_URL") or "http://192.168.189.229:8788").rstrip("/")
+# 默认跟主程序同一个真源地址（2026-09-07 起为公网 HTTPS；旧内网 IP 只在局域网内可达）
+IMAGES_BASE = (os.environ.get("RATES_REMOTE_URL") or "https://l5ruag9m.qwenwork.host").rstrip("/")
 
 LANE_AS_POD = None  # 由 portmap lanes 填充
 

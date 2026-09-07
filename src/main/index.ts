@@ -22,7 +22,6 @@ import { registerKbIPC } from "./transport/kb.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
 import { initUpdater, cleanupUpdater } from "./updater";
 import { getResourcesRoot, loadConfig } from "./config";
-import { ensureBatch } from "./services/suggestion.service";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -185,8 +184,7 @@ app.whenReady().then(async () => {
   createTray();
   initUpdater(mainWindow!);
 
-  // 首页「AI 建议行动」的当天批次：后台生成，用户进空态时只读库填槽（不等模型）
-  setTimeout(() => { void ensureBatch().catch(() => { /* 失败就留规则版，不打扰 */ }); }, 30_000);
+  // 「行动建议」流已改为本地实时拼装 + 事件驱动热更新（suggestion-bus），无需启动批生成
 
   // P1-1: better-sqlite3 逐事务落盘，无需定时全量保存（旧 sql.js 30s 定时器已移除）
 

@@ -132,11 +132,22 @@ export interface AgentProfile {
   buildInstructions(): string;
 }
 
+/** 模型侧时钟：每回合现算（跨夜自动换）。数据侧本来就是新→旧（邮件倒序、报价默认只给当期、
+ *  跟进按 stale 优先），不需要任何全局平衡；这里只补模型自己没表这一角——
+ *  没有它，"有效期到 9/7" 是好是坏、"这人多久没跟进"都判不了，还容易拿训练截止日当今天。 */
+function clockBlock(): string {
+  const d = new Date(Date.now() + 8 * 3600_000);   // 北京时间
+  const week = "日一二三四五六"[d.getUTCDay()] ?? "";
+  return "\n\n当前时间：" + d.toISOString().slice(0, 10) + `（星期${week}，北京时间）。`
+    + "涉及时效的判断（是否临近过期、多久没跟进、算不算最近一批）以它为基准；"
+    + "但邮件与运价里的时间字段一律照抄工具返回值，不要自己换算时区或倒推日期。";
+}
+
 /** 默认角色：Prospector 业务助手（全量工具） */
 export const DEFAULT_PROFILE: AgentProfile = {
   name: "prospector-assistant",
   maxTurns: 16,
-  buildInstructions: () => AGENT_INSTRUCTIONS + identityBlock(),
+  buildInstructions: () => AGENT_INSTRUCTIONS + clockBlock() + identityBlock(),
 };
 
 export interface TurnOutcome {

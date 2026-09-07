@@ -23,6 +23,7 @@ import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
 import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
+import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
@@ -35,6 +36,7 @@ import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
 import { rememberWork, fingerprint, listWork } from "./working-memory";
 import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
+import { lookupReplyRates } from "./reply-rates";
 import { listQuotes, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
@@ -491,6 +493,22 @@ export const sendQueueAddSchema = z.object({
   body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量；用素材库模板时原样传模板正文）"),
 });
 
+export const campaignCreateSchema = z.object({
+  name: optStr(60).describe("任务名，如「巴西冷客户·4 触点」；不传按「筛选条件·N 触点」自动生成"),
+  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).min(1).max(2000))
+    .describe("收件联系人 id 列表（来自 search_contacts 的结构化筛选结果）。已回复/已触达的会被自动排除并如实报数"),
+  touches: z.array(z.object({
+    stage: z.string().max(20).describe("该轮用的模板阶段：initial(首信)/followup1/followup2/closing/reactivate"),
+    delayDays: z.number().int().min(0).max(60).describe("距上一封发出的天数；首轮（首信）填 0"),
+  })).min(1).max(6).describe("触点计划按顺序执行；建议 3-5 轮、间隔 4-7 天"),
+  autoSend: optBool().describe("后续触点是否无人值守自动发送（默认 true；内容为用户模板机械替换）。传 false=每轮入队待发送中心手动开始"),
+});
+
+export const campaignControlSchema = z.object({
+  campaignId: z.string().min(1).max(24).describe("任务 id（来自 campaign_create 或 campaign_status）"),
+  action: z.string().max(10).describe("pause=暂停（不再排新触点）｜resume=恢复｜stop=终止（终态，不可恢复）"),
+});
+
 function audit(ctx: ToolCtx, toolName: string, sideEffect: string, args: unknown,
                result: unknown, approval: string, error?: string): void {
   // 失败轨迹就地计数：带 error 的审计 = 这次没办成；办成立刻清零。
@@ -728,7 +746,7 @@ function selectContactsRaw(o: ContactSelectOpts): { rows: RawContactRow[]; total
   const db = getRawDb();
   const nRow = db.prepare(`${cte} SELECT COUNT(*) AS n ${from} ${where}`).all(...params) as Array<{ n: number }>;
   const total = nRow[0]?.n ?? 0;
-  const order = o.stale ? "ORDER BY (m.last_at IS NULL) DESC, m.last_at ASC" : "ORDER BY c.id";
+  const order = o.stale ? "ORDER BY (m.last_at IS NULL) DESC, m.last_at ASC" : "ORDER BY c.id DESC";   // 默认最新建档在前（本程序以邮件为脉搏，时效优先）
   const rows = db.prepare(
     `${cte} SELECT c.id AS id, c.email AS email, c.first_name AS firstName, c.last_name AS lastName,
        c.country AS country, c.stage AS stage, c.status AS status, cp.name AS companyName,
@@ -1248,20 +1266,24 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
       // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
-      // 客户表格优先用标准化层（data/rates-standard.json，柜型已透视成 20/40/NOR 三列、港口已归一）；
-      // 无该文件时回退用镜像行拼表。两条路都是机械生成，模型只许原样贴。
+      // 客户表格与 total/quotes 同源（闭环规范 §5.1-A，治"共 0 条却显示有价"的自相矛盾）：
+      // 镜像命中 → 优先标准化透视表（data/rates-standard.json，柜型三列透视、港口已归一），
+      // 无标准化行回退镜像行拼表；镜像未命中 → customerTable 一律为空——标准化层无有效期/
+      // 柜型过滤，冒充结果会让模型/工作台把可能过期的价当真，降级为 notice 里的参考提示。
       const stdWord = podQ || qQ || laneQ;
       const stdRows = stdWord ? queryStandard(stdWord, { carrier: filters.carrier }) : [];
-      const customerTable = stdRows.length
-        ? standardToMarkdown(stdRows)
-        : (r.data.length
-          ? [
-            "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
-            "|---|---|---|---|---|---|",
-            ...r.data.slice(0, 15).map(q =>
-              `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
-          ].join("\n")
-          : "");
+      const customerTable = total > 0
+        ? (stdRows.length
+          ? standardToMarkdown(stdRows)
+          : (r.data.length
+            ? [
+              "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
+              "|---|---|---|---|---|---|",
+              ...r.data.slice(0, 15).map(q =>
+                `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
+            ].join("\n")
+            : ""))
+        : "";
       const cheapest = r.data[0] ?? null;
       const answer = cheapest
         ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
@@ -1309,6 +1331,14 @@ export function buildHarnessTools(ctx: ToolCtx) {
               + "再给用户两条路：到「运价库」页点同步刷新镜像，或让你联网查当前市场行情。"
             : `两轮都没命中，且镜像刚同步过（${syncAt}）、台账可达——可以确定台账里没有这个航线/港口。`
               + "请如实告诉用户库里没有，并问一句要不要你联网查当前市场行情；用户明确同意前不要自行联网。");
+        }
+        // 标准化参考层降级提示（闭环规范 §5.1-A）：镜像未命中时它不许冒充结果（customerTable 已强制为空），
+        // 但行数值得说一句——"镜像没跟上"最常见，指向运价页同步，而不是拿参考层当报价。
+        if (stdRows.length) {
+          noticeLines.push(
+            `标准化参考层另有 ${stdRows.length} 条「${stdWord}」相关行（该层不做有效期/柜型过滤，可能含过期价，不作为报价依据）：`
+              + "这通常说明镜像没跟上真源——请到「运价库」页点同步后重查，或按 candidates 换词重试；不要把参考层的行当作查询结果报给用户。",
+          );
         }
       } else {
         if (r.data.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${r.data.length} 条，回答时必须注明。`);
@@ -1827,7 +1857,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       let draftContactId: number | null;
       let replySubject: string | null = null;
       let ratesAttached = 0;          // 回信里注入的真实运价条数（0=没查到匹配价）
-      let inquiryNoRates = false;     // 是询价邮件但工作台无匹配价 → 出稿后提示先查价
+      let ratesSelfQueried = false;   // 这批价是工具自查台账拿的（true）还是会话工作台里已有的（false）
+      let inquiryNoRates = false;     // 是询价邮件但工作台与台账都没匹配价 → 出稿后说明查无当期价
       let r: Result<string>;
       if (args.messageId) {
         // —— 回信模式（docs/agent-draft-reply-spec.md）：针对来信逐条应答 ——
@@ -1854,8 +1885,13 @@ export function buildHarnessTools(ctx: ToolCtx) {
         // 闭环：解析来信询价要素 + 从会话工作台拉此前查到的匹配真价，据真数据起草（灭掉占位编造）
         const inq = parseEmailInquiry(bodyText);
         const matched = pickRatesForEmail(inq, listWork(ctx.conversationId, "rates", 8));
-        const replyRates = matched?.rows ?? null;
+        // 工作台没有匹配价 → 工具自己查一次台账（一轮就出带真价的草稿）。
+        // 旧行为是返回 notice 叫模型「先 quote_search 再重调本工具」，弱模型实测不照做，
+        // 询价信的回信就只剩「报价稍后补」。规范 docs/agent-draft-reply-spec.md §询价信回信
+        const selfRates = matched ? null : lookupReplyRates(inq);
+        const replyRates = matched?.rows ?? selfRates?.rows ?? null;
         ratesAttached = replyRates?.length ?? 0;
+        ratesSelfQueried = !!selfRates;
         inquiryNoRates = !!(inq.pod || inq.container || inq.pol) && ratesAttached === 0;
         r = await generateEmailReply({
           language: langOk || undefined,
@@ -1947,11 +1983,13 @@ export function buildHarnessTools(ctx: ToolCtx) {
         subject, body, language: lang, contactId: draftContactId ?? null, actions,
         ...(ratesAttached ? { ratesUsed: ratesAttached } : {}),
         ...(inquiryNoRates ? {
-          notice: "这封是询价邮件，但本会话工作台里没有匹配到的已查运价，草稿只能走「报价稍后补」话术、不编数字。"
-            + "要出带具体价的回复：先用 quote_search 按来信的起运港/目的港/柜型查一次，再重新调 generate_draft（会自动带上刚查到的价）。",
+          notice: "这封是询价邮件，但会话工作台与台账里都没有匹配到的当期运价（工具已按来信的起运港/目的港/柜型自查过一次）。"
+            + "草稿走「报价稍后补」话术、不编数字。要给用户交代，就说台账暂无该航线当期报价，"
+            + "并给两条出口：去运价页手动同步一次台账，或联网调研当前市场行情（market_research）。",
         } : {}),
       };
-      audit(ctx, "generate_draft", "read", args, { subject, length: body.length, actions: actions.length, ratesAttached }, "auto");
+      audit(ctx, "generate_draft", "read", args,
+        { subject, length: body.length, actions: actions.length, ratesAttached, ratesSelfQueried }, "auto");
       return okOut(out);
     },
   });
@@ -2336,6 +2374,110 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  const campaignCreate = tool({
+    name: "campaign_create",
+    description: "创建发信任务：对一批联系人按触点计划自动跟进——首信发出后隔 N 天自动发下一轮，客户回复/退订/bounce 自动止损，计划走完自动收尾。"
+      + "流程：先 search_contacts 按结构化筛选圈人 → 把命中 id 传给 contactIds → 本工具出预览与确认卡，用户点确认才建档。"
+      + "内容=用户模板库对应阶段模板（机械变量替换），支持无人值守。单封/临时批量发信不要用本工具（那是 send_queue_add）。",
+    parameters: campaignCreateSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "campaign_create");
+      if (gateNote) return gateNote;
+      const pv = previewCampaign(args.contactIds);
+      if (!pv.success) return failOut("bad_list", pv.error);
+      const { eligible, excluded, total, sample } = pv.data;
+      if (eligible === 0) {
+        return failOut("no_eligible", `名单里 ${excluded} 人全部不符合资格（已回复/已触达/已不在库）。这些客户的后续由用户引导，不进批量队列。`);
+      }
+      const name = args.name?.trim() || `${eligible} 人·${args.touches.length} 触点`;
+      const autoSend = args.autoSend !== false;
+      const planSummary = args.touches.map((t, i) =>
+        i === 0 ? `首信(${t.stage})立即` : `${t.stage} 间隔${t.delayDays}天`).join(" → ");
+      audit(ctx, "campaign_create", "write", args, { eligible, excluded, rounds: args.touches.length }, "auto");
+      return okOut({
+        eligible, excluded, total, planSummary, autoSend,
+        sample,
+        actions: [registerAction({
+          conversationId: ctx.conversationId, toolName: "campaign_create",
+          label: `创建发信任务（${eligible} 人 × ${args.touches.length} 轮）`,
+          confirm: `为 ${eligible} 位联系人创建发信任务「${name}」：${planSummary}。后续触点${autoSend ? "自动发送（无人值守，内容=你的模板库）" : "入队待你在发送中心手动开始"}。`,
+          detail: "已回复/已触达自动排除；客户回复后自动止损；入队走既有队列（账号轮换/时窗/限额照常）",
+          diff: [
+            { field: "targets", label: "收件人", from: "—", to: sample.map(s => `#${s.id} ${s.name}`).join("、") + (eligible > sample.length ? ` 等 ${eligible} 人` : "") },
+            { field: "plan", label: "触点计划", from: "—", to: planSummary },
+            { field: "auto", label: "执行方式", from: "—", to: autoSend ? "无人值守" : "每轮手动开始" },
+          ],
+          target: { label: "去发送中心", href: "#/campaigns" },
+          run: async () => {
+            const r = createCampaign({ name, contactIds: args.contactIds, touches: args.touches, autoSend });
+            if (!r.success) return failResult(r.error);
+            await scanDueCampaigns();   // 首触点立即入队（不等下个扫描周期）
+            return okResult(`任务 ${r.data.id} 已创建：${r.data.eligible} 人入列（排除 ${r.data.excluded}），首信已入队列${autoSend ? "并自动开始" : "，等你在发送中心点开始"}。后续触点按计划自动跟进，客户回复即止损。`);
+          },
+        })],
+        notice: "预览即执行对象：确认卡里的名单数=实际建任务的名单。向用户口头说明计划节奏与止损规则，确认卡由用户点击生效。",
+      });
+    },
+  });
+
+  const campaignStatus = tool({
+    name: "campaign_status",
+    description: "查询发信任务进度：不带参=全部任务概览（状态/各轮已发/回复/待发/止损计数）；带 campaignId=单任务名单明细。用户问「任务怎么样了」「发了多少、几个回了」用。",
+    parameters: z.object({
+      campaignId: optStr(24).describe("要查明细的任务 id；不传=全部任务概览"),
+    }),
+    execute: async (args) => {
+      const gateNote = gate(ctx, "campaign_status");
+      if (gateNote) return gateNote;
+      if (args.campaignId) {
+        const d = getCampaignDetail(args.campaignId.trim());
+        if (!d.success) return failOut("not_found", d.error);
+        const data = d.data;
+        audit(ctx, "campaign_status", "read", args, { id: args.campaignId, targets: data.targets.length }, "auto");
+        return okOut({
+          campaign: data.campaign,
+          targets: data.targets.slice(0, 20),
+          notice: `名单共 ${data.campaign?.total ?? 0} 人，本表展示前 20。status 口径：pending=待发，queued=已入队，sent=计划走完，replied/bounced/unsubscribed=止损，skipped=排除。`,
+        });
+      }
+      const campaigns = getCampaignOverview();
+      audit(ctx, "campaign_status", "read", args, { count: campaigns.length }, "auto");
+      if (!campaigns.length) {
+        return okOut({ campaigns: [], notice: "还没有发信任务。要批量自动跟进，先 search_contacts 筛人再 campaign_create。" });
+      }
+      return okOut({
+        campaigns,
+        notice: "回答格式：逐任务一句「名称 · 状态 · 已发 X/名单 Y · 回复 Z · 待发 W」；用户要细看某任务再带 campaignId 查一次。",
+      });
+    },
+  });
+
+  const campaignControl = tool({
+    name: "campaign_control",
+    description: "控制发信任务：pause=暂停（不再排新触点，在途批次照常）；resume=恢复；stop=终止（终态，待发触点全部清空，不可恢复）。用户说「先停一下那个任务」「恢复跑」时用。",
+    parameters: campaignControlSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "campaign_control");
+      if (gateNote) return gateNote;
+      const action = (args.action ?? "").trim().toLowerCase();
+      if (!["pause", "resume", "stop"].includes(action)) {
+        return failOut("bad_action", `action 值「${args.action}」不存在。有效值：pause / resume / stop。`);
+      }
+      const status = action === "pause" ? "paused" : action === "resume" ? "running" : "stopped";
+      const r = setCampaignStatus(args.campaignId.trim(), status as "paused" | "running" | "stopped");
+      audit(ctx, "campaign_control", "write", args, r.success ? { campaignId: args.campaignId, action } : undefined, "auto", r.success ? undefined : r.error);
+      if (!r.success) return failOut("control_failed", r.error);
+      return okOut({
+        campaignId: args.campaignId, action, status,
+        notice: action === "stop"
+          ? "任务已终止：待发触点全部清空，已发出的不受影响。如实告知用户不可恢复。"
+          : action === "pause"
+            ? "任务已暂停：不再排新触点；正在队列里的照常发完。恢复用 resume。"
+            : "任务已恢复：到期触点会被调度器自动排入队列。",
+      });
+    },
+  });
+
   // ── 审批闸门（唯一收口）────────────────────────────────────────────
   // needsApproval 一律由注册表派生：登记为 sideEffect:"write" 就必须人工确认。
   // 各工具不再自己写一份——漏写不再是「静默执行」的成因（export_artifact 曾把注册表
@@ -2350,6 +2492,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
     updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, listTemplatesTool, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
+    campaignCreate, campaignStatus, campaignControl,
   ];
   for (const t of tools) {
     const name = (t as unknown as { name?: string }).name ?? "";

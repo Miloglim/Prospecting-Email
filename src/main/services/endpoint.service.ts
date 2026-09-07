@@ -86,6 +86,26 @@ export function thinkingExtras(family: EndpointFamily): Record<string, unknown> 
   }
 }
 
+/**
+ * 单发合成类调用（起草/回信/背调）开思考的方言。
+ * 为什么能安全开：单发请求只有 system+user、没有 assistant 历史，DeepSeek 思考模式的
+ * 「reasoning_content 必须回传」约束无从触发（实测单发+thinking=200）；agent 多轮仍恒关。
+ */
+export function thinkingExtrasOn(family: EndpointFamily): Record<string, unknown> {
+  switch (family) {
+    case "google":
+      return {};   // 兼容层没有可用的思考控制字段（同 thinkingExtras 的实测结论），交给端点自己
+    case "ollama":
+      return { chat_template_kwargs: { thinking: true } };
+    case "openai":
+      return { reasoning_effort: "low" };
+    case "strict":
+      return { thinking: { type: "enabled" } };
+    default:
+      return { chat_template_kwargs: { enable_thinking: true, thinking: true } };
+  }
+}
+
 // ── 轻任务端点（大小模型路由的「小」档）──────────────────────
 // 适用：会话压缩摘要、邮件总结、背调报告——单发、无工具循环，便宜档足够。
 // 未配置时回落主端点（行为与今天一致）；密钥同样只进 .env。

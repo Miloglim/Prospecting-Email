@@ -160,7 +160,7 @@ describe("generate_draft 回信模式", () => {
     const arg = replyFn.mock.calls[0]![0] as { rates?: unknown[] | null };
     expect(arg.rates == null || (arg.rates as unknown[]).length === 0).toBe(true);
     expect(out.ratesUsed).toBeUndefined();
-    expect(out.notice).toContain("quote_search");            // 显式指路先查价，而非静默占位
+    expect(out.notice).toContain("不编");                       // 不编造；指路口径随台账自查/同步/行情演进
   });
 
   it("传 messageId：prompt 带来信纯文本（去 HTML），主题强制 Re:，收件人走关联联系人", async () => {

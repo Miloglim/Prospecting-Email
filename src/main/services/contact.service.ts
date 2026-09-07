@@ -9,6 +9,7 @@ import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-o
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
+import { nudge as nudgeSuggestions } from "./suggestion-bus";
 import * as XLSX from "xlsx";
 
 // ── 导入：列名别名 → 字段映射 ──
@@ -289,6 +290,7 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
     }
 
     saveDatabase();
+    nudgeSuggestions();   // 联系人变化 → 建议流热更新（沉默名单/往来匹配可能变）
     const updated = getDb().select().from(contacts).where(eq(contacts.id, existing.id)).get()!;
     return okResult(updated);
   }
@@ -313,6 +315,7 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
     updatedAt: now,
   } as InsertContactRow).run();
   saveDatabase();
+  nudgeSuggestions();   // 新建联系人 → 建议流热更新
 
   const created = getDb().select().from(contacts).where(eq(contacts.email, input.email)).get()!;
   return okResult(created);

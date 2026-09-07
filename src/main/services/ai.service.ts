@@ -3,7 +3,7 @@ import { APP_ROOT } from "../config";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 import { upsertEnv } from "../env-store";
-import { readActiveEndpoint, readLightEndpoint, endpointFamily, thinkingExtras } from "./endpoint.service";
+import { readActiveEndpoint, readLightEndpoint, endpointFamily, thinkingExtras, thinkingExtrasOn } from "./endpoint.service";
 import { readIdentity } from "./agent/identity";
 import { netFetch } from "../net-proxy";
 
@@ -74,9 +74,8 @@ function resolveLlmEndpoint(): { url: string; model: string; key: string; label:
   return null;
 }
 
-/** 调用 LLM，返回纯文本。超时 60s。 */
-/** 轻任务 LLM 调用（会话压缩摘要等单发小任务；也被 agent.service 复用） */
-export async function chat(system: string, user: string): Promise<Result<string>> {
+/** 轻任务 LLM 调用（会话压缩摘要等单发小任务；也被 agent.service 复用）。opts.thinking 供起草/背调等高价值合成开思考。 */
+export async function chat(system: string, user: string, opts?: { thinking?: boolean }): Promise<Result<string>> {
   // 大小模型路由：能力调用（总结/背调/开发信/压缩摘要）优先走轻任务档 LIGHT_*，未配置回落主端点
   const light = readLightEndpoint();
   const ep = light.source === "light"
@@ -85,10 +84,13 @@ export async function chat(system: string, user: string): Promise<Result<string>
   if (!ep) return failResult("模型端点未配置：请到「设置 → 模型与端点」填好 Base URL / 密钥 / 模型名并启用（或在 .env 配 DEEPSEEK_API_KEY 作回落）");
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
+  // 思考会显著加长首字前延迟：开思考的合成调用（起草/背调）放宽到 120s
+  const timeoutMs = opts?.thinking ? 120_000 : 60_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // 这些是「一次性出全文」的调用，推理模式只会拖慢它 —— 按端点族关掉思考；
+    // 默认关思考（总结/压缩这类一次性出全文，推理只会拖慢）；起草/背调等高价值合成
+    // 由调用方传 {thinking:true} 走开思考方言 —— 单发无 assistant 历史，RC 回传约束不存在。
     // 注入必须走方言（给 Gemini 塞 chat_template_kwargs 有 400 风险）
     const payload = {
       model: ep.model,
@@ -97,7 +99,9 @@ export async function chat(system: string, user: string): Promise<Result<string>
         { role: "user", content: user },
       ],
       temperature: 0.7,
-      ...thinkingExtras(endpointFamily(ep.url)),
+      ...(opts?.thinking
+        ? thinkingExtrasOn(endpointFamily(ep.url))
+        : thinkingExtras(endpointFamily(ep.url))),
     };
     const res = await netFetch(ep.url, {
       method: "POST",
@@ -119,15 +123,15 @@ export async function chat(system: string, user: string): Promise<Result<string>
   } catch (err: unknown) {
     const aborted = (err as { name?: string })?.name === "AbortError";
     Log.error("ai.chat", aborted ? "超时" : "网络错误", err instanceof Error ? err.stack : String(err));
-    return failResult(aborted ? "模型请求超时（60s）" : "模型网络错误");
+    return failResult(aborted ? `模型请求超时（${timeoutMs / 1000}s）` : "模型网络错误");
   } finally {
     clearTimeout(timer);
   }
 }
 
 /** 调 LLM 并要求返回 JSON，解析失败时给 fail */
-export async function chatJson<T>(system: string, user: string): Promise<Result<T>> {
-  const r = await chat(system, user);
+export async function chatJson<T>(system: string, user: string, opts?: { thinking?: boolean }): Promise<Result<T>> {
+  const r = await chat(system, user, opts);
   if (!r.success) return r;
   const cleaned = r.data.replace(/```json|```/g, "").trim();
   try {
@@ -271,7 +275,7 @@ export async function generateBackcheckReport(input: BackcheckInput, hits: Searc
   const searchText = hits.map(h => `· ${h.title}\n${h.snippet}`).join("\n\n");
   const system = "你是资深货代销售分析师。根据搜索资料生成公司背调报告。只输出 JSON，不要任何额外文字。";
   const user = `公司：${input.companyName}\n网站：${input.website || "未知"}\n国家：${input.country || "未知"}\n\n搜索资料：\n${searchText || "（无）"}\n\n请输出 JSON：{"summary":"一句话总结","importActivity":"进口活跃度判断","categories":["主营品类"],"logisticsFit":"货代契合点（如何切入）","rating":1-5数字,"risk":["风险"],"sources":[{"title","url"}]}`;
-  return chatJson<BackcheckReport>(system, user);
+  return chatJson<BackcheckReport>(system, user, { thinking: true });
 }
 
 export interface DraftSender {
@@ -308,7 +312,7 @@ export async function generateEmailDraft(input: EmailDraftInput): Promise<Result
       + "报价纪律：未经确认的运价、舱位、船期不向客户承诺；涉及价格注明「以最终确认为准」。"
     : "";
   const user = `收件公司：${input.companyName}\n收件人：${input.contactName}\n${back}${idBlock}\n\n请写这封邮件。`;
-  return chat(system, user);
+  return chat(system, user, { thinking: true });
 }
 
 export interface ReplyRateLine {
@@ -382,7 +386,7 @@ export async function generateEmailReply(input: EmailReplyInput): Promise<Result
   const focus = input.focus ? `\n内容侧重：${input.focus}` : "";
   const rateBlock = buildRateContext(input.rates, input.emailFacts);
   const user = `来信人：${input.contactName}（${input.fromEmail}），公司：${input.companyName}\n来信主题：${input.subject || "（无）"}${focus}${idBlock}${rateBlock}\n\n【来信全文】\n${input.bodyText}\n\n请写这封回复。`;
-  return chat(system, user);
+  return chat(system, user, { thinking: true });
 }
 
 export interface EmailSummaryInput {

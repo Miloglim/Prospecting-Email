@@ -34,6 +34,8 @@ export const EVENTS = {
   AGENT_APPROVAL: "agent:approval",
   /** Agent 后台长任务进度快照（start_batch_task 每步全量推送，任务卡原地刷新） */
   AGENT_TASK: "agent:task",
+  /** 新对话「行动建议」流变化（数据事件驱动重算，空态就地刷新；规范 docs/suggestion-feed-spec.md） */
+  SUGGESTIONS_CHANGED: "suggestions:changed",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];

@@ -12,6 +12,7 @@ import { Log } from "../logger";
 import { saveDatabase } from "../db";
 import { sendQueue } from "../db/schema/send-queue";
 import { EVENTS } from "../events";
+import { nudge as nudgeSuggestions } from "./suggestion-bus";
 import { loadConfig, DEFAULT_SCHEDULE } from "../config";
 import { writeBodyForLastInsert } from "./inbox.service";
 import { assembleEmail, type Lang, type ClientType, type Stage } from "./sentence-library";
@@ -141,7 +142,8 @@ function recordQuotaSend(count: number): void {
 
 let pushFn: ((c: string, d: unknown) => void) | null = null;
 export function setPushFn(fn: (c: string, d: unknown) => void) { pushFn = fn; }
-function push(c: string, d: unknown) { try { pushFn?.(c, d); } catch { /* */ } }
+// 发送进度同时喂建议流热更新（debounce 在总线里，逐收件人推送不会导致逐次重算）
+function push(c: string, d: unknown) { try { pushFn?.(c, d); } catch { /* */ } if (c === EVENTS.SEND_PROGRESS) nudgeSuggestions(); }
 
 let sendBccFn: ((item: SendItem & { body: string }) => Promise<Result<{ messageId: string | null }>>) | null = null;
 export function setSendBccFn(fn: (item: SendItem & { body: string }) => Promise<Result<{ messageId: string | null }>>) { sendBccFn = fn; }
@@ -682,7 +684,7 @@ let abortFlag = false; // 串行模型：单一批次中断标志（旧 per-acco
 /** 公共发送入口：配额守卫 → 账号分配 → 限额裁剪 → 持久化 → 启动发送循环。
  *  autoStart=false 时只入队落库、不发一封（对齐旧 PE 两步式：加入队列 → 队列页手动开始）。
  *  返回 { batchId, queued(组), queuedCount(封), dropped(组) } — 前端据此提示裁剪。 */
-async function startQueue(items: SendItem[], autoStart = true): Promise<Result<{ batchId: string; queued: number; queuedCount: number; dropped: number }>> {
+export async function startQueue(items: SendItem[], autoStart = true): Promise<Result<{ batchId: string; queued: number; queuedCount: number; dropped: number }>> {
   if (state.isRunning) return failResult("已有发送任务运行中");
   if (items.length === 0) return failResult("没有待发送项");
 
@@ -976,6 +978,9 @@ async function runBatchLoop(): Promise<void> {
                 }
               }
             } catch { /* 推进失败不影响发送记录 */ }
+            // 智能发信任务推进（docs/smart-send-spec.md §3.1）：真实发出 → 任务触点记一轮、排下一轮。
+            // 惰性 import 防循环依赖（campaign.service 引本服务的 buildDynamicQueue/类型）。
+            try { void import("./campaign.service").then(cm => cm.onCampaignSendSent(rc.contactId)); } catch { /* 任务推进失败不影响发送记录 */ }
             // v4.0: 发信不再自动标已触达 — reached 只能用户手动设置/改标签触发
           } catch (err) {
             Log.error("send.record", rc.email, err instanceof Error ? err.stack : undefined);
@@ -1006,6 +1011,8 @@ async function runBatchLoop(): Promise<void> {
         }
         item.status = "failed"; item.error = r.error; state.failedCount++;
         try { getDb().update(sendQueue).set({ status: "failed", error: r.error }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
+        // 智能发信任务失败回退（docs/smart-send-spec.md §3.2）：重试耗尽的目标回 pending 明天再试，不无声丢触点
+        try { for (const rc of item.recipients) void import("./campaign.service").then(cm => cm.onCampaignSendFailed(rc.contactId)); } catch { /* */ }
         saveDatabase(); // P0-2: 失败态同样即时落盘，崩溃恢复不会重发已判定失败的组
         const s = state.accountStats.find(x => x.accountId === accountId);
         if (s) s.failed++;

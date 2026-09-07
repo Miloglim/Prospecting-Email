@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Tabs } from "antd";
 import { CampaignList } from "./CampaignList";
+import { CampaignTasks } from "./CampaignTasks";
 import { QueuePage } from "../queue/QueuePage";
 import { HistoryPage } from "../history/HistoryPage";
 
@@ -19,6 +20,7 @@ export function SendCenter() {
       size="small"
       destroyOnHidden
       items={[
+        { key: "tasks", label: "发信任务", children: <CampaignTasks /> },
         { key: "new", label: "新建任务", children: <CampaignList goToQueue={() => setTab("queue")} /> },
         { key: "queue", label: "发送队列", children: <QueuePage /> },
         { key: "history", label: "发送历史", children: <HistoryPage /> },

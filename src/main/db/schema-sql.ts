@@ -150,6 +150,29 @@ CREATE TABLE IF NOT EXISTS agent_working_memory (
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_awm_conv_kind ON agent_working_memory(conversation_id, kind);
+CREATE TABLE IF NOT EXISTS send_campaigns (
+  id text PRIMARY KEY NOT NULL,
+  name text NOT NULL,
+  status text DEFAULT 'running' NOT NULL,
+  auto_send integer DEFAULT 1 NOT NULL,
+  target_filter_json text DEFAULT '{}' NOT NULL,
+  touch_plan_json text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS send_campaign_targets (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  campaign_id text NOT NULL,
+  contact_id integer NOT NULL,
+  status text DEFAULT 'pending' NOT NULL,
+  round integer DEFAULT 0 NOT NULL,
+  next_touch_at text,
+  last_sent_at text,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sct_campaign_status ON send_campaign_targets(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_sct_status_next ON send_campaign_targets(status, next_touch_at);
+CREATE INDEX IF NOT EXISTS idx_sct_campaign_contact ON send_campaign_targets(campaign_id, contact_id);
 CREATE INDEX IF NOT EXISTS idx_agent_suggestions_day ON agent_suggestions(day);
 CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);

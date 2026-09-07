@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 import "./OnboardingWizard.css";
 
 // ── 新手向导（复刻旧 PE OOBE：全屏覆盖 + 步骤滑入 + 完成页 Logo/渐变字 + 毛玻璃退出 + 可拖拽教程卡）──
-// 触发：启动后无 SMTP 账号自动弹出；Shift+点击侧边栏版本号强制重开（open-onboarding 事件）。
+// 触发：启动后无 SMTP 账号自动弹出；点过「跳过」或走完向导后不再自动弹（config.general.onboarding）；
+// Shift+点击侧边栏版本号强制重开（open-onboarding 事件，不受该标记影响）。
 // 步骤：①邮箱（保存即服务端 SMTP/IMAP 连通性验证）②署名 ③通用设置 → 完成页 → 教程卡。
 
 type IpcResult<T> = { success: boolean; data?: T; error?: string };
@@ -75,12 +76,29 @@ export function OnboardingWizard() {
   useEffect(() => {
     const open = () => { setStep(0); setBack(false); setForm(INITIAL); setErrs(new Set()); setServerErr(""); setPhase("opening"); };
     const check = async () => {
-      const r = await window.api.invoke("accounts:list") as IpcResult<unknown[]>;
+      // 两条并发查：串行会让「该不该弹」多等一个 IPC 往返
+      const [r, cfg] = await Promise.all([
+        window.api.invoke("accounts:list") as Promise<IpcResult<unknown[]>>,
+        window.api.invoke("system:getConfig") as Promise<IpcResult<{ general?: { onboarding?: string } }>>,
+      ]);
+      // 用户处置过（跳过 / 走完）就永远不再自动弹——即使后来把账号删空也不打扰；
+      // 要看向导只能 Shift+点版本号（下面的 open-onboarding 通道，不看这个标记）
+      if (cfg?.success && cfg.data?.general?.onboarding) return;
       if (r?.success && (r.data?.length ?? 0) === 0) later(300, open);
     };
     void check();
     window.addEventListener("open-onboarding", open);
     return () => window.removeEventListener("open-onboarding", open);
+  }, []);
+
+  /** 把「向导已处置」写进配置（general 是整体覆盖，照向导里其他写法的模式先读再并） */
+  const markOnboarded = useCallback(async (kind: "skipped" | "done") => {
+    try {
+      const cfg = await window.api.invoke("system:getConfig") as IpcResult<{ general?: Record<string, unknown> }>;
+      await window.api.invoke("system:updateConfig", {
+        general: { ...(cfg?.data?.general || {}), onboarding: kind },
+      });
+    } catch { /* 标记失败不卡关闭动画：最坏是下次再弹一次 */ }
   }, []);
 
   // opening → 双 rAF 挂 show 类（进场过渡）
@@ -94,7 +112,7 @@ export function OnboardingWizard() {
     setErrs(e => { if (!e.has(k)) return e; const n = new Set(e); n.delete(k); return n; });
   };
 
-  const skip = () => setPhase("hiding");
+  const skip = () => { void markOnboarded("skipped"); setPhase("hiding"); };
   useEffect(() => {
     if (phase === "hiding") later(600, () => setPhase("closed"));
     if (phase === "finishing") later(700, () => setPhase("fadeout"));
@@ -244,7 +262,7 @@ export function OnboardingWizard() {
                 <h2 className="ob-h2 done">一切就绪</h2>
                 <p className="ob-desc">您的邮箱已配置完成，退信检测将自动使用相同的邮箱与密码，无需额外设置。</p>
                 <div className="ob-actions">
-                  <button className="ob-btn" onClick={() => setPhase("finishing")}>开始使用</button>
+                  <button className="ob-btn" onClick={() => { void markOnboarded("done"); setPhase("finishing"); }}>开始使用</button>
                 </div>
               </div>
             )}

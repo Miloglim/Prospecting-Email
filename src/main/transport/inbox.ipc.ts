@@ -3,6 +3,9 @@ import * as tls from "tls";
 import * as net from "net";
 import { IPC } from "../contract";
 import * as InboxService from "../services/inbox.service";
+import * as SendService from "../services/send.service";
+import * as CampaignService from "../services/campaign.service";
+import { nudge as nudgeSuggestions } from "../services/suggestion-bus";
 import { Log } from "../logger";
 import { failResult, okResult, type Result } from "../errors";
 import { getDb } from "../db";
@@ -778,6 +781,9 @@ export function registerInboxIPC() {
   InboxService.setInboxPushFn(createPushFn());
   _pushToRenderer = createPushFn();
   InboxService.startAutoFetch();
+  // 智能发信任务（docs/smart-send-spec.md）：注入队列入口 + 启动到期触点调度器
+  CampaignService.setCampaignQueueFn((items, autoStart) => SendService.startQueue(items, autoStart));
+  CampaignService.startCampaignScheduler();
 
   ipcMain.handle(IPC.INBOX.LIST, async () => {
     return InboxService.listInbox();
@@ -795,7 +801,7 @@ export function registerInboxIPC() {
         ? [accountId]
         : getDb().select({ id: emailAccounts.id }).from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all().map(a => a.id);
       for (const aid of targets) n += await backfillBounceDeep(aid);
-      if (n > 0) BrowserWindow.getAllWindows()[0]?.webContents.send("inbox:newMail", { count: 0 });
+      if (n > 0) { BrowserWindow.getAllWindows()[0]?.webContents.send("inbox:newMail", { count: 0 }); nudgeSuggestions(); }
     })().catch(err => Log.error("inbox.backfill", "退信补匹配失败", err instanceof Error ? err.stack : undefined));
     // 后台检测 Sent 文件夹（不阻塞返回，完成后推送通知刷新前端）
     const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
@@ -809,6 +815,7 @@ export function registerInboxIPC() {
         try {
           InboxService.cleanupInbox();
           BrowserWindow.getAllWindows()[0]?.webContents.send("inbox:newMail", { count: totalNew });
+          nudgeSuggestions();
         } catch { /* */ }
       }
     });

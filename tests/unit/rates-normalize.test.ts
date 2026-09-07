@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalizeContainer, parseValidity, mapRemoteRow,
+  normalizeContainer, parseValidity, mapRemoteRow, imageUrlOf,
 } from "../../src/main/services/rate-sync.service";
 
 describe("normalizeContainer — 柜型脏值归一", () => {
@@ -105,5 +105,37 @@ describe("mapRemoteRow — board_server 行 → 归一化镜像行（键名=2026
   it("无目的港的行返回 null 跳过；无 content_key 用兜底主键", () => {
     expect(mapRemoteRow({ route: "加勒比" }, "remote-2")).toBeNull();
     expect(mapRemoteRow({ pod: "XPORT" }, "remote-3")!.recordId).toBe("remote-3");
+  });
+});
+
+// 截图字段在真源上换过名字：公网台账实测 image_url 恒 null、image_file 才是有值的那个
+// （500 行里 341 行带图）。只认 image_url/image_name 会让 imageUrl 全表为 null —— 用户看到的
+// 就是「报价单链接一片空白」。这里把四种形态都锁住。
+describe("报价截图字段容错", () => {
+  it("image_file 命中（公网真源现状）", () => {
+    expect(mapRemoteRow({ pod: "SANTOS", image_file: "msgJMEoHNTPTr6.png" }, "i-1")!.imageName)
+      .toBe("msgJMEoHNTPTr6.png");
+  });
+
+  it("images[] 数组形态：取第一条的 name（missing 标记是部署问题，不影响收名）", () => {
+    const row = {
+      pod: "SANTOS", image_url: null, image_file: null,
+      images: [{ name: "a.png", file: null, url: null, missing: true }, { name: "b.png" }],
+    };
+    expect(mapRemoteRow(row, "i-2")!.imageName).toBe("a.png");
+  });
+
+  it("字符串数组与旧字段优先级：image_url > image_name > image_file > images", () => {
+    expect(mapRemoteRow({ pod: "X", images: ["z.png"] }, "i-3")!.imageName).toBe("z.png");
+    expect(mapRemoteRow({ pod: "X", image_url: "u.png", image_file: "f.png" }, "i-4")!.imageName).toBe("u.png");
+    expect(mapRemoteRow({ pod: "X", image_name: "n.png", image_file: "f.png" }, "i-5")!.imageName).toBe("n.png");
+    expect(mapRemoteRow({ pod: "X" }, "i-6")!.imageName).toBeNull();
+  });
+
+  it("拼地址：文件名拼 /images/ 并转义；真源给完整 URL 就原样用", () => {
+    expect(imageUrlOf("1-天津-tj_fak.png", "https://h.example"))
+      .toBe("https://h.example/images/1-%E5%A4%A9%E6%B4%A5-tj_fak.png");
+    expect(imageUrlOf("https://cdn.example/a.png", "https://h.example")).toBe("https://cdn.example/a.png");
+    expect(imageUrlOf(null, "https://h.example")).toBeNull();
   });
 });

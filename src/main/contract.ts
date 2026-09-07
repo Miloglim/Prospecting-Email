@@ -58,6 +58,9 @@ export const IPC = {
     PREVIEW:          chan(PREFIX.SEND, "preview"),
     GET_QUOTA:        chan(PREFIX.SEND, "getQuota"),
     DYNAMIC:          chan(PREFIX.SEND, "dynamic"),
+    CAMPAIGNS:        chan(PREFIX.SEND, "campaigns"),
+    CAMPAIGN_DETAIL:  chan(PREFIX.SEND, "campaignDetail"),
+    CAMPAIGN_CONTROL: chan(PREFIX.SEND, "campaignControl"),
   },
   INBOX: {
     LIST:          chan(PREFIX.INBOX, "list"),
@@ -166,8 +169,10 @@ export const IPC = {
     EXPORT_DIAGNOSTICS: chan(PREFIX.AGENT, "exportDiagnostics"),
     /** 能力缺口台账清单（按被抱怨次数降序；/缺口 命令查看） */
     LIST_GAPS: chan(PREFIX.AGENT, "listGaps"),
-    /** 首页「AI 建议行动」：同步拿本地规则版，AI 版算好后走 agent:suggestions 事件替换 */
+    /** 新对话「行动建议」流：本地候选实时拼装；热更新走 suggestions:changed 事件（docs/suggestion-feed-spec.md） */
     SUGGESTIONS: chan(PREFIX.AGENT, "suggestions"),
+    /** chip 被点击 → 当天不再推荐同一条 */
+    DISMISS_SUGGESTION: chan(PREFIX.AGENT, "dismissSuggestion"),
     /** 工具元数据（UI 中文名 + 追问引导），渲染端不再维护第二份工具清单 */
     TOOL_META: chan(PREFIX.AGENT, "toolMeta"),
   },

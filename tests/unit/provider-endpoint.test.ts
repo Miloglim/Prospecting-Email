@@ -23,7 +23,7 @@ process.env.AI_PROVIDERS_PATH = STORE_FILE;
 const KEYS = ["AGENT_API_BASE_URL", "AGENT_MODEL", "AGENT_KEY_ENV", "AGENT_API_KEY", "DEEPSEEK_API_KEY"];
 for (const k of KEYS) delete process.env[k];
 
-const { readActiveEndpoint, endpointFamily, thinkingExtras, readLightEndpoint } = await import("../../src/main/services/endpoint.service");
+const { readActiveEndpoint, endpointFamily, thinkingExtras, thinkingExtrasOn, readLightEndpoint } = await import("../../src/main/services/endpoint.service");
 const { parseProxyServer } = await import("../../src/main/net-proxy");
 const { upsertEnv, readEnvFile } = await import("../../src/main/env-store");
 const Prov = await import("../../src/main/services/provider.service");
@@ -219,5 +219,13 @@ describe("端点族识别与关思考参数方言", () => {
   it("Ollama 与 vLLM/agnes 各自用自己认的键关思考", () => {
     expect(thinkingExtras("ollama")).toEqual({ chat_template_kwargs: { thinking: false } });
     expect(thinkingExtras("compat")).toEqual({ chat_template_kwargs: { enable_thinking: false, thinking: false } });
+  });
+
+  it("单发合成调用开思考方言（起草/背调）：单发无 assistant 历史，RC 回传约束不存在", () => {
+    expect(thinkingExtrasOn("strict")).toEqual({ thinking: { type: "enabled" } });
+    expect(thinkingExtrasOn("compat")).toEqual({ chat_template_kwargs: { enable_thinking: true, thinking: true } });
+    expect(thinkingExtrasOn("ollama")).toEqual({ chat_template_kwargs: { thinking: true } });
+    expect(thinkingExtrasOn("openai")).toEqual({ reasoning_effort: "low" });
+    expect(thinkingExtrasOn("google")).toEqual({});   // 兼容层无可用思考控制字段，交给端点自己
   });
 });

@@ -8,6 +8,7 @@ import { eq, desc, and, sql as dsql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
+import { nudge as nudgeSuggestions } from "./suggestion-bus";
 
 // ── 阶段定义 ──
 export const STAGES = [
@@ -179,6 +180,7 @@ export function addNote(contactId: number, text: string): Result<void> {
     bodyPreview: text, createdAt: new Date().toISOString(),
   }).run();
   saveDatabase();
+  nudgeSuggestions();   // 跟进写入 → 建议流热更新（沉默天数/到期名单变了）
   return okResult(undefined);
 }
 
@@ -203,6 +205,7 @@ export async function setReminder(contactId: number, reminderAt: string, note?: 
     }).run();
   }
   saveDatabase();
+  nudgeSuggestions();   // 提醒/跟进变化 → 建议流热更新
   return okResult(undefined);
 }
 

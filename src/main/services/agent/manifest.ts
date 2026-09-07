@@ -124,6 +124,23 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3 },
   },
   {
+    name: "campaign_create", label: "创建发信任务",
+    route: "创建发信任务（写，需确认）：对一批联系人按触点计划自动跟进——首信后隔 N 天自动发下一轮，"
+      + "回复/退订/bounce 自动止损。用户从首页建议卡进来要「批量开发/自动跟进」时用：先 search_contacts 筛人，"
+      + "再把 id 传进来；已回复/已触达自动排除。内容=用户模板库对应阶段模板，支持无人值守；",
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
+  },
+  {
+    name: "campaign_status", label: "查询发信任务进度",
+    route: "查询发信任务进度（各任务已发/回复/待发/止损计数，可带 campaignId 看名单明细）；用户问「任务怎么样了」「发了多少回复了多少」用；",
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 4 },
+  },
+  {
+    name: "campaign_control", label: "暂停/恢复/终止发信任务",
+    route: "暂停/恢复/终止发信任务（写，需确认）：用户说「先停一下那个任务」「恢复跑」时用；终止后该任务不再排新触点；",
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
+  },
+  {
     name: "import_contacts", label: "导入联系人",
     route: "批量导入客户信息入库（写，需确认；用户粘贴任意格式名单/表格/签名时，你负责整理成 contacts 数组再调用，"
       + "绝不要反问「用 CSV 还是 JSON」这类格式问题——邮箱是唯一键，无效或已存在会跳过不覆盖）；",

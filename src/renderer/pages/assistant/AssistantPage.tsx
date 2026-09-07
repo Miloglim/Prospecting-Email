@@ -707,54 +707,33 @@ function PlanCard({ items }: { items: PlanStep[] }) {
 }
 
 /**
- * 能力面板兜底版：主进程的建议还没回来（或没配端点）时显示这份。
- * 六个 title 必须与主进程 suggestion.service 的 GROUP_TITLES 一字不差，
- * prompt 前缀必须与 GROUP_PROMPT 一字不差 —— 卡上显示 text，点击发送 prompt。
+ * 新对话「行动建议」流（docs/suggestion-feed-spec.md）：布局与旧版一致（居中大 Logo+标题），
+ * 建议区为豆包式「想法气泡」——自然宽度、居中流式排布、3–4 个可点。
+ * feed 由主进程本地实时拼装（零模型调用，真实候选不足 3 条时从预备库补齐），
+ * 数据事件驱动 suggestions:changed 热更新；每次切换会话回骨架态重新拉（本地毫秒级）。
+ * 渲染端只做展示与点击。IPC 失败时用下面这份极简兜底（正常路径主进程自带预备库降级，
+ * 这里只防「连 IPC 都不通」的极端情况，不重复维护方法论前缀）。
  */
-const CAPABILITIES: Array<{ title: string; cap: string; items: Array<{ text: string; prompt: string }> }> = [
-  {
-    title: "查运价", cap: "接入钉钉《海运运价智能台账》本地镜像",
-    items: [
-      { text: "santos 的价格怎么样", prompt: "在本地运价台账镜像中检索，按目的港、船司、柜型汇总报价并注明有效期；只报台账里真实存在的条目，查不到就明说，不要用市场价或记忆补数。\n检索目标：santos 的价格怎么样" },
-      { text: "加勒比线 40HQ 最便宜到多少", prompt: "在本地运价台账镜像中检索，按目的港、船司、柜型汇总报价并注明有效期；只报台账里真实存在的条目，查不到就明说，不要用市场价或记忆补数。\n检索目标：加勒比线 40HQ 最便宜到多少" },
-    ],
-  },
-  {
-    title: "看市场行情", cap: "联网多源调研公开运价与船期，逐页核实并标注可信度，出带来源链接的报告",
-    items: [
-      { text: "上海到桑托斯现在公开市场报多少", prompt: "围绕指定业务目标检索多个可信公开来源，交叉核对信息，整理可用资源、关键结论、发布日期和来源链接。明确标注无法核实或可能过期的信息。\n检索目标：上海到桑托斯现在公开市场报多少" },
-      { text: "我们台账上 santos 的价在市场算什么水平", prompt: "围绕指定业务目标检索多个可信公开来源，交叉核对信息，整理可用资源、关键结论、发布日期和来源链接。明确标注无法核实或可能过期的信息。\n检索目标：我们台账上 santos 的价在市场算什么水平" },
-    ],
-  },
-  {
-    title: "管邮件", cap: "检索收件箱 + 逐封总结并给下一步建议",
-    items: [
-      { text: "我今天有哪些未读邮件", prompt: "检索本地收件箱，逐封给出发件人、主题、一句话摘要和下一步建议；需要回复或导出时先给草稿或清单等我确认，不要编造邮件里没有的内容。\n检索目标：我今天有哪些未读邮件" },
-      { text: "把未读邮件都总结一下，导出成文件", prompt: "检索本地收件箱，逐封给出发件人、主题、一句话摘要和下一步建议；需要回复或导出时先给草稿或清单等我确认，不要编造邮件里没有的内容。\n检索目标：把未读邮件都总结一下，导出成文件" },
-    ],
-  },
-  {
-    title: "跟进客户", cap: "联系人检索 + 今日到期提醒 + 记跟进（写操作需确认）",
-    items: [
-      { text: "我今天该跟进谁", prompt: "在联系人库与跟进记录里检索，给出匹配对象、最近跟进时间与状态；要写入跟进记录时先把内容给我确认。查不到就明说，不要猜测或张冠李戴。\n检索目标：我今天该跟进谁" },
-      { text: "帮我查公司名带「物流」的联系人", prompt: "在联系人库与跟进记录里检索，给出匹配对象、最近跟进时间与状态；要写入跟进记录时先把内容给我确认。查不到就明说，不要猜测或张冠李戴。\n检索目标：帮我查公司名带「物流」的联系人" },
-    ],
-  },
-  {
-    title: "准备发信", cap: "写开发信草稿 + 入队（不自动发送，需你在发送中心点开始）",
-    items: [
-      { text: "给 ACME 的 Juan 写一封西语开发信", prompt: "撰写开发信草稿或查看发送队列状态；草稿先给我过目，只能入队不能自动发送，开始发送必须我自己在发送中心确认。写内容前先查库里的联系人与公司信息。\n检索目标：给 ACME 的 Juan 写一封西语开发信" },
-      { text: "发送队列现在还有多少没发出去", prompt: "撰写开发信草稿或查看发送队列状态；草稿先给我过目，只能入队不能自动发送，开始发送必须我自己在发送中心确认。写内容前先查库里的联系人与公司信息。\n检索目标：发送队列现在还有多少没发出去" },
-    ],
-  },
-  {
-    title: "账号与公司", cap: "发信账号健康检查 + 公司网络背调",
-    items: [
-      { text: "我现在有几个发信账号能用", prompt: "检查发信账号的健康状态，或对指定公司做公开网络背调；账号问题给出原因与修复建议，背调只依据可查到的公开信息并标注可信度，查不到的部分明确说查不到。\n检索目标：我现在有几个发信账号能用" },
-      { text: "给 ACME 这家公司做个背调", prompt: "检查发信账号的健康状态，或对指定公司做公开网络背调；账号问题给出原因与修复建议，背调只依据可查到的公开信息并标注可信度，查不到的部分明确说查不到。\n检索目标：给 ACME 这家公司做个背调" },
-    ],
-  },
-];
+interface FeedItemDto {
+  key: string; text: string; prompt: string;
+  tone: "urgent" | "mail" | "intel" | "neutral";
+  bucket: "followup" | "mail" | "intel" | "static";
+  href?: string; contactId?: number;
+}
+interface FeedDto { greeting: string; items: FeedItemDto[] }
+
+const FEED_FALLBACK: FeedDto = {
+  greeting: "你好。有什么要办的，直接说。",
+  items: [
+    { key: "fb-rates", text: "查一下运价台账现在覆盖了哪些航线", prompt: "查一下运价台账现在覆盖了哪些航线", tone: "neutral", bucket: "static" },
+    { key: "fb-mail", text: "总结一下我的未读邮件", prompt: "总结一下我的未读邮件", tone: "neutral", bucket: "static" },
+  ],
+};
+
+/** 气泡内的 tone 小圆点（状态色：红=紧急 蓝=邮件 绿=资讯 灰=常规/预备库） */
+const TONE_DOT: Record<FeedItemDto["tone"], string> = {
+  urgent: "bg-red-400", mail: "bg-sky-400", intel: "bg-emerald-400", neutral: "bg-gray-300",
+};
 
 function readConvFromHash(): string | undefined {
   const raw = window.location.hash;
@@ -822,11 +801,12 @@ export function AssistantPage() {
   const [pendingWrite, setPendingWrite] = useState<ActionDto | null>(null);
   const [writing, setWriting] = useState(false);
   /**
-   * 首页「建议行动」六张卡。null = 还没拿到（先显示骨架）；
-   * 拿到的是主进程读当天批次、按今天的数字填好槽的结果（纯本地，不等模型）；
-   * 万一取失败才落到下面那份写死的兜底 —— 宁可笼统，不空着。
+   * 新对话「行动建议」流。null = 还没拿到（先显示骨架 chip，初值不写死兜底防闪——UI 铁律）；
+   * feed 由主进程本地实时拼装，suggestions:changed 事件驱动热更新（规范 docs/suggestion-feed-spec.md）。
    */
-  const [cards, setCards] = useState<typeof CAPABILITIES | null>(null);
+  const [feed, setFeed] = useState<FeedDto | null>(null);
+  /** 「换一批」页码：数据热更新时归零（新数据来了就重新给最优的一组） */
+  const [rotate, setRotate] = useState(0);
   /** 已自动发送过的 ?q=（防止 hashchange 回环重复发送） */
   const askedRef = useRef<string | null>(null);
   /** hashchange 回调拿不到最新闭包里的 handleSend，用 ref 转发 */
@@ -979,29 +959,38 @@ export function AssistantPage() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  /** 换会话即换一屏：未发送的输入、写入确认弹窗不跨会话（回合现场留在 store 里） */
+  /** 换会话即换一屏：未发送的输入、写入确认弹窗、建议流都不跨会话（回合现场留在 store 里） */
   const viewKeyRef = useRef(key);
   useEffect(() => {
     if (viewKeyRef.current === key) return;
     viewKeyRef.current = key;
     setInputVal("");
     setPendingWrite(null);
+    setFeed(null);      // 建议流回骨架态：每次切换都重新拉，本地毫秒级但骨架要在（用户明确要求）
+    setRotate(0);
     void refreshStatus();   // 期间可能在设置页换了端点
   }, [key]);
 
-  // 首页「建议行动」：进空态时读当天批次并填上今天的数字（纯本地，毫秒级；拿不到就用写死那份兜底）
-  // 只在真要显示六张卡时取，带历史的会话不该白跑一趟
+  // 建议流：进空态拉一次（带 ctx 锚点与「换一批」页码）；数据事件驱动 suggestions:changed 就地热更新。
+  // 只在真要显示开场气泡时订阅，带历史的会话不该白跑一趟
   const showCards = messages.length === 0 && !convLoading;
   useEffect(() => {
     if (!showCards) return;
     let alive = true;
-    void (async () => {
-      const r = await window.api.invoke("agent:suggestions") as
-        IpcResult<Array<{ title: string; cap: string; items: Array<{ text: string; prompt: string }> }>>;
-      if (alive) setCards(r?.success && Array.isArray(r.data) && r.data.length ? r.data : CAPABILITIES);
-    })();
-    return () => { alive = false; };
-  }, [showCards]);
+    const pull = async (rot: number) => {
+      const r = await window.api.invoke("agent:suggestions", ctx, rot) as IpcResult<FeedDto>;
+      if (alive) setFeed(r?.success && r.data && Array.isArray(r.data.items) ? r.data : FEED_FALLBACK);
+    };
+    void pull(rotate);
+    // 推送是 ctx-less 全局 feed；带锚点的会话收到事件后重拉（置顶在服务端算）
+    const off = window.api.on("suggestions:changed", (data) => {
+      if (!alive) return;
+      setRotate(0);
+      if (ctx) { void pull(0); return; }
+      if (data && typeof data === "object" && Array.isArray((data as FeedDto).items)) setFeed(data as FeedDto);
+    });
+    return () => { alive = false; off(); };
+  }, [showCards, ctx, rotate]);
 
   /** 入口：斜杠命令本地解析（/help、/新对话、/缺口 就地处理，不发起请求），其余交给 store 发起回合 */
   const handleSend = async (raw: string): Promise<void> => {
@@ -1276,6 +1265,8 @@ export function AssistantPage() {
             ))}
           </div>
         ) : messages.length === 0 ? (
+          // 布局与旧版一致：居中大 Logo + 标题 + 副标题 + 底部提示；
+          // 建议区从卡片栅格换成豆包式「想法气泡」：自然宽度、居中流式排布、不排整齐
           // min-h-full 而非 h-full：窗口矮时内容可滚动不裁切，有余量时仍垂直居中
           <div className="min-h-full flex flex-col items-center justify-center gap-5 py-6">
             <div className="text-center">
@@ -1283,32 +1274,51 @@ export function AssistantPage() {
               <div className="text-base font-semibold text-gray-700 mt-3">Hi，我是 Prospector 助手</div>
               <div className="text-xs text-gray-400 mt-1">已接入运价 / 邮件 / 客户 / 跟进 / 发信 11 项能力，写操作一律先弹确认</div>
             </div>
-            {/* 能力面板：标题与分组写死，条目按当前数据现算（AI 版到位后再就地换掉），点一条即发问 */}
-            {/* 窄窗口自动降为单列；宽度富余时三列，字号随视口线性缩放 */}
-            <div className="w-full max-w-[min(64rem,92%)] grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-              {cards === null && CAPABILITIES.map(g => (
-                // 数据还在路上：先占同款骨架，尺寸与真卡一致，填内容时不推版面
-                <div key={g.title} className="border border-gray-100 rounded-lg p-3 bg-white">
-                  <div className="text-[13px] font-semibold text-gray-300">{g.title}</div>
-                  <Skeleton active title={false} className="mt-1.5" paragraph={{ rows: 2, width: ["78%", "54%"] }} />
-                </div>
-              ))}
-              {cards?.map(g => (
-                <div key={g.title} className="border border-gray-100 rounded-lg p-3 bg-white">
-                  <div className="text-[clamp(12px,0.55vw+9px,14px)] font-semibold text-gray-800">{g.title}</div>
-                  <div className="text-[clamp(10px,0.4vw+8px,12px)] text-gray-400 mb-1.5 leading-snug">{g.cap}</div>
-                  {g.items.map(q => (
-                    <div
-                      key={q.text}
-                      className="text-[clamp(11px,0.45vw+9px,13px)] text-teal-700 hover:bg-teal-50 rounded px-1.5 py-1 -mx-1.5 cursor-pointer truncate"
-                      title={q.text}
-                      onClick={() => void handleSend(q.prompt)}
-                    >
-                      {q.text}
+            <div className="w-full max-w-[min(56rem,92%)] flex flex-col items-center gap-3">
+              {feed === null ? (
+                // 骨架气泡：每次切换会话都出现（feed 在 [key] effect 里清空），宽度错落与真气泡同款
+                <div className="flex flex-wrap justify-center gap-2.5">
+                  {[220, 168, 264, 190].map((w, i) => (
+                    <div key={i} className="h-[34px] rounded-full border border-gray-100 px-4 flex items-center" style={{ width: w }}>
+                      <Skeleton active title={false} paragraph={{ rows: 1, width: "100%" }} />
                     </div>
                   ))}
                 </div>
-              ))}
+              ) : (
+                <>
+                  <div className="text-[13px] text-gray-500 text-center leading-relaxed">{feed.greeting}</div>
+                  <div className="group/feed flex flex-wrap justify-center gap-2.5">
+                    {feed.items.map((it, i) => (
+                      <div
+                        key={it.key}
+                        className="group/bubble chip-in inline-flex items-center gap-2 max-w-[420px] rounded-full border border-gray-200/80 bg-white pl-3 pr-3.5 py-1.5 cursor-pointer hover:border-teal-300 hover:bg-teal-50/40 transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+                        style={{ animationDelay: `${i * 45}ms` }}
+                        title={it.text}
+                        onClick={() => {
+                          void window.api.invoke("agent:dismissSuggestion", it.key);   // 当天不再推荐同一条
+                          void handleSend(it.prompt);
+                        }}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TONE_DOT[it.tone]}${it.tone === "urgent" ? " breathe" : ""}`} />
+                        <span className="text-[13px] text-gray-700 truncate">{it.text}</span>
+                        {it.href && (
+                          <a
+                            className="shrink-0 text-[11px] text-gray-400 hover:text-teal-600 opacity-0 group-hover/bubble:opacity-100 transition-opacity"
+                            onClick={(e) => { e.stopPropagation(); window.location.hash = it.href!; }}
+                          >查看</a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {feed.items.length >= 3 && (
+                    <button
+                      type="button"
+                      className="text-[12px] text-gray-400 hover:text-teal-600 opacity-0 group-hover/feed:opacity-100 transition-opacity"
+                      onClick={() => setRotate(r => r + 1)}
+                    >换一批</button>
+                  )}
+                </>
+              )}
             </div>
             <div className="text-[11px] text-gray-400">
               输入 <code>/</code> 唤出快捷命令 · 多步任务会亮出任务清单 · 写操作先在对话里请你就地确认
