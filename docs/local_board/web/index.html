@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreightNet · 海运运价工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --border-focus: #0f2b46;
+  --ink: #0f2b46;
+  --ink-secondary: #475569;
+  --ink-muted: #94a3b8;
+  --accent: #0d9488;
+  --accent-soft: #f0fdfa;
+  --accent-border: #99f6e4;
+  --navy: #0f2b46;
+  --navy-soft: #eff6ff;
+  --coral: #e8614d;
+  --coral-soft: #fef2f0;
+  --amber: #d97706;
+  --amber-soft: #fffbeb;
+  --green: #059669;
+  --green-soft: #ecfdf5;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(15,43,70,.04);
+  --shadow: 0 2px 8px rgba(15,43,70,.06);
+  --shadow-lg: 0 8px 24px rgba(15,43,70,.08);
+  --font-display: "Outfit", -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-body: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+  --transition: 180ms cubic-bezier(.4,0,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.6 var(--font-body);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ========== LAYOUT ========== */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.shell { max-width: 1400px; width: 100%; margin: 0 auto; padding: 0 24px 48px; }
+
+/* ========== TOP NAV ========== */
+.topnav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+  backdrop-filter: blur(8px);
+  background: rgba(255,255,255,.92);
+}
+.topnav .shell {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-top: 0; padding-bottom: 0; height: 56px;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font: 600 17px/1 var(--font-display); color: var(--navy);
+  letter-spacing: -.3px;
+}
+.brand .icon {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--navy); display: grid; place-items: center;
+}
+.brand .icon svg { width: 16px; height: 16px; fill: #fff; }
+.brand .sub { font: 400 12px/1 var(--font-body); color: var(--ink-muted); margin-left: 2px; }
+
+.role-switch {
+  display: flex; background: var(--bg); border-radius: var(--radius); padding: 3px; gap: 2px;
+}
+.role-switch button {
+  border: 0; background: transparent; padding: 7px 20px;
+  font: 500 13px/1 var(--font-body); color: var(--ink-secondary);
+  border-radius: 7px; cursor: pointer; transition: all var(--transition);
+  white-space: nowrap;
+}
+.role-switch button.active {
+  background: var(--surface); color: var(--navy);
+  box-shadow: var(--shadow-sm);
+}
+
+.nav-meta {
+  font: 400 12px/1 var(--font-mono); color: var(--ink-muted);
+}
+
+/* ========== VIEWS ========== */
+.view { display: none; padding-top: 24px; animation: fadeIn .25s ease; }
+.view.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ========== SALES VIEW ========== */
+.search-hero {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 20px 24px;
+  margin-bottom: 16px; box-shadow: var(--shadow-sm);
+}
+.search-bar {
+  display: flex; align-items: center; gap: 10px;
+}
+.search-bar input {
+  flex: 1; height: 44px; border: 1.5px solid var(--border);
+  border-radius: var(--radius); padding: 0 16px;
+  font: 400 14px/1 var(--font-body); color: var(--ink);
+  transition: border-color var(--transition);
+  background: var(--bg);
+}
+.search-bar input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.search-bar input::placeholder { color: var(--ink-muted); }
+.btn-search {
+  height: 44px; padding: 0 24px; border: 0; border-radius: var(--radius);
+  background: var(--navy); color: #fff;
+  font: 500 13px/1 var(--font-body); cursor: pointer;
+  transition: all var(--transition); white-space: nowrap;
+}
+.btn-search:hover { background: #1a3d5c; transform: translateY(-1px); box-shadow: var(--shadow); }
+
+/* Filter Panel */
+.filter-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 12px; font: 500 12px/1 var(--font-body); color: var(--ink-secondary);
+  cursor: pointer; user-select: none; border: 0; background: none; padding: 4px 0;
+}
+.filter-toggle:hover { color: var(--navy); }
+.filter-toggle .arrow { transition: transform var(--transition); display: inline-block; }
+.filter-toggle.open .arrow { transform: rotate(90deg); }
+
+.filter-panel {
+  display: none; margin-top: 14px; padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.filter-panel.open { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font: 500 11px/1 var(--font-body); color: var(--ink-muted); text-transform: uppercase; letter-spacing: .5px; }
+.filter-group select, .filter-group input {
+  height: 34px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 10px; font: 400 13px/1 var(--font-body); color: var(--ink);
+  background: var(--bg);
+}
+.filter-group select { cursor: pointer; }
+.filter-group input { cursor: text; }
+.filter-group select:focus, .filter-group input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+
+/* Data Table */
+.table-wrap {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm);
+}
+.table-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+}
+.table-toolbar .title { font: 600 14px/1 var(--font-display); color: var(--navy); }
+.table-toolbar .actions { display: flex; gap: 8px; }
+.btn-ghost {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink-secondary); font: 500 12px/1 var(--font-body);
+  cursor: pointer; transition: all var(--transition);
+}
+.btn-ghost:hover { border-color: var(--navy); color: var(--navy); }
+
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table thead { background: #fafbfc; }
+.data-table th {
+  padding: 10px 14px; text-align: left;
+  font: 600 11px/1 var(--font-body); color: var(--ink-muted);
+  text-transform: uppercase; letter-spacing: .4px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.data-table td {
+  padding: 11px 14px; border-bottom: 1px solid #f1f5f9;
+  font-size: 13px; vertical-align: middle;
+}
+.data-table tbody tr { transition: background var(--transition); cursor: pointer; }
+.data-table tbody tr:hover { background: var(--navy-soft); }
+.data-table .pod { font: 600 13px/1 var(--font-body); }
+.data-table .num { font: 500 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.data-table .price { font: 600 14px/1 var(--font-mono); }
+.data-table .price.low { color: var(--green); }
+.data-table .price.high { color: var(--coral); }
+
+.badge {
+  display: inline-flex; align-items: center; padding: 2px 8px;
+  border-radius: 4px; font: 500 11px/1.4 var(--font-body); white-space: nowrap;
+}
+.badge-ok { background: var(--green-soft); color: var(--green); }
+.badge-over { background: var(--amber-soft); color: var(--amber); }
+.badge-type { background: var(--navy-soft); color: var(--navy); }
+.badge-coral { background: var(--coral-soft); color: var(--coral); }
+
+/* Row Detail Expansion */
+.detail-row td { padding: 16px 20px; background: #fafcfe; cursor: default; }
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+  margin-bottom: 12px;
+}
+.detail-item { font-size: 12px; }
+.detail-item .lbl { color: var(--ink-muted); display: block; margin-bottom: 2px; font-size: 11px; }
+.detail-item .val { color: var(--ink); font-weight: 500; }
+.detail-raw { margin-top: 12px; }
+.detail-raw .lbl { font: 500 11px/1 var(--font-body); color: var(--ink-muted); margin-bottom: 4px; display: block; }
+.detail-raw pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; font: 400 12px/1.5 var(--font-mono); color: var(--ink-secondary);
+  white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;
+}
+
+/* Pagination */
+.pager {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-top: 1px solid var(--border); flex-wrap: wrap; gap: 8px;
+}
+.pager .info { font: 400 12px/1 var(--font-body); color: var(--ink-muted); }
+.pager .pages { display: flex; gap: 4px; }
+.pager button {
+  min-width: 32px; height: 30px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); font: 500 12px/1 var(--font-mono); color: var(--ink);
+  cursor: pointer; transition: all var(--transition);
+}
+.pager button:hover:not(:disabled):not(.cur) { border-color: var(--navy); }
+.pager button.cur { background: var(--navy); color: #fff; border-color: var(--navy); }
+.pager button:disabled { opacity: .4; cursor: default; }
+
+/* ========== OPS VIEW ========== */
+.ops-tabs {
+  display: flex; gap: 0; margin-bottom: 24px;
+  border-bottom: 2px solid var(--border);
+}
+.ops-tabs button {
+  padding: 10px 24px; border: 0; background: none;
+  font: 500 14px/1 var(--font-body); color: var(--ink-muted);
+  cursor: pointer; position: relative; transition: color var(--transition);
+}
+.ops-tabs button::after {
+  content: ''; position: absolute; bottom: -2px; left: 0; right: 0;
+  height: 2px; background: transparent; transition: background var(--transition);
+}
+.ops-tabs button.active { color: var(--navy); }
+.ops-tabs button.active::after { background: var(--navy); }
+
+.ops-panel { display: none; }
+.ops-panel.active { display: block; animation: fadeIn .25s ease; }
+
+/* Rate Paste Zone */
+.paste-zone {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 20px; margin-bottom: 20px;
+}
+.paste-zone .zone-title { font: 600 14px/1 var(--font-display); color: var(--navy); margin-bottom: 12px; }
+.paste-textarea {
+  width: 100%; min-height: 120px; border: 1.5px dashed var(--border);
+  border-radius: var(--radius); padding: 14px; resize: vertical;
+  font: 400 13px/1.6 var(--font-mono); color: var(--ink);
+  background: var(--bg); transition: border-color var(--transition);
+}
+.paste-textarea:focus { outline: none; border-color: var(--accent); border-style: solid; background: var(--surface); }
+
+.image-drop {
+  margin-top: 12px; border: 1.5px dashed var(--border); border-radius: var(--radius);
+  padding: 24px; text-align: center; cursor: pointer;
+  transition: all var(--transition); position: relative; overflow: hidden;
+}
+.image-drop:hover, .image-drop.dragover { border-color: var(--accent); background: var(--accent-soft); }
+.image-drop .hint { font: 400 13px/1 var(--font-body); color: var(--ink-muted); }
+.image-drop .hint strong { color: var(--accent); font-weight: 500; }
+.image-drop input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.image-preview {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px;
+}
+.image-preview img { max-height: 80px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+/* Ops Form Panel */
+.parse-result {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 20px; margin-bottom: 20px;
+}
+.parse-result .zone-title { font: 600 14px/1 var(--font-display); color: var(--navy); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.parse-result .zone-title .badge { font-size: 11px; }
+
+.form-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+  margin-bottom: 16px;
+}
+.form-field { display: flex; flex-direction: column; gap: 4px; }
+.form-field.full { grid-column: 1 / -1; }
+.form-field label {
+  font: 500 11px/1 var(--font-body); color: var(--ink-muted);
+  letter-spacing: .3px; display: flex; align-items: center; gap: 4px;
+}
+.form-field label .req { color: var(--coral); font-size: 10px; }
+.form-field input, .form-field select, .form-field textarea {
+  height: 36px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 10px; font: 400 13px/1 var(--font-body); color: var(--ink);
+  background: var(--surface); transition: border-color var(--transition);
+}
+.form-field textarea { height: auto; min-height: 60px; padding: 8px 10px; resize: vertical; }
+.form-field input:focus, .form-field select:focus, .form-field textarea:focus {
+  outline: none; border-color: var(--accent);
+}
+.form-field input.filled { background: var(--accent-soft); border-color: var(--accent-border); }
+
+.form-actions { display: flex; gap: 10px; align-items: center; }
+.btn-submit {
+  padding: 10px 28px; border: 0; border-radius: var(--radius);
+  background: var(--navy); color: #fff;
+  font: 500 13px/1 var(--font-body); cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-submit:hover { background: #1a3d5c; box-shadow: var(--shadow); }
+.btn-submit:disabled { opacity: .5; cursor: default; }
+.btn-reset {
+  padding: 10px 20px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink-secondary);
+  font: 500 13px/1 var(--font-body); cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-reset:hover { border-color: var(--ink-muted); }
+
+/* Token Config */
+.token-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; background: var(--amber-soft); border: 1px solid #fde68a;
+  border-radius: var(--radius); margin-bottom: 20px; font-size: 13px; color: var(--amber);
+}
+.token-bar input {
+  flex: 1; height: 32px; border: 1px solid #fde68a; border-radius: var(--radius-sm);
+  padding: 0 10px; font: 400 12px/1 var(--font-mono); background: #fff;
+}
+.token-bar input:focus { outline: none; border-color: var(--amber); }
+.token-bar .btn-token {
+  padding: 6px 14px; border: 0; border-radius: var(--radius-sm);
+  background: var(--amber); color: #fff; font: 500 12px/1 var(--font-body); cursor: pointer;
+}
+
+/* ========== TOAST ========== */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 999;
+  padding: 12px 20px; border-radius: var(--radius);
+  background: var(--navy); color: #fff; font: 500 13px/1 var(--font-body);
+  box-shadow: var(--shadow-lg); transform: translateY(80px); opacity: 0;
+  transition: all .3s cubic-bezier(.4,0,.2,1);
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { background: var(--green); }
+.toast.error { background: var(--coral); }
+
+/* ========== EMPTY STATE ========== */
+.empty-state { padding: 48px 24px; text-align: center; color: var(--ink-muted); }
+.empty-state .icon { font-size: 36px; margin-bottom: 8px; opacity: .5; }
+.empty-state p { font-size: 13px; }
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 768px) {
+  .shell { padding: 0 12px 32px; }
+  .topnav .shell { padding: 0 12px; }
+  .role-switch button { padding: 6px 12px; font-size: 12px; }
+  .brand .sub { display: none; }
+  .search-hero { padding: 14px 16px; }
+  .search-bar { flex-wrap: wrap; }
+  .search-bar input { min-width: 100%; }
+  .filter-panel.open { grid-template-columns: 1fr 1fr; }
+  .data-table { font-size: 12px; }
+  .data-table th, .data-table td { padding: 8px 10px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .nav-meta { display: none; }
+}
+@media (max-width: 480px) {
+  .filter-panel.open { grid-template-columns: 1fr; }
+  .table-toolbar { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+/* ========== LOADING ========== */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg) 25%, #eef2f7 50%, var(--bg) 75%);
+  background-size: 200% 100%; animation: shimmer 1.2s infinite;
+  border-radius: var(--radius-sm); height: 14px;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== TOP NAV ===== -->
+  <nav class="topnav">
+    <div class="shell">
+      <div class="brand">
+        <div class="icon"><svg viewBox="0 0 24 24"><path d="M20 21c-1 0-3.1-.1-5.5-.1S9.1 21 7 21c-1 0-2.1 0-3-.1V4c2.4-.8 5-1.2 7.5-1.2S17.6 3.2 20 4v17z"/></svg></div>
+        <span>FreightNet</span>
+        <span class="sub">运价工作台</span>
+      </div>
+      <div class="role-switch">
+        <button class="active" onclick="switchRole('sales')">销售端</button>
+        <button onclick="switchRole('ops')">航管端</button>
+      </div>
+      <div class="nav-meta" id="nav-meta"></div>
+    </div>
+  </nav>
+
+  <div class="shell">
+    <!-- ===== SALES VIEW ===== -->
+    <div class="view active" id="view-sales">
+      <div class="search-hero">
+        <div class="search-bar">
+          <input type="text" id="s-q" placeholder="输入目的港、航线、船司或任意关键词模糊搜索…">
+          <button class="btn-search" onclick="salesSearch()">查询运价</button>
+        </div>
+        <button class="filter-toggle" id="filter-toggle" onclick="toggleFilters()">
+          <span class="arrow">&#9654;</span> 高级筛选
+        </button>
+        <div class="filter-panel" id="filter-panel">
+          <div class="filter-group"><label>起运港</label><input id="sf-pol" list="dl-pol" placeholder="输入筛选，如 青岛"><datalist id="dl-pol"></datalist></div>
+          <div class="filter-group"><label>航线</label><input id="sf-route" list="dl-route" placeholder="输入筛选，如 南美东"><datalist id="dl-route"></datalist></div>
+          <div class="filter-group"><label>船司</label><input id="sf-carrier" list="dl-carrier" placeholder="输入筛选，如 CMA"><datalist id="dl-carrier"></datalist></div>
+          <div class="filter-group"><label>柜型</label><input id="sf-ctype" list="dl-ctype" placeholder="输入筛选，如 40HQ/HC"><datalist id="dl-ctype"></datalist></div>
+          <div class="filter-group"><label>来源群</label><input id="sf-group" list="dl-group" placeholder="输入筛选，如 华南"><datalist id="dl-group"></datalist></div>
+          <div class="filter-group"><label>目的港</label><input id="sf-pod" placeholder="模糊匹配"></div>
+          <div class="filter-group"><label>有效期</label><input id="sf-valid" type="date"></div>
+          <div class="filter-group"><label>消息时间起</label><input id="sf-time-from" type="date"></div>
+          <div class="filter-group"><label>消息时间止</label><input id="sf-time-to" type="date"></div>
+          <div class="filter-group"><label>记录类型</label>
+            <select id="sf-tab" onchange="onTabChange()"><option value="rates">运价</option><option value="space">舱位</option><option value="dyn">动态</option><option value="group">来源群</option></select>
+          </div>
+          <div class="filter-group" id="fg-stype" style="display:none"><label>舱位类型</label><input id="sf-stype" list="dl-stype" placeholder="输入筛选，如 现舱"><datalist id="dl-stype"></datalist></div>
+        </div>
+      </div>
+
+      <style>.cat-tabs{display:flex;gap:8px;margin:14px 0 10px}.cat-tabs button{padding:8px 26px;font-size:15px;border:1px solid var(--border);background:#fff;border-radius:8px;cursor:pointer;color:var(--ink-muted)}.cat-tabs button:hover{border-color:#1677ff;color:#1677ff}.cat-tabs button.active{background:#1677ff;color:#fff;border-color:#1677ff;font-weight:600}</style>
+      <div class="cat-tabs" id="cat-tabs">
+        <button data-tab="rates" class="active" onclick="setCatTab(this)">运价</button>
+        <button data-tab="space" onclick="setCatTab(this)">舱位</button>
+        <button data-tab="dyn" onclick="setCatTab(this)">动态</button>
+        <button data-tab="group" onclick="setCatTab(this)">来源群</button>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-toolbar">
+          <span class="title" id="table-title">运价记录</span>
+          <div class="actions"></div>
+        </div>
+        <div id="table-container" style="overflow-x:auto"></div>
+        <div class="pager" id="pager"></div>
+      </div>
+    </div>
+
+    <!-- ===== OPS VIEW ===== -->
+    <div class="view" id="view-ops">
+      <div class="token-bar" id="token-bar">
+        <span>写入令牌：</span>
+        <input type="password" id="push-token" placeholder="输入 token.txt 中的值">
+        <button class="btn-token" onclick="saveToken()">确认</button>
+      </div>
+
+      <div class="ops-tabs">
+        <button class="active" onclick="switchOpsTab('rate-entry')">运价录入</button>
+        <button onclick="switchOpsTab('space-entry')">舱位录入</button>
+      </div>
+
+      <!-- Rate Entry Panel -->
+      <div class="ops-panel active" id="panel-rate-entry">
+        <div class="paste-zone">
+          <div class="zone-title">原文 & 图片存档</div>
+          <textarea class="paste-textarea" id="rate-paste" placeholder="从钉钉群复制报价消息原文粘贴到此（仅做溯源存档）…" oninput="syncPasteToForm()"></textarea>
+          <div class="image-drop" id="img-drop">
+            <span class="hint"><strong>点击上传</strong> 或拖拽运价截图到此（支持粘贴 Ctrl+V）</span>
+            <input type="file" accept="image/*" multiple id="img-file">
+          </div>
+          <div class="image-preview" id="img-preview"></div>
+        </div>
+
+        <div class="parse-result" id="rate-form">
+          <div class="zone-title">
+            运价字段
+            <span class="badge badge-type">手动填写</span>
+          </div>
+          <div class="form-grid" id="rate-fields"></div>
+          <div class="form-actions">
+            <button class="btn-submit" onclick="submitRate()">确认入库</button>
+            <button class="btn-reset" onclick="resetRateForm()">重新填写</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Space Entry Panel -->
+      <div class="ops-panel" id="panel-space-entry">
+        <div class="paste-zone">
+          <div class="zone-title">录入舱位动态</div>
+          <div class="form-grid" id="space-fields"></div>
+          <div class="form-actions" style="margin-top:16px">
+            <button class="btn-submit" onclick="submitSpace()">提交入库</button>
+            <button class="btn-reset" onclick="resetSpaceForm()">清空表单</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* =================== STATE =================== */
+const S = {
+  role: 'sales',
+  opsTab: 'rate-entry',
+  sales: { tab: 'rates', page: 1, total: 0, rows: [], groups: [], openKey: null },
+  opts: null,
+  token: '',
+  images: [],
+};
+const PAGE_SIZE = 50;
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* =================== INIT =================== */
+async function init() {
+  try {
+    const [opts, stats] = await Promise.all([
+      fetch('/api/options').then(r=>r.json()),
+      fetch('/api/stats').then(r=>r.json()),
+    ]);
+    if (opts.ok) { S.opts = opts; populateFilters(); }
+    $('nav-meta').textContent = '最新: ' + (stats.latestMessage || '—');
+    salesLoad();
+  } catch(e) {
+    $('table-container').innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div><p>无法连接本地服务，请确认 board_server.py 已启动 (端口 8788)</p></div>';
+  }
+}
+
+/* =================== ROLE SWITCH =================== */
+function switchRole(r) {
+  S.role = r;
+  document.querySelectorAll('.role-switch button').forEach(b => b.classList.toggle('active', b.textContent === (r==='sales'?'销售端':'航管端')));
+  $('view-sales').classList.toggle('active', r==='sales');
+  $('view-ops').classList.toggle('active', r==='ops');
+  if (r === 'ops') initOpsForms();
+}
+
+/* =================== SALES =================== */
+function populateFilters() {
+  const o = S.opts.rates;
+  fillList('dl-pol', o.pol);
+  fillList('dl-route', o.route);
+  fillList('dl-carrier', o.carrier);
+  fillList('dl-ctype', o.container_type);
+  fillList('dl-group', o.source_group);
+  if (S.opts.space) fillList('dl-stype', S.opts.space.space_type);
+}
+function fillList(dlId, vals) {
+  const dl = $(dlId); if (!dl) return;
+  dl.innerHTML = (vals||[]).map(v=>`<option value="${esc(v)}">`).join('');
+}
+function toggleFilters() {
+  const btn = $('filter-toggle'); const panel = $('filter-panel');
+  const open = panel.classList.toggle('open');
+  btn.classList.toggle('open', open);
+}
+function onTabChange() {
+  const tab = $('sf-tab').value;
+  $('fg-stype').style.display = tab === 'space' ? '' : 'none';
+  document.querySelectorAll('#cat-tabs button').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-tab')===tab); });
+  S.sales.page = 1; salesLoad();
+}
+function salesSearch() { S.sales.page = 1; salesLoad(); }
+
+async function salesLoad() {
+  const tab = $('sf-tab').value || 'rates';
+  S.sales.tab = tab;
+  $('table-title').textContent = {rates:'运价记录',space:'舱位记录',dyn:'最新动态',group:'来源群'}[tab] || '运价记录';
+
+  const p = new URLSearchParams();
+  p.set('limit', PAGE_SIZE); p.set('offset', (S.sales.page-1)*PAGE_SIZE);
+  const parts = [];
+  const q = $('s-q').value.trim(); if (q) parts.push(q);
+  const podVal = $('sf-pod').value.trim(); if (podVal) parts.push(podVal);
+  if (parts.length) p.set('q', parts.join(' '));
+  if ($('sf-pol').value) p.set('pol', $('sf-pol').value);
+  if ($('sf-route').value) p.set('route', $('sf-route').value);
+  if ($('sf-carrier').value) p.set('carrier', $('sf-carrier').value);
+  if ($('sf-ctype').value) p.set('ctype', $('sf-ctype').value);
+  if ($('sf-group').value) p.set('group', $('sf-group').value);
+
+  $('table-container').innerHTML = '<div class="empty-state"><div class="skeleton" style="width:100%;height:200px"></div></div>';
+  try {
+    if (tab === 'rates') {
+      // 折叠视图：走分组端点，服务端带出历史行、按身份分页
+      const data = await fetch(`/api/rates_grouped?` + p).then(r=>r.json());
+      if (!data.ok) throw new Error(data.error);
+      S.sales.total = data.total; S.sales.groups = data.groups; S.sales.rows = data.rows;
+      renderSalesFolded(); renderPager();
+    } else if (tab === 'space') {
+      const stv=$('sf-stype').value; if(stv) p.set('stype', stv);
+      p.set('status', '当前有效');
+      const data = await fetch(`/api/space?` + p).then(r=>r.json());
+      if (!data.ok) throw new Error(data.error);
+      S.sales.total = data.total; S.sales.rows = data.rows;
+      renderSalesTable(); renderPager();
+    } else if (tab === 'dyn') {
+      await renderDynFeed();
+    } else if (tab === 'group') {
+      await renderGroupCards();
+    }
+  } catch(e) {
+    $('table-container').innerHTML = `<div class="empty-state"><p>查询失败: ${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderSalesTable() {
+  const rows = S.sales.rows;
+  if (!rows.length) { $('table-container').innerHTML = '<div class="empty-state"><div class="icon">&#128269;</div><p>没有匹配的记录，试试调整筛选条件</p></div>'; return; }
+
+  // Compute price range for coloring
+  const prices = rows.map(r => parseFloat(S.sales.tab==='rates' ? r.freight_usd : r.price_usd)).filter(v=>!isNaN(v)&&v>0);
+  const pMin = Math.min(...prices), pMax = Math.max(...prices), pAvg = prices.length ? prices.reduce((a,b)=>a+b,0)/prices.length : 0;
+
+  let html = '<table class="data-table"><thead><tr>';
+  if (S.sales.tab === 'rates') {
+    html += '<th>时间</th><th>航线</th><th>目的港</th><th>船司</th><th>柜型</th><th>海运费 USD</th><th>有效期</th><th>来源群</th><th>状态</th>';
+  } else {
+    html += '<th>时间</th><th>舱位类型</th><th>航线</th><th>目的港</th><th>船司</th><th>船名航次</th><th>箱型箱量</th><th>价格USD</th><th>状态</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  rows.forEach((r, i) => {
+    const key = r.content_key || ('row-'+i);
+    const isOpen = S.sales.openKey === key;
+    if (S.sales.tab === 'rates') {
+      const price = parseFloat(r.freight_usd);
+      let cls = 'price';
+      if (!isNaN(price) && prices.length > 2) {
+        if (price <= pMin * 1.02) cls += ' low';
+        else if (price >= pMax * 0.98) cls += ' high';
+      }
+      html += `<tr onclick="toggleRow('${key}')">
+        <td class="num" style="color:var(--ink-muted)">${esc(fmtTime(r.message_time))}</td>
+        <td>${esc(r.route||'')}</td>
+        <td class="pod">${esc(r.pod||'')}</td>
+        <td>${esc(r.carrier||'')}</td>
+        <td>${r.container_type?'<span class="badge badge-type">'+esc(r.container_type)+'</span>':''}</td>
+        <td class="${cls}">${r.freight_usd ? '$'+esc(r.freight_usd) : '—'}</td>
+        <td style="font-size:12px">${esc(r.validity_raw||r.valid_to||'')}</td>
+        <td style="font-size:12px;color:var(--ink-muted)">${esc(r.source_group||'')}</td>
+        <td>${statusBadge(r.status)}</td>
+      </tr>`;
+    } else {
+      const price = parseFloat(r.price_usd);
+      let cls = 'price';
+      if (!isNaN(price) && prices.length > 2) {
+        if (price <= pMin * 1.02) cls += ' low';
+        else if (price >= pMax * 0.98) cls += ' high';
+      }
+      html += `<tr onclick="toggleRow('${key}')">
+        <td class="num" style="color:var(--ink-muted)">${esc(fmtTime(r.message_time))}</td>
+        <td>${r.space_type?'<span class="badge badge-type">'+esc(r.space_type)+'</span>':''}</td>
+        <td>${esc(r.route||'')}</td>
+        <td class="pod">${esc(r.pod||'—')}</td>
+        <td>${esc(r.carrier||'')}</td>
+        <td class="num" style="font-size:12px">${esc(r.vessel_voyage||'')}</td>
+        <td style="font-size:12px">${esc(r.container_type||'')}${r.box_qty?' ×'+esc(r.box_qty):''}</td>
+        <td class="${cls}">${r.price_usd ? '$'+esc(r.price_usd) : '—'}</td>
+        <td>${statusBadge(r.status)}</td>
+      </tr>`;
+    }
+    if (isOpen) {
+      html += `<tr class="detail-row"><td colspan="9">
+        <div class="detail-grid">
+          <div class="detail-item"><span class="lbl">起运港</span><span class="val">${esc(r.pol||'—')}</span></div>
+          <div class="detail-item"><span class="lbl">发送人</span><span class="val">${esc(r.sender||'—')}</span></div>
+          <div class="detail-item"><span class="lbl">船期 ETD</span><span class="val">${esc(r.etd||'—')}</span></div>
+          ${S.sales.tab==='rates' ? `
+            <div class="detail-item"><span class="lbl">有效期起</span><span class="val">${esc(r.valid_from||'—')}</span></div>
+            <div class="detail-item"><span class="lbl">有效期止</span><span class="val">${esc(r.valid_to||'—')}</span></div>
+            <div class="detail-item"><span class="lbl">目免</span><span class="val">${esc(r.free_days||'—')}</span></div>
+            <div class="detail-item"><span class="lbl">亏舱费</span><span class="val">${esc(r.dead_freight||'—')}</span></div>
+          ` : `
+            <div class="detail-item"><span class="lbl">截关</span><span class="val">${esc(r.cutoff_raw||'—')}</span></div>
+            <div class="detail-item"><span class="lbl">箱型箱量</span><span class="val">${esc(r.box_desc||'—')}</span></div>
+          `}
+          ${r.remark ? `<div class="detail-item full" style="grid-column:1/-1"><span class="lbl">备注</span><span class="val">${esc(r.remark)}</span></div>` : ''}
+        </div>
+        ${r.message_text ? '<div class="detail-raw"><span class="lbl">消息原文</span><pre>'+esc(r.message_text)+'</pre></div>' : ''}
+        ${r.image_url ? '<div style="margin-top:10px"><span class="lbl" style="font:500 11px/1 var(--font-body);color:var(--ink-muted);display:block;margin-bottom:4px">图片</span><img src="'+esc(r.image_url)+'" style="max-height:120px;border-radius:6px;border:1px solid var(--border)"></div>' : ''}
+        <div style="margin-top:8px;font:400 11px/1 var(--font-mono);color:var(--ink-muted)">入库 ${esc(r.synced_at||'')}</div>
+      </td></tr>`;
+    }
+  });
+  html += '</tbody></table>';
+  $('table-container').innerHTML = html;
+}
+
+function toggleRow(key) { S.sales.openKey = S.sales.openKey === key ? null : key; renderSalesTable(); }
+
+function foldCabCell(q, col){
+  const v = (q && q.cab) ? q.cab[col] : null;
+  if (v==null || v==='') return '<td class="price" style="color:var(--ink-muted)">–</td>';
+  const n = parseFloat(v);
+  return '<td class="price" style="color:#fa8c16">$'+(isNaN(n) ? esc(v) : Math.round(n))+'</td>';
+}
+function foldValid(q){
+  if(!q) return '—';
+  const f=(q.valid_from||'?').slice(5), t=(q.valid_to||'未声明').slice(5);
+  return '起 '+esc(f)+'<br>止 '+esc(t);
+}
+function renderSalesFolded(){
+  const gs = S.sales.groups || [];
+  if (!gs.length){ $('table-container').innerHTML='<div class="empty-state"><div class="icon">&#128269;</div><p>没有匹配的记录，试试调整筛选条件</p></div>'; return; }
+  const COLS=['20GP','40HQ/HC','40NOR'];
+  var FOLDSTYLE='<style>.qrow.hist-q td{box-shadow: inset 0 5px 6px -5px rgba(0,0,0,.22), inset 0 -5px 6px -5px rgba(0,0,0,.22);}'
+    +'.qrow.hist-q td:first-child{box-shadow: inset 4px 0 0 -1px #c3cad4, inset 0 5px 6px -5px rgba(0,0,0,.22), inset 0 -5px 6px -5px rgba(0,0,0,.22);}'
+    +'.drow.hist-q td{box-shadow: inset 0 5px 6px -5px rgba(0,0,0,.22);}'
+    +'.drow.hist-q td:first-child{box-shadow: inset 4px 0 0 -1px #c3cad4;}</style>';
+  let html=FOLDSTYLE+'<table class="data-table"><thead><tr><th>承运人</th><th>起运港</th><th>目的港</th><th>船期ETD</th><th>有效期</th>'+COLS.map(c=>'<th>'+c+'</th>').join('')+'<th>入库</th><th>操作</th></tr></thead><tbody>';
+  gs.forEach(function(g,i){
+    html += quoteRow(g.current, i, false, i+'-c', COLS, g.history.length);
+    g.history.forEach(function(h,j){ html += quoteRow(h, i, true, i+'-'+j, COLS, 0); });
+    html += detailRow(g.current, i, false, i+'-c');
+    g.history.forEach(function(h,j){ html += detailRow(h, i, true, i+'-'+j); });
+  });
+  html+='</tbody></table>';
+  $('table-container').innerHTML=html;
+  document.querySelectorAll('img.dimg').forEach(function(im){ im.onerror=function(){ var s=document.createElement('span'); s.style.cssText='font-size:12px;color:var(--ink-muted)'; s.textContent='图片未同步（'+(im.getAttribute('data-name')||'')+'）'; im.replaceWith(s); }; });
+}
+function quoteRow(q, gi, isHist, did, COLS, histN){
+  if(!q) return '';
+  var TOG='background:#fff;border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:12px;cursor:pointer;color:var(--ink-muted);margin-right:6px';
+  var noCur=q.expired||q.status==='已被覆盖';
+  var tag=noCur?' <span class="badge badge-coral">无有效价</span>':'';
+  var style=isHist?' style="display:none;background:#fafbfc"':' style="background:#fff"';
+  var detailBtn='<button style="'+TOG+'" data-did="'+did+'" data-open="0" onclick="toggleDetail(this)">▸ 详情</button>';
+  var histBtn=(!isHist&&histN>0)?('<button class="foldtog" data-gi="'+gi+'" data-n="'+histN+'" data-open="0" style="'+TOG+'" onclick="toggleGroup(this)">展开历史 '+histN+' ▾</button>'):'';
+  var row='<tr class="qrow'+(isHist?' hist-q':'')+'" data-gi="'+gi+'"'+style+'>'
+    +'<td><b>'+esc(q.carrier||'?')+'</b><div style="font-size:11px;color:var(--ink-muted)">'+esc(q.route||'')+tag+'</div></td>'
+    +'<td style="font-weight:700">'+esc(q.pol||'—')+'</td>'
+    +'<td style="font-weight:700">'+esc(q.pod||'—')+'</td>'
+    +'<td style="font-size:12px">'+esc(q.etd||'')+'</td>'
+    +'<td style="font-size:12px">'+foldValid(q)+'</td>'
+    +COLS.map(function(c){return foldCabCell(q,c);}).join('')
+    +'<td style="font-size:11px;color:var(--ink-muted)">'+esc((q.synced_at||'').slice(5,16))+'</td>'
+    +'<td>'+detailBtn+histBtn+'</td></tr>';
+  return row;
+}
+function detailRow(q, gi, isHist, did){
+  var style=' style="display:none"';
+  var DG='display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px 18px';
+  var LBL='font-size:11px;color:var(--ink-muted);display:block';
+  var VAL='font-size:13px;color:var(--ink)';
+  var items=[['来源群',q.source_group],['发送人',q.sender],['消息时间',q.message_time],['有效期原文',q.validity_raw],['目免',q.free_days],['亏舱费',q.dead_freight],['备注',q.remark],['入库时间',q.synced_at]];
+  var grid=items.map(function(kv){return '<div><span style="'+LBL+'">'+kv[0]+'</span><span style="'+VAL+'">'+esc(kv[1]||'—')+'</span></div>';}).join('');
+  var _imgname = q.image_file || q.image_url;
+  var img=_imgname?('<img class="dimg" data-name="'+esc(_imgname)+'" src="/images/'+encodeURIComponent(_imgname)+'" style="max-height:200px;border:1px solid var(--border);border-radius:6px;cursor:zoom-in" onclick="window.open(this.src)">'):'<span style="color:var(--ink-muted);font-size:12px">无图</span>';
+  var raw=q.message_text?('<div style="margin-top:8px"><span style="'+LBL+'">消息原文</span><pre style="white-space:pre-wrap;font-size:12px;background:#f7f8fa;padding:8px;border-radius:6px;margin:2px 0 0;max-height:180px;overflow:auto">'+esc(q.message_text)+'</pre></div>'):'';
+  return '<tr class="drow'+(isHist?' hist-q':'')+'" data-gi="'+gi+'" data-did="'+did+'" data-open="0"'+style+'><td colspan="10">'
+    +'<div style="'+DG+'">'+grid+'</div>'+raw
+    +'<div style="margin-top:8px"><span style="'+LBL+'">图片</span><div style="margin-top:4px">'+img+'</div></div>'
+    +'</td></tr>';
+}
+function toggleDetail(btn){
+  var did=btn.getAttribute('data-did');
+  var r=document.querySelector('tr.drow[data-did="'+did+'"]');
+  if(!r) return;
+  var next=r.getAttribute('data-open')==='1'?'0':'1';
+  r.setAttribute('data-open',next);
+  r.style.display = next==='1'?'':'none';
+  btn.textContent = next==='1'?'▾ 收起详情':'▸ 详情';
+}
+function toggleGroup(btn){
+  var gi=btn.getAttribute('data-gi');
+  var next=btn.getAttribute('data-open')==='1'?'0':'1';
+  btn.setAttribute('data-open',next);
+  document.querySelectorAll('tr.hist-q[data-gi="'+gi+'"]').forEach(function(r){
+    if(next==='1'){ if(!r.classList.contains('drow')) r.style.display=''; }
+    else {
+      r.style.display='none';
+      if(r.classList.contains('drow')){
+        r.setAttribute('data-open','0');
+        var b=document.querySelector('button[data-did="'+r.getAttribute('data-did')+'"]');
+        if(b) b.textContent='▸ 详情';
+      }
+    }
+  });
+  btn.textContent = next==='1' ? '收起历史 ▴' : ('展开历史 '+btn.getAttribute('data-n')+' ▾');
+}
+
+function setCatTab(btn){
+  document.querySelectorAll('#cat-tabs button').forEach(function(b){ b.classList.toggle('active', b===btn); });
+  $('sf-tab').value = btn.getAttribute('data-tab');
+  onTabChange();
+}
+async function renderDynFeed(){
+  var a = await fetch('/api/rates?limit=80').then(function(r){return r.json();});
+  var b = await fetch('/api/space?limit=80').then(function(r){return r.json();});
+  var rows = [];
+  (a.rows||[]).forEach(function(r){ r._kind='运价'; rows.push(r); });
+  (b.rows||[]).forEach(function(r){ r._kind='舱位'; rows.push(r); });
+  rows.sort(function(x,y){ return (y.message_time||'').localeCompare(x.message_time||''); });
+  rows = rows.slice(0, 80);
+  if(!rows.length){ $('table-container').innerHTML='<div class="empty-state"><p>暂无动态</p></div>'; return; }
+  var html = '<div style="display:flex;flex-direction:column;gap:8px">';
+  rows.forEach(function(r){
+    var sum = r._kind==='运价'
+      ? (r.carrier||'?')+' '+(r.pol||'')+'→'+(r.pod||'')+' '+(r.container_type||'')+(r.freight_usd?(' $'+Math.round(parseFloat(r.freight_usd))):'')
+      : (r.carrier||'?')+' '+(r.space_type||'')+' '+(r.vessel_voyage||'')+' '+(r.pol||'')+'→'+(r.pod||'');
+    html += '<div style="display:flex;gap:12px;align-items:flex-start;background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 14px">'
+      +'<span style="font:500 12px/1.4 var(--font-mono);color:var(--ink-muted);white-space:nowrap">'+esc((r.message_time||'').slice(5,16))+'</span>'
+      +'<span class="badge '+(r._kind==='运价'?'badge-ok':'badge-type')+'" style="white-space:nowrap">'+r._kind+'</span>'
+      +'<span style="font-size:13px;color:var(--ink);flex:1">'+esc(sum)+'</span>'
+      +'<span style="font-size:12px;color:var(--ink-muted);white-space:nowrap">'+esc(r.source_group||'')+' · '+esc(r.sender||'')+'</span>'
+      +'</div>';
+  });
+  html += '</div>';
+  $('table-container').innerHTML = html;
+  $('pager').innerHTML = '';
+}
+async function renderGroupCards(){
+  var a = await fetch('/api/rates?limit=500').then(function(r){return r.json();});
+  var b = await fetch('/api/space?limit=500').then(function(r){return r.json();});
+  var agg = {};
+  function bump(g, k){ if(!g) return; agg[g]=agg[g]||{r:0,s:0,t:''}; agg[g][k]++; }
+  (a.rows||[]).forEach(function(r){ bump(r.source_group,'r'); if((r.message_time||'')>agg[r.source_group].t) agg[r.source_group].t=r.message_time; });
+  (b.rows||[]).forEach(function(r){ bump(r.source_group,'s'); if((r.message_time||'')>agg[r.source_group].t) agg[r.source_group].t=r.message_time; });
+  var keys = Object.keys(agg).sort(function(x,y){ return (agg[y].t||'').localeCompare(agg[x].t||''); });
+  if(!keys.length){ $('table-container').innerHTML='<div class="empty-state"><p>暂无来源群</p></div>'; return; }
+  var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">';
+  keys.forEach(function(g){
+    html += '<div onclick="jumpGroup(\''+g.replace(/'/g,"\\'")+'\')" style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer">'
+      +'<div style="font-weight:700;font-size:14px;margin-bottom:6px">'+esc(g)+'</div>'
+      +'<div style="font-size:12px;color:var(--ink-muted)">运价 '+agg[g].r+' 条 · 舱位 '+agg[g].s+' 条</div>'
+      +'<div style="font-size:11px;color:var(--ink-muted);margin-top:4px">最新 '+esc((agg[g].t||'').slice(5,16))+'</div>'
+      +'</div>';
+  });
+  html += '</div>';
+  $('table-container').innerHTML = html;
+  $('pager').innerHTML = '';
+}
+function jumpGroup(g){
+  $('sf-group').value = g;
+  var btn = document.querySelector('#cat-tabs button[data-tab="rates"]');
+  setCatTab(btn);
+}
+function statusBadge(s) {
+  if (s==='当前生效'||s==='当前有效') return '<span class="badge badge-ok">生效</span>';
+  if (s==='已被覆盖') return '<span class="badge badge-over">覆盖</span>';
+  if (s) return '<span class="badge badge-coral">'+esc(s)+'</span>';
+  return '';
+}
+function fmtTime(t) { if (!t) return ''; return t.replace(/^\d{4}-/,'').replace('T',' ').slice(0,11); }
+function renderPager() {
+  const pages = Math.max(1, Math.ceil(S.sales.total / PAGE_SIZE));
+  let btns = '';
+  const add = (p,label,dis,cur) => { btns += `<button ${dis?'disabled':''} class="${cur?'cur':''}" onclick="goPage(${p})">${label}</button>`; };
+  add(S.sales.page-1,'&lsaquo;',S.sales.page<=1,false);
+  const start = Math.max(1,S.sales.page-2), end = Math.min(pages,start+4);
+  for(let p=start;p<=end;p++) add(p,p,false,p===S.sales.page);
+  add(S.sales.page+1,'&rsaquo;',S.sales.page>=pages,false);
+  $('pager').innerHTML = `<span class="info">共 ${S.sales.total} 条 · 第 ${S.sales.page}/${pages} 页</span><div class="pages">${btns}</div>`;
+}
+function goPage(p) { S.sales.page = p; salesLoad(); window.scrollTo({top:0,behavior:'smooth'}); }
+function exportCSV() {
+  if (!S.sales.rows.length) { toast('没有可导出的数据','error'); return; }
+  const cols = Object.keys(S.sales.rows[0]).filter(k=>!k.startsWith('_')&&k!=='content_key'&&k!=='synced_at');
+  let csv = '\uFEFF' + cols.join(',') + '\n';
+  S.sales.rows.forEach(r => { csv += cols.map(c=>'\"'+String(r[c]||'').replace(/\"/g,'\"\"')+'\"').join(',') + '\n'; });
+  const blob = new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = (S.sales.tab==='rates'?'运价':'舱位')+'_export_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click(); toast('已导出 '+S.sales.rows.length+' 条','success');
+}
+
+/* =================== OPS =================== */
+function switchOpsTab(t) {
+  S.opsTab = t;
+  document.querySelectorAll('.ops-tabs button').forEach((b,i)=>b.classList.toggle('active',(i===0&&t==='rate-entry')||(i===1&&t==='space-entry')));
+  $('panel-rate-entry').classList.toggle('active', t==='rate-entry');
+  $('panel-space-entry').classList.toggle('active', t==='space-entry');
+  if (t==='space-entry') initSpaceForm();
+}
+function saveToken() {
+  S.token = $('push-token').value.trim();
+  if (S.token) { toast('令牌已设置','success'); $('token-bar').style.display='none'; }
+  else toast('请输入令牌','error');
+}
+
+/* --- Rate Entry: Paste → Parse → Confirm → Submit --- */
+const RATE_FIELDS = [
+  {key:'pol', label:'起运港', req:true},
+  {key:'pod', label:'目的港', req:true},
+  {key:'route', label:'航线', req:false},
+  {key:'carrier', label:'船司', req:true},
+  {key:'container_type', label:'柜型', req:true, opts:['20GP','40GP','40HQ','40HC','45HC']},
+  {key:'freight_usd', label:'海运费 USD', req:true, type:'number'},
+  {key:'validity_raw', label:'有效期船期', req:false},
+  {key:'valid_from', label:'有效期起', req:false, type:'date'},
+  {key:'valid_to', label:'有效期止', req:false, type:'date'},
+  {key:'etd', label:'船期 ETD', req:false},
+  {key:'free_days', label:'目免', req:false},
+  {key:'dead_freight', label:'亏舱费', req:false},
+  {key:'remark', label:'备注', req:false, full:true, type:'textarea'},
+  {key:'source_group', label:'来源群', req:false},
+  {key:'sender', label:'发送人', req:false},
+  {key:'message_time', label:'消息时间', req:false},
+  {key:'message_text', label:'消息原文', req:false, full:true, type:'textarea'},
+];
+
+function initOpsForms() {
+  renderRateForm({});
+  initSpaceForm();
+}
+
+function renderRateForm(parsed) {
+  $('rate-fields').innerHTML = RATE_FIELDS.map(f => {
+    const cn = cnKey(f.key);
+    const val = esc(parsed[f.key]||'');
+    const filled = val ? ' class="filled"' : '';
+    if (f.type==='textarea') {
+      return `<div class="form-field${f.full?' full':''}"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><textarea data-key="${cn}"${filled}>${val}</textarea></div>`;
+    }
+    if (f.opts) {
+      return `<div class="form-field"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><select data-key="${cn}"${filled}><option value="">—</option>${f.opts.map(o=>`<option${o===parsed[f.key]?' selected':''}>${o}</option>`).join('')}</select></div>`;
+    }
+    return `<div class="form-field"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><input type="${f.type||'text'}" data-key="${cn}" value="${val}"${filled}></div>`;
+  }).join('');
+}
+
+function syncPasteToForm() {
+  const el = $('rate-fields').querySelector('[data-key="消息原文"]');
+  if (el) el.value = $('rate-paste').value;
+}
+
+async function submitRate() {
+  const fields = collectFormFields('rate-fields');
+  if (!fields['目的港'] || !fields['船司']) { toast('目的港和船司为必填项','error'); return; }
+  if (!fields['海运费USD']) { toast('海运费为必填项','error'); return; }
+  await pushToAPI('rates', [fields]);
+}
+function resetRateForm() {
+  $('rate-paste').value = '';
+  $('img-preview').innerHTML = ''; S.images = [];
+  $('rate-fields').querySelectorAll('input,select,textarea').forEach(el => { el.value = ''; el.classList.remove('filled'); });
+}
+
+/* --- Space Entry --- */
+const SPACE_FIELDS = [
+  {key:'pol', label:'起运港', req:true},
+  {key:'pod', label:'目的港', req:false},
+  {key:'route', label:'航线', req:false},
+  {key:'carrier', label:'船司', req:true},
+  {key:'vessel_voyage', label:'船名航次', req:true},
+  {key:'space_type', label:'舱位类型', req:true, opts:['现舱','加班船','约舱','售罄']},
+  {key:'container_type', label:'柜型', req:false, opts:['20GP','40GP','40HQ','40HC','45HC']},
+  {key:'box_qty', label:'箱量', req:false, type:'number'},
+  {key:'box_desc', label:'箱型箱量描述', req:false},
+  {key:'cutoff_raw', label:'船期截关', req:false},
+  {key:'etd', label:'ETD', req:false},
+  {key:'price_usd', label:'价格 USD', req:false},
+  {key:'remark', label:'备注', req:false, full:true, type:'textarea'},
+  {key:'source_group', label:'来源群', req:false},
+  {key:'sender', label:'发送人', req:false},
+  {key:'message_time', label:'消息时间', req:false},
+  {key:'message_text', label:'消息原文', req:false, full:true, type:'textarea'},
+];
+
+function initSpaceForm() {
+  if ($('space-fields').children.length) return; // already rendered
+  $('space-fields').innerHTML = SPACE_FIELDS.map(f => {
+    if (f.opts) {
+      const optVals = S.opts ? (f.key==='pol'?S.opts.rates.pol: f.key==='carrier'?S.opts.rates.carrier : f.key==='source_group'?S.opts.rates.source_group : f.opts) : f.opts;
+      return `<div class="form-field${f.full?' full':''}"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><select data-key="${cnKey(f.key)}"><option value="">—</option>${optVals.map(o=>`<option>${esc(o)}</option>`).join('')}</select></div>`;
+    }
+    if (f.type==='textarea') return `<div class="form-field${f.full?' full':''}"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><textarea data-key="${cnKey(f.key)}"></textarea></div>`;
+    return `<div class="form-field"><label>${f.label}${f.req?'<span class="req">*</span>':''}</label><input type="${f.type||'text'}" data-key="${cnKey(f.key)}"></div>`;
+  }).join('');
+}
+function cnKey(en) {
+  // Map field key to Chinese name for API push
+  const m = {pol:'起运港',pod:'目的港',route:'航线',carrier:'船司',container_type:'柜型',freight_usd:'海运费USD',validity_raw:'有效期船期',valid_from:'有效期起',valid_to:'有效期止',etd:'船期ETD',free_days:'目免',dead_freight:'亏舱费',remark:'备注',source_group:'来源群',sender:'发送人',message_time:'消息时间',message_text:'消息原文',vessel_voyage:'船名航次',cutoff_raw:'船期截关',box_desc:'箱型箱量',box_qty:'箱量',space_type:'舱位类型',price_usd:'价格USD'};
+  return m[en]||en;
+}
+
+function collectFormFields(containerId) {
+  const obj = {};
+  $(containerId).querySelectorAll('[data-key]').forEach(el => {
+    const v = el.value.trim();
+    if (v) obj[el.dataset.key] = v;
+  });
+  return obj;
+}
+
+async function submitSpace() {
+  const fields = collectFormFields('space-fields');
+  if (!fields['船司'] || !fields['船名航次'] || !fields['舱位类型']) {
+    toast('船司、船名航次和舱位类型为必填项','error'); return;
+  }
+  await pushToAPI('space', [fields]);
+}
+function resetSpaceForm() {
+  $('space-fields').querySelectorAll('input,select,textarea').forEach(el=>{el.value='';el.classList.remove('filled');});
+}
+
+async function pushToAPI(table, records) {
+  if (!S.token) { toast('请先设置写入令牌','error'); $('token-bar').style.display='flex'; return; }
+  try {
+    const res = await fetch('/api/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-push-token': S.token },
+      body: JSON.stringify({ table, records }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`入库成功：${data.accepted} 条`,'success');
+      if (table==='rates') resetRateForm();
+      else resetSpaceForm();
+      // Refresh stats
+      const stats = await fetch('/api/stats').then(r=>r.json());
+      $('nav-meta').textContent = '最新: ' + (stats.latestMessage||'—');
+    } else {
+      toast('入库失败: '+(data.error||'unknown'),'error');
+    }
+  } catch(e) { toast('请求失败: '+e.message,'error'); }
+}
+
+/* =================== IMAGE PASTE =================== */
+document.addEventListener('paste', e => {
+  if (S.role!=='ops' || S.opsTab!=='rate-entry') return;
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const blob = item.getAsFile();
+      addImage(blob);
+      e.preventDefault();
+    }
+  }
+});
+$('img-file').addEventListener('change', e => { [...e.target.files].forEach(addImage); });
+$('img-drop').addEventListener('dragover', e => { e.preventDefault(); e.currentTarget.classList.add('dragover'); });
+$('img-drop').addEventListener('dragleave', e => { e.currentTarget.classList.remove('dragover'); });
+$('img-drop').addEventListener('drop', e => {
+  e.preventDefault(); e.currentTarget.classList.remove('dragover');
+  [...e.dataTransfer.files].filter(f=>f.type.startsWith('image/')).forEach(addImage);
+});
+function addImage(file) {
+  const url = URL.createObjectURL(file);
+  S.images.push({ file, url });
+  const img = document.createElement('img'); img.src = url;
+  $('img-preview').appendChild(img);
+}
+
+/* =================== TOAST =================== */
+function toast(msg, type='') {
+  const t = $('toast'); t.textContent = msg;
+  t.className = 'toast ' + type;
+  requestAnimationFrame(()=>t.classList.add('show'));
+  setTimeout(()=>t.classList.remove('show'), 2800);
+}
+
+/* =================== KEYBOARD =================== */
+$('s-q').addEventListener('keydown', e => { if (e.key==='Enter') salesSearch(); });
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==='k' && S.role==='sales') { e.preventDefault(); $('s-q').focus(); }
+});
+
+/* =================== BOOT =================== */
+init();
+</script>
+</body>
+</html>

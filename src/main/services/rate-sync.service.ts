@@ -14,6 +14,19 @@ import { netFetch } from "../net-proxy";
 
 /** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
 const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "http://192.168.189.229:8788";
+/** 台账工作台跳转与报价截图 URL 都用它：界面层经 IPC/镜像字段取值，不再各自硬编码 IP */
+export function remoteBase(): string { return REMOTE_BASE; }
+/**
+ * board_server 局域网可达性探测：GET 根路径，3 秒内有任何 HTTP 响应即视为通
+ * （服务在跑就行，状态码不挑）；连不上/超时返回 false。
+ * 用裸 fetch 不走 netFetch 代理——局域网 IP 经代理必然到不了。
+ */
+export async function probeBoard(): Promise<boolean> {
+  try {
+    await fetch(`${REMOTE_BASE}/`, { signal: AbortSignal.timeout(3000) });
+    return true;
+  } catch { return false; }
+}
 /** 自动同步间隔（分钟），RATES_REMOTE_MINUTES 可覆盖，最小 1 */
 const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 240) || 240);   // 默认 4 小时
 const PAGE_SIZE = 500;
@@ -205,12 +218,16 @@ export function startAutoSync(): void {
   }, 5_000);
 }
 
-export interface QuoteFilters { lane?: string; carrier?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[] }
+export interface QuoteFilters { lane?: string; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[] }
 
 export interface QuoteDto {
   podRaw: string; lane: string | null; carrier: string | null; container: string | null;
   oceanUsd: number | null; validFrom: string | null; validTo: string | null;
   pol: string | null; note: string | null; sourceGroup: string | null; msgTime: string | null;
+  // 详情抽屉用（追加在尾部：agent 数据表格卡取前 7 键自动生成列，保持列序不变）
+  validityRaw: string | null; freeDays: string | null; shortfallFee: string | null; sender: string | null;
+  /** 报价截图的 board_server 绝对 URL（无图为 null；接口未动，只拼现成的 /images/ 静态服务） */
+  imageUrl: string | null;
 }
 
 /** 条件查价（供 UI 与 agent 工具 quote_search 复用） */
@@ -219,6 +236,8 @@ function quoteConds(f: QuoteFilters) {
   // 航线模糊匹配：库里是「加勒比/南美东…」受控枚举，like 兼容「加勒比线」这类口语后缀
   if (f.lane) conds.push(like(rateQuotes.lane, `%${f.lane}%`));
   if (f.carrier) conds.push(like(rateQuotes.carrier, `%${f.carrier}%`));   // 模糊 + ASCII 大小写不敏感（zim→ZIM）
+  // 起运港模糊匹配（界面筛选与列序对齐：船司→起运港→目的港→柜型）
+  if (f.pol) conds.push(like(rateQuotes.pol, `%${f.pol}%`));
   if (f.pod) {
     // 港口归一展开：pod=SANTOS 也要命中 podRaw=「南美东」/区域码 的航线级行
     const podConds = [like(rateQuotes.podRaw, `%${f.pod}%`)];
@@ -239,12 +258,20 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
     container: rateQuotes.container, oceanUsd: rateQuotes.oceanUsd,
     validFrom: rateQuotes.validFrom, validTo: rateQuotes.validTo,
     pol: rateQuotes.pol, note: rateQuotes.note, sourceGroup: rateQuotes.sourceGroup, msgTime: rateQuotes.msgTime,
+    // 尾键：详情抽屉字段（agent 表格卡只认前 7 键，加列不改展示序）
+    validityRaw: rateQuotes.validityRaw, freeDays: rateQuotes.freeDays,
+    shortfallFee: rateQuotes.shortfallFee, sender: rateQuotes.sender, imageName: rateQuotes.imageName,
   }).from(rateQuotes)
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(rateQuotes.oceanUsd)
     .limit(Math.min(f.limit ?? 20, 5000))
     .all();
-  return okResult(rows);
+  // 截图走 board_server 现成的 /images/ 静态服务（只取 basename 防穿越），拼成绝对 URL 给界面
+  const base = REMOTE_BASE.replace(/\/$/, "");
+  return okResult(rows.map(({ imageName, ...rest }) => ({
+    ...rest,
+    imageUrl: imageName ? `${base}/images/${encodeURIComponent(imageName)}` : null,
+  })));
 }
 
 /** 满足条件的总条数（评测 rate-count 发现的缺陷：工具只返回截断后的行数，

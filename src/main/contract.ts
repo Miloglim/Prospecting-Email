@@ -179,6 +179,8 @@ export const IPC = {
     LIST:   chan(PREFIX.RATES, "list"),
     /** 镜像统计（总数/有效数/最近同步/快照新鲜度） */
     STATUS: chan(PREFIX.RATES, "status"),
+    /** 在系统浏览器打开公司电脑 board_server 的台账工作台 */
+    OPEN_BOARD: chan(PREFIX.RATES, "openBoard"),
   },
   KB: {
     /** 读取 KB 中转配置（baseUrl/令牌是否已配/生效端点，不含明文令牌） */
