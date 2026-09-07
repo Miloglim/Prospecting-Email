@@ -7,4 +7,4 @@ export { inboxMessages, inboxBounceMatches, type InboxMessageRow, type InsertInb
 export { templates, type TemplateRow, type InsertTemplateRow } from "./templates";
 export { sendQueue, type SendQueueRow, type InsertSendQueueRow } from "./send-queue";
 export { agentConversations, agentMessages, agentToolCalls, agentFacts, agentGaps, agentSuggestions, type AgentConversationRow, type AgentMessageRow, type AgentToolCallRow, type AgentFactRow, type AgentGapRow, type AgentSuggestionRow } from "./agent";
-export { rateQuotes, type RateQuoteRow, type InsertRateQuoteRow } from "./rates";
+export { rateQuotes, spaceQuotes, type RateQuoteRow, type InsertRateQuoteRow, type SpaceQuoteRow, type InsertSpaceQuoteRow } from "./rates";

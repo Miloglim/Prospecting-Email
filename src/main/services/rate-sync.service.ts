@@ -1,16 +1,16 @@
-import { and, eq, like, gte, isNull, or, sql, type Column } from "drizzle-orm";
+import { and, eq, like, gte, isNull, or, desc, sql, type Column } from "drizzle-orm";
 import { Log } from "../logger";
 import { getDb, saveDatabase } from "../db";
-import { rateQuotes, type InsertRateQuoteRow } from "../db/schema/rates";
+import { rateQuotes, spaceQuotes, type InsertRateQuoteRow, type InsertSpaceQuoteRow } from "../db/schema/rates";
 import { okResult, failResult, type Result } from "../errors";
 import { netFetch } from "../net-proxy";
 
-// ── 运价同步服务 ──────────────────────────────────────────────────
-// 链路（v5.0.3 起）：钉钉台账（公司电脑心跳入库）→ board_server 局域网 HTTP →
-//       本服务分页拉取 + 归一化 → rate_quotes 镜像表（全量刷新）。
+// ── 运价 / 舱位同步服务 ──────────────────────────────────────────
+// 链路：公司电脑台账（board_server，局域网 HTTP）→
+//       本服务分页拉取 + 归一化 → 两张只读镜像：rate_quotes（运价）+ space_records（舱位）。
 // 程序只读镜像，不回写。服务地址为程序内置参数（RATES_REMOTE_URL 可覆盖，无 UI 配置），
 // 连接不上时给出简单提示；镜像保留上次同步成功的数据，失败不删旧。
-// 规范：docs/rates-remote-source-spec.md
+// 规范：docs/rates-remote-source-spec.md（同步）+ docs/rates-query-fallback-spec.md（查询三段式）
 
 /** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
 const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "http://192.168.189.229:8788";
@@ -167,6 +167,43 @@ export function mapRemoteRow(row: Record<string, unknown>, fallbackId: string): 
   };
 }
 
+/**
+ * 远程舱位行 → 归一化镜像行（/api/space，与运价同构但字段集不同：无海运费/有效期，
+ * 多船名航次、截关、箱型箱量、舱位类型）。纯函数不触库，供单测。
+ * 接口文档：docs/运价接口字段对接说明.md §3「/api/space 行」。
+ * pod 在舱位表里可能为 null（群里常只报航线）；目的港同样剥尾部航线小字并回填空 lane；
+ * price_usd 源端是文本（可能 "6815/7015" 这类双值），原样保留不强转成数字以免丢信息。
+ */
+export function mapRemoteSpace(row: Record<string, unknown>, fallbackId: string): InsertSpaceQuoteRow | null {
+  const carrier = pick(row, ["carrier"]);
+  const rawPod = pick(row, ["pod_raw", "pod"]);
+  const lane0 = pick(row, ["route", "lane"]);
+  const cleaned = rawPod ? stripLaneTag(rawPod, lane0) : { podRaw: null, lane: lane0 ?? null };
+  const containerRaw = pick(row, ["container_type", "box_desc", "container_raw"]);
+  return {
+    recordId: pick(row, ["content_key", "record_id"]) || fallbackId,
+    pol: pick(row, ["pol"]),
+    podRaw: cleaned.podRaw,
+    lane: cleaned.lane,
+    carrier,
+    container: normalizeContainer(containerRaw),
+    containerRaw,
+    boxQty: pick(row, ["box_qty"]),
+    spaceType: pick(row, ["space_type", "stype"]),
+    vessel: pick(row, ["vessel_voyage", "vessel"]),
+    etd: pick(row, ["etd"]),
+    cutoffRaw: pick(row, ["cutoff_raw", "cutoff"]),
+    priceUsd: pick(row, ["price_usd", "price"]),
+    note: pick(row, ["remark", "note"]),
+    sourceGroup: pick(row, ["source_group"]),
+    sender: pick(row, ["sender"]),
+    msgTime: pick(row, ["message_time", "msg_time"]),
+    imageName: pick(row, ["image_url", "image_name"]),
+    status: pick(row, ["status"]),
+    syncedAt: new Date().toISOString(),
+  };
+}
+
 let lastSync: { at: string; imported: number; source: string } | null = null;
 let lastError: string | null = null;
 let syncing = false;
@@ -177,61 +214,102 @@ function todayBeijing(): string {
   return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 }
 
+/** 分页拉一页（外层结构 {ok,total,rows}）；网络/响应异常返回 null 由调用方兜 */
+async function pullPage(base: string, path: string, query: string, offset: number):
+  Promise<{ rows: Record<string, unknown>[]; total: number } | null> {
+  try {
+    const res = await netFetch(`${base}${path}?${query}&limit=${PAGE_SIZE}&offset=${offset}`,
+      { headers: { Accept: "application/json" } });
+    if (!res.ok) { lastError = `${path} 返回 HTTP ${res.status}（${base}）`; return null; }
+    const json = await res.json() as { ok?: boolean; total?: number; rows?: Record<string, unknown>[] };
+    if (json.ok === false) { lastError = `${path} 响应 ok=false（${base}）`; return null; }
+    const list = Array.isArray(json.rows) ? json.rows : [];
+    return { rows: list, total: Number.isFinite(Number(json.total)) ? Number(json.total) : offset + list.length };
+  } catch (err) {
+    lastError = `${REMOTE_DOWN_HINT}（${err instanceof Error ? err.message.slice(0, 80) : "网络不可达"}）`;
+    return null;
+  }
+}
+
 /**
- * 从远程运价库全量刷新本地镜像（分页拉全量 → 归一化 → 删旧插新）。
- * 拉取失败不动本地镜像（保留上次成功数据），返回带友好提示的失败。
+ * 从台账全量刷新一张镜像表：分页拉 → 归一化 → 删旧插新（拉取中途失败则一行都不写，保留旧数据）。
+ * @param statusQuery 服务端状态过滤（运价「当前生效」/舱位「当前有效」，两表字面量不同）；
+ *                    传 null 则不带该参数，取回后在本地剔掉「已被覆盖」
+ */
+async function pullTable<T>(
+  base: string, path: string, statusQuery: string | null, map: (row: Record<string, unknown>, id: string) => T | null,
+): Promise<{ rows: T[]; unreachable: boolean }> {
+  const out: T[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  while (offset < total && offset < ROW_CAP) {
+    const page = await pullPage(base, path, statusQuery ? `status=${statusQuery}` : "", offset);
+    if (!page) return { rows: out, unreachable: true };
+    for (let i = 0; i < page.rows.length; i++) {
+      const raw = page.rows[i]!;
+      if (!statusQuery && String(raw.status ?? "") === "已被覆盖") continue;   // 被覆盖的历史不进镜像
+      const m = map(raw, `${path.replace(/\W/g, "")}-${offset + i}`);
+      if (m) out.push(m);
+    }
+    if (page.rows.length === 0) break;
+    total = page.total;
+    offset += page.rows.length;
+  }
+  return { rows: out, unreachable: false };
+}
+
+/**
+ * 刷新本地镜像：运价（/api/rates）+ 舱位（/api/space），同批全量、各自独立成败。
+ * 运价拉不到 = 整体失败（保留旧镜像，界面给友好提示）；
+ * 舱位拉不到只记日志并保留旧舱位镜像——舱位是附带信息，不该拖垮运价刷新。
  */
 export async function sync(): Promise<Result<{ imported: number }>> {
   if (syncing) return failResult("上一次同步仍在进行中，请稍候");
   syncing = true;
   try {
     const base = REMOTE_BASE.replace(/\/$/, "");
-    const rows: InsertRateQuoteRow[] = [];
-    let offset = 0;
-    let total = Number.POSITIVE_INFINITY;
-    while (offset < total && offset < ROW_CAP) {
-      let res: Response;
-      try {
-        // 只拉当前生效（被覆盖的历史不进镜像，防旧价污染 quote_search）；中文参数必须 URL 编码
-        const status = encodeURIComponent("当前生效");
-        res = await netFetch(`${base}/api/rates?status=${status}&limit=${PAGE_SIZE}&offset=${offset}`, { headers: { Accept: "application/json" } });
-      } catch (err) {
-        const d = err instanceof Error ? err.message.slice(0, 80) : "网络不可达";
-        lastError = `${REMOTE_DOWN_HINT}（${d}）`;
-        Log.warn("rates.sync", `远程库不可达：${d}`);
-        return failResult(REMOTE_DOWN_HINT);
-      }
-      if (!res.ok) {
-        lastError = `运价服务返回 HTTP ${res.status}（${base}）`;
-        Log.warn("rates.sync", lastError);
-        return failResult(`运价服务响应异常（HTTP ${res.status}），请联系数据管理员检查服务。`);
-      }
-      let json: { ok?: boolean; total?: number; rows?: Record<string, unknown>[] };
-      try { json = await res.json() as typeof json; }
-      catch { lastError = "运价服务返回格式异常"; return failResult("运价服务返回格式异常，请联系数据管理员。"); }
-      const list = Array.isArray(json.rows) ? json.rows : [];
-      total = Number.isFinite(Number(json.total)) ? Number(json.total) : offset + list.length;
-      for (let i = 0; i < list.length; i++) {
-        const m = mapRemoteRow(list[i]!, `remote-${offset + i}`);
-        if (m) rows.push(m);
-      }
-      if (list.length === 0) break;
-      offset += list.length;
+    const cur = encodeURIComponent("当前生效");
+    const rates = await pullTable(base, "/api/rates", cur, mapRemoteRow);
+    if (rates.unreachable) {
+      Log.warn("rates.sync", lastError ?? "远程库不可达");
+      return failResult(lastError && !lastError.startsWith(REMOTE_DOWN_HINT)
+        ? "运价服务响应异常，请联系数据管理员检查服务。" : REMOTE_DOWN_HINT);
     }
-    if (!rows.length) {
+    if (!rates.rows.length) {
       lastError = "远程库没有有效运价行";
       return failResult("运价库暂无有效数据（远程行目的港全为空或接口结构不符）。");
     }
     const db = getDb();
     db.delete(rateQuotes).run();
-    for (let i = 0; i < rows.length; i += 100) {
-      db.insert(rateQuotes).values(rows.slice(i, i + 100)).run();
+    for (let i = 0; i < rates.rows.length; i += 100) {
+      db.insert(rateQuotes).values(rates.rows.slice(i, i + 100)).run();
     }
+
+    // 舱位：状态字面量与运价不同，服务端不认这个值时退回不带 status 再拉一次（本地剔已被覆盖）
+    const spaceCur = encodeURIComponent("当前有效");
+    let spaces = await pullTable(base, "/api/space", spaceCur, mapRemoteSpace);
+    if (spaces.unreachable || !spaces.rows.length) {
+      const retry = await pullTable(base, "/api/space", null, mapRemoteSpace);
+      if (!retry.unreachable && retry.rows.length) spaces = retry;
+    }
+    let spaceImported = 0;
+    if (spaces.rows.length) {
+      db.delete(spaceQuotes).run();
+      for (let i = 0; i < spaces.rows.length; i += 100) {
+        db.insert(spaceQuotes).values(spaces.rows.slice(i, i + 100)).run();
+      }
+      spaceImported = spaces.rows.length;
+    } else if (!spaces.unreachable) {
+      Log.debug("rates.sync", "舱位镜像拉到 0 行，保留旧数据");
+    } else {
+      Log.debug("rates.sync", `舱位拉取失败，保留旧舱位镜像：${lastError ?? ""}`);
+    }
+
     saveDatabase();
-    lastSync = { at: new Date().toISOString(), imported: rows.length, source: base };
+    lastSync = { at: new Date().toISOString(), imported: rates.rows.length, source: base };
     lastError = null;
-    Log.info("rates.sync", `镜像刷新 ${rows.length} 条（远程 ${base}）`);
-    return okResult({ imported: rows.length });
+    Log.info("rates.sync", `镜像刷新：运价 ${rates.rows.length} 条、舱位 ${spaceImported} 条（远程 ${base}）`);
+    return okResult({ imported: rates.rows.length });
   } finally {
     syncing = false;
   }
@@ -342,8 +420,61 @@ export function countQuotes(f: QuoteFilters): number {
   return Number(row?.n ?? 0);
 }
 
+export interface SpaceFilters { terms?: string[]; pod?: string; lane?: string; carrier?: string; pol?: string; container?: string; /** 只看最近 N 天的群内动态（默认 21 天），舱位是时效信息 */ days?: number; limit?: number }
+
+export interface SpaceDto {
+  podRaw: string | null; lane: string | null; carrier: string | null; pol: string | null;
+  container: string | null; boxQty: string | null; spaceType: string | null;
+  vessel: string | null; etd: string | null; cutoffRaw: string | null; priceUsd: string | null;
+  note: string | null; sender: string | null; sourceGroup: string | null; msgTime: string | null;
+  imageUrl: string | null;
+}
+
+/**
+ * 查运价时附带的「相关舱位」：用户查的那个词同时比对航线/目的港/起运港/柜型/船名，
+ * 只取最近 days 天（舱位是群内动态，旧一条会误导），按消息时间倒序。
+ * msg_time 格式不统一（"2026-09-03" 或 "2026-09-06 17:59"），但都以 YYYY-MM-DD 开头，字典序可比。
+ */
+export function listSpaces(f: SpaceFilters): Result<SpaceDto[]> {
+  const conds = [];
+  const words = [...(f.terms ?? []), f.pod ?? "", f.lane ?? ""];
+  for (const t of words) {
+    const w = (t ?? "").trim();
+    if (!w) continue;
+    // 一个词可能是航线名、港名、船司的船名——舱位表里哪一列命中都算相关
+    conds.push(or(
+      like(spaceQuotes.lane, `%${w}%`), like(spaceQuotes.podRaw, `%${w}%`),
+      like(spaceQuotes.pol, `%${w}%`), like(spaceQuotes.container, `%${w}%`),
+      like(spaceQuotes.vessel, `%${w}%`),
+    ));
+  }
+  if (f.carrier) conds.push(like(spaceQuotes.carrier, `%${f.carrier}%`));
+  if (f.container) conds.push(or(eq(spaceQuotes.container, f.container), like(spaceQuotes.container, `%${f.container}%`)));
+  if (f.pol) conds.push(like(spaceQuotes.pol, `%${f.pol}%`));
+  // 舱位是群内动态：只取最近 days 天（没时间戳的按"时效不可判"丢掉，免得把旧舱位说成现舱）
+  const days = Math.max(1, f.days ?? 21);
+  const from = new Date(Date.now() + 8 * 3600_000 - days * 86_400_000).toISOString().slice(0, 10);
+  conds.push(gte(spaceQuotes.msgTime, from));
+  const rows = getDb().select({
+    podRaw: spaceQuotes.podRaw, lane: spaceQuotes.lane, carrier: spaceQuotes.carrier, pol: spaceQuotes.pol,
+    container: spaceQuotes.container, boxQty: spaceQuotes.boxQty, spaceType: spaceQuotes.spaceType,
+    vessel: spaceQuotes.vessel, etd: spaceQuotes.etd, cutoffRaw: spaceQuotes.cutoffRaw,
+    priceUsd: spaceQuotes.priceUsd, note: spaceQuotes.note, sender: spaceQuotes.sender,
+    sourceGroup: spaceQuotes.sourceGroup, msgTime: spaceQuotes.msgTime, imageName: spaceQuotes.imageName,
+  }).from(spaceQuotes)
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(desc(spaceQuotes.msgTime))
+    .limit(Math.min(f.limit ?? 8, 30))
+    .all();
+  const base = REMOTE_BASE.replace(/\/$/, "");
+  return okResult(rows.map(({ imageName, ...rest }) => ({
+    ...rest,
+    imageUrl: imageName ? `${base}/images/${encodeURIComponent(imageName)}` : null,
+  })));
+}
+
 export function status(): Result<{
-  total: number; active: number; lastSyncAt: string | null; lastImported: number | null;
+  total: number; active: number; spaceTotal: number; lastSyncAt: string | null; lastImported: number | null;
   remoteHost: string; lastError: string | null;
 }> {
   const rows = getDb().select({ validTo: rateQuotes.validTo }).from(rateQuotes).all();
@@ -353,6 +484,7 @@ export function status(): Result<{
   return okResult({
     total: rows.length,
     active: rows.filter(r => !r.validTo || r.validTo >= today).length,
+    spaceTotal: getDb().select({ n: sql<number>`count(*)` }).from(spaceQuotes).get()?.n ?? 0,
     lastSyncAt: lastSync?.at ?? null,
     lastImported: lastSync?.imported ?? null,
     remoteHost: host,

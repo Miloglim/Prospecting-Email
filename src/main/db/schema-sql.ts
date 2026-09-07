@@ -159,4 +159,18 @@ CREATE TABLE IF NOT EXISTS rate_quotes (
 );
 CREATE INDEX IF NOT EXISTS idx_rate_quotes_lane ON rate_quotes(lane);
 CREATE INDEX IF NOT EXISTS idx_rate_quotes_valid_to ON rate_quotes(valid_to);
+/* 舱位镜像（同台账 /api/space）：群内动态，按 msg_time 看时效，不设有效期列 */
+CREATE TABLE IF NOT EXISTS space_records (
+  record_id text PRIMARY KEY NOT NULL,
+  pol text, pod_raw text,
+  lane text, carrier text,
+  container text, container_raw text, box_qty text,
+  space_type text, vessel text, etd text, cutoff_raw text,
+  price_usd text, note text,
+  source_group text, sender text, msg_time text, image_name text, status text,
+  synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_space_records_lane ON space_records(lane);
+CREATE INDEX IF NOT EXISTS idx_space_records_pod_raw ON space_records(pod_raw);
+CREATE INDEX IF NOT EXISTS idx_space_records_msg_time ON space_records(msg_time);
 `.trim();

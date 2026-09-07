@@ -33,7 +33,7 @@ import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from
 import { readIdentity } from "./identity";
 import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
-import { listQuotes, countQuotes, normalizeContainer, quoteOptions, probeBoardCached, remoteBase } from "../rate-sync.service";
+import { listQuotes, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
@@ -1060,6 +1060,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "用户给了一个词就原样传 q（不必判断它是航线名还是港口名，工具会跨字段比对）；所有参数均可省略，省略的条件视为不限。"
       + "没命中时按返回的 notice 指引走：第一轮先照 candidates 换词重试一次，两轮都没命中才按 notice 给的口径回答——"
       + "「本地镜像查不到」与「该航线没有报价」是两件事，不得混说，更不得编造价格。"
+      + "每次查价都会同批附带该航线/港口最近 21 天的舱位动态（spaces / spaceTable）：回答必须价在前、舱位在后，"
+      + "舱位照表里的原值说并注明以订舱时确认为准。"
       + "返回 目的港/船司/柜型/USD价/有效期/备注 结构化列表，按价格升序。运价相关问题必须且只能基于本工具结果回答；结果为参考价，回答时须提醒以船司实时报价为准。",
     parameters: quoteSearchSchema,
     execute: async (args) => {
@@ -1097,6 +1099,22 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }
       // total=满足条件的真总数（评测发现只给截断行数会让模型反复重试凑数直至 max turns）
       const total = countQuotes(filters);
+      // 规则：查运价必带相关舱位——同一次调用里用同一批词并联查舱位镜像（本地查询，不多花模型调用）。
+      // 附带查询不得打挂主查询：老库缺表/列变更等异常一律按「无近期舱位动态」处理
+      let spaces: SpaceDto[] = [];
+      try {
+        const sp = listSpaces({ terms: termWords.length ? termWords : undefined, carrier: filters.carrier, limit: 8 });
+        if (sp.success) spaces = sp.data;
+      } catch { /* 宁可不带舱位，也不让查价失败 */ }
+      const spaceTable = spaces.length
+        ? [
+          "| 舱位动态 | 船名航次 | ETD | 截关 | 航线 | 目的港 | 柜型/箱量 | 价格USD | 时间 | 来源群 |",
+          "|---|---|---|---|---|---|---|---|---|---|",
+          ...spaces.map(s => `| ${s.spaceType ?? "—"} | ${s.vessel ?? "—"} | ${s.etd ?? "—"} | ${s.cutoffRaw ?? "—"} `
+            + `| ${s.lane ?? "—"} | ${s.podRaw ?? "—"} | ${[s.container, s.boxQty].filter(Boolean).join(" ") || "—"} `
+            + `| ${s.priceUsd ?? "—"} | ${s.msgTime ?? "—"} | ${s.sourceGroup ?? "—"} |`),
+        ].join("\n")
+        : "";
       // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
       // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
@@ -1174,9 +1192,18 @@ export function buildHarnessTools(ctx: ToolCtx) {
           "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
         );
       }
+      // 舱位与运价同行（规则）：有近期动态必须一起答，没有也如实说一句，两种都不许编
+      noticeLines.push(spaces.length
+        ? `相关舱位动态 ${spaces.length} 条（最近 21 天，见 spaceTable）：回答必须在运价之后再用一两句带上——`
+          + "舱位类型、船名航次、ETD、截关、箱量一律照表里的原值说，不得编造或推算；"
+          + "并补一句「舱位为群内动态，以订舱时确认为准」。用户要报价信时，把舱位一并写进去。"
+        : "本次没有该航线/港口最近 21 天的舱位动态。如实说「舱位这边没有近期动态，需要时我再查」，"
+          + "不要拿更早的记录或外部印象当现状。");
       const out = {
         total, count: r.data.length, quotes: r.data,
         answer, customerTable,
+        spaceCount: spaces.length,
+        ...(spaces.length ? { spaces, spaceTable } : {}),
         ...(stdRows.length ? { standardCount: stdRows.length } : {}),
         notice: noticeLines.join("\n"),
         ...(candidates ? { candidates } : {}),
@@ -1186,11 +1213,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
         ...(total > 0 ? {
           say: `共 ${total} 条` + (args.q || args.lane || args.pod || args.carrier || args.container
             ? `（当前筛选条件下的命中数）` : `（镜像库全量）`)
-            + `，其中返回明细 ${r.data.length} 条${r.data.length ? `，最低 ${r.data[0]!.oceanUsd ?? "-"} USD` : ""}`,
+            + `，其中返回明细 ${r.data.length} 条${r.data.length ? `，最低 ${r.data[0]!.oceanUsd ?? "-"} USD` : ""}`
+            + `；相关舱位动态 ${spaces.length} 条`,
         } : {}),
         ...(total > 0 ? {
           actions: [
-            promptAction("按这批价写一封报价信", "根据刚才查到的运价，选最便宜的那条给客户写一封报价信，注明有效期和「以船司实时报价为准」的提醒"),
+            promptAction("按这批价写一封报价信", "根据刚才查到的运价，选最便宜的那条给客户写一封报价信，注明有效期和「以船司实时报价为准」的提醒；刚才那批相关舱位动态（船名航次/ETD/截关/舱位类型）也一并写进去，并注明舱位以订舱时确认为准"),
             navAction("在运价库筛选", "#/rates"),
           ],
         } : concluded ? {

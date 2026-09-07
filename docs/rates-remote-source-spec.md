@@ -10,13 +10,14 @@ Prospector 及分发给同事的副本都没有钉钉权限。运价数据的获
 ## 1. 数据流
 
 ```
-钉钉台账(公司电脑心跳) → board_server :8788 → Prospector syncRemote() → rate_quotes 镜像
-                                                                    ├─ RateBoard
-                                                                    └─ quote_search
+钉钉台账(公司电脑心跳) → board_server :8788 → Prospector sync() ─┬─ rate_quotes 镜像（运价）
+                                                                  └─ space_records 镜像（舱位）
+                                              ├─ RateBoard
+                                              └─ quote_search（查价时同批附带相关舱位）
 ```
 
 - **本地镜像语义不变**：归一化柜型/有效期、全量刷新、includeExpired 过滤全部照旧。
-- **准实时**：远程源配置后自动定时同步（默认 10 分钟，`RATES_REMOTE_MINUTES` 可调），
+- **定时节奏**：启动后 5 秒首拉 + 每 `RATES_REMOTE_MINUTES` 分钟轮询（**默认 240 分钟 = 4 小时**），
   外加手动「同步台账」按钮；数据新鲜度上限 = 心跳入库节奏。
 
 ## 2. 远程接口约定（board_server 侧）
@@ -55,5 +56,10 @@ sender/msg_time/image_name/record_id）同名直取。数值容忍字符串带�
 
 - 拉取失败不动本地镜像（先全量拉完、后删旧插新）；失败保留上次同步的数据并报错。
 - 单条远程行字段残缺（无目的港等）跳过，不阻塞整批。
+- **两张镜像各自独立成败**：运价拉不到 = 整体失败（界面提示）；舱位拉不到或返回 0 行 = 只记日志、
+  保留旧 `space_records`，不阻断运价刷新——舱位是附带信息，不该拖垮主链路。
+- **两表 status 字面量不同**：运价「当前生效 / 已被覆盖」，舱位「当前有效 / 已被覆盖」。
+  舱位带 `status=当前有效` 拉不到任何行时，退回不带 status 再拉一次、在本地剔掉「已被覆盖」，
+  防服务端字面量变更把舱位镜像清空。
 - 联动清理：快照链路死代码（SNAPSHOT_PATH / dws 字段表 / cellText / parseSnapshot）已删；
   `data/rates-snapshot.json` 不再被读取，可留可删。

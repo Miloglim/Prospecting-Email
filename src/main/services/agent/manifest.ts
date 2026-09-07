@@ -52,9 +52,9 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 3 },
   },
   {
-    name: "quote_search", label: "查询运价",
-    route: "查询海运运价镜像；",
-    followUps: ["按最便宜的船司给客户写一封开发信", "把这条航线的报价按柜型对比一下"],
+    name: "quote_search", label: "查运价与舱位",
+    route: "查询海运运价镜像（同一次调用会附带该航线/港口最近 21 天的舱位动态，回答要价在前、舱位在后）；",
+    followUps: ["按最便宜的船司给客户写一封开发信", "这条航线最近舱位紧不紧"],
     spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 5 },
   },
   {

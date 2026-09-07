@@ -65,6 +65,11 @@ CREATE TABLE rate_quotes (
   container text, container_raw text, ocean_usd integer, validity_raw text, valid_from text, valid_to text,
   free_days text, shortfall_fee text, note text, source_group text, sender text, msg_time text,
   image_name text, synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
+CREATE TABLE space_records (
+  record_id text PRIMARY KEY NOT NULL, pol text, pod_raw text, lane text, carrier text,
+  container text, container_raw text, box_qty text, space_type text, vessel text, etd text,
+  cutoff_raw text, price_usd text, note text, source_group text, sender text, msg_time text,
+  image_name text, status text, synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
 CREATE TABLE email_accounts (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, email text NOT NULL UNIQUE,
   provider text DEFAULT 'smtp' NOT NULL, smtp_host text, smtp_port integer,

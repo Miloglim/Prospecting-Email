@@ -5,12 +5,12 @@ import * as path from "path";
 import * as os from "os";
 import * as schema from "../../src/main/db/schema";
 import { BASE_SCHEMA_SQL } from "../../src/main/db/schema-sql";
-import { rateQuotes } from "../../src/main/db/schema/rates";
+import { rateQuotes, spaceQuotes } from "../../src/main/db/schema/rates";
 
 // ═══════════════════════════════════════════════════════════════════
-// 运价查询三段式（规范 docs/rates-query-fallback-spec.md）
-// 钉住用户实测翻车的那句回答：问「地东的价格」被答成「镜像库暂无该航线报价」。
-// L1 机械层跨字段并集、L2 空结果回候选让模型换词重试、L3 两轮不过才定论。
+// 运价查询三段式 + 查价必带舱位（规范 docs/rates-query-fallback-spec.md）
+// 钉住用户实测翻车的两件事：问「地东的价格」被答成「镜像库暂无该航线报价」；
+// 以及查价时把该航线/港口的近期舱位动态一起带出来（过期动态不许进来）。
 // ═══════════════════════════════════════════════════════════════════
 
 // 探测真源可达性用得到：指向必然拒绝的端口 → 秒失败，测试不等 3 秒超时
@@ -30,7 +30,7 @@ vi.mock("../../src/main/config", async (importOriginal) => {
   return { ...actual, APP_ROOT: TMP, DB_PATH: path.join(TMP, "prospector.db") };
 });
 
-const { stripLaneTag, mapRemoteRow, listQuotes, countQuotes, quoteOptions } =
+const { stripLaneTag, mapRemoteRow, mapRemoteSpace, listQuotes, countQuotes, listSpaces, quoteOptions } =
   await import("../../src/main/services/rate-sync.service");
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 
@@ -40,6 +40,9 @@ const call = (t: ToolLike, args: unknown): Promise<string> => t.invoke({}, JSON.
 
 const ctx = { conversationId: "rates-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
 let T: (name: string) => ToolLike = () => { throw new Error("未初始化"); };
+
+const recent = (daysAgo: number) =>
+  new Date(Date.now() + 8 * 3600_000 - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
 function freshDb() {
   const raw: SqlJsDatabase = new SQLLIB.Database();
@@ -60,6 +63,16 @@ function freshDb() {
       carrier: "MSC", container: "40GP", oceanUsd: 1650, validTo: "2099-12-31", syncedAt: new Date().toISOString() },
     { recordId: "r-santos", pol: "宁波", podRaw: "SANTOS", lane: "南美东",
       carrier: "MSC", container: "40HQ", oceanUsd: 3200, validTo: "2099-12-31", syncedAt: new Date().toISOString() },
+  ] as never).run();
+  h.db.insert(spaceQuotes).values([
+    { recordId: "s-ist", pol: "宁波", podRaw: "ISTANBUL 伊斯坦布尔(土耳其)", lane: "地东", carrier: "CMA",
+      container: "40HQ", containerRaw: "40HQ", boxQty: "3", spaceType: "现舱", vessel: "CMA CGM JADE /0E",
+      etd: "2026-09-18", cutoffRaw: "9.12 截关", priceUsd: "1850", note: "现舱可预定",
+      sourceGroup: "航线动态群", sender: "张三", msgTime: recent(5), status: "当前有效",
+      syncedAt: new Date().toISOString() },
+    { recordId: "s-old", pol: "宁波", podRaw: "ISTANBUL 伊斯坦布尔(土耳其)", lane: "地东", carrier: "MSC",
+      container: "40GP", spaceType: "售罄", msgTime: recent(90), status: "当前有效",
+      syncedAt: new Date().toISOString() },              // 90 天前的动态，时间窗必须挡掉
   ] as never).run();
   const all = buildHarnessTools(ctx as never) as unknown as ToolLike[];
   const byName = Object.fromEntries(all.map(t => [t.name ?? "", t]));
@@ -124,7 +137,7 @@ describe("L2/L3：查不到 ≠ 没有", () => {
     expect(out.candidates?.lanes.map(l => l.v)).toContain("地东");
     expect(out.candidates?.pods.map(p => p.v)).toContain("ISTANBUL 伊斯坦布尔(土耳其)");
     expect(out.notice).toContain("再查一次");
-    expect(out.notice).not.toContain("暂无");
+    expect(out.notice).not.toContain("暂无该航线");
     // 空结果不许进读缓存：同一参数第二次调用要真跑，才走得到定论口径
     const again = JSON.parse(await call(T("quote_search"), { q: "波德港不存在XYZ" })) as { notice: string };
     expect(again.notice).not.toBe(out.notice);
@@ -144,13 +157,45 @@ describe("L2/L3：查不到 ≠ 没有", () => {
     expect(out.actions?.map(a => a.label)).toEqual(["去运价页同步镜像", "联网查市场行情"]);
   });
 
-  it("命中时口径不变：给出条数与固定格式指令", async () => {
+  it("命中时口径不变：条数、固定格式指令，并同批附带相关舱位", async () => {
     const out = JSON.parse(await call(T("quote_search"), { q: "地东" })) as {
       total: number; empty?: boolean; candidates?: unknown; notice: string;
+      spaceCount: number; spaces: Array<{ spaceType: string | null; vessel: string | null }>; spaceTable: string;
     };
     expect(out.total).toBe(2);
     expect(out.empty).toBeUndefined();
     expect(out.candidates).toBeUndefined();
     expect(out.notice).toContain("以船司实时报价为准");
+    // 查价必带舱位：同一次调用里把该航线近期动态一并带回，并硬指令"价在前、舱位在后"
+    expect(out.spaceCount).toBe(1);
+    expect(out.spaces[0]?.spaceType).toBe("现舱");
+    expect(out.spaceTable).toContain("CMA CGM JADE");
+    expect(out.notice).toContain("舱位");
+  });
+});
+
+describe("舱位镜像：归一化与相关性", () => {
+  it("远程舱位行：pod 可空、目的港尾缀剥离回填空 lane、价格保留原文文本", () => {
+    const s = mapRemoteSpace({
+      content_key: "k-1", pol: "宁波", pod: "ISTANBUL 伊斯坦布尔(土耳其) 地东", route: "",
+      carrier: "CMA", container_type: "40HQ", box_qty: "3", space_type: "现舱",
+      vessel_voyage: "CMA CGM JADE /0E", etd: "2026-09-18", cutoff_raw: "9.12 截关",
+      price_usd: "1850/1900", message_time: "2026-09-06", status: "当前有效",
+    }, "k-1")!;
+    expect(s.podRaw).toBe("ISTANBUL 伊斯坦布尔(土耳其)");
+    expect(s.lane).toBe("地东");
+    expect(s.priceUsd).toBe("1850/1900");        // 双值文本不强转，免丢数
+    expect(s.spaceType).toBe("现舱");
+    expect(mapRemoteSpace({ content_key: "k-2", pol: "宁波", space_type: "舱位紧张" }, "k-2")!.podRaw).toBeNull();
+  });
+
+  it("相关舱位按同词跨字段命中，且只取最近 21 天", () => {
+    const r = listSpaces({ terms: ["地东"], limit: 8 });
+    expect(r.success).toBe(true);
+    const rows = (r as { data: Array<{ vessel: string | null; recordId?: string; msgTime: string | null }> }).data;
+    expect(rows.length).toBe(1);                              // 90 天前那条被时间窗挡掉
+    expect(rows[0]!.vessel).toBe("CMA CGM JADE /0E");
+    expect(listSpaces({ terms: ["伊斯坦布尔"] }).success).toBe(true);
+    expect((listSpaces({ terms: ["SANTOS"] }) as { data: unknown[] }).data.length).toBe(0);
   });
 });

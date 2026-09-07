@@ -31,3 +31,35 @@ export const rateQuotes = sqliteTable("rate_quotes", {
 
 export type RateQuoteRow = typeof rateQuotes.$inferSelect;
 export type InsertRateQuoteRow = typeof rateQuotes.$inferInsert;
+
+/**
+ * 舱位镜像表 — 同一台账的 space 表（`/api/space`）本地副本，与运价同批全量刷新。
+ * 舱位是群内动态（现舱/加班船/约舱/售罄/舱位紧张/截关截单/撤载改期/箱子动态），
+ * 按消息时间看时效，不设 valid_from/to；pod 允许为空（群里常只报航线不报港）。
+ * status 字面量与运价表不同：本表是「当前有效 / 已被覆盖」，运价表是「当前生效 / 已被覆盖」。
+ */
+export const spaceQuotes = sqliteTable("space_records", {
+  recordId:     text("record_id").primaryKey(),
+  pol:          text("pol"),
+  podRaw:       text("pod_raw"),                // 目的港原文（可空；已剥尾部航线小字）
+  lane:         text("lane"),                   // 航线
+  carrier:      text("carrier"),
+  container:    text("container"),              // 柜型（归一后）
+  containerRaw: text("container_raw"),          // 箱型箱量描述原文（如 "2个40HQ"）
+  boxQty:       text("box_qty"),
+  spaceType:    text("space_type"),             // 现舱/加班船/约舱/售罄/舱位紧张/截关截单/撤载改期/箱子动态
+  vessel:       text("vessel"),                 // 船名航次
+  etd:          text("etd"),
+  cutoffRaw:    text("cutoff_raw"),             // 截关原文
+  priceUsd:     text("price_usd"),              // 源端就是文本（可能 "6815/7015"），原样保留不强转
+  note:         text("note"),
+  sourceGroup:  text("source_group"),
+  sender:       text("sender"),
+  msgTime:      text("msg_time"),               // 时效基准（格式不统一，只做倒序与展示）
+  imageName:    text("image_name"),
+  status:       text("status"),
+  syncedAt:     text("synced_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type SpaceQuoteRow = typeof spaceQuotes.$inferSelect;
+export type InsertSpaceQuoteRow = typeof spaceQuotes.$inferInsert;
