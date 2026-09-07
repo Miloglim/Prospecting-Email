@@ -51,10 +51,12 @@ describe("agent harness tool schemas", () => {
   });
 });
 
-describe("会话级写操作豁免（本会话内不再询问）", () => {
-  it("只有低风险写工具可豁免，外发类永不豁免", () => {
-    expect(canAutoApprove("record_followup")).toBe(true);
+describe("写操作审批（硬约束：写入/编辑/修改/生成一律先询问）", () => {
+  it("所有写工具每次都人工确认，无会话豁免", () => {
+    expect(canAutoApprove("record_followup")).toBe(false);
+    expect(canAutoApprove("update_contact")).toBe(false);
     expect(canAutoApprove("send_queue_add")).toBe(false);   // 红线：外发每次都要人工确认
+    expect(canAutoApprove("export_artifact")).toBe(false);  // 写盘=生成，同样先询问
   });
 
   it("读工具与未注册工具不在豁免范围", () => {

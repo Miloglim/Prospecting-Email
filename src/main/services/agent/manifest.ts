@@ -2,8 +2,9 @@
 // 每个工具的预算/审批/副作用（spec）、UI 中文名（label）、"何时用我"路由（route）、
 // 追问引导（followUps）全部登记在这里。TOOL_SPECS、系统提示词工具段、渲染端标签
 // 与追问引导一律从本表派生 —— 新增工具只改这一处，禁止在任何地方维护第二份清单。
-// 红线：write 类工具 requiresApproval 必须为 true；发信类（send_queue_add）与
-// 批量导入（import_contacts）autoApprovable 永远 false。
+// 红线：write 类工具 requiresApproval 必须为 true —— 每一次写/生成都先人工确认，
+// 无会话豁免（autoApprovable 已于 2026-09-07 移除）。闸门不靠各工具自觉：
+// needsApproval 在 buildHarnessTools 返回处由本表强制派生覆盖，agent-approval-gate.test.ts 锁死。
 import type { ToolSpec } from "./policy";
 
 export interface ToolMeta {
@@ -27,7 +28,7 @@ export const TOOL_MANIFEST: ToolMeta[] = [
   {
     name: "delete_contacts", label: "删除联系人",
     route: "删除联系人（按邮箱后缀或关键词批量，写、需确认、不可恢复）；",
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2, autoApprovable: false },
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
   },
   {
     name: "read_program_config", label: "读取程序配置",
@@ -36,14 +37,14 @@ export const TOOL_MANIFEST: ToolMeta[] = [
   },
   {
     name: "update_program_config", label: "修改程序配置",
-    route: "修改程序配置（写、需确认、永不豁免）；用户说「把发信窗口改成…」「限额调到…」时用；",
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2, autoApprovable: false },
+    route: "修改程序配置（写，每次执行前向用户请求确认）；用户说「把发信窗口改成…」「限额调到…」时用；",
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
   },
   {
     name: "update_contact", label: "更新联系人资料",
     route: "更新联系人档案字段（职位/电话/国家/客户类型/标签/偏好备注，写、需确认）；",
     followUps: ["把刚才邮件里提到的偏好也记进 TA 的档案"],
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4, autoApprovable: true },
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4 },
   },
   {
     name: "email_read_full", label: "读取邮件全文",
@@ -107,20 +108,20 @@ export const TOOL_MANIFEST: ToolMeta[] = [
   {
     name: "record_followup", label: "记录跟进",
     route: "记录跟进（写，需确认）；",
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4, autoApprovable: true },
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4 },
   },
   {
     name: "send_queue_add", label: "加入发信队列",
     route: "把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）；",
     followUps: ["发送队列现在什么状态", "再给下一家也准备一封"],
     // 入队 ≠ 发出：真正发送仍需用户在发送中心点启动；外发动作每一次都要人工确认，永不豁免
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3, autoApprovable: false },
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3 },
   },
   {
     name: "import_contacts", label: "导入联系人",
     route: "批量导入客户信息入库（写，需确认；用户粘贴任意格式名单/表格/签名时，你负责整理成 contacts 数组再调用，"
       + "绝不要反问「用 CSV 还是 JSON」这类格式问题——邮箱是唯一键，无效或已存在会跳过不覆盖）；",
-    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 1, autoApprovable: false },
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 1 },
   },
   {
     name: "update_plan", label: "更新任务清单",
@@ -132,16 +133,17 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     name: "export_artifact", label: "导出文件",
     route: "把整理好的内容导出成文件（md 或 csv，落盘到 outputs/agent，界面出现文件卡）；",
     followUps: ["把刚才的内容再导出一份 csv", "继续总结剩下的未读邮件"],
-    // 元能力：只写 outputs/agent，不碰业务数据
-    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 3 },
+    // 写盘类生成操作：只写 outputs/agent，不碰业务数据；每次导出都要人工确认
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3 },
   },
   {
     name: "start_batch_task", label: "启动后台任务",
-    route: "批量后台任务（对话里出进度卡、可取消、不阻塞）：多家公司批量背调 / 各写开发信草稿，"
-      + "或多封邮件批量总结（kind=email_summary，传 messageIds）；",
+    route: "批量后台任务（写，需确认后启动；对话里出进度卡、可取消、不阻塞）：多家公司批量背调 / "
+      + "各写开发信草稿，或多封邮件批量总结（kind=email_summary，传 messageIds）；",
     followUps: ["等结果出来后，给评级最高的那家写封开发信", "发送队列现在什么状态"],
-    // 元能力：只读搜索 + 生成文本，绝不发送
-    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 1 },
+    // 只读搜索 + 生成文本，绝不发送、不写业务表；但起任务会自跑并收尾自动落盘产物文件
+    // （= 生成类副作用），故登记为 write：2026-09-07 起按红线一律先询问
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 1 },
   },
   {
     name: "report_gap", label: "登记能力缺口",
