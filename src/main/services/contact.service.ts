@@ -3,7 +3,7 @@ import { contacts, type ContactRow, type InsertContactRow } from "../db/schema/c
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { crmStages, crmRelations } from "../db/schema/crm";
-import { inboxMessages } from "../db/schema/inbox";
+import { inboxMessages, inboxBounceMatches } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
 import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
@@ -324,9 +324,20 @@ export function deleteContactCascade(id: number): void {
   getDb().delete(interactions).where(eq(interactions.contactId, id)).run();
   getDb().delete(crmStages).where(eq(crmStages.contactId, id)).run();
   getDb().delete(crmRelations).where(or(eq(crmRelations.contactIdA, id), eq(crmRelations.contactIdB, id))).run();
-  // 收件箱邮件保留，仅解除联系人关联
+  // 收件箱邮件保留，仅解除联系人关联（含退信↔被退关联表）
   getDb().update(inboxMessages).set({ matchedContactId: null }).where(eq(inboxMessages.matchedContactId, id)).run();
+  getDb().delete(inboxBounceMatches).where(eq(inboxBounceMatches.contactId, id)).run();
   getDb().delete(contacts).where(eq(contacts.id, id)).run();
+}
+
+/** 公司名下已无联系人时随手清掉（单个删除与退信批量删除共用口径，防留孤儿公司） */
+export function removeCompanyIfOrphan(companyId: number | null | undefined): void {
+  if (!companyId) return;
+  const remaining = getDb().select({ id: contacts.id }).from(contacts).where(eq(contacts.companyId, companyId)).all();
+  if (remaining.length === 0) {
+    getDb().delete(companies).where(eq(companies.id, companyId)).run();
+    Log.debug("contact.delete", `已删除空壳公司 id=${companyId}`);
+  }
 }
 
 export async function deleteContact(id: number): Promise<Result<void>> {
@@ -339,16 +350,7 @@ export async function deleteContact(id: number): Promise<Result<void>> {
   // 内存删除（真正的删除）：SQL 异常才报失败
   try {
     deleteContactCascade(id);
-
-    // 公司无联系人时自动清理
-    if (companyId) {
-      const remaining = getDb().select({ id: contacts.id })
-        .from(contacts).where(eq(contacts.companyId, companyId)).all();
-      if (remaining.length === 0) {
-        getDb().delete(companies).where(eq(companies.id, companyId)).run();
-        Log.debug("contact.delete", `已删除空壳公司 id=${companyId}`);
-      }
-    }
+    removeCompanyIfOrphan(companyId);
   } catch (err) {
     Log.error("contact.delete", `删除失败 id=${id}`, err instanceof Error ? err.stack : String(err));
     return failResult(`删除失败: ${err instanceof Error ? err.message : String(err)}`);

@@ -66,6 +66,10 @@ export const IPC = {
     MARK_READ:     chan(PREFIX.INBOX, "markRead"),
     DELETE:        chan(PREFIX.INBOX, "delete"),
     DELETE_BOUNCE: chan(PREFIX.INBOX, "deleteBounce"),
+    /** 被退联系人全库计数+邮箱预览（一键删除按钮现拉，规范 docs/bounce-multi-match-spec.md） */
+    BOUNCE_MATCH_STATS: chan(PREFIX.INBOX, "bounceMatchStats"),
+    /** 单封退信的被退联系人列表（详情栏同源展示） */
+    BOUNCE_MATCHES: chan(PREFIX.INBOX, "bounceMatches"),
     GET_BODY:      chan(PREFIX.INBOX, "getBody"),
   },
   CRM: {

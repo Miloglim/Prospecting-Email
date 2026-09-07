@@ -9,7 +9,7 @@ import { getDb, saveDatabase } from "../db";
 import { agentConversations, agentMessages, agentToolCalls, agentFacts } from "../db/schema/agent";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
-import { inboxMessages } from "../db/schema/inbox";
+import { inboxMessages, inboxBounceMatches } from "../db/schema/inbox";
 import {
   runHarnessTurn, resolveApproval, rejectPendingFor, hasPending,
   DEFAULT_PROFILE, type PushFn, type TurnOutcome,
@@ -153,8 +153,14 @@ function resolveContextNote(ctxRaw: string | undefined): string | undefined {
     // 实测它为了起草回信去调了 company_backcheck。正文一次给足，比让它猜工具便宜也更稳。
     const body = (msg.bodyPreview || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
     const who = msg.fromName ? `${msg.fromName} <${msg.fromEmail}>` : msg.fromEmail;
+    // 被退联系人可能多个（一封群发退信）：不给全，助手就只见单列那一个
+    const matchIds = [...new Set([
+      ...db.select({ cid: inboxBounceMatches.contactId }).from(inboxBounceMatches)
+        .where(eq(inboxBounceMatches.messageId, id)).all().map(r => r.cid),
+      ...(msg.matchedContactId ? [msg.matchedContactId] : []),
+    ])];
     return `邮件 #${id}｜主题「${msg.subject || "(无主题)"}」｜发件人 ${who}｜分类 ${msg.classification || "其他"}｜时间 ${msg.receivedAt}`
-      + `${msg.matchedContactId ? `｜已匹配联系人 #${msg.matchedContactId}` : ""}\n`
+      + `${matchIds.length ? `｜已匹配联系人 ${matchIds.map(x => `#${x}`).join("、")}` : ""}\n`
       + `正文（已随本次提问一并提供，直接据此作答，不要再调用工具去读它）：${body || "（无正文摘要，可用 email_summarize 取全文）"}`;
   } catch (err) {
     Log.warn("agent.chat", `解析上下文失败 ${ctxRaw}: ${err instanceof Error ? err.message : String(err)}`);

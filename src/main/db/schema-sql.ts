@@ -74,6 +74,12 @@ CREATE TABLE IF NOT EXISTS interactions (
   metadata text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+CREATE TABLE IF NOT EXISTS inbox_bounce_matches (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  message_id integer NOT NULL, contact_id integer NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  UNIQUE(message_id, contact_id)
+);
 CREATE TABLE IF NOT EXISTS templates (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   name text NOT NULL, language text NOT NULL,

@@ -829,6 +829,13 @@ export function registerInboxIPC() {
   ipcMain.handle(IPC.INBOX.DELETE_BOUNCE, async () => {
     return InboxService.deleteAllBounce();
   });
+  ipcMain.handle(IPC.INBOX.BOUNCE_MATCH_STATS, async () => {
+    return InboxService.bounceMatchStats();
+  });
+  ipcMain.handle(IPC.INBOX.BOUNCE_MATCHES, async (_e, id: number) => {
+    if (!Number.isInteger(id) || id <= 0) return failResult("参数错误");
+    return InboxService.bounceMatchesOf(id);
+  });
   ipcMain.handle(IPC.INBOX.GET_BODY, async (_e, id: number) => {
     if (!Number.isInteger(id) || id <= 0) return failResult("参数错误");
     return await InboxService.getBody(id);

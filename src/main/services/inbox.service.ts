@@ -1,14 +1,16 @@
 import { getDb } from "../db";
-import { inboxMessages, type InboxMessageRow, type InsertInboxMessageRow } from "../db/schema/inbox";
+import { inboxMessages, inboxBounceMatches, type InboxMessageRow, type InsertInboxMessageRow } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
 import { contacts, type ContactRow } from "../db/schema/contacts";
+import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
-import { eq, desc, sql } from "drizzle-orm";
+import { crmStages, crmRelations } from "../db/schema/crm";
+import { and, eq, inArray, or, desc, sql } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { EVENTS } from "../events";
 import { saveDatabase, getRawDb } from "../db";
-import { updateContactStatus, markAsBounced, deleteContactCascade } from "./contact.service";
+import { updateContactStatus, markAsBounced, deleteContactCascade, removeCompanyIfOrphan } from "./contact.service";
 import * as path from "path";
 import * as fs from "fs";
 import { DB_PATH } from "../config";
@@ -203,48 +205,82 @@ function myDomains(): string[] {
     .filter(Boolean);
 }
 
-/** 从退信原文提取"被退的那个地址"并匹配联系人，返回联系人 id。
- *  移植自旧 PE extractBouncedAddress 的优先级链：DSN 标准头 → 中英文正文模式 → 全文兜底。
+/** 从退信原文提取**全部**「被退」联系人 id（去重、上限 50）。规范 docs/bounce-multi-match-spec.md §2。
+ *  优先级链每层有任一命中即收：① DSN 标准头（RFC 3464——群发退信会列多个失败收件人，
+ *  X-Failed-Recipients 可一行逗号多址或多行重复）→ ② 正文自然语言模式全收 → ③ 全文兜底。
  *  传完整 raw source 效果最好（DSN 段在里面）；只有 HTML 正文时自动降级走后两级。 */
-export function extractBouncedContact(text: string): number | null {
+export function extractBouncedContacts(text: string): number[] {
   const excl = [...SYS_ADDR_KEYWORDS, ...myDomains()];
-  /** 清洗候选地址 → 排除系统/我方 → 匹配联系人 */
-  const pick = (addr: string | undefined): number | null => {
-    if (!addr) return null;
+  const seen = new Set<number>();
+  const picked: number[] = [];
+  const pick = (addr: string | undefined | null): void => {
+    if (!addr || picked.length >= 50) return;
     const e = addr.toLowerCase().trim().replace(/[;,<>'")\]]/g, "");
-    if (!e.includes("@") || excl.some(d => e.includes(d))) return null;
-    return matchContact(e)?.id ?? null;
+    if (!e.includes("@") || excl.some(d => e.includes(d))) return;
+    const c = matchContact(e);
+    if (!c || seen.has(c.id)) return;
+    seen.add(c.id);
+    picked.push(c.id);
   };
 
-  // ① DSN 标准头 — 最可靠，退信服务按 RFC 3464 明确写出被退地址
-  for (const re of [
-    /X-Failed-Recipients:\s*(\S+@\S+)/i,
-    /Final-Recipient:\s*rfc822;\s*(\S+)/i,
-    /Original-Recipient:\s*rfc822;\s*(\S+)/i,
-  ]) {
-    const hit = pick(text.match(re)?.[1]);
-    if (hit != null) return hit;
+  // ① DSN 标准头：整行捕获后按逗号/分号拆址（一行多址很常见）
+  for (const m of text.matchAll(/(?:X-Failed-Recipients|Final-Recipient|Original-Recipient):\s*(?:rfc822;)?([^\r\n]+)/gi)) {
+    for (const addr of (m[1] || "").split(/[,;]/)) pick(addr);
   }
+  if (picked.length) return picked;
 
-  // ② 正文模式 — 没有 DSN 段时，退信服务用自然语言写明被退地址
+  // ② 正文模式 — 没有 DSN 段时，退信服务用自然语言写明被退地址。
+  // 每条模式捕获「地址所在的一整段」再用邮箱正则展开（群发退信常把多个失败地址写在同一句里）
   const flat = text.replace(/\s+/g, " ");
+  const pickSegment = (seg: string | undefined): void => {
+    for (const em of (seg || "").match(EMAIL_RE) || []) pick(em);
+  };
   for (const re of [
-    /could not be delivered to\s+(\S+@\S+)/i,
-    /following recipients?[^:]*:\s*(\S+@\S+)/i,
-    /<(\S+@\S+)>[^<]{0,60}?(?:failed|rejected|bounced|undeliverable)/i,
-    /收(?:件|信)人?\s*(?:邮件)?地址[：:\s]*(\S+@\S+)/,
-    /(?:无法(?:送达|投递)|退信|拒收)[^@]{0,30}(\S+@\S+)/,
+    /could not be delivered to\s+([^\r\n]{0,400})/gi,
+    /following recipients?[^:]*:\s*([^\r\n]{0,400})/gi,
+    /<(\S+@\S+)>[^<]{0,60}?(?:failed|rejected|bounced|undeliverable)/gi,
+    /收(?:件|信)人?\s*(?:邮件)?地址[：:]\s*([^\r\n]{0,200})/g,
+    /(?:无法(?:送达|投递)|退信|拒收)\s*[^\r\n]{0,60}?((?:[\w.+-]+@[\w.-]+\.\w+)(?:[，,、;；\s]+[\w.+-]+@[\w.-]+\.\w+)*)/g,
   ]) {
-    const hit = pick(flat.match(re)?.[1]);
-    if (hit != null) return hit;
+    for (const m of flat.matchAll(re)) pickSegment(m[1]);
   }
+  if (picked.length) return picked;
 
-  // ③ 兜底：全文扫邮箱，排除系统/我方域名后取第一个能匹配到联系人的
-  for (const em of text.match(EMAIL_RE) || []) {
-    const hit = pick(em);
-    if (hit != null) return hit;
+  // ③ 兜底：全文扫邮箱，排除系统/我方域名后收所有能匹配到联系人的
+  for (const em of text.match(EMAIL_RE) || []) pick(em);
+  return picked;
+}
+
+/** 兼容旧单值语义：第一个被退人（写 inbox_messages.matched_contact_id 单列用） */
+export function extractBouncedContact(text: string): number | null {
+  return extractBouncedContacts(text)[0] ?? null;
+}
+
+/** ── 退信匹配写链（规范 §3）：一次调用干齐"这封退信 ↔ 这些被退人"的全部副作用 ──
+ *  幂等写关联表 → 单列空则补第一个（兼容旧读取）→ 每个新加入者标记退信 + 补一条 bounced 事件。
+ *  返回本次新增的联系人 id（旧链只处理一个人，全员在这一步一次覆盖）。不 saveDatabase，由调用方统一落盘。 */
+export function recordBounceMatches(msgId: number, cids: number[]): number[] {
+  const uniq = [...new Set(cids)].filter(x => Number.isInteger(x) && x > 0);
+  if (!uniq.length) return [];
+  const db = getDb();
+  const msg = db.select().from(inboxMessages).where(eq(inboxMessages.id, msgId)).get();
+  if (!msg) return [];
+  const already = new Set(db.select({ contactId: inboxBounceMatches.contactId }).from(inboxBounceMatches)
+    .where(eq(inboxBounceMatches.messageId, msgId)).all().map(r => r.contactId));
+  const fresh = uniq.filter(cid => !already.has(cid));
+  for (const cid of fresh) db.insert(inboxBounceMatches).values({ messageId: msgId, contactId: cid }).run();
+  if (msg.matchedContactId == null) {
+    db.update(inboxMessages).set({ matchedContactId: uniq[0] }).where(eq(inboxMessages.id, msgId)).run();
   }
-  return null;
+  for (const cid of fresh) {
+    markAsBounced(cid);
+    db.insert(interactions).values({
+      contactId: cid, type: "bounced", direction: "inbound",
+      subject: msg.subject, bodyPreview: (msg.bodyPreview || "").slice(0, 500),
+      messageId: msg.messageId, accountId: msg.accountId, createdAt: msg.receivedAt,
+    }).run();
+  }
+  return fresh;
 }
 
 // ── 抓取器状态 ──
@@ -543,13 +579,24 @@ export async function writeBodyForLastInsert(html: string): Promise<void> {
 
 // ── 获取邮件正文 ──
 
-/** 从正文捞联系人并回填 matchedContactId（幂等，已匹配直接跳过）。
+/** 从正文捞联系人回填（点开正文时顺手做，幂等）。
+ *  退信：以关联表为准——没关联过则全量补一次（关联+标记+事件一步齐）；
+ *  普通邮件：保持旧机会式匹配（正文里第一个在库联系人 → 单列），不建关联不标记。
  *  不补的话：右侧详情靠前端扫正文能显示「已匹配」，左侧列表读的却是 DB 字段 → 标签永远不亮。 */
-function backfillMatchFromBody(id: number, current: number | null, text: string): void {
-  if (current != null) return;
-  const cid = extractBouncedContact(text);
-  if (cid == null) return;
-  getDb().update(inboxMessages).set({ matchedContactId: cid }).where(eq(inboxMessages.id, id)).run();
+function backfillMatchFromBody(id: number, current: number | null, classification: string | null, text: string): void {
+  let touched = false;
+  if (classification === "bounce") {
+    const linked = getDb().select({ id: inboxBounceMatches.id }).from(inboxBounceMatches)
+      .where(eq(inboxBounceMatches.messageId, id)).limit(1).get();
+    if (!linked) touched = recordBounceMatches(id, extractBouncedContacts(text)).length > 0;
+  } else if (current == null) {
+    const cid = extractBouncedContact(text);
+    if (cid != null) {
+      getDb().update(inboxMessages).set({ matchedContactId: cid }).where(eq(inboxMessages.id, id)).run();
+      touched = true;
+    }
+  }
+  if (!touched) return;
   saveDatabase();
   // 推空计数事件：前端监听里 count=0 不弹提示，只刷新列表 → 左侧标签立即亮
   try { pushFn?.("inbox:newMail", { count: 0 }); } catch { /* 推送失败不影响正文返回 */ }
@@ -564,7 +611,7 @@ export async function getBody(id: number): Promise<Result<string>> {
   if (fs.existsSync(file)) {
     try {
       const html = await fs.promises.readFile(file, "utf-8");
-      backfillMatchFromBody(row.id, row.matchedContactId, html);
+      backfillMatchFromBody(row.id, row.matchedContactId, row.classification, html);
       return okResult(html);
     }
     catch (err) { Log.error("inbox.body", `正文文件读取失败 id=${id}`, err instanceof Error ? err.stack : undefined); }
@@ -616,24 +663,24 @@ export async function applyBounceSource(
     catch (err) { Log.error("inbox.bounce", `正文落盘失败 id=${row.id}`, err instanceof Error ? err.stack : undefined); }
   }
 
-  const cid = row.matchedContactId ?? extractBouncedContact(rawSource);
-  const isNew = cid != null && row.matchedContactId == null;
-  getDb().update(inboxMessages).set({
-    bodyPreview: bodyText.slice(0, 500),
-    ...(isNew ? { matchedContactId: cid } : {}),
-  }).where(eq(inboxMessages.id, row.id)).run();
+  getDb().update(inboxMessages).set({ bodyPreview: bodyText.slice(0, 500) })
+    .where(eq(inboxMessages.id, row.id)).run();
 
-  // 联系人标记退信 — 整条下游链（退信日志/CRM状态/一键删除）都挂在这一步上
-  if (isNew && cid != null) markAsBounced(cid);
-  return isNew;
+  // 全员被退一次收齐（群发退信可通知多个失败收件人）——
+  // 关联表 + 标记退信 + bounced 事件的下游链都在 recordBounceMatches 里
+  const fresh = recordBounceMatches(row.id, extractBouncedContacts(rawSource));
+  saveDatabase();
+  return fresh.length > 0;
 }
 
 /** 补匹配退信联系人（幂等）。
  *  退信 from 是 mailer-daemon，抓取阶段必然匹配不到；被退的真实收件人只在正文里。
+ *  口径 = 关联表还没有记录的退信（存量单列值已由迁移种子进表，不会重复处理）。
  *  ponytail: 只扫本地已落盘的正文文件，零网络。缺正文的邮件等 prefetch/点开后落盘，下次拉取再补。 */
 export async function backfillBounceMatches(): Promise<number> {
   const rows = getDb().select({ id: inboxMessages.id }).from(inboxMessages)
-    .where(sql`${inboxMessages.classification} = 'bounce' AND ${inboxMessages.matchedContactId} IS NULL`)
+    .where(sql`${inboxMessages.classification} = 'bounce'
+      AND ${inboxMessages.id} NOT IN (SELECT ${inboxBounceMatches.messageId} FROM ${inboxBounceMatches})`)
     .all();
 
   let filled = 0;
@@ -641,11 +688,8 @@ export async function backfillBounceMatches(): Promise<number> {
     const file = bodyFilePath(r.id);
     if (!fs.existsSync(file)) continue;
     try {
-      const cid = extractBouncedContact(await fs.promises.readFile(file, "utf-8"));
-      if (cid != null) {
-        getDb().update(inboxMessages).set({ matchedContactId: cid }).where(eq(inboxMessages.id, r.id)).run();
-        filled++;
-      }
+      const fresh = recordBounceMatches(r.id, extractBouncedContacts(await fs.promises.readFile(file, "utf-8")));
+      if (fresh.length) filled++;
     } catch (err) {
       Log.error("inbox.backfill", `正文读取失败 id=${r.id}`, err instanceof Error ? err.stack : undefined);
     }
@@ -689,20 +733,15 @@ export function classifyMessage(id: number, classification: string): Result<void
   const existing = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();
   if (!existing) return failResult("邮件不存在");
 
-  getDb().update(inboxMessages).set({
-    classification,
-    // 退信 → 同时标记关联联系人
-    ...(classification === "bounce" && existing.matchedContactId
-      ? { matchedContactId: existing.matchedContactId }
-      : {}),
-  }).where(eq(inboxMessages.id, id)).run();
-  saveDatabase();
+  getDb().update(inboxMessages).set({ classification })
+    .where(eq(inboxMessages.id, id)).run();
 
-  // 回写联系人状态
+  // 回写联系人状态；手动标退信同时进关联表（与一键删除同源）
   if (existing.matchedContactId) {
-    if (classification === "bounce") markAsBounced(existing.matchedContactId);
+    if (classification === "bounce") recordBounceMatches(id, [existing.matchedContactId]);
     else if (classification === "autoreply") updateContactStatus(existing.matchedContactId, "autoreply");
   }
+  saveDatabase();
 
   return okResult(undefined);
 }
@@ -757,21 +796,71 @@ export function deleteMessage(id: number): Result<void> {
   return okResult(undefined);
 }
 
-/** 一键删除所有退信匹配的联系人（不删邮件） */
-export function deleteAllBounce(): Result<number> {
-  // 查所有退信邮件匹配到的联系人（去重）
-  const bounceMsgs = getDb().select({ matchedContactId: inboxMessages.matchedContactId })
-    .from(inboxMessages)
-    .where(eq(inboxMessages.classification, "bounce"))
+/** 「被退联系人」唯一数据源（规范 §4）：关联表 ∪ 旧单列，只认现存联系人。
+ *  INNER 语义（id 必须在 contacts 里）天然把「挂到已消失旧 ID」挡在计数外。
+ *  按钮计数、确认弹窗、一键删除三处共用这一个口径 —— 所见 = 所删。 */
+function bounceMatchedContactIds(): number[] {
+  return getDb().select({ id: contacts.id }).from(contacts)
+    .where(sql`${contacts.id} IN (
+      SELECT m.contact_id FROM inbox_bounce_matches m
+        JOIN inbox_messages i ON i.id = m.message_id AND i.classification = 'bounce'
+      UNION
+      SELECT i2.matched_contact_id FROM inbox_messages i2
+        WHERE i2.classification = 'bounce' AND i2.matched_contact_id IS NOT NULL
+    )`).all().map(r => r.id);
+}
+
+/** 按钮/确认弹窗现拉：全库同源计数 + 邮箱预览（前 20），弹窗说的就是会删的 */
+export function bounceMatchStats(): Result<{ count: number; emails: string[] }> {
+  const ids = bounceMatchedContactIds();
+  const emails = ids.length
+    ? getDb().select({ email: contacts.email }).from(contacts).where(inArray(contacts.id, ids)).all().map(r => r.email)
+    : [];
+  return okResult({ count: ids.length, emails: emails.slice(0, 20) });
+}
+
+/** 某封退信的被退联系人（详情栏「被退联系人」段） */
+export function bounceMatchesOf(inboxMessageId: number): Result<Array<{ id: number; email: string; companyName: string | null }>> {
+  if (!Number.isInteger(inboxMessageId) || inboxMessageId <= 0) return failResult("无效的 ID");
+  const rows = getDb().select({ id: contacts.id, email: contacts.email, companyName: companies.name })
+    .from(inboxBounceMatches)
+    .innerJoin(contacts, eq(contacts.id, inboxBounceMatches.contactId))
+    .leftJoin(companies, eq(companies.id, contacts.companyId))
+    .where(eq(inboxBounceMatches.messageId, inboxMessageId))
     .all();
-  const contactIds = [...new Set(
-    bounceMsgs.map(m => m.matchedContactId).filter((x): x is number => x != null),
-  )];
-  // 级联删除这些联系人（收件箱邮件保留，仅解除关联）
-  for (const cid of contactIds) deleteContactCascade(cid);
+  return okResult(rows);
+}
+
+/** 一键删除全部被退联系人：邮件保留仅解关联；不可逆 → 动手前先把整人档案追加归档，归档失败即拒绝删除。 */
+export function deleteAllBounce(): Result<{ deleted: number; emails: string[]; archive: string | null }> {
+  const ids = bounceMatchedContactIds();
+  if (!ids.length) return okResult({ deleted: 0, emails: [], archive: null });
+  const db = getDb();
+  const people = db.select().from(contacts).where(inArray(contacts.id, ids)).all();
+  const archivePath = path.join(path.dirname(DB_PATH), "bounce-delete-archive.jsonl");
+  try {
+    const now = new Date().toISOString();
+    const lines = people.map(p => JSON.stringify({
+      deletedAt: now,
+      contact: p,
+      interactions: db.select().from(interactions).where(eq(interactions.contactId, p.id)).all(),
+      crmStages: db.select().from(crmStages).where(eq(crmStages.contactId, p.id)).all(),
+      crmRelations: db.select().from(crmRelations).where(or(eq(crmRelations.contactIdA, p.id), eq(crmRelations.contactIdB, p.id))).all(),
+      bounceMessageIds: db.select({ messageId: inboxBounceMatches.messageId }).from(inboxBounceMatches)
+        .where(eq(inboxBounceMatches.contactId, p.id)).all().map(r => r.messageId),
+    }));
+    if (!fs.existsSync(path.dirname(archivePath))) fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+    fs.appendFileSync(archivePath, lines.join("\n") + "\n", "utf-8");
+  } catch (err) {
+    return failResult(`删除前归档写入失败，未删除任何人：${err instanceof Error ? err.message : String(err)}`);
+  }
+  for (const p of people) {
+    deleteContactCascade(p.id);
+    removeCompanyIfOrphan(p.companyId);   // 与单个删除同口径：名下没人的公司随手清，不留孤儿
+  }
   saveDatabase();
-  Log.info("inbox.deleteBounce", `已删除 ${contactIds.length} 个退信匹配的联系人`);
-  return okResult(contactIds.length);
+  Log.info("inbox.deleteBounce", `已删除 ${people.length} 个被退联系人，归档：${archivePath}`);
+  return okResult({ deleted: people.length, emails: people.map(p => p.email), archive: archivePath });
 }
 
 // ── 自动抓取 ──

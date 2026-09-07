@@ -228,5 +228,19 @@ export function runMigrations(): void {
     Log.warn("db.backfill", `回填失败: ${(e as Error).message}`);
   }
 
+  // v5.1 退信↔被退联系人关联表种子（幂等，规范 docs/bounce-multi-match-spec.md）：
+  // 存量单列已匹配的退信各补一行；放在上面单列回填之后，让刚补出来的值也一并进表。
+  // ON CONFLICT 靠表上的 UNIQUE(message_id, contact_id)。
+  try {
+    const seeded = raw.prepare(`
+      INSERT INTO inbox_bounce_matches (message_id, contact_id)
+      SELECT i.id, i.matched_contact_id FROM inbox_messages i
+      WHERE i.classification = 'bounce' AND i.matched_contact_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM contacts c WHERE c.id = i.matched_contact_id)
+      ON CONFLICT(message_id, contact_id) DO NOTHING
+    `).run().changes;
+    if (seeded > 0) Log.info("db.migrate", `被退联系人关联表种子 ${seeded} 条`);
+  } catch (e) { Log.warn("db.migrate", `被退联系人关联表种子失败: ${(e as Error).message}`); }
+
   Log.info("db.migrations", `${statements.length} 条建表语句已执行`);
 }

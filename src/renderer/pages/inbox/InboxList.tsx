@@ -160,8 +160,8 @@ export function InboxList() {
   const delBounceMut = useMutation({
     mutationFn: () => window.api.invoke("inbox:deleteBounce"),
     onSuccess: (r: unknown) => {
-      const rr = r as { success: boolean; data?: number; error?: string };
-      message[rr?.success ? "success" : "error"](rr?.success ? `已删除 ${rr.data} 个联系人` : (rr?.error || "失败"));
+      const rr = r as { success: boolean; data?: { deleted: number; archive: string | null }; error?: string };
+      message[rr?.success ? "success" : "error"](rr?.success ? `已删除 ${rr.data?.deleted ?? 0} 位被退联系人，删除前档案已归档` : (rr?.error || "失败"));
       setSid(null); setSel(new Set());
       qc.invalidateQueries({ queryKey: ["inbox"] });
       // 联系人已删 → 匹配索引必须失效，否则右侧详情还拿旧缓存显示「已匹配」
@@ -170,6 +170,37 @@ export function InboxList() {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
+
+  // 被退联系人同源数据（规范 docs/bounce-multi-match-spec.md）：
+  // 计数由后端全库现拉 —— 按钮显示多少、确认弹窗列谁、删的就是谁；单封列表供详情首栏
+  const { data: bounceStatsData } = useQuery({
+    queryKey: ["inbox", "bounceStats"],
+    queryFn: () => window.api.invoke("inbox:bounceMatchStats") as Promise<{ success: boolean; data?: { count: number; emails: string[] } }>,
+  });
+  const bounceStats = bounceStatsData?.success ? bounceStatsData.data : undefined;
+  const { data: bounceMatchesData } = useQuery({
+    queryKey: ["inbox", "bounceMatches", sid],
+    queryFn: () => window.api.invoke("inbox:bounceMatches", sid) as Promise<{ success: boolean; data?: Array<{ id: number; email: string; companyName: string | null }> }>,
+    enabled: !!sid,
+  });
+  const bounceMatches = bounceMatchesData?.success ? bounceMatchesData.data || [] : [];
+
+  /** 删除单个联系人（详情两栏共用：被退栏 / 正文提及栏）；级联与孤儿公司清理在主进程 */
+  const confirmDeleteContact = (c: { id: number; email: string }) => {
+    Modal.confirm({
+      title: `删除联系人 ${c.email}？`,
+      content: "其往来记录一并删除，此操作不可撤销。",
+      okText: "删除", okType: "danger", cancelText: "取消",
+      onOk: async () => {
+        const r = await window.api.invoke("contacts:delete", c.id) as { success: boolean; error?: string };
+        if (r?.success) {
+          message.success("已删除");
+          qc.invalidateQueries({ queryKey: ["inbox"] });
+          qc.invalidateQueries({ queryKey: ["contacts"] });
+        } else message.error(r?.error || "删除失败");
+      },
+    });
+  };
 
   let items = data?.success ? data.data || [] : [];
   if (filter !== "all") items = items.filter(i => i.classification === filter);
@@ -497,13 +528,22 @@ export function InboxList() {
           })}
         </div>
 
-        {/* 退信删除 */}
-        {filter === "bounce" && (() => {
-          const cnt = new Set(items.filter(i => i.matchedContactId != null).map(i => i.matchedContactId)).size;
-          if (cnt === 0) return null;
+        {/* 退信删除：计数/弹窗/执行同一数据源（后端全库），所见即所删；删除前主进程先归档 */}
+        {filter === "bounce" && (bounceStats?.count ?? 0) > 0 && (() => {
+          const cnt = bounceStats!.count;
+          const shown = bounceStats!.emails.slice(0, 6).join("、");
           return (
-            <button onClick={() => { Modal.confirm({ title: `确定删除这 ${cnt} 个已匹配联系人？`, content: "联系人及其往来记录一并删除，退信邮件保留。此操作不可撤销。", okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
-              style={{ width: "100%", padding: "4px 0", border: 0, fontSize: 10.5, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>一键删除已匹配联系人 ({cnt})</button>
+            <button onClick={() => { Modal.confirm({
+              title: `确定删除这 ${cnt} 个被退联系人？`,
+              content: (
+                <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  <div>联系人及其往来记录一并删除，退信邮件保留。此操作不可撤销。</div>
+                  <div style={{ color: "#888", wordBreak: "break-all" }}>{shown}{cnt > bounceStats!.emails.length ? ` …共 ${cnt} 人` : ""}</div>
+                  <div style={{ color: "#888" }}>删除前先把被删者档案归档一份。</div>
+                </div>
+              ),
+              okText: "删除", okType: "danger", cancelText: "取消", onOk: () => delBounceMut.mutate() }); }}
+              style={{ width: "100%", padding: "4px 0", border: 0, fontSize: 10.5, fontWeight: 500, cursor: "pointer", color: "#fff", background: "#e5484d", flexShrink: 0 }}>一键删除被退联系人 ({cnt})</button>
           );
         })()}
 
@@ -718,14 +758,40 @@ export function InboxList() {
             {/* 联系人匹配栏 — 始终显示 */}
             {sid && (
               <div style={{ borderBottom: "1px solid #e8e8e8", flexShrink: 0, padding: "6px 18px", fontSize: 11 }}>
+                {/* 被退联系人：一键删除同源名单（红色段）——不依赖正文扫描，正文未加载也在 */}
+                {bounceMatches.length > 0 && (
+                  <div style={{ marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: "#e5484d", textTransform: "uppercase", letterSpacing: ".5px" }}>被退 {bounceMatches.length} 人</span>
+                    {bounceMatches.map(c => (
+                      <div key={`bm-${c.id}`} style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 0", fontSize: 11 }}>
+                        <span
+                          onClick={() => { window.location.hash = `#/customers?view=table&detail=${c.id}`; }}
+                          style={{ color: "#1565c0", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: "2px" }}
+                          title="点击打开联系人详情"
+                        >{c.email}</span>
+                        <span style={{ color: "#ccc" }}>→</span>
+                        <b>{c.companyName || "未知公司"}</b>
+                        <DeleteOutlined
+                          style={{ fontSize: 11, color: "#ccc", cursor: "pointer", marginLeft: 4 }}
+                          title="删除该联系人"
+                          onClick={(e) => { e.stopPropagation(); confirmDeleteContact({ id: c.id, email: c.email }); }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!matchReady ? (
                   <span style={{ fontSize: 10, color: "#ccc" }}>{contactsLoading || bl ? "加载中..." : "未提取"}</span>
-                ) : (
+                ) : (() => {
+                  // 松口径扫描（正文里出现的在库地址：签名/抄送/被引用者都可能在）排除已入「被退」段的，避免两栏重复+误导
+                  const bset = new Set(bounceMatches.map(b => b.id));
+                  const others = matchedContacts.filter(c => !bset.has(c.id));
+                  return (
                   <>
-                    {matchedContacts.length > 0 && (
+                    {others.length > 0 && (
                       <div style={{ marginBottom: unmatchedEmails.length > 0 ? 4 : 0 }}>
-                        <span style={{ fontSize: 10, color: "#999", textTransform: "uppercase", letterSpacing: ".5px" }}>已匹配 {matchedContacts.length} 人</span>
-                        {matchedContacts.map((c, i) => (
+                        <span style={{ fontSize: 10, color: "#999", textTransform: "uppercase", letterSpacing: ".5px" }}>正文提到的其他联系人 {others.length} 人</span>
+                        {others.map((c, i) => (
                           <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 0", fontSize: 11 }}>
                             <span
                               onClick={() => { window.location.hash = `#/customers?view=table&detail=${c.id}`; }}
@@ -737,18 +803,7 @@ export function InboxList() {
                             <DeleteOutlined
                               style={{ fontSize: 11, color: "#ccc", cursor: "pointer", marginLeft: 4 }}
                               title="删除该联系人"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                Modal.confirm({
-                                  title: `删除联系人 ${c.email}？`,
-                                  okText: "删除", okType: "danger", cancelText: "取消",
-                                  onOk: async () => {
-                                    const r = await window.api.invoke("contacts:delete", c.id) as { success: boolean; error?: string };
-                                    if (r?.success) { message.success("已删除"); qc.invalidateQueries({ queryKey: ["inbox"] }); qc.invalidateQueries({ queryKey: ["contacts"] }); }
-                                    else message.error(r?.error || "删除失败");
-                                  },
-                                });
-                              }}
+                              onClick={(e) => { e.stopPropagation(); confirmDeleteContact({ id: c.id, email: c.email }); }}
                             />
                           </div>
                         ))}
@@ -794,11 +849,12 @@ export function InboxList() {
                         </div>
                       </div>
                     )}
-                    {matchedContacts.length === 0 && unmatchedEmails.length === 0 && (
+                    {others.length === 0 && unmatchedEmails.length === 0 && bounceMatches.length === 0 && (
                       <span style={{ fontSize: 10, color: "#ccc" }}>未提取</span>
                     )}
                   </>
-                )}
+                  );
+                })()}
               </div>
             )}
 
