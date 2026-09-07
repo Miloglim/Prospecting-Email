@@ -34,7 +34,7 @@ export type InsertRateQuoteRow = typeof rateQuotes.$inferInsert;
 
 /**
  * 舱位镜像表 — 同一台账的 space 表（`/api/space`）本地副本，与运价同批全量刷新。
- * 舱位是群内动态（现舱/加班船/约舱/售罄/舱位紧张/截关截单/撤载改期/箱子动态），
+ * 舱位是群内动态（现舱/放舱开放/加班船/箱子动态/舱位紧张/截关截单/售罄/撤载改期），
  * 按消息时间看时效，不设 valid_from/to；pod 允许为空（群里常只报航线不报港）。
  * status 字面量与运价表不同：本表是「当前有效 / 已被覆盖」，运价表是「当前生效 / 已被覆盖」。
  */
@@ -47,7 +47,7 @@ export const spaceQuotes = sqliteTable("space_records", {
   container:    text("container"),              // 柜型（归一后）
   containerRaw: text("container_raw"),          // 箱型箱量描述原文（如 "2个40HQ"）
   boxQty:       text("box_qty"),
-  spaceType:    text("space_type"),             // 现舱/加班船/约舱/售罄/舱位紧张/截关截单/撤载改期/箱子动态
+  spaceType:    text("space_type"),             // 现舱/放舱开放/加班船/箱子动态/舱位紧张/截关截单/售罄/撤载改期
   vessel:       text("vessel"),                 // 船名航次
   etd:          text("etd"),
   cutoffRaw:    text("cutoff_raw"),             // 截关原文
