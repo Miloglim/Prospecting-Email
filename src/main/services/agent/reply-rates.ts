@@ -86,7 +86,9 @@ export function lookupReplyRates(inq: EmailInquiry, limit = 12): ReplyRates | nu
   const container = normalizeContainer(inq.container) ?? undefined;
   // 不用 terms（跨字段 AND 语义）：脏词一旦进 AND 就把整批结果掐死；pod + podRaw 展开已够
   const filters = { pod, podExtra: podRawExpansion(pod), container, includeExpired: false, limit };
-  const r = listQuotes(filters);
+  // 附带查询不得打挂起草：老库缺表/列变更等异常一律按「没查到价」处理（回信仍可成稿，只是不报价）
+  let r: ReturnType<typeof listQuotes>;
+  try { r = listQuotes(filters); } catch { return null; }
   if (!r.success) return null;
   const accept = mirrorPolSet(inq);
   const rank = (q: QuoteDto) => (accept && q.pol && accept.some(a => q.pol!.includes(a)) ? 0 : 1);
@@ -100,4 +102,149 @@ export function lookupReplyRates(inq: EmailInquiry, limit = 12): ReplyRates | nu
     rows: rows.map(toRateRow),
     polAligned: !!accept && rows.some(q => rank(q) === 0),
   };
+}
+
+// ── 客户报价表（英文十一列，列与占位锁死）────────────────────────────
+// 规范 docs/rates-query-spec.md §4 + docs/agent-draft-reply-spec.md §客户报价表接缝：
+// CARRIER/POL/POD/20GP/40HQ|HC/40NOR/FT/ETD/VALIDITY/TT/REMARK；POL、POD 唯一且全大写，
+// 缺项一律 "/"，TT 恒 "/"（台账没有航程数据，不猜），内部溯源（来源群/发送人/入库时间）不进客户表。
+
+/** 船司 → 国际标准缩写。台账里多是群内简称，长名/别名统一收敛；认不出就原样大写，
+ *  「未注明/未知/N/A/-」不是船司名 → "/"（客户表里不留假名）。 */
+const CARRIER_STD: Record<string, string> = {
+  "CMA CGM": "CMA", "CMACGM": "CMA", "达飞": "CMA",
+  "MAERSK": "MSK", "MSK": "MSK", "马士基": "MSK",
+  "EVERGREEN": "EMC", "长荣": "EMC", "EMC": "EMC",
+  "HAPAG-LLOYD": "HPL", "赫伯罗特": "HPL",
+  "YANG MING": "YML", "阳明": "YML",
+  "WAN HAI": "WHL", "万海": "WHL",
+  "OCEAN NETWORK EXPRESS": "ONE", "ZIM": "ZIM", "HMM": "HMM", "MSC": "MSC",
+  "COSCO": "COSCO", "中远": "COSCO", "OOCL": "OOCL", "PIL": "PIL", "太平": "PIL",
+  "TS LINES": "TSL", "德翔": "TSL", "SM LINE": "SKSM", "IRISL": "IRISL", "TURKON": "TURKON",
+  "SEABOARD": "SBS", "KINGSTON": "KSC", "GFS": "GFS", "SITC": "SITC", "CNC": "CNC",
+  "NYK": "NYK", "MOL": "MOL", "K LINE": "KLN", "HPL": "HPL",
+};
+const CARRIER_BLANK = ["未注明", "未知", "N/A", "NA", "-", "—", ""];
+
+export function stdCarrier(raw: string | null | undefined): string {
+  const s = (raw || "").trim();
+  if (!s || CARRIER_BLANK.includes(s.toUpperCase())) return "/";
+  const up = s.toUpperCase();
+  return CARRIER_STD[up] ?? CARRIER_STD[s] ?? up.replace(/\s+/g, " ");
+}
+
+/** 镜像 pol 是中文群名 → 客户表要英文大写港名。认不出的一律 "/"，不音译不猜。 */
+const POL_EN: Record<string, string> = {
+  宁波: "NINGBO", 上海: "SHANGHAI", 青岛: "QINGDAO", 天津: "TIANJIN", 新港: "TIANJIN XINGANG",
+  厦门: "XIAMEN", 大连: "DALIAN", 连云港: "LIANYUNGANG", 深圳: "SHENZHEN", 蛇口: "SHEKOU",
+  盐田: "YANTIAN", 南沙: "NANSHA", 广州: "GUANGZHOU", 福州: "FUZHOU", 汕头: "SHANTOU",
+  中山: "ZHONGSHAN", 珠海: "ZHUHAI", 华南基本港: "CHINA BASE PORTS", 华东基本港: "CHINA EAST BASE PORTS",
+  华北基本港: "CHINA NORTH BASE PORTS", 基本港: "CHINA BASE PORTS",
+};
+export function stdPol(raw: string | null | undefined, inq?: Pick<EmailInquiry, "pol" | "polCode">): string {
+  const s = (raw || "").trim();
+  if (!s) return "/";
+  // 该行起运港与来信要求的起运港对得上 → 用来信的英文写法（客户看的就是自己问的那个港）
+  const accept = inq ? mirrorPolSet(inq) : null;
+  if (accept?.some(a => s.includes(a)) && inq?.polCode) return inq.polCode.toUpperCase();
+  return POL_EN[s] ?? (/^[A-Za-z0-9 ,'-]+$/.test(s) ? s.toUpperCase() : "/");
+}
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2026-09-08" → {d:8,m:9}；"9.8"/"9/8" 也认（中文写法月在前）。认不出返回 null（不猜） */
+function dayOf(raw: string | null | undefined): { d: number; m: number } | null {
+  const s = (raw || "").trim();
+  if (!s) return null;
+  const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (iso) return { d: Number(iso[3]), m: Number(iso[2]) };
+  const md = /(?:^|[^\d.])(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)/.exec(s);
+  if (md) {
+    const a = Number(md[1]); const b = Number(md[2]);
+    if (a >= 1 && a <= 12 && b >= 1 && b <= 31) return { d: b, m: a };
+  }
+  return null;
+}
+/** 有效期：同月 "8-14 Sep"，跨月 "28 Aug-3 Sep"，只有一端就给单个日期，都没有 "/" */
+export function fmtValidityEn(from: string | null | undefined, to: string | null | undefined): string {
+  const a = dayOf(from); const b = dayOf(to);
+  if (!a && !b) return "/";
+  if (a && b) {
+    if (a.m === b.m) return `${a.d}-${b.d} ${MON[a.m - 1]}`;
+    return `${a.d} ${MON[a.m - 1]}-${b.d} ${MON[b.m - 1]}`;
+  }
+  const x = (a ?? b)!;
+  return `${x.d} ${MON[x.m - 1]}`;
+}
+/** 船期：单日 "12 Sep"；认不出 "/"（源端常是「EVER FIT 027W，9.6晚开」这类自由文本，不猜） */
+export function fmtEtdEn(raw: string | null | undefined): string {
+  const d = dayOf(raw);
+  return d ? `${d.d} ${MON[d.m - 1]}` : "/";
+}
+/** 目免：台账是「21天」「21 combined」这类文本，只取天数，取不到 "/" */
+export function fmtFtEn(raw: string | null | undefined): string {
+  const s = (raw || "").trim();
+  if (!s) return "/";
+  const m = /(\d{1,3})/.exec(s);
+  return m ? m[1]! : "/";
+}
+
+const CONTAINER_COL: Array<{ key: "p20" | "p40" | "pNor"; test: (c: string | null) => boolean }> = [
+  { key: "p20", test: c => /^20/.test(c ?? "") },
+  { key: "p40", test: c => /^40(HQ|HC|GP)?$/.test((c ?? "").toUpperCase()) || /^40\s*'?\s*(HQ|HC)$/.test(c ?? "") },
+  { key: "pNor", test: c => /NOR/i.test(c ?? "") },
+];
+
+/** 备注：只留客户看得懂的（附加费/免费期/直转航），内部溯源与联系方式剔掉；空 → "/" */
+function remarkFor(raw: string | null | undefined): string {
+  const s = (raw || "").trim();
+  if (!s) return "/";
+  const cleaned = s
+    .replace(/1[3-9]\d{9}/g, "")                      // 手机号
+    .replace(/\d{2,3}-?\d{7,8}/g, "")                  // 座机
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return (cleaned || "/").slice(0, 60);
+}
+
+/**
+ * 客户报价表：按（船司 + 起运港）透视成一行三柜型价，POD 用查询归一后的标准港名
+ * （航线级行也展开到该港，多港粘连一律只留目标港）。行序沿用 lookupReplyRates 的排序
+ * （起运港对齐的在前、其次价升序）。
+ */
+export function customerQuoteTable(rows: ReplyRateRow[] | RateRow[], pod: string | null, inq?: EmailInquiry, max = 20): string {
+  if (!rows.length) return "";
+  const podCell = (pod || "").trim().toUpperCase() || "/";
+  const groups = new Map<string, { carrier: string; pol: string; p20: number | null; p40: number | null; pNor: number | null; ft: string; etd: string; from: string | null; to: string | null; note: string }>();
+  for (const r of rows) {
+    const carrier = stdCarrier(r.carrier);
+    const pol = stdPol(r.pol, inq);
+    const key = `${carrier}|${pol}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { carrier, pol, p20: null, p40: null, pNor: null, ft: "/", etd: "/", from: null, to: null, note: "/" };
+      groups.set(key, g);
+    }
+    const col = CONTAINER_COL.find(c => c.test(r.container));
+    const price = typeof r.price === "number" ? r.price : null;
+    if (col && price != null && g[col.key] == null) g[col.key] = price;
+    const ft = fmtFtEn((r as ReplyRateRow).ft);
+    if (ft !== "/" && g.ft === "/") g.ft = ft;
+    const etd = fmtEtdEn((r as ReplyRateRow).etd);
+    if (etd !== "/" && g.etd === "/") g.etd = etd;
+    if (!g.from && r.validFrom) g.from = r.validFrom;
+    if (!g.to && r.validTo) g.to = r.validTo;
+    if (g.note === "/") {
+      const rm = remarkFor(r.note);
+      if (rm !== "/") g.note = rm;
+    }
+  }
+  const usd = (n: number | null) => (n != null ? String(n) : "/");
+  const head = [
+    "| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |",
+    "|---|---|---|---|---|---|---|---|---|---|---|",
+  ];
+  const body = [...groups.values()].slice(0, max).map(g =>
+    `| ${g.carrier} | ${g.pol} | ${podCell} | ${usd(g.p20)} | ${usd(g.p40)} | ${usd(g.pNor)} `
+    + `| ${g.ft} | ${g.etd} | ${fmtValidityEn(g.from, g.to)} | / | ${g.note} |`);
+  return [...head, ...body].join("\n");
 }

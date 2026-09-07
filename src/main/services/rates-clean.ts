@@ -74,6 +74,8 @@ const COL_OF: Record<string, "p20" | "p40" | "pNor"> = {
   "40NOR": "pNor", "20NOR": "pNor", "NOR": "pNor",
 };
 const RE_PRICE_PAIR = /(?:USD\s*)?(\d[\d,]{2,8})\s*\/\s*(\d[\d,]{2,8})\s*(?:\/\s*(\d[\d,]{2,8}))?\s*\+?/i;
+/** matchAll 专用全局克隆（matchAll 强制要求 /g；exec 保持非全局，防 lastIndex 串状态） */
+const RE_PRICE_PAIR_G = /(?:USD\s*)?(\d[\d,]{2,8})\s*\/\s*(\d[\d,]{2,8})\s*(?:\/\s*(\d[\d,]{2,8}))?\s*\+?/gi;
 const RE_HIGH = /高\s*柜?\s*[:：]?\s*(\d[\d,]{2,8})/;
 const RE_SMALL = /小\s*柜?\s*[:：]?\s*(\d[\d,]{2,8})/;
 const RE_FREE_POD = /(\d{1,2})\s*(?:天|days?)?\s*(?:目免|combined|FT|free\s*time)/i;
@@ -240,26 +242,47 @@ export function parsePrices(o: {
     if (v != null) out[col] = v;
     else out.unverified.push(`价格可疑（${o.oceanUsd}），未采信`);
   }
-  // 2) 原文：先只看含本行目的港的行
-  const scoped = locatePodLines(o.messageText, o.pods);
-  const fromText = (txt: string | null) => {
-    if (!txt) return;
-    const m = RE_PRICE_PAIR.exec(txt);
+  // 2) 原文按港定位：取含本行目的港的行，**再加它们的下一行**——真源形态是
+  //    港名行（ISTANBUL/ IZMIT/ MERSIN/ ALIAGA）的下一行才是价行（USD3300/3900+），
+  //    只取含港名的行会永远漏掉价。仅用于本服务的作用域，不动 locatePodLines 的对外语义。
+  const txt = o.messageText ?? "";
+  const keys = o.pods.map(x => (x ?? "").trim().toUpperCase()).filter(x => x.length >= 3);
+  let scoped: string | null = null;
+  if (txt.trim() && keys.length) {
+    const lines = txt.split(/\r?\n/);
+    const hitIdx = lines.reduce<number[]>((acc, l, i) => {
+      if (keys.some(k => l.toUpperCase().includes(k))) acc.push(i);
+      return acc;
+    }, []);
+    if (hitIdx.length) {
+      const keep = new Set(hitIdx);
+      for (const i of hitIdx) keep.add(i + 1);
+      scoped = [...keep].sort((a, b) => a - b).map(i => lines[i] ?? "").join("\n");
+    }
+  }
+  const fromText = (t: string | null) => {
+    if (!t) return;
+    const m = RE_PRICE_PAIR.exec(t);
     if (m) {
       fill("p20", m[1]);
       fill("p40", m[2]);
       if (m[3]) fill("pNor", m[3]);
     }
-    fill("p40", RE_HIGH.exec(txt)?.[1]);
-    fill("p20", RE_SMALL.exec(txt)?.[1]);
+    fill("p40", RE_HIGH.exec(t)?.[1]);
+    fill("p20", RE_SMALL.exec(t)?.[1]);
   };
   fromText(scoped);
-  // 3) 定位不到本港时：全篇只有一处多价 → 视为港组共享价采用；多处不同价 → 不猜
-  if (!scoped && o.p20 == null && out.p20 == null && out.p40 == null) {
-    const all = [...(o.messageText ?? "").matchAll(RE_PRICE_PAIR)].map(m => `${m[1]}/${m[2]}`);
+  // 3) 定位不到本港时：全篇只有一处多价 → 视为港组共享价采用；多处不同价 → 不猜。
+  //    连多价都没有 → 试"高 2000 / 小 1000"整文兜底（无港可定位时的独立价写法）。
+  if (!scoped) {
+    const all = [...txt.matchAll(RE_PRICE_PAIR_G)].map(m => `${m[1]}/${m[2]}`);
     const uniq = dedupe(all);
-    if (uniq.length === 1) fromText(o.messageText);
+    if (uniq.length === 1) fromText(txt);
     else if (uniq.length > 1) out.unverified.push("原文多处价且未按港定位，未采信（需人工核对）");
+    else if (out.p20 == null && out.p40 == null && out.pNor == null) {
+      fill("p40", RE_HIGH.exec(txt)?.[1]);
+      fill("p20", RE_SMALL.exec(txt)?.[1]);
+    }
   }
   if (out.p20 == null && out.p40 == null && out.pNor == null) out.unverified.push("价：三列未解析");
   return out;
@@ -281,27 +304,32 @@ export function cleanFreeDays(o: {
   const txt = `${o.messageText ?? ""}\n${o.note ?? ""}`;
   if (!txt.trim()) return { days: null, intoNote: null };
   const countries = dedupe(o.pods.flatMap(p => POD_COUNTRY[p] ?? []));
-  const take = (seg: string): number | null => {
-    const m = RE_FREE_POD.exec(seg) ?? RE_FREE_BY_COUNTRY.exec(seg);
-    const n = Number(m ? (m[2] ?? m[1]) : NaN);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  };
-  // 按国别定位：取"国别词 + 目免数字"在同一片段里的那一处
+  // 1) 国别 + 目免关键词同段："埃及目免21"（关键词在场，数字绝不会被当成日期）
   for (const c of countries) {
-    const re = new RegExp(`${c}[^\\n，,。;；]{0,12}?(\\d{1,2})`, "i");
+    const re = new RegExp(`${c}[^\\n]{0,10}?(?:目免|free\\s*time|FT)[^0-9]{0,6}(\\d{1,2})`, "i");
     const m = re.exec(txt);
     if (m) {
       const n = Number(m[1]);
       if (n > 0 && n <= 30) return { days: n, intoNote: null };
     }
   }
-  const scoped = locatePodLines(o.messageText, o.pods);
-  const v = take(scoped ?? "") ?? (() => {
-    const all = [...txt.matchAll(RE_FREE_BY_COUNTRY)].map(m => Number(m[2]));
-    return dedupe(all).length === 1 ? all[0]! : null;
-  })();
-  if (v != null && v > 0 && v <= 30) return { days: v, intoNote: null };
-  if (v != null) return { days: null, intoNote: `目免异常（${v}），已转备注` };
+  // 2) 国别 + 紧邻裸数字："土耳其14"。数字后随 . / ~ 月 一律拒绝（"土耳其推广 9.1~9.30"
+  //    是促销+船期行，9 不是目免——这正是旧实现采错 9 的根因）。
+  for (const c of countries) {
+    const re = new RegExp(`${c}[^\\n0-9]{0,4}(\\d{1,2})(?![.\\-/~月]\\d)`, "i");
+    const m = re.exec(txt);
+    if (m) {
+      const n = Number(m[1]);
+      if (n > 0 && n <= 30) return { days: n, intoNote: null };
+    }
+  }
+  // 3) 全文唯一免词兜底："21 combined"（无限定词但全篇唯一）/"目免21"/"免21天"。
+  //    多个不同值且定位不到国别 → 不猜，转备注。
+  const kw = [...txt.matchAll(/(\d{1,2})\s*(?:combined|days?\s*free)|目免[^0-9]{0,4}(\d{1,2})|免\s*(\d{1,2})\s*天/gi)]
+    .map(m => Number(m[1] ?? m[2] ?? m[3])).filter(n => Number.isFinite(n) && n > 0);
+  const uniqKw = dedupe(kw).filter(n => n <= 30);
+  if (uniqKw.length === 1) return { days: uniqKw[0]!, intoNote: null };
+  if (uniqKw.length > 1) return { days: null, intoNote: `目免多值（${uniqKw.join("/")}），已转备注` };
   return { days: null, intoNote: null };
 }
 
@@ -328,7 +356,7 @@ export function cleanEtd(o: { etd: string | null; messageText: string | null; ms
   const raw = (o.etd ?? "").trim();
   if (raw) {
     const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
-    if (iso) return `${iso[1]}-${pad(iso[2])}-${pad(iso[3])}`;
+    if (iso) return `${iso[1]}-${pad(iso[2]!)}-${pad(iso[3]!)}`;
     const v = fromMd(raw);
     if (v) return v;
   }
@@ -485,6 +513,13 @@ export function cleanTableMarkdown(rows: CleanQuote[], max = 20): string {
   return [...head, ...body].join("\n");
 }
 
+/** 十值口岸 → 客户报价表英文港名（对外报价表 POL 列全大写英文；未映射的回落原文大写） */
+const POL_EN: Record<string, string> = {
+  "蛇口": "SHEKOU", "盐田": "YANTIAN", "南沙": "NANSHA", "华南基本港": "SOUTH CHINA",
+  "上海": "SHANGHAI", "厦门": "XIAMEN", "宁波": "NINGBO", "青岛": "QINGDAO",
+  "天津": "TIANJIN", "大连": "DALIAN",
+};
+
 /** 客户报价表：列与占位锁死（POL/POD 唯一全大写、缺项 "/"、TT 恒 "/"），多起运港拆行 */
 export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
   const head = ["| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |",
@@ -494,7 +529,8 @@ export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
     const pols = r.pols.length ? r.pols : [r.polText];
     for (const pol of pols.slice(0, 3)) {
       if (body.length >= max) break;
-      body.push(`| ${r.carrier || "/"} | ${(pol || "").toUpperCase() || "/"} | ${(r.pod || "").toUpperCase() || "/"} `
+      const polEn = POL_EN[pol] ?? (pol || "");
+      body.push(`| ${r.carrier || "/"} | ${polEn.toUpperCase() || "/"} | ${(r.pod || "").toUpperCase() || "/"} `
         + `| ${r.p20 ?? "/"} | ${r.p40 ?? "/"} | ${r.pNor ?? "/"} | ${r.freeDays ?? "/"} `
         + `| ${fmtEtdShort(r.etd)} | ${fmtValidity(r.validFrom, r.validTo)} | / | ${r.note || "/"} |`);
     }

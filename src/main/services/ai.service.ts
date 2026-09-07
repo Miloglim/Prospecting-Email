@@ -340,13 +340,19 @@ export interface EmailReplyInput {
   rates?: ReplyRateLine[] | null;
   /** 来信解析出的询价要素（柜型/起运/目的/条款…），让回复对准这些 */
   emailFacts?: ReplyEmailFacts | null;
+  /** 客户报价表（英文十一列 Markdown，系统按台账生成）：给了就原样嵌进回信正文，一个字符都不许改 */
+  quoteTable?: string | null;
 }
 
 /**
  * 把「来信要素 + 系统已查真价」渲染成提示块（纯函数，便于单测）。
  * 有真价时口径变硬：必须据此报价、禁编造/占位；没有的项才走"后续补"。
  */
-export function buildRateContext(rates: ReplyRateLine[] | null | undefined, inq: ReplyEmailFacts | null | undefined): string {
+export function buildRateContext(
+  rates: ReplyRateLine[] | null | undefined,
+  inq: ReplyEmailFacts | null | undefined,
+  quoteTable?: string | null,
+): string {
   const lines: string[] = [];
   if (inq) {
     const f = [
@@ -367,6 +373,13 @@ export function buildRateContext(rates: ReplyRateLine[] | null | undefined, inq:
       lines.push(`· ${r.carrier ?? "—"} ${r.pol ?? "—"}→${r.pod ?? "—"} ${r.container ?? ""} USD ${r.price ?? "议价"}${valid}${r.note ? ` ｜ ${r.note}` : ""}`);
     }
   }
+  // 客户报价表：系统按台账生成的成品（英文十一列、缺项 "/"、TT 恒 "/"）。
+  // 唯一要求是原样嵌入——模型改列名、并行、补值、把 "/" 换成数字，都等于自己造了一张错报价单。
+  if (quoteTable && quoteTable.trim()) {
+    lines.push("【客户报价表（成品，原样嵌进回信正文，禁止改列名/列序/数值，禁止把 \"/\" 补成数字，禁止另起一张表）】");
+    lines.push(quoteTable.trim());
+    lines.push("表后加一句：Prices are for reference and subject to final confirmation with the carrier.");
+  }
   return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
@@ -377,14 +390,15 @@ export async function generateEmailReply(input: EmailReplyInput): Promise<Result
   const s = input.sender ?? readIdentity();
   const who = [s.selfName, s.company].filter(Boolean).join(" / ");
   const hasRates = !!(input.rates && input.rates.length);
-  const system = `你是运去哪（YQN）国际物流的销售助理，代表运去哪回复一封客户来信。语气专业但不生硬，像资深销售：简洁、有分寸、不堆砌客套、不过度承诺时效。${langHint}回复。先一两句正面回应来信，再逐条应答对方提出的问题与要求；${hasRates ? "下方给了系统已查到的真实运价，报价必须严格据此填写、不得编造或留占位符；" : ""}无法立即提供、且下方也没有的内容（资质文件等）坦诚说明会后续补，绝不编造。带主题行（用 SUBJECT: 开头）和正文，不要多余解释。`;
+  const hasTable = !!(input.quoteTable && input.quoteTable.trim());
+  const system = `你是运去哪（YQN）国际物流的销售助理，代表运去哪回复一封客户来信。语气专业但不生硬，像资深销售：简洁、有分寸、不堆砌客套、不过度承诺时效。${langHint}回复。先一两句正面回应来信，再逐条应答对方提出的问题与要求；${hasRates ? "下方给了系统已查到的真实运价，报价必须严格据此填写、不得编造或留占位符；" : ""}${hasTable ? "下方还给了成品客户报价表，必须原样嵌进正文（列名、列序、数值、\"/\" 占位一个都不许改），不要自己另拼一张表；" : ""}无法立即提供、且下方也没有的内容（资质文件等）坦诚说明会后续补，绝不编造。带主题行（用 SUBJECT: 开头）和正文，不要多余解释。`;
   const idBlock = who
     ? `\n【我方身份】${who}\n`
       + "正文一律用上面的真实自称与身份落款，禁止留 {{firstName}} {{company}} {{phone}} 这类占位符。\n"
       + "报价纪律：未经确认的运价、舱位、船期不向客户承诺；涉及价格注明「以最终确认为准」。"
     : "";
   const focus = input.focus ? `\n内容侧重：${input.focus}` : "";
-  const rateBlock = buildRateContext(input.rates, input.emailFacts);
+  const rateBlock = buildRateContext(input.rates, input.emailFacts, input.quoteTable);
   const user = `来信人：${input.contactName}（${input.fromEmail}），公司：${input.companyName}\n来信主题：${input.subject || "（无）"}${focus}${idBlock}${rateBlock}\n\n【来信全文】\n${input.bodyText}\n\n请写这封回复。`;
   return chat(system, user, { thinking: true });
 }

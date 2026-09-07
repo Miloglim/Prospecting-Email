@@ -36,7 +36,7 @@ import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
 import { rememberWork, fingerprint, listWork } from "./working-memory";
 import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
-import { lookupReplyRates } from "./reply-rates";
+import { lookupReplyRates, podQueryWord, customerQuoteTable } from "./reply-rates";
 import { listQuotes, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
@@ -1859,6 +1859,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       let ratesAttached = 0;          // 回信里注入的真实运价条数（0=没查到匹配价）
       let ratesSelfQueried = false;   // 这批价是工具自查台账拿的（true）还是会话工作台里已有的（false）
       let inquiryNoRates = false;     // 是询价邮件但工作台与台账都没匹配价 → 出稿后说明查无当期价
+      let quoteTableAttached = false; // 客户报价表（英文十一列）是否已随草稿生成
       let r: Result<string>;
       if (args.messageId) {
         // —— 回信模式（docs/agent-draft-reply-spec.md）：针对来信逐条应答 ——
@@ -1893,12 +1894,17 @@ export function buildHarnessTools(ctx: ToolCtx) {
         ratesAttached = replyRates?.length ?? 0;
         ratesSelfQueried = !!selfRates;
         inquiryNoRates = !!(inq.pod || inq.container || inq.pol) && ratesAttached === 0;
+        // 客户报价表（英文十一列）：有真价就随草稿一起出，模型只负责原样嵌入。
+        // POD 用归一后的标准港名（航线级行也展开到该港；多港粘连只留目标港）。
+        const tablePod = selfRates?.pod ?? podQueryWord(inq) ?? (typeof matched?.pod === "string" ? matched.pod : null);
+        const quoteTable = replyRates?.length ? customerQuoteTable(replyRates, tablePod, inq) : "";
+        quoteTableAttached = !!quoteTable;
         r = await generateEmailReply({
           language: langOk || undefined,
           companyName, contactName,
           fromEmail: row.fromEmail, subject: row.subject,
           bodyText, focus: args.focus ?? null, sender,
-          rates: replyRates, emailFacts: inq,
+          rates: replyRates, emailFacts: inq, quoteTable: quoteTable || null,
         });
         replySubject = row.subject ? (/^re[:\s]/i.test(row.subject) ? row.subject : `Re: ${row.subject}`) : null;
         tplName = `${companyName} · AI 回信`.slice(0, 60);
@@ -1982,6 +1988,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const out = {
         subject, body, language: lang, contactId: draftContactId ?? null, actions,
         ...(ratesAttached ? { ratesUsed: ratesAttached } : {}),
+        ...(quoteTableAttached ? { quoteTableAttached: true } : {}),
         ...(inquiryNoRates ? {
           notice: "这封是询价邮件，但会话工作台与台账里都没有匹配到的当期运价（工具已按来信的起运港/目的港/柜型自查过一次）。"
             + "草稿走「报价稍后补」话术、不编数字。要给用户交代，就说台账暂无该航线当期报价，"
@@ -1989,7 +1996,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
         } : {}),
       };
       audit(ctx, "generate_draft", "read", args,
-        { subject, length: body.length, actions: actions.length, ratesAttached, ratesSelfQueried }, "auto");
+        { subject, length: body.length, actions: actions.length, ratesAttached, ratesSelfQueried, quoteTableAttached }, "auto");
       return okOut(out);
     },
   });

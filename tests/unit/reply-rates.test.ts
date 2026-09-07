@@ -32,7 +32,8 @@ vi.mock("../../src/main/config", async (importOriginal) => {
 });
 
 const { parseEmailInquiry } = await import("../../src/main/services/agent/email-parse");
-const { lookupReplyRates, mirrorPolSet, podQueryWord } = await import("../../src/main/services/agent/reply-rates");
+const { lookupReplyRates, mirrorPolSet, podQueryWord, customerQuoteTable, fmtValidityEn, fmtEtdEn, fmtFtEn } =
+  await import("../../src/main/services/agent/reply-rates");
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>>;
 const day = (offset: number) =>
@@ -136,5 +137,86 @@ describe("回信自查台账价", () => {
 
   it("抽不到目的港就不查（宁可不报价，不可报错价）", () => {
     expect(lookupReplyRates(inq({ pol: "Ningbo", polCode: "CNNBG", container: "40HQ" }))).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// 客户报价表：英文十一列，列与占位锁死（规范 docs/rates-query-spec.md §4）
+// 用户口径：CARRIER 国际标准缩写、POL/POD 唯一且全大写、缺项 "/"、TT 恒 "/"、
+// VALIDITY/ETD 形如 "1-15 Sep" / "16 Sep"；内部溯源（来源群/发送人/入库时间）不进客户表。
+// ═══════════════════════════════════════════════════════════════════
+describe("客户报价表（英文十一列）", () => {
+  const HEAD = "| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |";
+  const cells = (line: string) => line.split("|").slice(1, -1).map(s => s.trim());
+
+  it("表头锁死十一列，TT 恒 /", () => {
+    const t = customerQuoteTable([
+      { carrier: "MSC", container: "40HQ", pol: "青岛", pod: "SANTOS", price: 8500, validFrom: "2026-09-08", validTo: "2026-09-14", note: null },
+    ], "SANTOS");
+    const lines = t.split("\n");
+    expect(lines[0]).toBe(HEAD);
+    const row = cells(lines[2]!);
+    expect(row).toHaveLength(11);
+    expect(row[9]).toBe("/");                       // TT：台账没有航程数据，恒 "/"
+  });
+
+  it("同船司同起运港的多柜型合并成一行三列；缺的柜型用 / 占位", () => {
+    const t = customerQuoteTable([
+      { carrier: "CMA CGM", container: "40HQ", pol: "天津", pod: "SANTOS", price: 8000, validFrom: "2026-09-08", validTo: "2026-09-14", note: "特价合约舱位 2个高柜 13820801000" },
+      { carrier: "CMA", container: "20GP", pol: "天津", pod: "SANTOS", price: 4200, validFrom: "2026-09-08", validTo: "2026-09-14", note: null, ft: "21天", etd: "2026-09-12" },
+      { carrier: "MSK", container: "40NOR", pol: "蛇口", pod: "Santos", price: 7810, validFrom: null, validTo: null, note: null },
+    ], "SANTOS");
+    const rows = t.split("\n").slice(2).map(cells);
+    expect(rows).toHaveLength(2);                   // CMA|TIANJIN 合并成一行 + MSK|SHEKOU 一行
+    const cma = rows[0]!;
+    expect(cma[0]).toBe("CMA");                     // CMA CGM → 国际标准缩写
+    expect(cma[1]).toBe("TIANJIN");                 // 中文群名 → 英文大写
+    expect(cma[2]).toBe("SANTOS");
+    expect(cma[3]).toBe("4200");                    // 20GP
+    expect(cma[4]).toBe("8000");                    // 40HQ/HC
+    expect(cma[5]).toBe("/");                       // 40NOR 缺 → /
+    expect(cma[6]).toBe("21");                      // FT：只取天数
+    expect(cma[7]).toBe("12 Sep");                  // ETD
+    expect(cma[8]).toBe("8-14 Sep");                // VALIDITY 同月
+    expect(cma[10]).not.toContain("13820801000");   // 备注里的手机号不进客户表
+    const msk = rows[1]!;
+    expect(msk[0]).toBe("MSK");
+    expect(msk[1]).toBe("SHEKOU");
+    expect(msk.slice(3, 6)).toEqual(["/", "/", "7810"]);
+    expect(msk.slice(6, 10)).toEqual(["/", "/", "/", "/"]);   // 无目免/船期/有效期 → 全 "/"
+  });
+
+  it("POD 用查询归一后的标准港名：航线级行与多港粘连行都收敛到目标港", () => {
+    const t = customerQuoteTable([
+      { carrier: "PIL", container: "40HQ", pol: "青岛", pod: "南美东", price: 8800, validFrom: null, validTo: null, note: null },
+      { carrier: "ONE", container: "40HQ", pol: "青岛", pod: "SANTOS/ITAJAI", price: 9000, validFrom: null, validTo: null, note: null },
+    ], "SANTOS");
+    const rows = t.split("\n").slice(2).map(cells);
+    expect(rows.map(r => r[2])).toEqual(["SANTOS", "SANTOS"]);
+  });
+
+  it("起运港与来信对得上时用来信的英文写法（客户看的就是自己问的港）；未注明船司给 /", () => {
+    const t = customerQuoteTable([
+      { carrier: "EMC", container: "40HQ", pol: "宁波", pod: "SANTOS", price: 8800, validFrom: null, validTo: null, note: null },
+      { carrier: "未注明", container: "40HQ", pol: "宁波", pod: "SANTOS", price: 9900, validFrom: null, validTo: null, note: null },
+    ], "SANTOS", inq({ pol: "Porto de Ningbo", polCode: "CNNBG" }));
+    const rows = t.split("\n").slice(2).map(cells);
+    expect(rows[0]![1]).toBe("CNNBG");
+    expect(rows[1]![0]).toBe("/");                  // 「未注明」不是船司名
+  });
+
+  it("日期格式：跨月、单端、认不出的一律不猜", () => {
+    expect(fmtValidityEn("2026-08-28", "2026-09-03")).toBe("28 Aug-3 Sep");
+    expect(fmtValidityEn("2026-09-08", "2026-09-14")).toBe("8-14 Sep");
+    expect(fmtValidityEn(null, "2026-09-14")).toBe("14 Sep");
+    expect(fmtValidityEn(null, null)).toBe("/");
+    expect(fmtEtdEn("EVER FIT 027W，9.6晚开")).toBe("6 Sep");
+    expect(fmtEtdEn("待定")).toBe("/");
+    expect(fmtFtEn("21 combined")).toBe("21");
+    expect(fmtFtEn(null)).toBe("/");
+  });
+
+  it("空行不出表（回信里不塞一张只有表头的空表）", () => {
+    expect(customerQuoteTable([], "SANTOS")).toBe("");
   });
 });
