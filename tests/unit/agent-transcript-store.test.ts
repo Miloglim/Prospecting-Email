@@ -162,15 +162,18 @@ describe("agent 回合现场 store", () => {
     const id = "conv-approve";
     await openConversation(id);
     await mod.send(id, "记一条跟进");
-    emit("agent:approval", { conversationId: id, approvalId: "a1", items: [{ tool: "record_followup", args: {}, autoApprovable: true }] });
+    emit("agent:approval", { conversationId: id, approvalId: "a1", items: [{ tool: "record_followup", args: {} }] });
     expect(mod.getConv(id).approval?.approvalId).toBe("a1");
 
     await openConversation("conv-elsewhere");                 // 切去看别的会话
     expect(mod.getConv(id).approval?.approvalId).toBe("a1");  // 现场仍挂着，不会因换视图丢掉
 
-    await mod.resolveApproval(id, true, "record_followup");
+    await mod.resolveApproval(id, true);
     expect(mod.getConv(id).approval).toBeNull();
     expect(invoke.mock.calls.some(c => c[0] === "agent:resolveApproval")).toBe(true);
+    // 载荷锁死：会话豁免已删，不得再有 rememberTool 之类的"记住这次批准"参数
+    expect(invoke.mock.calls.find(c => c[0] === "agent:resolveApproval")?.[1])
+      .toEqual({ approvalId: "a1", approved: true });
     expect(mod.getConv(id).sending).toBe(true);               // 续跑的 done 还没来，回合不算结束
   });
 

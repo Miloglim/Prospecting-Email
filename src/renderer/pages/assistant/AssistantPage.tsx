@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Avatar, Button, Checkbox, Dropdown, Modal, message, Skeleton, Table, Tag, Tooltip } from "antd";
+import { Alert, Avatar, Button, Dropdown, Modal, message, Skeleton, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import {
   UserOutlined, LoadingOutlined, CheckCircleOutlined,
@@ -806,8 +806,6 @@ export function AssistantPage() {
   /** 已配好的端点清单（模型胶囊点开就地换；只有一份时胶囊退化成纯标签） */
   const [profiles, setProfiles] = useState<Array<{ id: string; name: string; active: boolean }>>([]);
   const [inputVal, setInputVal] = useState("");
-  /** 审批卡上的「本会话内不再询问」勾选（仅低风险写工具可选，外发类永不出现该勾选项） */
-  const [rememberApproval, setRememberApproval] = useState(false);
   /** 回合进行中每秒跳一次，让折叠头的「正在处理 · Xs」动起 */
   const [, setTick] = useState(0);
   /** 动作卡：待确认的写入动作（确认弹窗属于「这一屏」，不进现场） */
@@ -956,13 +954,12 @@ export function AssistantPage() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  /** 换会话即换一屏：未发送的输入、「不再询问」勾选、写入确认弹窗不跨会话（回合现场留在 store 里） */
+  /** 换会话即换一屏：未发送的输入、写入确认弹窗不跨会话（回合现场留在 store 里） */
   const viewKeyRef = useRef(key);
   useEffect(() => {
     if (viewKeyRef.current === key) return;
     viewKeyRef.current = key;
     setInputVal("");
-    setRememberApproval(false);
     setPendingWrite(null);
     void refreshStatus();   // 期间可能在设置页换了端点或切了思考
   }, [key]);
@@ -1033,20 +1030,13 @@ export function AssistantPage() {
 
   /** 停止只管当前会话：审批卡、排队、请示卡一并收掉（现场本身不动，已生成的内容留着） */
   const handleStop = () => {
-    setRememberApproval(false);
     stopTurn(key);
   };
 
   /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
     if (!approval) return;
-    // 「不再询问」只在整批同工具且 policy 允许豁免时生效（外发类永不满足条件）
-    const tools = [...new Set(approval.items.map(i => i.tool ?? ""))];
-    const rememberTool = approved && rememberApproval
-      && tools.length === 1 && !!tools[0] && approval.items.every(i => i.autoApprovable)
-      ? tools[0] : undefined;
-    setRememberApproval(false);
-    await submitApproval(key, approved, rememberTool);
+    await submitApproval(key, approved);
   };
 
   /** 结果卡动作：跳转直接走，提示即续问，写入弹确认（显 diff） */
@@ -1092,12 +1082,6 @@ export function AssistantPage() {
   // 菱形头像只出现在最后一条 AI 消息上（流式期间即正在输出的那条），历史气泡一律无头像
   const tailSeg = segs[segs.length - 1];
   const lastAiKey = tailSeg && tailSeg.type === "msg" && tailSeg.m.role === "ai" ? tailSeg.key : null;
-
-  // 「本会话内不再询问」只对低风险写工具开放（判据由主进程随审批事件下发，前端不复制白名单）
-  const approvalTools = [...new Set((approval?.items ?? []).map(i => i.tool ?? ""))];
-  const rememberToolName = approvalTools.length === 1 ? approvalTools[0] ?? "" : "";
-  const canRememberApproval = !!approval && approval.items.length > 0
-    && !!rememberToolName && approval.items.every(i => i.autoApprovable);
 
   /** 段 → 气泡条目：折叠过程 / 产物卡 / 清单卡 / 回执行 / 带 token 页脚的回答 */
   const toBubbleItem = (seg: Segment) => {
@@ -1325,14 +1309,6 @@ export function AssistantPage() {
             {approval.items.map((it, i) => (
               <ApprovalItem key={i} tool={it.tool} args={it.args} />
             ))}
-            {canRememberApproval && (
-              <Checkbox
-                checked={rememberApproval} onChange={e => setRememberApproval(e.target.checked)}
-                className="!text-[12px] !text-gray-500 mt-1"
-              >
-                本会话内不再询问「{toolLabel(rememberToolName)}」
-              </Checkbox>
-            )}
             <div className="flex items-center gap-2 mt-2">
               <Button type="primary" size="small" style={{ fontSize: 12 }}
                 onClick={() => { void handleApproval(true); }}>确认执行</Button>

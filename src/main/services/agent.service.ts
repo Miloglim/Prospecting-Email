@@ -11,7 +11,7 @@ import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { inboxMessages } from "../db/schema/inbox";
 import {
-  runHarnessTurn, resolveApproval, rejectPendingFor, hasPending, clearAutoApprove,
+  runHarnessTurn, resolveApproval, rejectPendingFor, hasPending,
   DEFAULT_PROFILE, type PushFn, type TurnOutcome,
 } from "./agent/harness";
 import { toolLabelMap, toolFollowUpMap } from "./agent/manifest";
@@ -299,7 +299,7 @@ export function stop(conversationId: string): Result<void> {
   return okResult(undefined);
 }
 
-export interface ApprovalInput { approvalId?: string; approved?: boolean; rememberTool?: string; }
+export interface ApprovalInput { approvalId?: string; approved?: boolean; }
 
 /** 渲染端审批结论 → harness 恢复执行。续跑完成落消息 + DONE；链式再审批则继续等确认。 */
 export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput): Promise<Result<{ resumed: boolean }>> {
@@ -318,7 +318,7 @@ export async function resolveApprovalRequest(push: PushFn, input: ApprovalInput)
     const outcome = await resolveApproval(approvalId, !!input.approved, {
       baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model,
       history: [], conversationId: "", push: touchPush, signal: ac.signal,
-    }, input.rememberTool?.trim());
+    });
     if (outcome.kind === "approval") return okResult({ resumed: false });
     if (outcome.text) appendMessage(outcome.conversationId, "assistant", outcome.text);
     if (outcome.usage) {
@@ -398,7 +398,7 @@ export function unarchiveConversation(conversationId: string): Result<void> {
   return okResult(undefined);
 }
 
-/** 批量删除会话：复用单条删除（连同消息/事实/运行态/审批豁免/未点击动作卡一起清） */
+/** 批量删除会话：复用单条删除（连同消息/事实/运行态/待审批/未点击动作卡一起清） */
 export function deleteConversations(ids: string[]): Result<{ deleted: number }> {
   const list = (ids ?? []).filter((x): x is string => typeof x === "string" && !!x.trim());
   if (!list.length) return failResult("参数错误: 至少选择一个会话");
@@ -463,7 +463,7 @@ export function deleteConversation(conversationId: string): Result<void> {
   db.delete(agentConversations).where(eq(agentConversations.id, conversationId)).run();
   saveDatabase();
   runtime.delete(conversationId);
-  clearAutoApprove(conversationId);            // 「本会话内不再询问」随会话一起失效
+  // 写操作审批为内存态：会话删除后待审批自然作废（无会话级豁免可清）
   dropActionsForConversation(conversationId);   // 该会话未点击的动作卡一并作废
   Log.debug("agent.delete", conversationId.slice(0, 8));
   return okResult(undefined);

@@ -9,22 +9,32 @@
 读全部运行配置、按需拉邮件全文、经审批改配置、读全联系人档案（含偏好）并写回。
 
 红线（继承 harness 既有红线，一条都不能破）：
-1. 写工具一律 `requiresApproval: true`；`update_program_config` 与 `update_contact`
-   中只有 `update_contact` 允许 `autoApprovable: true`（低风险），配置修改**永不豁免**。
-2. 不新增任何发送/触发群发能力。
-3. **密钥与端点绝不进 agent 视野**：read 工具不返回 apiKey/令牌；update 工具不接受
+1. **【2026-09-07 修订】所有 `sideEffect: "write"` 工具每次都人工确认，零豁免。**
+   原「低风险写工具可勾『本会话内不再询问』」的会话豁免机制已连根删除：`ToolSpec` 不再
+   有 `autoApprovable` 字段，`canAutoApprove()` / `rememberAutoApprove()` / 审批卡上的勾选
+   全部不存在。**判据只可加严、不可豁免**——代码里不留"下次把它改回 true"的旋钮。
+2. **审批闸门统一收口在 `buildHarnessTools` 返回处**：工具的 `needsApproval` 一律由注册表
+   （manifest）派生并强制覆盖，禁止依赖每个工具各自手写。漏手写不再是漏洞成因——
+   结构锁测试 `tests/unit/agent-approval-gate.test.ts` 会断言「write 工具 needsApproval 必为
+   true、read 工具不得为 true」。（历史教训：`export_artifact` 曾把注册表改成 write/需审批，
+   但工具定义没接 `needsApproval`，SDK 不中断，元数据与真实行为脱节且测试全绿。）
+3. **写盘=生成，同样先询问**：`export_artifact`、以及会在收尾时自动产出文件的
+   `start_batch_task` 均登记为 `write` + 需审批；批量任务的产物文件由"启动任务"这一次
+   审批覆盖，不再单独弹层。
+4. 不新增任何发送/触发群发能力。
+5. **密钥与端点绝不进 agent 视野**：read 工具不返回 apiKey/令牌；update 工具不接受
    endpoints/检索源密钥/KB 令牌这类域（要改去设置页人工改）。
-4. 工具参数保持扁平：改配置用「domain + key=value 行文本」单字段传，不传嵌套 JSON
+6. 工具参数保持扁平：改配置用「domain + key=value 行文本」单字段传，不传嵌套 JSON
    （弱模型必写坏，既有约定）。
-5. 模型可见返回契约只增不改（notice/say/complete 字段名沿用）。
+7. 模型可见返回契约只增不改（notice/say/complete 字段名沿用）。
 
 ## 1. 新增工具清单（4 个）+ 1 处补字段
 
 | 工具 | 副作用 | 审批 | 预算/轮 | 用途 |
 |---|---|---|---|---|
 | `read_program_config` | read | 否 | 2 | 聚合读全部运行配置（时段/限额/测试模式/身份/CRM 参数/账号/生效端点） |
-| `update_program_config` | write | **是（永不豁免）** | 2 | 按域改配置：schedule/quota/test/crm/identity(仅 fromName) |
-| `update_contact` | write | 是（可会话豁免） | 4 | 改联系人白名单字段（职位/电话/国家/客户类型/标签/偏好备注） |
+| `update_program_config` | write | **是（每次确认）** | 2 | 按域改配置：schedule/quota/test/crm/identity(仅 fromName) |
+| `update_contact` | write | 是（每次确认） | 4 | 改联系人白名单字段（职位/电话/国家/客户类型/标签/偏好备注） |
 | `email_read_full` | read | 否 | 3 | 按 id 拉邮件全文+收件人/抄送/附件名（懒加载 IMAP 原文） |
 | `search_contacts` 补字段 | — | — | — | 返回行补 `title`/`tags`/`extra`（偏好可读） |
 
@@ -38,14 +48,14 @@ manifest 登记（照抄进 TOOL_MANIFEST，位置跟在 delete_contacts 后）�
 },
 {
   name: "update_program_config", label: "修改程序配置",
-  route: "修改程序配置（写、需确认、永不豁免）；用户说「把发信窗口改成…」「限额调到…」时用；",
-  spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2, autoApprovable: false },
+  route: "修改程序配置（写、每次确认）；用户说「把发信窗口改成…」「限额调到…」时用；",
+  spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
 },
 {
   name: "update_contact", label: "更新联系人资料",
   route: "更新联系人档案字段（职位/电话/国家/客户类型/标签/偏好备注，写、需确认）；",
   followUps: ["把刚才邮件里提到的偏好也记进 TA 的档案"],
-  spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4, autoApprovable: true },
+  spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4 },
 },
 {
   name: "email_read_full", label: "读取邮件全文",

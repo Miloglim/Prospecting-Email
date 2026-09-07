@@ -1,6 +1,7 @@
 // ── Agent Harness 策略层 ──────────────────────────────────────────
 // 工具注册表元数据：副作用分级 / 审批要求 / 每轮调用预算。
 // 设计红线：write 类工具必须 requiresApproval；发信类动作永不进入注册表。
+// 会话级「不再询问」豁免已于 2026-09-07 连根删除——写/生成每次都问，不留旋钮。
 // 纯逻辑、无副作用，便于单测。
 
 export type SideEffect = "read" | "write";
@@ -11,14 +12,12 @@ export interface ToolSpec {
   requiresApproval: boolean;
   /** 单轮对话内该工具的最大调用次数，防失控循环 */
   budgetPerTurn?: number;
-  /** 低风险写工具：允许用户在当前会话内选择「不再询问」。缺省 false —— 发信类永不豁免 */
-  autoApprovable?: boolean;
 }
 
 /**
  * 工具策略元数据从注册表（manifest.ts）派生 —— 副作用分级/审批/预算的唯一事实源
  * 在 manifest 里登记；这里不维护第二份清单。红线见 manifest 头部：
- * write 类工具必须 requiresApproval；send_queue_add / import_contacts 永不豁免。
+ * write 类工具必须 requiresApproval，且每次都问（无任何豁免通道）。
  */
 import { TOOL_MANIFEST } from "./manifest";
 
@@ -29,10 +28,13 @@ export function classifyTool(name: string): ToolSpec | undefined {
   return TOOL_SPECS[name];
 }
 
-/** 该写工具能否被「本会话内不再询问」豁免（未注册 / 读工具 / 发信类一律 false） */
-export function canAutoApprove(name: string): boolean {
-  const spec = TOOL_SPECS[name];
-  return !!spec && spec.sideEffect === "write" && spec.autoApprovable === true;
+/**
+ * 审批闸门的唯一口径：注册表登记为 write ⇒ 必须人工确认。
+ * 刻意只看 sideEffect——万一 requiresApproval 被误写成 false，闸门仍然拦得住，
+ * 判据只可加严不可放宽。工具层用它给 needsApproval 赋值，禁止各自判断。
+ */
+export function requiresApprovalOf(name: string): boolean {
+  return TOOL_SPECS[name]?.sideEffect === "write";
 }
 
 export class ToolBudgetError extends Error {

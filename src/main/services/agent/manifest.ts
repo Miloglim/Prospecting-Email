@@ -114,7 +114,7 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     name: "send_queue_add", label: "加入发信队列",
     route: "把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）；",
     followUps: ["发送队列现在什么状态", "再给下一家也准备一封"],
-    // 入队 ≠ 发出：真正发送仍需用户在发送中心点启动；外发动作每一次都要人工确认，永不豁免
+    // 入队 ≠ 发出：真正发送仍需用户在发送中心点启动；外发动作每一次都要人工确认
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3 },
   },
   {

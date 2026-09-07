@@ -55,8 +55,8 @@ export interface PlanStep { id?: string; text: string; state: "pending" | "doing
 export interface ApprovalReq {
   approvalId: string;
   conversationId?: string;
-  /** autoApprovable 由主进程按 policy 下发：只有低风险写工具才允许「本会话内不再询问」 */
-  items: Array<{ tool?: string; args?: unknown; autoApprovable?: boolean }>;
+  /** 一次中断可能含多项写操作；全部由用户逐项过目后一次性批准或拒绝 */
+  items: Array<{ tool?: string; args?: unknown }>;
 }
 
 /** 一个会话的完整现场：流水 + 回合态 + 回合内部计数 */
@@ -599,12 +599,12 @@ export function stop(key: string): void {
 }
 
 /** 写操作审批结论：确认/拒绝后等续跑的流（done 收尾） */
-export async function resolveApproval(key: string, approved: boolean, rememberTool?: string): Promise<void> {
+export async function resolveApproval(key: string, approved: boolean): Promise<void> {
   const a = entries.get(key)?.approval;
   if (!a) return;
   patch(key, s => ({ ...s, approval: null }));
   const r = await window.api.invoke("agent:resolveApproval", {
-    approvalId: a.approvalId, approved, rememberTool,
+    approvalId: a.approvalId, approved,
   }) as IpcResult<{ resumed: boolean }>;
   if (!r?.success) {
     pushLocal(key, { key: nextKey(), role: "tool", content: `审批失败：${r?.error || "未知错误"}` });

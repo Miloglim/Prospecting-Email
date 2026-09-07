@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TOOL_SPECS, classifyTool, checkBudget, canAutoApprove, ToolBudgetError } from "../../src/main/services/agent/policy";
+import { TOOL_SPECS, classifyTool, checkBudget, requiresApprovalOf, ToolBudgetError } from "../../src/main/services/agent/policy";
 import { searchContactsSchema, recordFollowupSchema, normalizePlan } from "../../src/main/services/agent/tools";
 
 describe("agent harness policy", () => {
@@ -52,17 +52,17 @@ describe("agent harness tool schemas", () => {
 });
 
 describe("写操作审批（硬约束：写入/编辑/修改/生成一律先询问）", () => {
-  it("所有写工具每次都人工确认，无会话豁免", () => {
-    expect(canAutoApprove("record_followup")).toBe(false);
-    expect(canAutoApprove("update_contact")).toBe(false);
-    expect(canAutoApprove("send_queue_add")).toBe(false);   // 红线：外发每次都要人工确认
-    expect(canAutoApprove("export_artifact")).toBe(false);  // 写盘=生成，同样先询问
+  it("所有写工具都在闸门内，无会话豁免", () => {
+    expect(requiresApprovalOf("record_followup")).toBe(true);
+    expect(requiresApprovalOf("update_contact")).toBe(true);
+    expect(requiresApprovalOf("send_queue_add")).toBe(true);    // 红线：外发每次都要人工确认
+    expect(requiresApprovalOf("export_artifact")).toBe(true);   // 写盘=生成，同样先询问
   });
 
-  it("读工具与未注册工具不在豁免范围", () => {
-    expect(canAutoApprove("search_contacts")).toBe(false);
-    expect(canAutoApprove("update_plan")).toBe(false);
-    expect(canAutoApprove("send_campaign")).toBe(false);
+  it("读工具与未注册工具不在闸门范围（也不会被降级）", () => {
+    expect(requiresApprovalOf("search_contacts")).toBe(false);
+    expect(requiresApprovalOf("update_plan")).toBe(false);
+    expect(requiresApprovalOf("send_campaign")).toBe(false);    // 未注册：发信能力根本不存在
   });
 
   it("update_plan 是免审批读工具（只维护界面清单）", () => {

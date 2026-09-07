@@ -1,19 +1,20 @@
 import { describe, it, expect, afterAll } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import { TOOL_SPECS, classifyTool, canAutoApprove } from "../../src/main/services/agent/policy";
+import { TOOL_SPECS, classifyTool, requiresApprovalOf } from "../../src/main/services/agent/policy";
 import { normalizeBatchItems, normalizeBatchKind } from "../../src/main/services/bg-task.service";
 import { slugify, csvCell, toCsv, writeArtifact, isInsideArtifactDir, ARTIFACT_DIR } from "../../src/main/services/artifact.service";
 
 describe("P2 policy 登记", () => {
-  it("export_artifact / start_batch_task 都是免审批读工具", () => {
-    expect(classifyTool("export_artifact")).toMatchObject({ sideEffect: "read", requiresApproval: false });
-    expect(classifyTool("start_batch_task")).toMatchObject({ sideEffect: "read", requiresApproval: false });
+  it("export_artifact / start_batch_task 都属生成类：write + 每次人工确认", () => {
+    expect(classifyTool("export_artifact")).toMatchObject({ sideEffect: "write", requiresApproval: true });
+    // 起后台任务会自跑并在收尾自动落盘汇总文件 —— 2026-09-07 起按生成类先询问
+    expect(classifyTool("start_batch_task")).toMatchObject({ sideEffect: "write", requiresApproval: true });
   });
 
-  it("元能力工具不在「本会话内不再询问」范围（豁免只认显式标记的写工具）", () => {
-    expect(canAutoApprove("export_artifact")).toBe(false);
-    expect(canAutoApprove("start_batch_task")).toBe(false);
+  it("两个生成类工具都进审批闸门（无会话豁免可言）", () => {
+    expect(requiresApprovalOf("export_artifact")).toBe(true);
+    expect(requiresApprovalOf("start_batch_task")).toBe(true);
   });
 
   it("注册表全部条目仍有副作用分级与预算", () => {

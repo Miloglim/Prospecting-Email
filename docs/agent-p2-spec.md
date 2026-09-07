@@ -65,7 +65,10 @@
 - 红线：本服务不引用 send.service；不写任何业务表。
 
 ### 工具
-- `start_batch_task`（policy：`read` / 免审批 / 预算 1）：入参 `{ kind?, companies: [{name, country?}] }`；
+- `start_batch_task`（**2026-09-07 修订：`write` / 每次人工确认 / 预算 1**。原登记为 read/免审批，
+  因收尾会自动把汇总 md 落盘到 `outputs/agent`，属「生成」类副作用，按控制面红线一律先询问。
+  它仍不引用 send.service、不写任何业务表——审批覆盖的是"起任务 + 产文件"这一整次动作）：
+  入参 `{ kind?, companies: [{name, country?}] }`；
   经 `ToolCtx.push`（types.ts 的 ToolCtx 增加可选 `push` 字段，harness 注入）调 `startTask`；
   返回 `{ task: {taskId, title, total}, notice }`，提示模型「后台任务已启动，界面有进度卡，可继续回答其它问题」。
 
@@ -87,7 +90,10 @@
 
 ## 5. 测试与验收
 
-- 单测新增：`normalizeBatchItems`（钳制/归一/脏输入）、`slugify` + csv 引号转义、policy 新条目（两工具 read/免审批；`canAutoApprove` 对它们为 false）。
+- 单测新增：`normalizeBatchItems`（钳制/归一/脏输入）、`slugify` + csv 引号转义、policy 新条目。
+  **2026-09-07 修订**：`export_artifact` / `start_batch_task` 登记为 write+需审批；`canAutoApprove`
+  随会话豁免机制一并删除，改由 `tests/unit/agent-approval-gate.test.ts` 锁真实行为——构造
+  `buildHarnessTools` 的返回数组，逐个断言 write 工具 `needsApproval === true`、read 工具不为 true。
 - 全量：`npm run typecheck` + `npm test` + `npm run build` 三绿。
 - 手测清单：
   1. 「把未读邮件总结导出成表」→ 出现文件卡，打开位置可弹窗；

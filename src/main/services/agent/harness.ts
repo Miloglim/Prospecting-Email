@@ -16,7 +16,6 @@ import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.
 import { netFetch } from "../../net-proxy";
 import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, isToolRuntimeError, isEnvelopeFailure, type ToolCtx, type PlanItem } from "./tools";
 import { toolRoutesBlock, pickTools } from "./manifest";
-import { canAutoApprove } from "./policy";
 import { identityBlock } from "./identity";
 
 /** 主进程 → 渲染进程事件推送器（由 transport 层注入，service 不 import electron） */
@@ -174,30 +173,8 @@ interface PendingApproval {
 
 const pendingApprovals = new Map<string, PendingApproval>();
 
-// ── 会话级「本会话内不再询问」──────────────────────────────────────
-// 只覆盖 policy 判定为低风险可豁免的写工具（record_followup）。
-// 外发类（send_queue_add 及任何发信动作）永远要人工确认：canAutoApprove 直接判 false。
-const autoApproved = new Map<string, Set<string>>();
-
-/** 记住/撤销「该会话内这个工具不再询问」；不允许豁免的工具返回 false（调用方据此决定 UI 状态） */
-export function rememberAutoApprove(conversationId: string, toolName: string, on = true): boolean {
-  if (!conversationId || !canAutoApprove(toolName)) return false;
-  const set = autoApproved.get(conversationId) ?? new Set<string>();
-  autoApproved.set(conversationId, set);
-  if (on) set.add(toolName); else set.delete(toolName);
-  if (!set.size) autoApproved.delete(conversationId);
-  Log.info("agent.harness", `会话 ${conversationId.slice(0, 8)} ${on ? "豁免" : "取消豁免"}写操作免确认：${toolName}`);
-  return true;
-}
-
-function isAutoApproved(conversationId: string, toolName: string): boolean {
-  return autoApproved.get(conversationId)?.has(toolName) === true;
-}
-
-/** 删除会话时清理（内存态，重启本就清零） */
-export function clearAutoApprove(conversationId: string): void {
-  autoApproved.delete(conversationId);
-}
+// 写操作一律每次都人工确认（无会话豁免）：审批中断流见 resolveApproval 与 collectRunResult。
+// 「本会话内不再询问」机制已于 2026-09-07 连根移除——判据只可加严，不留旋钮。
 
 // ── 任务清单快照 ────────────────────────────────────────────────
 /** 维护界面清单的元工具名：它不走过程行通道，避免被折叠计数当"处理了一步" */
@@ -357,14 +334,13 @@ export async function runHarnessTurn(profile: AgentProfile, o: HarnessOptions): 
 }
 
 /** 人工审批结论回填 → 恢复执行（拒绝时模型会收到 reject 消息并据此回复）。
- *  rememberTool：批准时顺带登记「该工具本会话内不再询问」（仅低风险写工具，见 canAutoApprove）。 */
+ *  审批只对"这一次调用的这一份参数"生效：下一次写操作仍会重新中断询问。 */
 export async function resolveApproval(
-  approvalId: string, approved: boolean, o: HarnessOptions, rememberTool?: string,
+  approvalId: string, approved: boolean, o: HarnessOptions,
 ): Promise<TurnOutcome> {
   const p = pendingApprovals.get(approvalId);
   if (!p) return { kind: "done", text: "", conversationId: o.conversationId };
   pendingApprovals.delete(approvalId);
-  if (approved && rememberTool) rememberAutoApprove(p.ctx.conversationId, rememberTool);
   const state = p.state as unknown as {
     getInterruptions(): Array<Record<string, unknown>>;
     approve(item: unknown): void;
@@ -417,23 +393,6 @@ interface RunResultLite {
 }
 
 /**
- * 中断项全部命中「本会话内不再询问」→ 直接批准并续跑，不再打扰用户。
- * 发信类工具进不来这里（canAutoApprove 判 false）；返回 null 表示仍需人工确认。
- */
-async function resumeIfAutoApproved(
-  agent: Agent<any, any>, ctx: ToolCtx, o: HarnessOptions,
-  state: { getInterruptions(): Array<Record<string, unknown>>; approve(item: unknown): void },
-  interruptions: Array<Record<string, unknown>>,
-  maxTurns: number,
-): Promise<TurnOutcome | null> {
-  if (!interruptions.length) return null;
-  if (!interruptions.every(i => isAutoApproved(o.conversationId, String(i.name ?? "")))) return null;
-  for (const item of interruptions) state.approve(item);
-  Log.info("agent.harness", `会话 ${o.conversationId.slice(0, 8)} 免确认续跑（${interruptions.length} 项写操作）`);
-  return streamRun(agent, ctx, o, state as unknown as RunState<any, any>, maxTurns);
-}
-
-/**
  * 非流式回合的结果转事件：工具过程逐条补推（calling/done），正文一次性推出。
  * 前端契约与流式路径完全一致，只是没有逐字效果。
  */
@@ -473,15 +432,12 @@ async function collectRunResult(
 
   const interruptions = r.state.getInterruptions();
   if (interruptions.length > 0) {
-    const auto = await resumeIfAutoApproved(agent, ctx, o, r.state, interruptions, maxTurns);
-    if (auto) return auto;
     const approvalId = crypto.randomUUID();
     pendingApprovals.set(approvalId, { state: r.state as unknown as RunState<any, any>, agent, ctx, maxTurns });
     o.push(EVENTS.AGENT_APPROVAL, {
       conversationId: o.conversationId, approvalId,
       items: interruptions.map(i => ({
         tool: String(i.name ?? "unknown"), args: i.arguments,
-        autoApprovable: canAutoApprove(String(i.name ?? "")),
       })),
     });
     Log.info("agent.harness", `（非流式）写操作待审批 ${approvalId.slice(0, 8)}`);
@@ -630,8 +586,6 @@ async function streamRun(
   };
   const interruptions = state.getInterruptions();
   if (interruptions.length > 0) {
-    const auto = await resumeIfAutoApproved(agent, ctx, o, state, interruptions, maxTurns);
-    if (auto) return auto;
     const approvalId = crypto.randomUUID();
     pendingApprovals.set(approvalId, { state: result.state, agent, ctx, maxTurns });
     o.push(EVENTS.AGENT_APPROVAL, {
@@ -639,7 +593,6 @@ async function streamRun(
       approvalId,
       items: interruptions.map(i => ({
         tool: String(i.name ?? "unknown"), args: i.arguments,
-        autoApprovable: canAutoApprove(String(i.name ?? "")),
       })),
     });
     Log.info("agent.harness", `写操作待审批 ${approvalId.slice(0, 8)}（${interruptions.length} 项）`);

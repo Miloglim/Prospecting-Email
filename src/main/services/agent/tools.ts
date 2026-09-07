@@ -1,7 +1,8 @@
 // ── Agent Harness 工具层 ──────────────────────────────────────────
-// 每个工具 = @openai/agents tool() + policy 元数据（副作用分级/预算/审批）。
-// execute 内强制：预算守卫 → 执行 → 审计落库。write 工具的 needsApproval 由
-// SDK 中断流接管，execute 只在人工批准后才可能运行。
+// 每个工具 = @openai/agents tool() + 注册表元数据（副作用分级/预算）。
+// execute 内强制：预算守卫 → 执行 → 审计落库。
+// 审批不在这里各写一份：write 类工具的 needsApproval 统一由 buildHarnessTools 返回处
+// 按注册表派生（见本文件末尾闸门），execute 只在人工批准后才可能运行。
 import * as crypto from "crypto";
 import { z } from "zod";
 import { eq, like, or, and, desc, ne, sql, count, inArray } from "drizzle-orm";
@@ -18,7 +19,7 @@ import { emailAccounts } from "../../db/schema/accounts";
 import { agentToolCalls } from "../../db/schema/agent";
 import { Log } from "../../logger";
 import { okResult, failResult, type Result } from "../../errors";
-import { checkBudget, ToolBudgetError } from "./policy";
+import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
 import { getBody, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
@@ -30,7 +31,6 @@ import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
 import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from "./tool-cache";
 import { readIdentity } from "./identity";
-import { toolMeta } from "./manifest";
 import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
 import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
@@ -325,6 +325,7 @@ export const searchContactsSchema = z.object({
   query: z.string().min(1).max(80).describe("姓名/邮箱/公司名关键词；要查全库就传一个宽泛的词（如公司域名的常见片段）或 a"),
   limit: optInt().describe("返回条数上限，默认 10（发成字符串也行）"),
   sortBy: optStr(12).describe("传 'stale' = 按最近跟进时间升序（沉默最久的排前面，适合「沉默最久的是谁」类问题）"),
+  hasPhone: optBool().describe("传 true = 只返回有电话号码的联系人（适合「有电话的客户」「要打电话的名单」类问题）"),
 });
 
 export const recordFollowupSchema = z.object({
@@ -646,6 +647,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
         const p = `%${tok}%`;
         return or(like(contacts.email, p), like(contacts.firstName, p), like(contacts.lastName, p), like(companies.name, p));
       });
+      // hasPhone 过滤：只返回有电话号码的联系人
+      if (args.hasPhone) {
+        perToken.push(and(sql`${contacts.phone} IS NOT NULL`, sql`${contacts.phone} != ''`));
+      }
       // A2：真总数（不带 total 时模型会拿"本批行数"当全库数，live 评测实锤过同类坑）
       const total = getDb()
         .select({ n: count() })
@@ -728,6 +733,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
             firstName: contacts.firstName, lastName: contacts.lastName,
             country: contacts.country, stage: contacts.stage, status: contacts.status,
             title: contacts.title, tags: contacts.tags, extra: contacts.extra,
+            phone: contacts.phone,
             companyName: companies.name,
           })
           .from(contacts)
@@ -821,7 +827,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "绝对不要用本工具改客户阶段（那要在 CRM 里操作）、不要用它写开发信正文、也不要拿它代替用户确认发信。"
       + "写操作，执行前会请求人工确认；被拒绝则放弃。",
     parameters: recordFollowupSchema,
-    needsApproval: toolMeta("record_followup")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "record_followup");
       if (gateNote) return gateNote;
@@ -869,7 +874,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
       emailSuffix: optStr(60).describe("按邮箱后缀过滤（如 no.email）；与 query 二选一或并用"),
       query: optStr(80).nullable().describe("姓名/邮箱/公司名关键词（与 search_contacts 同词法）；只按后缀删时可传 null"),
     }),
-    needsApproval: toolMeta("delete_contacts")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "delete_contacts");
       if (gateNote) return gateNote;
@@ -935,7 +939,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const updateProgramConfig = tool({
     name: "update_program_config",
-    description: "修改程序配置（写操作，执行前弹人工确认，永不豁免）。"
+    description: "修改程序配置（写操作，执行前一律弹人工确认）。"
       + 'domain 取 schedule/quota/test/crm/identity；kvs 为多行 key=value（如 "startHour=9\nendHour=18"）。'
       + "字段白名单：schedule=timeWindowEnabled/startHour/endHour/groupSize/groupDelayMinSeconds/groupDelayMaxSeconds；"
       + "quota=dailyLimit；test=enabled/dryRun/email/company；crm=followupDays.<阶段>/todoAdvanceDays/autoArchiveDays；"
@@ -946,7 +950,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
       domain: z.string().describe("配置域：schedule/quota/test/crm/identity"),
       kvs: z.string().describe("多行 key=value，只写要改的键"),
     }),
-    needsApproval: toolMeta("update_program_config")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "update_program_config");
       if (gateNote) return gateNote;
@@ -979,7 +982,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
       tags: optStr(120).describe("逗号分隔标签，如 reaching,重点"),
       preference: optStr(200).describe("偏好备注，追加写入 extra.preferences"),
     }),
-    needsApproval: toolMeta("update_contact")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "update_contact");
       if (gateNote) return gateNote;
@@ -1752,7 +1754,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
     name: "send_queue_add",
     description: "把一封邮件加入发送队列。触发时机：用户明确说「把/给 X 发一封邮件」「发给 X」「发报价给 X」时直接调用本工具入队（收件人可用 contactIds 或 contact=邮箱/姓名，本工具会自己在库里定位，不必先调 search_contacts）—— 系统随后会弹人工确认框，那一步就是征求同意，因此不要只在正文里问「要不要发」而不调用本工具。本工具只入队不发送：队列建好后处于未启动状态，用户仍需在「发送中心」点「开始」才真正外发。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
     parameters: sendQueueAddSchema,
-    needsApproval: toolMeta("send_queue_add")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "send_queue_add");
       if (gateNote) return gateNote;
@@ -1862,7 +1863,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "邮箱是去重与写入的键：无效邮箱跳过、库里已存在的邮箱不会被覆盖（只提示疑似已存在）。"
       + "写操作，执行前请用户确认；被拒绝则不写。完成后给一句结论并询问是否按公司/国家汇总、或挑几位进开发信。",
     parameters: importContactsSchema,
-    needsApproval: toolMeta("import_contacts")!.spec.requiresApproval,
     execute: async (args) => {
       const gateNote = gate(ctx, "import_contacts");
       if (gateNote) return gateNote;
@@ -1955,10 +1955,21 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
-  return [
+  // ── 审批闸门（唯一收口）────────────────────────────────────────────
+  // needsApproval 一律由注册表派生：登记为 sideEffect:"write" 就必须人工确认。
+  // 各工具不再自己写一份——漏写不再是「静默执行」的成因（export_artifact 曾把注册表
+  // 改成 write/需审批却没接 needsApproval，元数据与真实行为脱节、测试还全绿）。
+  // 闸门只向上加严：只可能把 needsApproval 置 true，绝不把任何工具置成免审批。
+  // 结构锁见 tests/unit/agent-approval-gate.test.ts。
+  const tools = [
     searchContacts, recordFollowup, deleteContacts, readProgramConfig, updateProgramConfig,
     updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
   ];
+  for (const t of tools) {
+    const name = (t as unknown as { name?: string }).name ?? "";
+    if (requiresApprovalOf(name)) (t as unknown as { needsApproval?: unknown }).needsApproval = true;
+  }
+  return tools;
 }

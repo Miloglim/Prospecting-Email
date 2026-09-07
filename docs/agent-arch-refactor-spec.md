@@ -8,7 +8,9 @@
 **目标**：把「工具清单四处维护、解析正则散落、结果形状不一、异常靠文本正则识别」的补丁面收敛掉，并为记忆/反思/规划补齐承载结构。分四期，期期可独立验收、可独立回滚。
 
 **红线（任何一期都不得突破）**：
-1. 写工具（record_followup / send_queue_add / import_contacts）人工审批链路不动；`needsApproval` 只能加严不能豁免；`send_queue_add`/`import_contacts` 永远 `autoApprovable:false`。
+1. 写工具人工审批链路不动；`needsApproval` 只能加严不能豁免。原 `autoApprovable`（会话级豁免）
+   已于 2026-09-07 连根删除——所有 write 工具每次确认，闸门统一由注册表在
+   `buildHarnessTools` 返回处派生（细则见 `agent-control-plane-spec.md` 红线 1、2）。
 2. 不新增任何"发送/触发群发"能力；后台任务服务维持只读红线。
 3. 重构必须**减少**重复名单，禁止引入第五份工具清单。
 4. 模型可见的工具返回契约（notice/say/complete 等字段名）只能增补、不得改名，弱模型对措辞敏感。

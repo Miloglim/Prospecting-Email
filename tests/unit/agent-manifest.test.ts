@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { TOOL_MANIFEST, toolMeta, toolRoutesBlock, toolLabelMap, toolFollowUpMap } from "../../src/main/services/agent/manifest";
-import { TOOL_SPECS, canAutoApprove } from "../../src/main/services/agent/policy";
+import { TOOL_SPECS, requiresApprovalOf } from "../../src/main/services/agent/policy";
 
 describe("工具注册表（唯一事实源）", () => {
   it("名单无重名、每条有标签与路由", () => {
@@ -23,11 +23,13 @@ describe("工具注册表（唯一事实源）", () => {
     for (const m of writes) expect(m.spec.requiresApproval).toBe(true);
   });
 
-  it("发信与批量导入永不可豁免确认", () => {
-    expect(canAutoApprove("send_queue_add")).toBe(false);
-    expect(canAutoApprove("import_contacts")).toBe(false);
-    expect(canAutoApprove("record_followup")).toBe(true);
-    expect(canAutoApprove("不存在的工具")).toBe(false);
+  it("审批闸门 = 注册表派生：write 必问、read 不问，无会话豁免通道", () => {
+    for (const m of TOOL_MANIFEST) {
+      expect(requiresApprovalOf(m.name), m.name).toBe(m.spec.sideEffect === "write");
+      // 豁免旋钮已连根删除：类型上不存在这个键，运行时也不该有人偷偷塞回来
+      expect("autoApprovable" in m.spec, m.name).toBe(false);
+    }
+    expect(requiresApprovalOf("不存在的工具")).toBe(false);
   });
 
   it("UI 标签无重复", () => {
