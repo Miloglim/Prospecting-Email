@@ -1,4 +1,4 @@
-import { and, eq, like, gte, isNull, or, sql } from "drizzle-orm";
+import { and, eq, like, gte, isNull, or, sql, type Column } from "drizzle-orm";
 import { Log } from "../logger";
 import { getDb, saveDatabase } from "../db";
 import { rateQuotes, type InsertRateQuoteRow } from "../db/schema/rates";
@@ -26,6 +26,38 @@ export async function probeBoard(): Promise<boolean> {
     await fetch(`${REMOTE_BASE}/`, { signal: AbortSignal.timeout(3000) });
     return true;
   } catch { return false; }
+}
+
+/** 探测结果缓存 30 秒：一次查价链路里可能连用好几次，别每次都得等满 3 秒超时 */
+let probeCache: { at: number; ok: boolean } | null = null;
+export async function probeBoardCached(): Promise<boolean> {
+  if (probeCache && Date.now() - probeCache.at < 30_000) return probeCache.ok;
+  const ok = await probeBoard();
+  probeCache = { at: Date.now(), ok };
+  return ok;
+}
+
+/**
+ * 目的港尾巴上可能粘连台账网页里的小字航线标签（"ISTANBUL 伊斯坦布尔(土耳其) 地东"）。
+ * 受控词表只收区域/航线简称；另一个判据是"尾段与该行 route 值相同"（最常见形态）。
+ * 护栏：只剥最后一个空白分隔、长度 ≤6 且不含括号的尾段 —— 正常形态
+ * "BALBOA, PA 巴尔博亚(巴拿马)" 的中文译名(国家)带括号，绝不会被切碎。
+ * 剥下来的标签在该行 lane 为空时回填 lane（航线信息回到它该在的列）。
+ */
+const LANE_TAGS = [
+  "地东", "地西", "欧地", "欧西", "地中海", "黑海", "波海", "波罗的海", "红海", "波斯湾", "阿拉伯海",
+  "南亚", "东南亚", "西非", "东非", "北非", "北欧", "大洋洲",
+  "加勒比", "墨西哥", "南美东", "南美西", "中美洲", "美东", "美西",
+];
+export function stripLaneTag(podRaw: string, lane: string | null): { podRaw: string; lane: string | null } {
+  const s = podRaw.trim();
+  const i = s.lastIndexOf(" ");
+  if (i <= 0) return { podRaw: s, lane };
+  const head = s.slice(0, i).trim();
+  const tail = s.slice(i + 1).trim();
+  if (!head || !tail || tail.length > 6 || /[()（）\[\]]/.test(tail)) return { podRaw: s, lane };
+  if (!LANE_TAGS.includes(tail) && tail !== lane?.trim()) return { podRaw: s, lane };
+  return { podRaw: head, lane: lane?.trim() || tail };
 }
 /** 自动同步间隔（分钟），RATES_REMOTE_MINUTES 可覆盖，最小 1 */
 const AUTO_MINUTES = Math.max(1, Number(process.env.RATES_REMOTE_MINUTES || 240) || 240);   // 默认 4 小时
@@ -110,11 +142,13 @@ export function mapRemoteRow(row: Record<string, unknown>, fallbackId: string): 
   const parsed = parseValidity(pick(row, ["validity_raw"]), msgTime);
   const usdRaw = pick(row, ["freight_usd", "ocean_usd"]);
   const usd = usdRaw != null ? Number(usdRaw.replace(/[,\s]/g, "")) : NaN;
+  // 目的港尾部粘连的航线小字（"… 地东"）剥掉，空 lane 用它回填
+  const cleaned = stripLaneTag(pod, pick(row, ["route", "lane"]));
   return {
     recordId: pick(row, ["content_key", "record_id"]) || fallbackId,
     pol: pick(row, ["pol"]),
-    podRaw: pod,
-    lane: pick(row, ["route", "lane"]),
+    podRaw: cleaned.podRaw,
+    lane: cleaned.lane,
     carrier: pick(row, ["carrier"]),
     container: normalizeContainer(containerRaw),
     containerRaw,
@@ -218,7 +252,7 @@ export function startAutoSync(): void {
   }, 5_000);
 }
 
-export interface QuoteFilters { lane?: string; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[] }
+export interface QuoteFilters { lane?: string; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[]; /** 跨字段并集词：每个词同时比对 lane/pod_raw/pol，词之间 AND（规范 rates-query-fallback-spec §1） */ terms?: string[] }
 
 export interface QuoteDto {
   podRaw: string; lane: string | null; carrier: string | null; container: string | null;
@@ -245,10 +279,35 @@ function quoteConds(f: QuoteFilters) {
     conds.push(or(...podConds));
   }
   if (f.container) conds.push(or(eq(rateQuotes.container, f.container), like(rateQuotes.container, `%${f.container}%`)));
+  // 跨字段并集：一个词到底是航线名还是港口名，机械层不猜（模型也不该猜）
+  for (const t of f.terms ?? []) {
+    const w = t.trim();
+    if (!w) continue;
+    conds.push(or(like(rateQuotes.lane, `%${w}%`), like(rateQuotes.podRaw, `%${w}%`), like(rateQuotes.pol, `%${w}%`)));
+  }
   if (!f.includeExpired) {
     conds.push(or(gte(rateQuotes.validTo, todayBeijing()), isNull(rateQuotes.validTo)));
   }
   return conds;
+}
+
+/**
+ * 镜像库存概览（实时现算，不养第二份词表）：查价空结果时回给模型当候选，
+ * 让"语义理解"这一步有真实可依的东西。规范 rates-query-fallback-spec §3。
+ */
+export function quoteOptions(limit = 20): {
+  lanes: { v: string; c: number }[]; pods: { v: string; c: number }[]; rows: number; latestSyncAt: string | null;
+} {
+  const db = getDb();
+  const group = (col: Column, label: string) => db.select({
+    v: sql<string>`coalesce(nullif(trim(${col}), ''), ${label})`, c: sql<number>`count(*)`,
+  }).from(rateQuotes).groupBy(sql`1`).orderBy(sql`count(*) desc`).limit(limit).all();
+  return {
+    lanes: group(rateQuotes.lane, "（未标注航线）"),
+    pods: group(rateQuotes.podRaw, "（未标注目的港）"),
+    rows: db.select({ n: sql<number>`count(*)` }).from(rateQuotes).get()?.n ?? 0,
+    latestSyncAt: db.select({ t: sql<string>`max(${rateQuotes.syncedAt})` }).from(rateQuotes).get()?.t ?? null,
+  };
 }
 
 export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {

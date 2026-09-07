@@ -33,7 +33,7 @@ import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from
 import { readIdentity } from "./identity";
 import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
-import { listQuotes, countQuotes, normalizeContainer } from "../rate-sync.service";
+import { listQuotes, countQuotes, normalizeContainer, quoteOptions, probeBoardCached, remoteBase } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
@@ -189,10 +189,10 @@ export function mirrorCompareForPod(podEn: string, podCn: string): string | null
   for (const term of [podEn, podCn]) {
     const t = String(term || "").trim();
     if (!t) continue;
-    const rows = listQuotes({ pod: t, limit: 30 });
+    const rows = listQuotes({ terms: [t], limit: 30 });
     if (!rows.success || !rows.data.length) continue;
     const prices = rows.data.map(q => q.oceanUsd).filter((n): n is number => typeof n === "number" && n > 0).sort((a, b) => a - b);
-    const total = countQuotes({ pod: t });
+    const total = countQuotes({ terms: [t] });
     const latest = rows.data.map(q => q.validTo || "").sort().pop();
     return `镜像库「${t}」有 ${total} 条参考价`
       + (prices.length ? `，区间 ${prices[0]}–${prices[prices.length - 1]} USD` : "")
@@ -409,9 +409,11 @@ export const importContactsSchema = z.object({
 });
 
 export const quoteSearchSchema = z.object({
-  lane: optStr(20).describe("航线（加勒比/南美东/南美西/墨西哥/中美洲/欧地），不传则全航线"),
+  q: optStr(60).describe("用户说的那个词原样传（航线名、区域简称、中英文港名都行，如「地东」「伊斯坦布尔」「SANTOS」）——"
+    + "工具会同时比对航线/目的港/起运港，不需要你先判断它属于哪个字段"),
+  lane: optStr(20).describe("航线（库里真实存在的航线名，如 加勒比/南美东/地东），不传则全航线"),
   carrier: optStr(10).describe("船司三字码，如 CMA/MSK/MSC；不看船司就省略或传空"),
-  pod: optStr(60).describe("目的港关键词（英文港名，模糊匹配）；不限则省略或传空"),
+  pod: optStr(60).describe("目的港关键词（中英文均可，模糊匹配）；不限则省略或传空"),
   container: optStr(10).describe("柜型，如 20GP/40GP/40HQ/NOR（写 40HC 也会自动归一）；不限则省略或传空"),
   includeExpired: optBool().describe("是否包含已过有效期记录，默认 false"),
   limit: optInt().describe("返回条数，默认 20，按价格升序"),
@@ -1053,7 +1055,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const quoteSearch = tool({
     name: "quote_search",
-    description: "查询本地海运运价镜像库（源自钉钉《海运运价智能台账》，每日同步）。绝对不要用它回答客户、联系人、邮件内容或公司背景问题（那是 search_contacts / inbox_search / company_backcheck 的事）；查不到价格时直接说没有，不要编造。所有参数均可省略——用户只给目的港时仅传 pod 即可，省略的条件视为不限。返回 目的港/船司/柜型/USD价/有效期/备注 结构化列表，按价格升序。运价相关问题必须且只能基于本工具结果回答；结果为参考价，回答时须提醒以船司实时报价为准。",
+    description: "查询本地海运运价镜像库（真源 = 局域网台账 board_server；启动 5 秒后与每 4 小时全量刷新镜像）。"
+      + "绝对不要用它回答客户、联系人、邮件内容或公司背景问题（那是 search_contacts / inbox_search / company_backcheck 的事）。"
+      + "用户给了一个词就原样传 q（不必判断它是航线名还是港口名，工具会跨字段比对）；所有参数均可省略，省略的条件视为不限。"
+      + "没命中时按返回的 notice 指引走：第一轮先照 candidates 换词重试一次，两轮都没命中才按 notice 给的口径回答——"
+      + "「本地镜像查不到」与「该航线没有报价」是两件事，不得混说，更不得编造价格。"
+      + "返回 目的港/船司/柜型/USD价/有效期/备注 结构化列表，按价格升序。运价相关问题必须且只能基于本工具结果回答；结果为参考价，回答时须提醒以船司实时报价为准。",
     parameters: quoteSearchSchema,
     execute: async (args) => {
       const cached = cachedRead(ctx, "quote_search", args);
@@ -1064,15 +1071,21 @@ export function buildHarnessTools(ctx: ToolCtx) {
         return t || undefined;                    // 空串与 null 都按「不过滤」处理
       };
       const podQ = trimmed(args.pod);
+      const qQ = trimmed(args.q);
+      // 口语后缀去掉（「加勒比线」「南美东航线」→ 加勒比 / 南美东）
+      const laneQ = trimmed(args.lane)?.replace(/航线$/, "").replace(/线$/, "").trim() || undefined;
       // 港口归一：用户任意写法→标准港名；并把航线级/区域级 podRaw 展开进过滤
       // （查 SANTOS 时 podRaw=「南美东」「WCSA」的行也要命中，否则漏掉航线级报价）
       const canon = podQ ? resolveQueryPod(podQ) : undefined;
+      // L1 机械层：每个词各自跨字段 OR（航线/目的港/起运港），词之间 AND。
+      // 「地东」是航线还是港名不由机械层猜、也不由模型猜——猜错字段就是漏查（规范 rates-query-fallback-spec §1）
+      const termWords = [...new Set([qQ, laneQ, podQ].filter((x): x is string => !!x)
+        .flatMap(w => [w, resolveQueryPod(w)].map(t => t.trim()).filter(Boolean)))];
       const filters = {
-        // 去掉口语后缀（「加勒比线」「南美东航线」→ 加勒比 / 南美东），配合 like 模糊匹配
-        lane: trimmed(args.lane)?.replace(/航线$/, "").replace(/线$/, "").trim() || undefined,
         carrier: trimmed(args.carrier)?.toUpperCase(),
         pod: podQ,
         podExtra: canon ? podRawExpansion(canon) : undefined,
+        terms: termWords.length ? termWords : undefined,
         // 脏柜型归一（40HC→40HQ 等），识别不了则原样大写透传
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
         includeExpired: args.includeExpired ?? undefined,
@@ -1089,7 +1102,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
       // 客户表格优先用标准化层（data/rates-standard.json，柜型已透视成 20/40/NOR 三列、港口已归一）；
       // 无该文件时回退用镜像行拼表。两条路都是机械生成，模型只许原样贴。
-      const stdRows = podQ ? queryStandard(podQ, { carrier: filters.carrier, lane: filters.lane }) : [];
+      const stdWord = podQ || qQ || laneQ;
+      const stdRows = stdWord ? queryStandard(stdWord, { carrier: filters.carrier }) : [];
       const customerTable = stdRows.length
         ? standardToMarkdown(stdRows)
         : (r.data.length
@@ -1106,8 +1120,48 @@ export function buildHarnessTools(ctx: ToolCtx) {
         : "";
       // 逐条件拼 notice：收敛信号 + 固定格式指令（弱模型对工具返回里的指令最服帖）
       const noticeLines: string[] = [];
+      let candidates: { lanes: { v: string; c: number }[]; pods: { v: string; c: number }[] } | undefined;
+      let mirror: { rows: number; latestSyncAt: string | null; remoteHost: string; reachable: boolean } | undefined;
+      let concluded = false;                       // 是否已进入 L3 定论口径
       if (total === 0) {
-        noticeLines.push("镜像库中没有满足条件的报价。请直接如实告知用户「镜像库暂无该航线报价」，不要重复调用本工具。");
+        // 查不到 ≠ 没有：L2 把库存事实回给模型做语义重试，两轮不过才 L3 定论（规范 rates-query-fallback-spec §3/§4）
+        const opts = quoteOptions();
+        const attempt = ctx.counts?.get("quote_search") ?? 1;
+        const words = termWords.map(w => w.toLowerCase());
+        const hasSub = (s: string, w: string) => {
+          for (let i = 0; i + 2 <= w.length; i++) if (s.includes(w.slice(i, i + 2))) return true;
+          return false;
+        };
+        // 贴合度只机械排个序（谁和查询词有公共子串靠前）；语义等价关系交给人/模型判断，代码不养同义词表
+        const score = (v: string) => {
+          const s = v.toLowerCase();
+          if (words.some(w => s.includes(w) || w.includes(s))) return 0;
+          return words.some(w => hasSub(s, w)) ? 1 : 2;
+        };
+        const rank = <T extends { v: string; c: number }>(items: T[]): T[] =>
+          [...items].sort((a, b) => score(a.v) - score(b.v) || b.c - a.c).slice(0, 12);
+        candidates = { lanes: rank(opts.lanes), pods: rank(opts.pods) };
+        const reachable = await probeBoardCached();
+        let remoteHost = remoteBase();
+        try { remoteHost = new URL(remoteBase()).host; } catch { /* 保底原样 */ }
+        mirror = { rows: opts.rows, latestSyncAt: opts.latestSyncAt, remoteHost, reachable };
+        const syncAt = opts.latestSyncAt ? beijingTime(opts.latestSyncAt) : "未知（本次运行还没同步过）";
+        const stale = !opts.latestSyncAt || Date.now() - Date.parse(opts.latestSyncAt) > 24 * 3600_000;
+        if (attempt <= 1) {
+          noticeLines.push(
+            "机械匹配第一轮没命中，这不是「库里没有」。candidates 是本地镜像里真实存在的航线与目的港（带条数，已按贴合度排序）："
+            + "请判断用户说的词是否对应其中某一项（区域简称、中英文译名、同一航线的不同叫法都算）。"
+            + "对得上就换成 candidates 里的原值再查一次（重试一次为限，别用同样的词重复调用）；对不上再等下一轮结论。",
+          );
+        } else {
+          concluded = true;
+          noticeLines.push(!reachable || stale
+            ? `两轮都没命中。本地镜像共 ${opts.rows} 条、最近同步 ${syncAt}，局域网台账${reachable ? "可达" : "现在连不上"}`
+              + "——很可能是镜像没跟上真源。请照实说「本地镜像里查不到这条」，不要说成「该航线没有报价」；"
+              + "再给用户两条路：到「运价库」页点同步刷新镜像，或让你联网查当前市场行情。"
+            : `两轮都没命中，且镜像刚同步过（${syncAt}）、台账可达——可以确定台账里没有这个航线/港口。`
+              + "请如实告诉用户库里没有，并问一句要不要你联网查当前市场行情；用户明确同意前不要自行联网。");
+        }
       } else {
         if (r.data.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${r.data.length} 条，回答时必须注明。`);
         else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
@@ -1125,10 +1179,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
         answer, customerTable,
         ...(stdRows.length ? { standardCount: stdRows.length } : {}),
         notice: noticeLines.join("\n"),
+        ...(candidates ? { candidates } : {}),
+        ...(mirror ? { mirror } : {}),
         ...(total > 0 && r.data.length >= total ? { complete: true } : {}),
         ...(total === 0 ? { empty: true } : {}),
         ...(total > 0 ? {
-          say: `共 ${total} 条` + (args.lane || args.pod || args.carrier || args.container
+          say: `共 ${total} 条` + (args.q || args.lane || args.pod || args.carrier || args.container
             ? `（当前筛选条件下的命中数）` : `（镜像库全量）`)
             + `，其中返回明细 ${r.data.length} 条${r.data.length ? `，最低 ${r.data[0]!.oceanUsd ?? "-"} USD` : ""}`,
         } : {}),
@@ -1137,10 +1193,20 @@ export function buildHarnessTools(ctx: ToolCtx) {
             promptAction("按这批价写一封报价信", "根据刚才查到的运价，选最便宜的那条给客户写一封报价信，注明有效期和「以船司实时报价为准」的提醒"),
             navAction("在运价库筛选", "#/rates"),
           ],
+        } : concluded ? {
+          // 定论后的两条出口：刷新镜像（用户自己在运价页点，agent 不代点）/ 联网调研（点了才做）
+          actions: [
+            navAction("去运价页同步镜像", "#/rates"),
+            promptAction("联网查市场行情",
+              `本地镜像没查到「${termWords.join(" ") || "这个航线"}」的运价。请联网调研该航线当前的市场行情与船期，`
+              + "回答时注明这是外部行情、不是公司台账报价。"),
+          ],
         } : {}),
       };
       audit(ctx, "quote_search", "read", args, out, "auto");
-      return finishRead(ctx, "quote_search", args, okOut(out));
+      // 空结果不进读缓存：同词再查也要真跑一遍，才走得到 L2→L3 的分层结论
+      const payload = okOut(out);
+      return total === 0 ? payload : finishRead(ctx, "quote_search", args, payload);
     },
   });
 

@@ -84,7 +84,9 @@ export function RateBoard() {
     return () => clearTimeout(t);
   }, [podInput, polInput, laneInput, carrierInput]);
 
-  const filters = useMemo(() => ({ lane, carrier, pol, container, pod, limit: 5000 }),
+  // 目的港框走跨字段并集（与 agent 工具 q 同口径）：清洗后 pod_raw 里不再有航线小字，
+  // 用户在目的港框敲「地东」这类习惯仍要筛得出来；航线框保持 lane 精滤
+  const filters = useMemo(() => ({ lane, carrier, pol, container, terms: pod ? [pod] : undefined, limit: 5000 }),
     [lane, carrier, pol, container, pod]);
 
   const { data, isLoading } = useQuery({

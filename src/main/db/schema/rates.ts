@@ -2,9 +2,10 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 /**
- * 运价镜像表 — 钉钉 AI 表格《海运运价智能台账》的本地归一化副本。
- * 同步方向单向：AI 表格（源头，人工维护/群聊管道）→ 快照文件 → 本表（只读镜像）。
- * recordId 为源端主键，全量刷新时按它去重；valid_from/to 由有效期文本解析而来。
+ * 运价镜像表 — 公司电脑台账（board_server，局域网 HTTP）的本地归一化副本。
+ * 同步方向单向：board_server /api/rates 分页拉取 → 归一化 → 本表全量刷新（只读镜像，不回写）；
+ * 启动 5 秒后首拉 + 每 4 小时轮询。recordId 为源端主键（content_key），全量刷新按它去重。
+ * pod_raw 入库时已剥掉台账网页粘连在目的港尾部的航线小字（如「… 地东」），航线信息归 lane。
  */
 export const rateQuotes = sqliteTable("rate_quotes", {
   recordId:     text("record_id").primaryKey(),
