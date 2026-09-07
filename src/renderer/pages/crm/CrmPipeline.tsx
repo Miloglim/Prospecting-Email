@@ -384,8 +384,16 @@ export function CrmPipeline() {
     setEditingNoteId(null);
   };
 
+  // 浮层卡片 fixed 于视口、不占布局流 → 打开详情时给整行垫出等宽空间（同一条 clamp 公式），
+  // 行尾的提醒/跟进人/复选框就不会从卡片底下钻过去
   return (
-    <div className="flex gap-4 h-full" style={{ minHeight: "calc(100vh - 130px)" }}>
+    <div
+      className="flex gap-4 h-full"
+      style={{
+        minHeight: "calc(100vh - 130px)",
+        ...(detailId ? { paddingRight: "calc(clamp(300px, 30vw, 460px) + 20px)" } : {}),
+      }}
+    >
       {/* ═══ 左侧看板 ═══ */}
       <div className="flex-1 overflow-y-auto pb-4 space-y-1">
         {/* 分类筛选 — 国家 / 跟进人：下拉多选（选项再多也只占一行） */}
@@ -482,9 +490,14 @@ export function CrmPipeline() {
         }
       </div>
 
-      {/* ═══ 右侧详情面板 ═══ */}
+      {/* ═══ 右侧详情：常驻浮层卡片（position: fixed）═══
+          钉在视口右侧：滚动时位置不变、永远浮在列表上层；
+          上下贴边定位 → 高度天然随窗口伸缩，宽度 clamp 按视口比例自适应，内容超出走卡片内部滚动。 */}
       {detailId && (
-        <div className="flex-shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-hidden" style={{ width: 340 }}>
+        <div
+          className="fixed z-30 bg-white border border-gray-200 rounded-xl shadow-[0_8px_24px_rgba(0,0,0,0.16)] flex flex-col overflow-hidden"
+          style={{ top: 44, right: 36, bottom: 28, width: "clamp(300px, 30vw, 460px)" }}
+        >
           {/* 头部 */}
           <div className="p-3 border-b border-gray-100 flex items-center justify-between bg-gray-50">
             <div className="flex items-center gap-1.5">

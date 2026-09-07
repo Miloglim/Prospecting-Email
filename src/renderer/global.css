@@ -182,6 +182,18 @@ body {
 /* 操作列按钮：无色→悬停显色 */
 .btn-hover-color:not(.ant-btn-disabled):hover { color: #1a1a1a !important; }
 .btn-hover-color:last-child:not(.ant-btn-disabled):hover { color: #e5484d !important; }
+/* 固定列（右侧功能栏等）行悬停底色：主题的 rowHoverBg 是半透明黑（rgba .015），
+   贴在 fixed 单元格上会让下层横向滚来的标签透出来、与按钮叠在一起。
+   压成「半透明黑叠白」后的同款实心浅灰：视觉不变，不再透下 */
+.ant-table-cell-fix-right.ant-table-cell-row-hover,
+.ant-table-cell-fix-left.ant-table-cell-row-hover {
+  background: #fbfbfb !important;
+}
+/* 选中行的固定列同理：默认 rowSelectedBg 也是半透明，一并压实心 */
+.ant-table-row-selected > .ant-table-cell-fix-right,
+.ant-table-row-selected > .ant-table-cell-fix-left {
+  background: #fafafa !important;
+}
 /* 禁用按钮不改变指针、不变色 */
 .ant-btn[disabled], .ant-btn-disabled { cursor: default !important; pointer-events: none !important; }
 
