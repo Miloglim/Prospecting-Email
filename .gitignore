@@ -19,6 +19,17 @@ kbdocx_tmp/
 # 产出与本机演示目录（体积大/运行时写入，不入库）
 outputs/
 rate-workbench-static/
+# 本机运价台账 docs/local_board：只入库 py/ps1 脚本与 web 界面；
+# 库文件与日志由上面的 *.db/*.log 兜住，这里再挡运行态 pid、导入源表与报价截图
+__pycache__/
+*.pid
+docs/local_board/images/
+docs/local_board/taizhang.json
+docs/local_board/taizhang.xlsx
+# 台账服务的访问令牌（本机密钥，与 .env 同等待遇）
+docs/local_board/token.txt
+# 发送引擎运行期配置：程序自己写（时段/配额/测试模式），首启缺失会自动落默认配置，不入库
+send/config.json
 # CI 工作流：推送 workflows/* 需要 token 具备 workflow 权限，当前令牌没有 → 暂不入库
 # 拿到该权限后用 `git add -f .github` 即可收入
 .github/
