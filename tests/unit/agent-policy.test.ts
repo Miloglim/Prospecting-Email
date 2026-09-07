@@ -32,9 +32,12 @@ describe("agent harness policy", () => {
 });
 
 describe("agent harness tool schemas", () => {
-  it("search_contacts 拒绝空关键词；limit 不再硬拒（execute 内钳制，防模型撞 zod 校验循环）", () => {
-    expect(searchContactsSchema.safeParse({ query: "" }).success).toBe(false);
-    // live 评测实锤：zod 拒绝发生在预算守卫之前，模型会反复重试直至 max turns → 改为 execute 钳制
+  it("search_contacts：query 可选（空关键词/纯筛选都过 schema，无条件拒绝下沉到 execute 的 no_criteria）；limit execute 内钳制", () => {
+    // 契约变更（闭环规范 §4.1）：冷开发要能纯按 country/stage/… 圈人，query 不再硬必填。
+    // 空关键词+无条件不再撞 zod（那会让模型看不到引导语、反复重试到 max turns），改由 execute 给 no_criteria。
+    expect(searchContactsSchema.safeParse({ query: "" }).success).toBe(true);
+    expect(searchContactsSchema.safeParse({ country: "Brazil", stage: "cold" }).success).toBe(true);   // 纯筛选无关键词
+    expect(searchContactsSchema.safeParse({}).success).toBe(true);                                    // 空参过 schema，execute 再拒
     expect(searchContactsSchema.safeParse({ query: "x", limit: 21 }).success).toBe(true);
     expect(searchContactsSchema.safeParse({ query: "物流", limit: 5 }).success).toBe(true);
   });

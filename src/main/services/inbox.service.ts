@@ -602,6 +602,22 @@ function backfillMatchFromBody(id: number, current: number | null, classificatio
   try { pushFn?.("inbox:newMail", { count: 0 }); } catch { /* 推送失败不影响正文返回 */ }
 }
 
+/** 邮件 HTML → 可读纯文本：剔 style/script/head 与 data:URI 内嵌图片，块级标签转换行，去标签+解码常见实体，压缩空白 */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/"data:[^"]*"/g, '""')
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(p|div|tr|li|h[1-6]|table|blockquote|pre)(\s[^>]*)?\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#0?39;/g, "'")
+    .replace(/[ \t\r]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function getBody(id: number): Promise<Result<string>> {
   if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
   const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, id)).get();

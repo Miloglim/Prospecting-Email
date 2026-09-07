@@ -101,8 +101,8 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 1 },
   },
   {
-    name: "generate_draft", label: "撰写开发信",
-    route: "撰写开发信草稿（只出文本）；",
+    name: "generate_draft", label: "写开发信/回信",
+    route: "撰写开发信/跟进信/回信草稿（只出文本；回信传 messageId，针对来信逐条应答）；",
     spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 4 },
   },
   {
@@ -111,8 +111,14 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 4 },
   },
   {
+    name: "list_templates", label: "查邮件模板",
+    route: "列出素材库邮件模板（只读；批量发信「用系统内置模板」先查它再入队）；",
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 2 },
+  },
+  {
     name: "send_queue_add", label: "加入发信队列",
-    route: "把邮件加入发送队列（写，需确认；入队后不会自动发送，需用户到「发送中心」手动点开始）；",
+    route: "把邮件加入发送队列（写，需确认；交互规则：没说清先问一句「单发还是批量」——单发详配，批量=圈人+选模板直接入队、"
+      + "不追问账号/语言；入队后不会自动发送，需用户到「发送中心」手动点开始）；",
     followUps: ["发送队列现在什么状态", "再给下一家也准备一封"],
     // 入队 ≠ 发出：真正发送仍需用户在发送中心点启动；外发动作每一次都要人工确认
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 3 },

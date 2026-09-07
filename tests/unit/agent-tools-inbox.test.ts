@@ -60,11 +60,16 @@ CREATE TABLE agent_tool_calls (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL, tool_name text NOT NULL,
   side_effect text NOT NULL, args_json text, result_json text, approval text NOT NULL, error text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
+CREATE TABLE agent_working_memory (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL,
+  kind text NOT NULL, ref_id text NOT NULL, tool_name text NOT NULL,
+  context_line text NOT NULL, payload_json text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
 CREATE TABLE rate_quotes (
   record_id text PRIMARY KEY NOT NULL, pol text, pod_raw text NOT NULL, lane text, carrier text,
   container text, container_raw text, ocean_usd integer, validity_raw text, valid_from text, valid_to text,
   free_days text, shortfall_fee text, note text, source_group text, sender text, msg_time text,
-  image_name text, synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
+  image_name text, etd text, status text, message_text text, synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
 CREATE TABLE space_records (
   record_id text PRIMARY KEY NOT NULL, pol text, pod_raw text, lane text, carrier text,
   container text, container_raw text, box_qty text, space_type text, vessel text, etd text,
@@ -105,9 +110,9 @@ function newSandbox(): Driz {
   db.insert(schema.inboxMessages).values([
     { accountId: 1, fromEmail: "juan@acme.com", fromName: "Juan Garcia",
       subject: "Quote request 40HQ", bodyPreview: "<div>Hello, <b>need rate</b> to Veracruz</div><style>body{color:red}</style>",
-      classification: "inquiry", matchedContactId: 1, isRead: 0, receivedAt: "2026-09-01T10:00:00Z" },
+      classification: "replied", matchedContactId: 1, isRead: 0, receivedAt: "2026-09-01T10:00:00Z" },
     { accountId: 1, fromEmail: "noreply@x.com", subject: "Out of office",
-      bodyPreview: "away", classification: "auto_reply", isRead: 1, receivedAt: "2026-08-30T10:00:00Z" },
+      bodyPreview: "away", classification: "autoreply", isRead: 1, receivedAt: "2026-08-30T10:00:00Z" },
   ]).run();
   // 运价种子：40HQ ×4 + 20GP ×1，全部在有效期（柜型归一测试用）
   const today = new Date();
@@ -162,7 +167,7 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     const out = JSON.parse(await call(T("inbox_search"), { query: "40HQ", unreadOnly: true })) as { messages: Array<{ id: number }> };
     expect(out.messages).toHaveLength(1);
     expect(out.messages[0]!.id).toBe(1);
-    const bounce = JSON.parse(await call(T("inbox_search"), { classification: "auto_reply" })) as { messages: Array<{ id: number }> };
+    const bounce = JSON.parse(await call(T("inbox_search"), { classification: "autoreply" })) as { messages: Array<{ id: number }> };
     expect(bounce.messages.map(r => r.id)).toEqual([2]);
     const empty = JSON.parse(await call(T("inbox_search"), { query: "不存在的关键词xyz" })) as { messages: unknown[]; notice?: string };
     expect(empty.messages).toHaveLength(0);
@@ -188,15 +193,22 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     expect(inboxNulls.messages).toHaveLength(2);
   });
 
-  it("空字符串的可选筛选＝不过滤（模型用空串表达留省，不能被当成非法参数）", async () => {
+  it("空字符串的可选筛选＝不过滤；非法分类值报错纠偏而非静默 0 条（防假「查无」连环盲试）", async () => {
     const out = JSON.parse(await call(T("quote_search"), {
       lane: "", carrier: "", pod: "", container: "", limit: 0,
     })) as { total: number; quotes: unknown[] };
     expect(out.total).toBe(5);
     const inbox = JSON.parse(await call(T("inbox_search"), {
-      query: "   ", classification: "随便写的值", limit: 0,
+      query: "   ", classification: "", limit: 0,
     })) as { total: number };
-    expect(inbox.total).toBeGreaterThanOrEqual(2);   // 非法分类被忽略，既不报错也不查空
+    expect(inbox.total).toBeGreaterThanOrEqual(2);   // 空串＝不过滤，照常返回
+    // 旧词表时代的静默忽略是实测翻车点：模型传 reply（库里是 replied）→ 0 条 → 连环盲试
+    const bad = JSON.parse(await call(T("inbox_search"), { classification: "reply" })) as {
+      ok: boolean; error: { code: string; message: string };
+    };
+    expect(bad.ok).toBe(false);
+    expect(bad.error.code).toBe("bad_filter");
+    expect(bad.error.message).toContain("replied");   // 把有效值当面教给模型
   });
 
   it("quote_search：口语航线名（加勒比线）命中受控枚举「加勒比」", async () => {

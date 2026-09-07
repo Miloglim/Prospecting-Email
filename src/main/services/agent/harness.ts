@@ -12,7 +12,7 @@ import {
 } from "@openai/agents";
 import { Log } from "../../logger";
 import { EVENTS } from "../../events";
-import { readActiveEndpoint, endpointFamily, thinkingExtras } from "../endpoint.service";
+import { endpointFamily, thinkingExtras } from "../endpoint.service";
 import { netFetch } from "../../net-proxy";
 import { buildHarnessTools, auditRejected, normalizePlan, noteToolOutcome, isToolRuntimeError, isEnvelopeFailure, type ToolCtx, type PlanItem } from "./tools";
 import { toolRoutesBlock, pickTools } from "./manifest";
@@ -203,10 +203,9 @@ function disableTracingOnce(): void {
   tracingOff = true;
 }
 
-/** OpenAI 兼容客户端。思考/推理开关按端点族注入正确方言（见 endpoint.service）：
+/** OpenAI 兼容客户端。恒关思考，按端点族注入正确的「关推理」方言（见 endpoint.service）：
  *  vLLM/agnes 认 chat_template_kwargs，Ollama 认 chat_template_kwargs.thinking，
- *  Gemini 认 google.thinking_config，OpenAI 认 reasoning_effort。
- *  开关来源：设置页「模型与端点」的思考拨杆（落在 .env 的 AGENT_THINKING），切换即时生效。 */
+ *  DeepSeek 认顶层 thinking:{type:"disabled"}，Gemini/OpenAI 兼容层不注入。 */
 // ── 流式 usage 嗅探 ─────────────────────────────────────────────
 // SDK 的流式分支不透传末帧 usage；这里在 fetch 层解包 SSE，抓 usage 帧存到回调里，
 // 正文行原样重组成流返回（零语义改动）。端点不给 usage 就什么都不记。
@@ -254,7 +253,7 @@ function sniffStreamUsage(res: Response, onUsage: (u: TurnUsageLike) => void): R
 }
 
 function makeClient(baseUrl: string, apiKey: string): OpenAI {
-  const extras = thinkingExtras(endpointFamily(baseUrl), readActiveEndpoint().thinking);
+  const extras = thinkingExtras(endpointFamily(baseUrl));
   const fetchImpl: typeof fetch = async (url, init) => {
     if (init?.method === "POST" && typeof init.body === "string") {
       try {

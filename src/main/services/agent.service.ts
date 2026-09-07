@@ -72,11 +72,10 @@ function getProviderConfig(): ProviderConfig {
 }
 
 /** 配置状态（不含密钥值），供 UI 显示模式横幅 */
-export function status(): Result<{ configured: boolean; model: string; baseUrl: string; thinking: boolean; identityOk: boolean }> {
+export function status(): Result<{ configured: boolean; model: string; baseUrl: string; identityOk: boolean }> {
   const c = getProviderConfig();
   return okResult({
     configured: c.configured, model: c.model, baseUrl: c.baseUrl,
-    thinking: readActiveEndpoint().thinking,
     // 身份已固定为运去哪 agent 助手（恒有效），字段保留供前端状态聚合
     identityOk: true,
   });
@@ -161,7 +160,7 @@ function resolveContextNote(ctxRaw: string | undefined): string | undefined {
     ])];
     return `邮件 #${id}｜主题「${msg.subject || "(无主题)"}」｜发件人 ${who}｜分类 ${msg.classification || "其他"}｜时间 ${msg.receivedAt}`
       + `${matchIds.length ? `｜已匹配联系人 ${matchIds.map(x => `#${x}`).join("、")}` : ""}\n`
-      + `正文（已随本次提问一并提供，直接据此作答，不要再调用工具去读它）：${body || "（无正文摘要，可用 email_summarize 取全文）"}`;
+      + `正文（已随本次提问一并提供，直接据此作答，不要再调用工具去读它）：${body || "（库里摘要为空，但原文在系统里——要原文先 email_read_full 读 messageId=" + id + "，或直接 generate_draft 传 messageId=" + id + " 起草回复；绝不要让用户粘贴正文）"}`;
   } catch (err) {
     Log.warn("agent.chat", `解析上下文失败 ${ctxRaw}: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;

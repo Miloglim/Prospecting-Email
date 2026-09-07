@@ -298,6 +298,12 @@ body {
 .md-body tbody tr:last-child td { border-bottom: none; }
 .md-body tbody tr:hover td { background: #f9f9f9; }
 
+/* ── 会话页禁横向滚动条（表格超宽只能表内滚）────────────────────────
+   flex 气泡默认 min-width:auto，宽表格会把气泡连着整页撑宽 → 消息流容器被顶出横向滚动。
+   放开收缩限制后，宽内容被约束在可见宽内，由最近的内部滚动容器（md 表格/数据表格卡）横滚。 */
+.ant-bubble, .ant-bubble-content { min-width: 0; }
+.md-body { overflow-wrap: break-word; }
+
 /* ── 助手数据表格卡（工具结果渲染的 antd Table）：白底灰线 + 外阴影成卡 ── */
 .chat-table-card {
   /* 块级 + 贴内容宽：表格卡必须独占一行，永不与相邻的过程标识/文本同排
@@ -307,7 +313,9 @@ body {
   max-width: 100%;
   background: #fff;
   border-radius: 8px;
-  overflow: hidden;
+  /* 宽表格在卡内横滚（不许撑宽页面、也不许静默裁掉右边列）；纵向仍裁齐圆角 */
+  overflow-x: auto;
+  overflow-y: hidden;
   margin: 2px 6px 6px 2px;   /* 给阴影留展开位，防被消息区滚动容器裁边 */
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12), 0 8px 20px rgba(0, 0, 0, 0.16);
 }
@@ -359,6 +367,10 @@ body {
   max-width: 100%;
 }
 .agent-chain .ant-thought-chain-item-footer { margin-top: 2px; }
+
+/* 转圈图标提升到合成层：主线程再忙（流式增量、重列表渲染）旋转也不掉帧。
+   覆盖输入框的加载/停止按钮与过程折叠里所有 LoadingOutlined。 */
+.anticon-spin { will-change: transform; }
 
 /* 思考逐字生长时跟一个光标，封口即随节点消失（纯 CSS，不加状态位） */
 .agent-caret {

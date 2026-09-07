@@ -26,6 +26,9 @@ export const rateQuotes = sqliteTable("rate_quotes", {
   sender:       text("sender"),                 // 发送人（溯源）
   msgTime:      text("msg_time"),               // 源消息时间（快照内时效基准）
   imageName:    text("image_name"),             // 运价表截图文件名（不存临时 URL）
+  etd:          text("etd"),                    // 船期 ETD（源端文本，读侧再归一为 YYYY-MM-DD）
+  status:       text("status"),                 // 记录状态（台账口径：当前生效/已被覆盖）
+  messageText:  text("message_text"),           // 消息原文 raw：三列价与目免的解析素材只在这里，不过 IPC
   syncedAt:     text("synced_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 

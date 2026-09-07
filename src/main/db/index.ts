@@ -149,6 +149,18 @@ export function runMigrations(): void {
     }
   } catch { /* 忽略 */ }
 
+  // 运价镜像补列：老库缺列会让 drizzle 全列 INSERT 直接崩，必须逐列守卫
+  try {
+    const rcols = tableCols("rate_quotes");
+    let radded = false;
+    if (rcols.length) {
+      if (!rcols.includes("etd")) { raw.exec("ALTER TABLE rate_quotes ADD COLUMN etd text;"); radded = true; }
+      if (!rcols.includes("status")) { raw.exec("ALTER TABLE rate_quotes ADD COLUMN status text;"); radded = true; }
+      if (!rcols.includes("message_text")) { raw.exec("ALTER TABLE rate_quotes ADD COLUMN message_text text;"); radded = true; }
+    }
+    if (radded) Log.info("db.migrate", "rate_quotes 表已补列（etd/status/message_text）");
+  } catch { /* 表不存在 → 忽略 */ }
+
   // v4.x: stage 大小写归一化
   try {
     let n = 0;

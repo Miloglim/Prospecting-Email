@@ -1,5 +1,5 @@
 // ── 模型端点 Profile 管理（界面可增删改、一键热切换）────────────
-// 设计：profile 只存非敏感字段（baseUrl/model/名称/思考开关）在 ai/providers.json；
+// 设计：profile 只存非敏感字段（baseUrl/model/名称）在 ai/providers.json；
 // 密钥一律进 .env（变量名 PROVIDER_KEY_<ID>），激活时只写「指针」AGENT_KEY_ENV，
 // 不把密钥复制成第二份 —— 切换端点后不会在 .env 里留下旧密钥的副本。
 // 因为各处配置都是每次调用现读 env，激活后立即可用，无需重启应用。
@@ -20,7 +20,6 @@ export interface ProviderProfile {
   model: string;
   /** .env 中该端点密钥的变量名（密钥本身不落此文件） */
   keyEnv: string;
-  thinking: boolean;
 }
 
 export interface ProfileDto extends ProviderProfile {
@@ -58,7 +57,6 @@ function seedStore(): Store {
     baseUrl,
     model: (env.AGENT_MODEL || "").trim(),
     keyEnv: keyEnv || keyEnvFor("current"),
-    thinking: /^(1|true|on|yes)$/i.test((env.AGENT_THINKING || "").trim()),
   };
   return { activeId: keyEnv ? "current" : null, profiles: [p] };
 }
@@ -123,7 +121,6 @@ export interface ProfileInput {
   name: string;
   baseUrl: string;
   model: string;
-  thinking?: boolean;
 }
 
 /** 新增或修改端点（密钥请用 setProfileKey，此处不接受密钥入参） */
@@ -138,7 +135,6 @@ export function upsertProfile(input: ProfileInput): Result<ProfileDto> {
     if (!p) return failResult(`端点不存在: ${input.id}`);
     p.name = name; p.baseUrl = baseUrl;
     p.model = input.model?.trim() ?? p.model;
-    if (typeof input.thinking === "boolean") p.thinking = input.thinking;
     writeStore(s);
     Log.info("provider.upsert", `更新端点 ${p.id}（${p.name}）`);
     return okResult(toDto(s, p));
@@ -148,7 +144,6 @@ export function upsertProfile(input: ProfileInput): Result<ProfileDto> {
     id, name, baseUrl,
     model: input.model?.trim() ?? "",
     keyEnv: keyEnvFor(id),
-    thinking: !!input.thinking,
   };
   s.profiles.push(p);
   writeStore(s);
@@ -182,23 +177,6 @@ export function setProfileKey(id: string, value: string): Result<void> {
   return okResult(undefined);
 }
 
-/** 切换思考模式：写 profile；若这份档案就是当前生效端点，同步更新 .env 的 AGENT_THINKING */
-export function setProfileThinking(id: string, thinking: boolean): Result<ProfileDto> {
-  const s = readStore();
-  const p = s.profiles.find(x => x.id === id);
-  if (!p) return failResult(`端点不存在: ${id}`);
-  p.thinking = thinking;
-  writeStore(s);
-  // 没有 active 指针时（.env 手写配置被收编成档案的那份），逐字相同即是生效端点，改它同样要落地
-  const e = readActiveEndpoint();
-  const envKeyEnv = (process.env.AGENT_KEY_ENV || "").trim();
-  const mirrorsEnv = !s.activeId && !!e.baseUrl
-    && normalizeBaseUrl(p.baseUrl) === normalizeBaseUrl(e.baseUrl)
-    && p.model === e.model && (!envKeyEnv || envKeyEnv === p.keyEnv);
-  if (s.activeId === id || mirrorsEnv) upsertEnv("AGENT_THINKING", thinking ? "1" : "");
-  return okResult(toDto(s, p));
-}
-
 /** 激活 = 写指针与生效参数到 .env + 同步 process.env，立即生效（无需重启） */
 export function activateProfile(id: string): Result<{ configured: boolean; model: string; name: string }> {
   const s = readStore();
@@ -212,9 +190,8 @@ export function activateProfile(id: string): Result<{ configured: boolean; model
   upsertEnv("AGENT_API_BASE_URL", p.baseUrl);
   upsertEnv("AGENT_MODEL", p.model);
   upsertEnv("AGENT_KEY_ENV", p.keyEnv);
-  upsertEnv("AGENT_THINKING", p.thinking ? "1" : "");
   const e = readActiveEndpoint();
-  Log.info("provider.activate", `切换到 ${p.name}（model=${p.model || "默认"} thinking=${p.thinking}）即时生效`);
+  Log.info("provider.activate", `切换到 ${p.name}（model=${p.model || "默认"}）即时生效`);
   return okResult({ configured: !!(e.baseUrl && e.apiKey), model: e.model, name: p.name });
 }
 

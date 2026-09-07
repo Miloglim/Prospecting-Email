@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Alert, Avatar, Button, Dropdown, Modal, message, Skeleton, Table, Tag, Tooltip } from "antd";
 import type { TableColumnsType } from "antd";
 import {
-  UserOutlined, LoadingOutlined, CheckCircleOutlined,
+  UserOutlined, LoadingOutlined, CheckCircleOutlined, ArrowUpOutlined,
   BulbOutlined, DownOutlined, RightOutlined, FileTextOutlined, CloseCircleOutlined, CopyOutlined,
 } from "@ant-design/icons";
 import { Bubble, Sender, ThoughtChain } from "@ant-design/x";
@@ -16,7 +16,7 @@ import { DiamondLogo } from "../../components/DiamondLogo";
 import {
   clearQueued, enqueue, markAction, navigate as openConversation,
   nextKey, pushLocal, pushLocalText, resetDraft, resolveApproval as submitApproval, send as sendTurn,
-  setBudgetAsk, setCtx as setConvCtx, stop as stopTurn, useActiveConvKey, useConvState,
+  setBudgetAsk, setCtx as setConvCtx, stop as stopTurn, takeRejectedInput, useActiveConvKey, useConvState,
 } from "../../hooks/useAgentTranscript";
 import type { ApprovalReq, Msg, PlanStep } from "../../hooks/useAgentTranscript";
 import { ensureToolMeta, toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
@@ -46,8 +46,10 @@ function asRows(detail?: string): Record<string, unknown>[] | null {
   return null;
 }
 
-/** 中间检索类工具：结果卡静默（表格不上屏，只留状态行）——它们是给模型的中间依据，不是回答 */
-const QUIET_TOOLS = new Set(["search_contacts"]);
+/** 中间检索类工具：结果卡静默（表格不上屏，只留状态行）——它们是给模型的中间依据，不是回答。
+ *  运价/邮件的检索结果一律由模型按规范整理后自己呈现（运价表带来源/发送人/入库时间），
+ *  工具原样吐的镜像行上屏只会跟答案打架（实测：模型还会在卡旁边编一版错的汇总表）。 */
+const QUIET_TOOLS = new Set(["search_contacts", "quote_search", "inbox_search", "email_read_full", "email_summarize"]);
 
 /** 常见字段中文表头（未收录键原样显示） */
 const COL_LABELS: Record<string, string> = {
@@ -447,7 +449,13 @@ function ArtifactBlock({ chip, done, onAction }: {
   // 中间检索类工具（联系人检索等）：结果表不上屏——它们是给模型看的中间依据，
   // 直接渲染成表格会让用户误以为是回答（实测翻车）。过程折叠区内只留状态行。
   if (QUIET_TOOLS.has(chip.tool ?? "")) {
-    return <div className="py-1">{header}</div>;
+    // 表格静默，但一键入口不能跟着没：「做成客户报价表」「建联系人」「记跟进」这些动作卡保留
+    return (
+      <div className="py-1">
+        {header}
+        {actions.length > 0 && <ActionRow actions={actions.slice(0, 2)} done={done} onAction={onAction} />}
+      </div>
+    );
   }
 
   if (parsed?.artifact && !rows) {
@@ -578,12 +586,20 @@ const fmtTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace(/
  * 过程折叠：跑的时候摊开（ThoughtChain 逐步点亮，耗时每秒一跳），回合一结束收成一行
  * 「已处理 N 步 · 用时 Xs」。想回看细节点开头部即可 —— 答案不再被过程挤出屏幕。
  */
-function ProcessChain({ items, live, now }: { items: Msg[]; live: boolean; now: number }) {
+function ProcessChain({ items, live }: { items: Msg[]; live: boolean }) {
   const [open, setOpen] = useState(false);
+  // 自跳秒：live 时只重渲染本组件（每秒一次）。此前由页面级 setTick 每秒重渲染整个消息列表，
+  // 主线程周期性卡顿把转圈动画拖成掉帧（输入框加载按钮"不丝滑"的根因）。
+  const [, setSelfTick] = useState(0);
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(() => setSelfTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [live]);
   const toolSteps = items.filter(m => m.chip?.kind !== "reasoning").length;
   const thinkSteps = items.length - toolSteps;
   const start = items[0]?.ts;
-  const end = live ? now : items.reduce((n, m) => Math.max(n, m.ts ?? 0), 0);
+  const end = live ? Date.now() : items.reduce((n, m) => Math.max(n, m.ts ?? 0), 0);
   const spent = start ? fmtSec(end - start) : "";
   const expanded = live || open;
 
@@ -789,7 +805,7 @@ export function AssistantPage() {
    */
   const key = useActiveConvKey();
   const {
-    messages, sending, loading: convLoading, approval, budgetAsk, queued,
+    messages, sending, loading: convLoading, approval, budgetAsk, queued, rejectedInput,
     sessionUsage, followUps, doneActions, ctx,
   } = useConvState(key);
   // 工具中文名来自注册表（经 agent:toolMeta）：到达后本组件批量刷新一次
@@ -799,15 +815,9 @@ export function AssistantPage() {
   /** 我方身份是否填全（缺了 AI 只能留 {{占位符}}） */
   const [identityOk, setIdentityOk] = useState(true);
   const [model, setModel] = useState("");
-  const [thinking, setThinking] = useState(false);
-  /** 当前生效的端点档案 id：解析不出（纯手写 .env 且无同名档案）就不给开关，免得按了没反应 */
-  const [thinkingProfile, setThinkingProfile] = useState<string | null>(null);
-  const [thinkingBusy, setThinkingBusy] = useState(false);
   /** 已配好的端点清单（模型胶囊点开就地换；只有一份时胶囊退化成纯标签） */
   const [profiles, setProfiles] = useState<Array<{ id: string; name: string; active: boolean }>>([]);
   const [inputVal, setInputVal] = useState("");
-  /** 回合进行中每秒跳一次，让折叠头的「正在处理 · Xs」动起 */
-  const [, setTick] = useState(0);
   /** 动作卡：待确认的写入动作（确认弹窗属于「这一屏」，不进现场） */
   const [pendingWrite, setPendingWrite] = useState<ActionDto | null>(null);
   const [writing, setWriting] = useState(false);
@@ -830,13 +840,29 @@ export function AssistantPage() {
   const [pendingBelow, setPendingBelow] = useState(false);
   const contentLenRef = useRef(0);
 
+  /** 用户最近一次手动滚动的时间戳；2 秒内发消息不抢滚动条（正在阅读） */
+  const lastUserScrollAtRef = useRef(0);
+  /** 程序化滚动豁免窗口：窗口内的 scroll 事件不记为用户手动滚动 */
+  const programmaticUntilRef = useRef(0);
+
   const trackScroll = (el: HTMLElement | null) => {
     if (!el) return;
     scrollerRef.current = el;
+    // 程序化滚动（发送跳底/底部跟随/点按钮回底）触发的 scroll 事件不算用户手动滚动，
+    // 否则流式跟随的每一帧都会被误记成「用户在滚动」，2 秒免打扰窗口就永远清不掉
+    if (Date.now() >= programmaticUntilRef.current) lastUserScrollAtRef.current = Date.now();
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const bottom = distance <= 24;
     setAtBottom(bottom);
     if (bottom) setPendingBelow(false);
+  };
+
+  /** 贴底滚动（instant）：先登记程序化窗口再动 scrollTop */
+  const stickBottom = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    programmaticUntilRef.current = Date.now() + 80;
+    el.scrollTop = el.scrollHeight;
   };
 
   /** 回答在长、但用户不在底部 → 标记有新内容在下方 */
@@ -845,6 +871,24 @@ export function AssistantPage() {
     if (!atBottom && len > contentLenRef.current) setPendingBelow(true);
     contentLenRef.current = len;
   }, [messages, atBottom]);
+
+  /** 底部跟随：人贴着底时内容怎么长都贴着底走；人上翻了就完全不碰滚动条 */
+  useEffect(() => {
+    if (atBottom) stickBottom();
+  }, [messages]);
+
+  /** 切换/回到会话：载入完成后默认落到页面底部（上一屏停在哪不重要，每个会话都从最新消息看起） */
+  const jumpedConvRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (jumpedConvRef.current === key) return;
+    if (convLoading || messages.length === 0) return;   // 等载入完成、有内容可滚
+    jumpedConvRef.current = key;
+    setAtBottom(true);
+    stickBottom();
+    requestAnimationFrame(stickBottom);                 // 气泡渲染完后再兜一次
+    const t = setTimeout(stickBottom, 150);             // 表格/异步气泡撑高后最终归位
+    return () => clearTimeout(t);
+  }, [key, convLoading, messages]);
 
   /** 输入区高度会变（上下文 chip、引导条、命令菜单），按钮位置跟着让位 */
   const inputBoxRef = useRef<HTMLDivElement | null>(null);
@@ -860,23 +904,22 @@ export function AssistantPage() {
   const jumpToBottom = () => {
     const el = scrollerRef.current;
     if (!el) return;
+    programmaticUntilRef.current = Date.now() + 700;   // smooth 动画期间的连续 scroll 事件都算程序化
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     setAtBottom(true);
     setPendingBelow(false);
   };
 
-  /** 发送即回底：不管用户当时停在哪，都跳到底部等结果（instant，smooth 会让人感觉追不上）。
+  /** 发送时回底：不在底部且最近 2 秒没手动滚过 → 跳到底部等结果（instant，smooth 追不上）；
+   *  用户刚滚过（<2s）= 正在阅读，不抢滚动条，只标「下方有新内容」。
    *  此刻用户消息/骨架还没渲染（send 在 store 里 patch），滚一次；
-   *  下一帧内容上屏后再滚一次兜底；atBottom 复位后 autoScroll 继续跟随流式增量。 */
+   *  下一帧内容上屏后再滚一次兜底；atBottom 复位后跟随 effect 继续贴底。 */
   const jumpToBottomNow = () => {
-    const el = scrollerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (Date.now() - lastUserScrollAtRef.current < 2000) return;
+    stickBottom();
     setAtBottom(true);
     setPendingBelow(false);
-    requestAnimationFrame(() => {
-      const el2 = scrollerRef.current;
-      if (el2) el2.scrollTop = el2.scrollHeight;
-    });
+    requestAnimationFrame(stickBottom);
   };
 
   // 模式横幅：设置页可热切端点，所以每次进入/切换会话都重新读一次。
@@ -884,7 +927,7 @@ export function AssistantPage() {
   const refreshStatus = async () => {
     const [r, s] = await Promise.all([
       window.api.invoke("agent:status") as Promise<
-        IpcResult<{ configured: boolean; model: string; thinking?: boolean; identityOk?: boolean }>>,
+        IpcResult<{ configured: boolean; model: string; identityOk?: boolean }>>,
       window.api.invoke("ai:endpointStatus") as Promise<IpcResult<{
         activeId: string | null;
         profiles: Array<{ id: string; name: string; baseUrl: string; model: string }>;
@@ -892,31 +935,20 @@ export function AssistantPage() {
       }>>,
     ]);
     if (r?.success && r.data) {
-      setConfigured(r.data.configured); setModel(r.data.model); setThinking(!!r.data.thinking);
+      setConfigured(r.data.configured); setModel(r.data.model);
       setIdentityOk(r.data.identityOk !== false);
     } else {
       setConfigured(false);   // 读失败也要落到「未配置」，不能永远停在未知态不提示
     }
-    // 生效档案与可选清单：思考开关要落到生效那一份，模型胶囊点开则用来就地换端点
+    // 生效档案与可选清单：模型胶囊点开用来就地换端点，并标出当前生效那一份
     if (s?.success && s.data) {
       const cut = (u: string) => u.replace(/\/+$/, "");
       const d = s.data;
       const eff = d.activeId
         ?? d.profiles.find(p => cut(p.baseUrl) === cut(d.endpoint.baseUrl) && p.model === d.endpoint.model)?.id
         ?? null;
-      setThinkingProfile(eff);
       setProfiles(d.profiles.map(p => ({ id: p.id, name: p.name, active: p.id === eff })));
     }
-  };
-  /** 就地切思考：写档案 + 同步 .env（生效端点每次现读，不用重启） */
-  const toggleThinking = async (on: boolean) => {
-    if (!thinkingProfile) return;
-    setThinkingBusy(true);
-    const r = await window.api.invoke("ai:profileThinking", { id: thinkingProfile, thinking: on }) as
-      IpcResult<{ thinking?: boolean }>;
-    setThinkingBusy(false);
-    if (!r?.success) { message.error(r?.error || "切换失败"); return; }
-    void refreshStatus();
   };
   /** 就地换端点：激活即写生效参数并同步进程环境，下一轮对话就用它（不用重启） */
   const switchProfile = async (id: string) => {
@@ -928,13 +960,6 @@ export function AssistantPage() {
     void refreshStatus();
   };
   useEffect(() => { void refreshStatus(); }, []);
-
-  // 心跳只在回合进行中挂着：折叠头的「正在处理 · Xs」靠它一秒一跳
-  useEffect(() => {
-    if (!sending) return;
-    const t = setInterval(() => setTick(n => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [sending]);
 
   // 挂载 / hash 变更：把视图指向对应会话的现场（现场本身在 store 里，切页切会话都不丢）
   useEffect(() => {
@@ -961,7 +986,7 @@ export function AssistantPage() {
     viewKeyRef.current = key;
     setInputVal("");
     setPendingWrite(null);
-    void refreshStatus();   // 期间可能在设置页换了端点或切了思考
+    void refreshStatus();   // 期间可能在设置页换了端点
   }, [key]);
 
   // 首页「建议行动」：进空态时读当天批次并填上今天的数字（纯本地，毫秒级；拿不到就用写死那份兜底）
@@ -1033,6 +1058,13 @@ export function AssistantPage() {
     stopTurn(key);
   };
 
+  // 回合出错时排队消息不静默蒸发：退回输入框（输入框已有新内容就不覆盖），用户自己决定重发
+  useEffect(() => {
+    if (!rejectedInput) return;
+    setInputVal(prev => (prev.trim() ? prev : rejectedInput));
+    takeRejectedInput(key);
+  }, [rejectedInput, key]);
+
   /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
     if (!approval) return;
@@ -1069,7 +1101,6 @@ export function AssistantPage() {
 
   // ── 渲染派生数据：消息流 → 段（过程折一段、产物与清单各自独立）──────
   const segs = segmentMessages(messages);
-  const now = Date.now();
   let lastUserSeg = -1;
   segs.forEach((s, i) => { if (s.type === "msg" && s.m.role === "user") lastUserSeg = i; });
   let liveChainKey: string | null = null;
@@ -1089,7 +1120,7 @@ export function AssistantPage() {
       return {
         key: seg.key, role: "tool" as const, content: "",
         messageRender: () => (
-          <ProcessChain items={seg.items} live={seg.key === liveChainKey} now={now} />
+          <ProcessChain items={seg.items} live={seg.key === liveChainKey} />
         ),
       };
     }
@@ -1143,8 +1174,60 @@ export function AssistantPage() {
     return base;
   };
 
+  /** 复制当前会话为 Markdown 到剪贴板：排查/记录优化期问题用（右上角按钮显式触发，不落盘）。
+   *  用户与助手全文 + 工具调用的参数与返回摘要（截断），思考过程不进导出。 */
+  const exportChat = async () => {
+    const lines: string[] = [];
+    const title = (messages.find(m => m.role === "user")?.content || "会话").slice(0, 40).replace(/\s+/g, " ");
+    lines.push(`# 会话导出：${title}`, "", `- 导出时间：${new Date().toLocaleString("zh-CN")}`);
+    if (model) lines.push(`- 模型：${model}`);
+    if (sessionUsage && ((sessionUsage.input ?? 0) > 0 || (sessionUsage.output ?? 0) > 0)) {
+      lines.push(`- 会话累计：${sessionUsage.input ?? 0} 入 · ${sessionUsage.output ?? 0} 出`);
+    }
+    lines.push("");
+    for (const m of messages) {
+      if (m.role === "user") { lines.push(`## 用户`, "", m.content, ""); continue; }
+      if (m.role === "ai") {
+        lines.push(`## 助手`, "", m.content, "");
+        if (m.usage && ((m.usage.input ?? 0) > 0 || (m.usage.output ?? 0) > 0)) {
+          const parts = [`本轮 ${m.usage.input ?? 0} 入 · ${m.usage.output ?? 0} 出`];
+          if ((m.usage.cached ?? 0) > 0) parts.push(`缓存命中 ${m.usage.cached}`);
+          if ((m.usage.requests ?? 1) > 1) parts.push(`${m.usage.requests} 次模型调用`);
+          lines.push(`> ${parts.join(" · ")}`, "");
+        }
+        continue;
+      }
+      if (m.chip?.kind === "reasoning" || m.chip?.kind === "calling") continue;
+      if (m.chip) {
+        const brief = m.chip.brief ? ` · ${m.chip.brief}` : "";
+        lines.push(`> 工具${m.chip.failed ? "失败" : "调用"}：${m.chip.tool ?? "?"}${brief}`, "");
+        if (m.chip.args) lines.push("<details><summary>参数</summary>", "", "```json", m.chip.args.slice(0, 800), "```", "", "</details>", "");
+        if (m.chip.detail) lines.push("<details><summary>返回摘要（截断 3000 字）</summary>", "", "```json", m.chip.detail.slice(0, 3000), "```", "", "</details>", "");
+        continue;
+      }
+      if (m.plan?.length) {
+        lines.push(`> 任务清单：${m.plan.map(p => `${p.state === "done" ? "✔" : p.state === "doing" ? "▶" : "○"} ${p.text}`).join("；")}`, "");
+        continue;
+      }
+      lines.push(`> ${m.content}${m.link ? `（${m.link.label}）` : ""}`, "");
+    }
+    try {
+      await window.navigator.clipboard.writeText(lines.join("\n"));
+      message.success("聊天记录已复制到剪贴板（Markdown）");
+    } catch {
+      message.error("复制失败，请重试");
+    }
+  };
+
   return (
-    <div className="relative flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
+    <div className="relative group/chat flex flex-col" style={{ height: "calc(100vh - 100px)" }}>
+      {/* 右上角导出：hover 才现形（次要操作不常驻）；点击复制到剪贴板，不落盘 */}
+      <div className="absolute top-1.5 right-3 z-10 opacity-0 group-hover/chat:opacity-100 hover:!opacity-100 transition-opacity pointer-events-none group-hover/chat:pointer-events-auto">
+        <Tooltip title="复制聊天记录到剪贴板（Markdown，含工具调用摘要）">
+          <Button size="small" type="text" icon={<CopyOutlined />} onClick={exportChat}
+            className="!text-gray-300 hover:!text-gray-600" />
+        </Tooltip>
+      </div>
       {configured === false && (
         <Alert
           type="error" showIcon className="mb-2"
@@ -1167,8 +1250,11 @@ export function AssistantPage() {
         />
       )}
 
-      {/* 消息流 — selectable 豁免全局 user-select:none，允许复制 AI 回复 */}
-      <div className="relative flex-1 min-h-0 overflow-y-auto pr-1 selectable"
+      {/* 消息流 — selectable 豁免全局 user-select:none，允许复制 AI 回复。
+          overflow-x-hidden：会话页禁横向滚动条，宽内容一律在表格卡内横滚（见 global.css 的收缩规则）。
+          ref 常驻：此前 scrollerRef 只在首次滚动事件才有值，进会话落底时是 null → 落底空转停在顶头。 */}
+      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 selectable"
+           ref={(el) => { if (el) scrollerRef.current = el; }}
            onScrollCapture={(e) => trackScroll(e.currentTarget)}>
         {convLoading ? (
           /* 会话切换骨架屏：模拟气泡布局 */
@@ -1230,7 +1316,8 @@ export function AssistantPage() {
           </div>
         ) : (
           <Bubble.List
-            autoScroll
+            // autoScroll 不用 antd-x 的：它不认「用户是否在底部」，会跟人抢滚动条；
+            // 跟随/跳转统一走上面的 stickBottom + 跟随 effect
             onScroll={(e) => trackScroll(e.currentTarget)}
             items={segs.map(toBubbleItem)}
             roles={{
@@ -1361,6 +1448,24 @@ export function AssistantPage() {
           loading={sending}
           onSubmit={(text) => { setInputVal(""); handleSend(text); }}
           onCancel={handleStop}
+          actions={(ori, { components }) => {
+            // 运行中发送键不再兼职停止键（「点发送=停止」是插队机制没人发现的元凶）：
+            // 上箭头=插队发送（本轮结束自动发出，与回车同路），停止独立成键；空闲交还默认按钮
+            if (!sending) return ori;
+            const { LoadingButton } = components;
+            return (
+              <div className="flex items-center gap-1.5">
+                <Tooltip title="插队发送：本轮回答结束后自动发出">
+                  <Button type="primary" shape="circle" icon={<ArrowUpOutlined />}
+                    disabled={!inputVal.trim()}
+                    onClick={() => { const t = inputVal.trim(); if (t) { setInputVal(""); handleSend(t); } }} />
+                </Tooltip>
+                <Tooltip title="停止本轮">
+                  <LoadingButton />
+                </Tooltip>
+              </div>
+            );
+          }}
           onKeyDown={(e) => {
             // loading 下 Sender 的提交键变停止键；回车改由这里入队排队输入
             if (sending && e.key === "Enter" && !e.shiftKey) {
@@ -1370,20 +1475,9 @@ export function AssistantPage() {
             }
           }}
         />
-        {/* 聊天框的延伸标签：两枚胶囊骑在输入框下沿（白底压住那一小段边线），点一下就切 */}
-        {/* 容器常驻并占好行高，胶囊本身等状态读到再出现 —— 否则它们"从无到有"会把输入区顶一下 */}
+        {/* 聊天框的延伸标签：模型胶囊骑在输入框下沿（白底压住那一小段边线），点一下就切端点 */}
+        {/* 容器常驻并占好行高，胶囊本身等状态读到再出现 —— 否则它"从无到有"会把输入区顶一下 */}
         <div className="relative z-10 -mt-1.5 pb-0.5 min-h-[19px] flex items-center gap-1.5 pl-2.5">
-          {configured && thinkingProfile && (
-            <Tooltip title="先想再答：对话里能看到它在想什么；代价是更慢、token 更多">
-              <button type="button" disabled={thinkingBusy}
-                onClick={() => { void toggleThinking(!thinking); }}
-                className={`flex items-center gap-1.5 h-[19px] px-2 rounded-full border bg-white text-[11px] leading-none transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.04)]
-                  ${thinking ? "border-teal-300 text-teal-700" : "border-gray-200 text-gray-500 hover:border-teal-200 hover:text-teal-600"}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${thinking ? "bg-teal-500" : "bg-gray-300"}`} />
-                思考
-              </button>
-            </Tooltip>
-          )}
           {configured && model && (profiles.length > 1 ? (
             <Dropdown trigger={["click"]} menu={{
               items: profiles.map(p => ({

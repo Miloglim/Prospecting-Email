@@ -141,6 +141,15 @@ CREATE TABLE IF NOT EXISTS agent_facts (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_facts_conv ON agent_facts(conversation_id);
+CREATE TABLE IF NOT EXISTS agent_working_memory (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  conversation_id text NOT NULL,
+  kind text NOT NULL, ref_id text NOT NULL, tool_name text NOT NULL,
+  context_line text NOT NULL, payload_json text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_awm_conv_kind ON agent_working_memory(conversation_id, kind);
 CREATE INDEX IF NOT EXISTS idx_agent_suggestions_day ON agent_suggestions(day);
 CREATE INDEX IF NOT EXISTS idx_interactions_contact_id ON interactions(contact_id);
 CREATE INDEX IF NOT EXISTS idx_interactions_type ON interactions(type);
@@ -155,6 +164,7 @@ CREATE TABLE IF NOT EXISTS rate_quotes (
   validity_raw text, valid_from text, valid_to text,
   free_days text, shortfall_fee text, note text,
   source_group text, sender text, msg_time text, image_name text,
+  etd text, status text, message_text text,
   synced_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rate_quotes_lane ON rate_quotes(lane);

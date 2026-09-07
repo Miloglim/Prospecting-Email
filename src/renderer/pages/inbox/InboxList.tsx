@@ -335,18 +335,8 @@ export function InboxList() {
   }, [sid, bodyCache]);
 
 
-  // 首次加载：存量邮件全部标为已读
-  const inited = useRef(false);
-  useEffect(() => {
-    const all = data?.success ? data.data || [] : [];
-    if (!inited.current && all.length > 0) {
-      const nv = new Set(loadViewed());
-      all.forEach(i => nv.add(mk(i)));
-      saveViewed(nv);
-      setViewed(nv);
-      inited.current = true;
-    }
-  }, [data]);
+  // 未读标记只随点击/右键标读消失（存 localStorage 跨会话）；不再「首载全标已读」——
+  // 那会把你还没看的邮件在打开页面瞬间全部清标
 
   useEffect(() => {
     const off = window.api.on("inbox:newMail", (p: unknown) => {

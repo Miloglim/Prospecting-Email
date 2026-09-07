@@ -39,6 +39,11 @@ CREATE TABLE agent_messages (
 CREATE TABLE agent_facts (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL,
   tool_name text NOT NULL, fact text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
+CREATE TABLE agent_working_memory (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL, conversation_id text NOT NULL,
+  kind text NOT NULL, ref_id text NOT NULL, tool_name text NOT NULL,
+  context_line text NOT NULL, payload_json text NOT NULL,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
 `;
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>> | null = null;
@@ -65,6 +70,13 @@ function seedFacts(db: Driz, convId: string, facts: Array<[string, string]>): vo
   db.insert(schema.agentFacts).values(facts.map(([toolName, fact]) => ({ conversationId: convId, toolName, fact }))).run();
 }
 
+function seedWork(db: Driz, convId: string, items: Array<[string, string, string]>): void {
+  db.insert(schema.agentWorkingMemory).values(items.map(([kind, refId, contextLine], i) => ({
+    conversationId: convId, kind, refId, toolName: "t", contextLine, payloadJson: "{}",
+    createdAt: new Date(Date.now() + i * 1000).toISOString(), updatedAt: new Date(Date.now() + i * 1000).toISOString(),
+  }))).run();
+}
+
 describe("loadConversation（记忆加载）", () => {
   it("短会话：无摘要，有事实则先注入事实块", async () => {
     const db = await newSandbox();
@@ -75,6 +87,19 @@ describe("loadConversation（记忆加载）", () => {
     expect(msgs[0]!.content).toContain("【系统注入·本会话已查过的数据】");
     expect(msgs[0]!.content).toContain("quote_search：共 6 条");
     expect(msgs[1]!.content).toBe("消息1");
+  });
+
+  it("工作台块注入在瘦事实块之前（工作台为主、过渡期并存）", async () => {
+    const db = await newSandbox();
+    seedMessages(db, "cw", 2);
+    seedWork(db, "cw", [["email", "16703", "邮件#16703 柜型 1×40'HC 目的 桑托斯"]]);
+    seedFacts(db, "cw", [["quote_search", "共 6 条"]]);
+    const msgs = await memory.loadConversation("cw");
+    expect(msgs).toHaveLength(4);   // 工作台块 + 事实块 + 2 条消息
+    expect(msgs[0]!.content).toContain("本会话工作台");
+    expect(msgs[0]!.content).toContain("柜型 1×40'HC");
+    expect(msgs[1]!.content).toContain("本会话已查过的数据");
+    expect(msgs[2]!.content).toBe("消息1");
   });
 
   it("无事实不注入（短对话零噪音）", async () => {

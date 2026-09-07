@@ -769,12 +769,12 @@ function AgentAuditCard() {
 // 激活即写生效参数并同步 process.env —— 切换后不用重启应用。
 interface ProfileDto {
   id: string; name: string; baseUrl: string; model: string; keyEnv: string;
-  thinking: boolean; hasKey: boolean; active: boolean;
+  hasKey: boolean; active: boolean;
 }
 interface EndpointStatus {
   profiles: ProfileDto[];
   activeId: string | null;
-  endpoint: { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; thinking: boolean; source: string; keyEnv: string };
+  endpoint: { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; source: string; keyEnv: string };
   configured: boolean;
 }
 type TestState = { running?: boolean; ok?: boolean; text?: string };
@@ -782,7 +782,7 @@ type TestState = { running?: boolean; ok?: boolean; text?: string };
 const ENDPOINT_PRESETS = [
   { label: "Gemini Flash（推荐）", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.7-flash" },
   { label: "Agnes（云端 OpenAI 兼容）", baseUrl: "https://apihub.agnes-ai.com/v1", model: "agnes-2.5-pro-beta" },
-  { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-v4-flash" },
   { label: "本地 Ollama", baseUrl: "http://localhost:11434/v1", model: "qwen3:8b" },
   { label: "公司内部中转", baseUrl: "", model: "" },
 ];
@@ -882,19 +882,6 @@ function ProviderCard() {
           },
           { title: "模型", dataIndex: "model", key: "model", width: 130,
             render: (v: string) => <span className="text-[11px] font-mono">{v || "—"}</span> },
-          { title: "思考", dataIndex: "thinking", key: "thinking", width: 56,
-            render: (v: boolean, r) => (
-              <Tooltip title={v ? "先想再答：对话里能看到它在想什么，代价是更慢、token 更多" : "直答：不出思考过程"}>
-                <Switch size="small" checked={v} onChange={async (on) => {
-                  const res = await window.api.invoke("ai:profileThinking", { id: r.id, thinking: on }) as
-                    { success: boolean; error?: string; data?: { active?: boolean } };
-                  if (!res?.success) { message.error(res?.error || "设置失败"); return; }
-                  // 改的不是正在用的那份端点：只记在档案上，启用时才落地，得说一句清楚
-                  if (res.data?.active === false) message.info(`已记在「${r.name}」上，启用该端点后生效`);
-                  refresh();
-                }} />
-              </Tooltip>
-            ) },
           { title: "密钥", dataIndex: "hasKey", key: "hasKey", width: 60,
             render: (v: boolean) => v ? <Tag color="green" className="!my-0">已配</Tag> : <Tag className="!my-0">未配</Tag> },
           {

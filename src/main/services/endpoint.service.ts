@@ -13,12 +13,9 @@ export interface ActiveEndpoint {
   baseUrl: string;
   apiKey: string;
   model: string;
-  thinking: boolean;
   /** profile=界面激活的端点 / legacy=.env 手写 / none=未配置 */
   source: "profile" | "legacy" | "none";
 }
-
-const truthy = (v: string) => ["1", "true", "on", "yes"].includes(v.toLowerCase());
 
 export function readActiveEndpoint(): ActiveEndpoint {
   const baseUrl = (process.env.AGENT_API_BASE_URL || "").trim();
@@ -27,14 +24,13 @@ export function readActiveEndpoint(): ActiveEndpoint {
   const pointed = keyEnv ? (process.env[keyEnv] || "").trim() : "";
   const legacy = (process.env.AGENT_API_KEY || "").trim();
   const apiKey = pointed || legacy;
-  const thinking = truthy((process.env.AGENT_THINKING || "").trim());
   const source: ActiveEndpoint["source"] = !baseUrl || !apiKey
     ? "none"
     : (pointed && keyEnv) ? "profile" : "legacy";
   if (source === "none" && (baseUrl || legacy) && process.env.AGENT_DEBUG_ENDPOINT) {
     Log.debug("endpoint", `未就绪 baseUrl=${!!baseUrl} key=${!!legacy}`);
   }
-  return { baseUrl, apiKey, model, thinking, source };
+  return { baseUrl, apiKey, model, source };
 }
 
 /** 端点是否就绪：缺 base 或 key 都算未配置（对话会直接失败并提示去设置） */
@@ -61,10 +57,10 @@ export function endpointFamily(baseUrl: string): EndpointFamily {
 }
 
 /**
- * 要合并进请求体的额外字段（按族 + 按思考开关）。
- * thinking=false 时尽力关掉推理换首字速度；关不掉也不能把请求搞坏。
+ * 要合并进请求体的额外字段（按端点族）。思考开关已从产品里移除，这里恒为「关思考」：
+ * 尽力关掉各家推理换首字速度、并规避思考模式带来的多轮回传约束；关不掉也不能把请求搞坏。
  */
-export function thinkingExtras(family: EndpointFamily, thinking: boolean): Record<string, unknown> {
+export function thinkingExtras(family: EndpointFamily): Record<string, unknown> {
   switch (family) {
     case "google":
       // 实测（.trash 探针）：Gemini 的 OpenAI 兼容层对顶层 google / thinking_budget /
@@ -73,16 +69,20 @@ export function thinkingExtras(family: EndpointFamily, thinking: boolean): Recor
       // 保住 thought_signature —— 那才是它在兼容层下的真正约束。
       return {};
     case "ollama":
-      return { chat_template_kwargs: { thinking } };
+      return { chat_template_kwargs: { thinking: false } };
     case "openai":
-      // OpenAI 自家不认这些扩展键；推理强度另用 reasoning_effort 表达
-      return thinking ? { reasoning_effort: "low" } : {};
-    case "strict":
-      // 严格白名单的兼容服务（DeepSeek 等）：一个多余键都不要塞
+      // OpenAI 自家不认这些扩展键；关思考即不传 reasoning_effort
       return {};
+    case "strict":
+      // DeepSeek 原生认顶层 thinking:{type} 开关（实测 deepseek-chat / v4-flash / v4-pro 传它均 200）。
+      // 必须显式关：V4 默认就思考，一旦思考，API 就要求历史里每条 assistant 带回 reasoning_content，
+      // 而 agent/memory.ts 的历史回放从不带 RC → 多轮时不时被判
+      // 「400 The reasoning_content in the thinking mode must be passed back to the API」。
+      // 关思考后模型不再吐 RC，这条规则从根上无从触发。
+      return { thinking: { type: "disabled" } };
     default:
       // vLLM/agnes：enable_thinking（flash 系）与 thinking（pro 系）混发，jinja 模板忽略未知键
-      return { chat_template_kwargs: { enable_thinking: thinking, thinking } };
+      return { chat_template_kwargs: { enable_thinking: false, thinking: false } };
   }
 }
 
@@ -112,13 +112,12 @@ export function readLightEndpoint(main: ActiveEndpoint = readActiveEndpoint()): 
 
 /** 供 UI 展示的安全视图（绝不含密钥值） */
 export function endpointView(e: ActiveEndpoint = readActiveEndpoint()):
-  { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; thinking: boolean; source: ActiveEndpoint["source"]; keyEnv: string } {
+  { hasBaseUrl: boolean; hasKey: boolean; baseUrl: string; model: string; source: ActiveEndpoint["source"]; keyEnv: string } {
   return {
     hasBaseUrl: !!e.baseUrl,
     hasKey: !!e.apiKey,
     baseUrl: e.baseUrl,
     model: e.model,
-    thinking: e.thinking,
     source: e.source,
     keyEnv: (process.env.AGENT_KEY_ENV || "").trim(),
   };

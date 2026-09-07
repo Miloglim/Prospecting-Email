@@ -100,7 +100,7 @@ export function exportDiagnostics(): Result<ArtifactMeta> {
   try {
     const ep = readActiveEndpoint();
     lines.push(`- baseUrl: ${ep.baseUrl || "（未配置端点）"}`);
-    lines.push(`- model: ${ep.model || "-"} · thinking: ${ep.thinking ? "on" : "off"} · 密钥: ${ep.apiKey ? "已配置（值不外泄）" : "未配置"}`);
+    lines.push(`- model: ${ep.model || "-"} · 密钥: ${ep.apiKey ? "已配置（值不外泄）" : "未配置"}`);
   } catch (e) {
     lines.push(`- 读取失败：${e instanceof Error ? e.message : String(e)}`);
   }

@@ -63,6 +63,27 @@ export const agentFacts = sqliteTable("agent_facts", {
 export type AgentFactRow = typeof agentFacts.$inferSelect;
 
 /**
+ * 会话工作台（closed-loop working memory）：数据型工具把「决策相关的结构化结果」落这里，
+ * 跨轮不丢、跨工具可程序化直取。取代 agent_facts 的瘦一行事实（见 docs/agent-closed-loop-spec.md）。
+ *  · contextLine：回放进模型上下文的紧凑要点（1-3 行，含单位/口径），封顶 ~400 字；
+ *  · payloadJson：供工具直取的完整结构化数据（JSON），封顶 ~8KB，超限按字段优先级裁剪（保条数）；
+ *  · (conversationId, kind, refId) 为逻辑去重键：重读同一封邮件/同条件重查 = upsert 刷新而非堆叠。
+ */
+export const agentWorkingMemory = sqliteTable("agent_working_memory", {
+  id:             integer("id").primaryKey({ autoIncrement: true }),
+  conversationId: text("conversation_id").notNull(),
+  kind:           text("kind").notNull(),      // email | rates | contacts | inbox | backcheck | draft
+  refId:          text("ref_id").notNull(),    // 去重键：email=messageId，rates/contacts=查询指纹
+  toolName:       text("tool_name").notNull(),
+  contextLine:    text("context_line").notNull(),
+  payloadJson:    text("payload_json").notNull(),
+  createdAt:      text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt:      text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type AgentWorkingMemoryRow = typeof agentWorkingMemory.$inferSelect;
+
+/**
  * 首页「AI 建议行动」的每日批次（每天一批，读的时候按当天数据填槽）。
  * template 存的是带 {slot} 占位的模板而不是成品句子 —— 数字与人名每次显示时现填，
  * 昨天的「9 封未读」今天不会还挂在卡上；填不上的槽（值为 0/空）那条建议直接跳过。

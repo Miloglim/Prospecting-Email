@@ -77,6 +77,8 @@ export interface ConvState {
   budgetAsk: boolean;
   /** 排队输入（单槽） */
   queued: string | null;
+  /** 回合出错被退回的排队消息：页面取走塞回输入框即清（错误不静默吞用户的话） */
+  rejectedInput: string | null;
   sessionUsage: { input: number; output: number } | null;
   followUps: string[];
   doneActions: Record<string, string>;
@@ -159,7 +161,7 @@ const DEFAULT_FOLLOW_UPS = ["我今天该跟进谁", "总结一下我的未读�
 
 const BLANK: ConvState = Object.freeze({
   messages: [], sending: false, loaded: false, loading: false, approval: null, budgetAsk: false,
-  queued: null, sessionUsage: null, followUps: [], doneActions: {}, turnUser: "", turnText: "",
+  queued: null, rejectedInput: null, sessionUsage: null, followUps: [], doneActions: {}, turnUser: "", turnText: "",
   turnTools: [], flushGen: 0, followGen: 0, liveReasoning: null,
 }) as ConvState;
 
@@ -344,14 +346,14 @@ function onErrorEv(d: ErrorEv): void {
       const m = msgs[i]!;
       if (m.role === "ai" && m.streaming) {
         msgs[i] = { ...m, streaming: false, loading: false, error: true, content: message };
-        return { ...sealed, messages: msgs, sending: false, queued: null, budgetAsk: false, flushGen: sealed.flushGen + 1 };
+        return { ...sealed, messages: msgs, sending: false, queued: null, rejectedInput: s.queued, budgetAsk: false, flushGen: sealed.flushGen + 1 };
       }
     }
     // 没有骨架气泡可挂（空列表 / 已被封口）→ 另起一条错误气泡，错误信息绝不吞掉
     return {
       ...sealed,
       messages: [...msgs, { key: nextKey(), role: "ai" as const, content: message, error: true }],
-      sending: false, queued: null, budgetAsk: false, flushGen: sealed.flushGen + 1,
+      sending: false, queued: null, rejectedInput: s.queued, budgetAsk: false, flushGen: sealed.flushGen + 1,
     };
   });
   window.dispatchEvent(new Event(CONVS_CHANGED));
@@ -586,6 +588,13 @@ export function enqueue(key: string, text: string): void {
 
 export function clearQueued(key: string): void {
   patch(key, s => ({ ...s, queued: null }));
+}
+
+/** 取走「回合出错退回」的排队消息（一次性：页面塞回输入框后调用即清） */
+export function takeRejectedInput(key: string): string | null {
+  const t = entries.get(key)?.rejectedInput ?? null;
+  if (t) patch(key, s => ({ ...s, rejectedInput: null }));
+  return t;
 }
 
 /** 中断本会话生成（其他会话的回合不受影响） */

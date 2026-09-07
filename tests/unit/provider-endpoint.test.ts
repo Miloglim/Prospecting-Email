@@ -20,7 +20,7 @@ const STORE_FILE = path.join(tmp, "providers.json");
 process.env.QW_ENV_PATH = ENV_FILE;
 process.env.AI_PROVIDERS_PATH = STORE_FILE;
 
-const KEYS = ["AGENT_API_BASE_URL", "AGENT_MODEL", "AGENT_KEY_ENV", "AGENT_API_KEY", "AGENT_THINKING", "DEEPSEEK_API_KEY"];
+const KEYS = ["AGENT_API_BASE_URL", "AGENT_MODEL", "AGENT_KEY_ENV", "AGENT_API_KEY", "DEEPSEEK_API_KEY"];
 for (const k of KEYS) delete process.env[k];
 
 const { readActiveEndpoint, endpointFamily, thinkingExtras, readLightEndpoint } = await import("../../src/main/services/endpoint.service");
@@ -166,7 +166,7 @@ describe("出网代理自动检测", () => {
 
 describe("轻任务端点（大小模型路由）", () => {
   it("未配置 LIGHT_* → 回落主端点（source=main，行为与今天一致）", () => {
-    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", thinking: false, source: "profile" });
+    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", source: "profile" });
     expect(e.source).toBe("main");
     expect(e.model).toBe("big");
   });
@@ -188,13 +188,13 @@ describe("轻任务端点（大小模型路由）", () => {
     process.env.LIGHT_API_BASE_URL = "https://light.example/v1";
     process.env.LIGHT_MODEL = "small-cheap";
     // 没有密钥
-    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", thinking: false, source: "profile" });
+    const e = readLightEndpoint({ baseUrl: "https://main/v1", apiKey: "sk-main", model: "big", source: "profile" });
     expect(e.source).toBe("main");
     delete process.env.LIGHT_API_BASE_URL; delete process.env.LIGHT_MODEL;
   });
 });
 
-describe("端点族识别与思考参数方言", () => {
+describe("端点族识别与关思考参数方言", () => {
   it("按域名识别 google / ollama / openai / compat", () => {
     expect(endpointFamily("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("google");
     expect(endpointFamily("http://localhost:11434/v1")).toBe("ollama");
@@ -203,21 +203,21 @@ describe("端点族识别与思考参数方言", () => {
     expect(endpointFamily("https://apihub.agnes-ai.com/v1")).toBe("compat");
   });
 
-  it("google 族一律不注入扩展字段（顶层 google/thinking_budget 会被兼容层判 400）", () => {
+  it("google / openai 族不注入扩展字段（顶层 google/thinking_budget 会被兼容层判 400）", () => {
     // 这条曾经把 24 张卡全打挂：给 Gemini 塞了 google.thinking_config → Invalid JSON payload
-    expect(thinkingExtras("google", false)).toEqual({});
-    expect(thinkingExtras("google", true)).toEqual({});
-    expect(thinkingExtras("openai", false)).toEqual({});
-    expect(thinkingExtras("openai", false).chat_template_kwargs).toBeUndefined();
+    expect(thinkingExtras("google")).toEqual({});
+    expect(thinkingExtras("openai")).toEqual({});
+    expect(thinkingExtras("openai").chat_template_kwargs).toBeUndefined();
   });
 
-  it("严格白名单网关（DeepSeek）不注入任何扩展键", () => {
-    expect(thinkingExtras("strict", false)).toEqual({});
-    expect(thinkingExtras("strict", true)).toEqual({});
+  it("严格白名单网关（DeepSeek）恒注入 thinking:disabled（根治 RC 回传 400）", () => {
+    // V4 默认思考 → API 要求历史 assistant 回传 reasoning_content，而应用从不回传 → 多轮间歇 400。
+    // 恒关思考后模型不吐 RC，该规则无从触发。实测 deepseek-chat/v4-flash/v4-pro 均认此顶层键。
+    expect(thinkingExtras("strict")).toEqual({ thinking: { type: "disabled" } });
   });
 
-  it("Ollama 与 vLLM/agnes 各自用自己认的键", () => {
-    expect(thinkingExtras("ollama", true)).toEqual({ chat_template_kwargs: { thinking: true } });
-    expect(thinkingExtras("compat", false)).toEqual({ chat_template_kwargs: { enable_thinking: false, thinking: false } });
+  it("Ollama 与 vLLM/agnes 各自用自己认的键关思考", () => {
+    expect(thinkingExtras("ollama")).toEqual({ chat_template_kwargs: { thinking: false } });
+    expect(thinkingExtras("compat")).toEqual({ chat_template_kwargs: { enable_thinking: false, thinking: false } });
   });
 });

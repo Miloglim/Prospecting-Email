@@ -185,9 +185,7 @@ export function RateBoard() {
             title: "目的港", dataIndex: "podRaw", key: "pod", width: 200, align: "left", ellipsis: { showTitle: false },
             render: (v: string, r: QuoteDto) => (
               <Tooltip title={r.lane ? `${v}（${r.lane}）` : v} placement="topLeft">
-                <span className="text-xs font-medium text-gray-800 block truncate">{v}
-                  {r.lane && <span className="text-[10px] text-gray-400 ml-1">{r.lane}</span>}
-                </span>
+                <span className="text-xs font-medium text-gray-800 block truncate">{v}</span>
               </Tooltip>
             ),
           },

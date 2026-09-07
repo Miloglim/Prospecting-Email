@@ -20,19 +20,21 @@ import { agentToolCalls } from "../../db/schema/agent";
 import { Log } from "../../logger";
 import { okResult, failResult, type Result } from "../../errors";
 import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
-import { getBody, markRead } from "../inbox.service";
+import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
-import { summarizeEmail, generateBackcheckReport, generateEmailDraft, searchCompany, type BackcheckReport } from "../ai.service";
+import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
-import { upsertTemplate } from "../template.service";
+import { upsertTemplate, listTemplates as listTemplatesSvc } from "../template.service";
 import { registerAction, type ActionCard } from "./actions";
 import { lookupIdempotent, rememberResult, forget } from "./idempotency";
 import { lookupCache, rememberCache, invalidateCache, countHit, countMiss } from "./tool-cache";
 import { readIdentity } from "./identity";
 import { parseDraft, parseTsv } from "./parser";
 import { extractFact, rememberToolFact } from "./memory";
+import { rememberWork, fingerprint, listWork } from "./working-memory";
+import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
 import { listQuotes, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
@@ -251,6 +253,20 @@ function pickTarget(
 const candidatesText = (list: ResolvedContact[]) => list.slice(0, 5)
   .map(c => '#' + c.id + ' ' + c.name + (c.company ? '（' + c.company + '）' : '') + ' ' + c.email).join('；');
 
+/** 回信模式收件人定位：fromEmail 精确等值（邮箱是唯一键；模糊匹配会跨国错配，禁用） */
+function pickByEmail(email: string): ResolvedContact | null {
+  const e = (email || "").trim().toLowerCase();
+  if (!e) return null;
+  const one = getDb().select({
+    id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
+    companyName: companies.name,
+  }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
+    .where(sql`lower(${contacts.email}) = ${e}`).get();
+  return one
+    ? { id: one.id, name: [one.firstName, one.lastName].filter(Boolean).join(" ") || one.email, email: one.email, company: one.companyName ?? null }
+    : null;
+}
+
 /** 按公司名模糊找库内记录：多命中时优先精确同名，其次首条（供背调联动判断「库里有没有」） */
 function findCompanyByName(name: string) {
   const tokens = name.split(/\s+/).filter(Boolean).slice(0, 4);
@@ -322,10 +338,15 @@ const optBool = () => z.preprocess((v: unknown) => toBool(v) ?? undefined, z.boo
 //    （否则报 "uses .optional() without .nullable()"）；而 DeepSeek 等模型确实会把没用上的
 //    字段回传 null —— 声明可空后 null 能过校验，下游用 ?? / ?. / 真值判断天然按「未填」处理。
 export const searchContactsSchema = z.object({
-  query: z.string().min(1).max(80).describe("姓名/邮箱/公司名关键词；要查全库就传一个宽泛的词（如公司域名的常见片段）或 a"),
+  query: optStr(80).describe("姓名/邮箱/公司名关键词（可留空，留空时必须给下面的筛选条件）。别用单字母去全库扫——那是把 8000 多人一股脑拉回来，既慢又选不准人"),
   limit: optInt().describe("返回条数上限，默认 10（发成字符串也行）"),
   sortBy: optStr(12).describe("传 'stale' = 按最近跟进时间升序（沉默最久的排前面，适合「沉默最久的是谁」类问题）"),
   hasPhone: optBool().describe("传 true = 只返回有电话号码的联系人（适合「有电话的客户」「要打电话的名单」类问题）"),
+  country: optStr(60).describe("按国家/地区筛选（模糊匹配联系人或公司的国家字段，如 巴西/Brazil/Mexico）；冷开发按国别圈人时用"),
+  stage: optStr(16).describe("按发送阶段筛选，只认 cold/f1/f2/f3/f4（cold=还没开发过的冷客户）；也认中文别名 冷开发/跟进1..4。传别的值会当面报错并列出有效值"),
+  industry: optStr(60).describe("按公司主营品类筛选（模糊匹配公司行业字段，如 家具/家具制造/furniture）"),
+  silenceDays: optInt().describe("只要最近跟进早于 N 天的（含从未跟进过的）；冷开发挑沉默客户用，如 30=一个月没动静的"),
+  validEmail: optBool().describe("传 true = 排除占位/无效邮箱（如 xxx@no.email 这类导入占位），只留能真发出去的"),
 });
 
 export const recordFollowupSchema = z.object({
@@ -420,10 +441,11 @@ export const quoteSearchSchema = z.object({
 });
 
 export const inboxSearchSchema = z.object({
-  query: optStr(120).describe("关键词，匹配发件人邮箱/主题/正文摘要；不传则返回最近邮件"),
+  query: optStr(120).describe("关键词，匹配发件人邮箱与称呼/主题/正文摘要；不传则返回最近邮件。「第一封/最新一封」这类指代不要拿称呼当关键词，直接省略 query 或配 unreadOnly"),
   classification: z.string().max(20).nullable().optional()
-    .describe("按系统分类过滤：inquiry=询盘 reply=回复 bounce=退信 auto_reply=自动回复；其他值视为不过滤"),
-  intentFilter: optStr(20).describe("按意图过滤（可单用）：price_inquiry=询价 schedule_request=船期 cooperation=合作 follow_up=跟进；「有哪些询价」类问题优先用它"),
+    .describe("按系统分类过滤，值必须照抄不可自创：replied=客户回复 bounce=退信 autoreply=自动回复 other=其他来信 sent=我方发出的副本"),
+  intentFilter: optStr(20).describe("按意图过滤（可单用）：price_inquiry=询价 schedule_request=船期 cooperation=合作 follow_up=跟进 other=其他；"
+    + "多数邮件意图未被识别（为空），按意图过滤容易漏——确认「有没有某人来信」优先用 query，别叠加 intent"),
   unreadOnly: optBool().describe("只看未读，默认 false"),
   limit: optInt().describe("返回条数，默认 10，按时间倒序"),
 });
@@ -454,18 +476,19 @@ export const companyBackcheckSchema = z.object({
 export const generateDraftSchema = z.object({
   companyName: optStr(80).describe("目标公司名（给了 contact 时可省略，工具会用库里档案补全）"),
   contactName: optStr(60).describe("收件人姓名（给了 contact 时可省略）"),
-  language: z.string().max(8).nullable().optional().describe("输出语言：EN 英语 / ES 西语 / PT 葡语；其他值按 EN 处理"),
+  language: z.string().max(8).nullable().optional().describe("输出语言：EN 英语 / ES 西语 / PT 葡语；其他值按 EN 处理。回信模式省略 = 跟随对方来信的语言"),
   focus: optStr(300).describe("内容侧重提示，如主推航线、客户痛点"),
   contactId: optInt().describe("收件联系人 id（可选）"),
   contact: optStr(80).describe("收件人的邮箱/姓名/公司名任一；给了它本工具会自己定位人并补全姓名与公司，无需先调 search_contacts"),
+  messageId: optInt().describe("要回复的邮件 id（来自 inbox_search）。传了它 = 回信模式：草稿会针对对方来信逐条应答，收件人自动从来信取，无需 contact/contactId"),
 });
 
 export const sendQueueAddSchema = z.object({
-  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50))
-    .describe("收件联系人 id 列表；也接受字符串数组或 \"1,2\" 形式。只有一个收件人时可改用 contact"),
+  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(2000))
+    .describe("收件联系人 id 列表；也接受字符串数组或 \"1,2\" 形式。只有一个收件人时可改用 contact。批量发信一次最多 2000 个，更多分多次调用"),
   contact: optStr(80).describe("单个收件人的邮箱/姓名/公司名（本工具会自己定位人，无需先调 search_contacts）"),
-  subject: z.string().min(1).max(150).describe("邮件主题（可含 {{company}}/{{firstName}} 变量）"),
-  body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量）"),
+  subject: z.string().min(1).max(150).describe("邮件主题（可含 {{company}}/{{firstName}} 变量；用素材库模板时原样传模板主题）"),
+  body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量；用素材库模板时原样传模板正文）"),
 });
 
 function audit(ctx: ToolCtx, toolName: string, sideEffect: string, args: unknown,
@@ -634,34 +657,123 @@ const tagsArr = (s: string | null | undefined): string[] => {
   catch { return []; }
 };
 
+// ── search_contacts 结构化筛选助手（冷开发按前置条件精确圈人，不再全库扫）──────
+const STAGE_VALUES = ["cold", "f1", "f2", "f3", "f4"];
+const STAGE_ALIAS: Record<string, string> = {
+  cold: "cold", 冷开发: "cold", 冷: "cold", 未开发: "cold",
+  f1: "f1", 跟进1: "f1", 跟进一: "f1", f2: "f2", 跟进2: "f2", 跟进二: "f2",
+  f3: "f3", 跟进3: "f3", 跟进三: "f3", f4: "f4", 跟进4: "f4", 跟进四: "f4",
+};
+/** 归一阶段值：空→null（不过滤）；合法/别名→标准值；非法→undefined（调用方据此当面纠错，不静默降级） */
+function normStage(raw: string | null | undefined): string | null | undefined {
+  const t = (raw ?? "").trim();
+  if (!t) return null;
+  const low = t.toLowerCase();
+  if (STAGE_VALUES.includes(low)) return low;
+  return STAGE_ALIAS[t] ?? STAGE_ALIAS[low] ?? undefined;
+}
+
+type RawContactRow = {
+  id: number; email: string; firstName: string | null; lastName: string | null;
+  country: string | null; stage: string | null; status: string | null; companyName: string | null;
+  title: string | null; tags: string | null; extra: string | null; lastFollowupAt: string | null;
+};
+function mapContactHit(r: RawContactRow) {
+  return {
+    id: r.id,
+    name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
+    email: r.email, company: r.companyName, country: r.country,
+    stage: r.stage, status: r.status,
+    title: r.title, tags: tagsArr(r.tags),
+    preferences: (() => { try { const e = JSON.parse(r.extra || "{}"); return Array.isArray(e.preferences) ? e.preferences : []; } catch { return []; } })(),
+    lastFollowupAt: r.lastFollowupAt ?? null,
+  };
+}
+
+interface ContactSelectOpts {
+  tokens: string[]; country?: string | null; stage?: string | null; industry?: string | null;
+  silenceDays?: number | null; validEmail?: boolean | null; hasPhone?: boolean | null;
+  stale?: boolean; limit: number;
+}
+/**
+ * 统一 CTE 选择器：关键词 + 结构化筛选 + 沉默天数，一次算清命中行与真总数。
+ * 沉默比较坑：interactions.created_at 是「YYYY-MM-DD HH:MM:SS」、inbox.received_at 是 ISO「…T…Z」，
+ * 混格式直接字符串比 cutoff 会错 → 用 substr(replace(last_at,'T',' '),1,10) 归一到日期粒度再比。
+ * count 也走 .all()（部分测试 raw 库 shim 只实现 .all，不实现 .get）。
+ */
+function selectContactsRaw(o: ContactSelectOpts): { rows: RawContactRow[]; total: number } {
+  const conds: string[] = [];
+  const params: Array<string | number> = [];
+  for (const tok of o.tokens) {
+    conds.push("(c.email LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR cp.name LIKE ?)");
+    const p = `%${tok}%`; params.push(p, p, p, p);
+  }
+  if (o.country) { conds.push("(c.country LIKE ? OR cp.country LIKE ?)"); const p = `%${o.country.trim()}%`; params.push(p, p); }
+  if (o.stage) { conds.push("c.stage = ?"); params.push(o.stage); }
+  if (o.industry) { conds.push("cp.industry LIKE ?"); params.push(`%${o.industry.trim()}%`); }
+  if (o.hasPhone) conds.push("(c.phone IS NOT NULL AND c.phone != '')");
+  if (o.validEmail) conds.push("(instr(c.email,'@')>0 AND lower(c.email) NOT LIKE '%no.email%')");
+  if (o.silenceDays && o.silenceDays > 0) {
+    const cutoff = new Date(Date.now() - o.silenceDays * 86_400_000).toISOString().slice(0, 10);
+    conds.push("(m.last_at IS NULL OR substr(replace(m.last_at,'T',' '),1,10) < ?)");
+    params.push(cutoff);
+  }
+  const where = conds.length ? "WHERE " + conds.join(" AND ") : "";
+  const cte = `WITH last_act AS (
+     SELECT contact_id AS cid, MAX(created_at) AS at FROM interactions GROUP BY contact_id
+     UNION ALL
+     SELECT matched_contact_id, MAX(received_at) FROM inbox_messages WHERE matched_contact_id IS NOT NULL GROUP BY matched_contact_id
+   ), merged AS (SELECT cid, MAX(at) AS last_at FROM last_act GROUP BY cid)`;
+  const from = `FROM contacts c LEFT JOIN merged m ON m.cid = c.id LEFT JOIN companies cp ON cp.id = c.company_id`;
+  const db = getRawDb();
+  const nRow = db.prepare(`${cte} SELECT COUNT(*) AS n ${from} ${where}`).all(...params) as Array<{ n: number }>;
+  const total = nRow[0]?.n ?? 0;
+  const order = o.stale ? "ORDER BY (m.last_at IS NULL) DESC, m.last_at ASC" : "ORDER BY c.id";
+  const rows = db.prepare(
+    `${cte} SELECT c.id AS id, c.email AS email, c.first_name AS firstName, c.last_name AS lastName,
+       c.country AS country, c.stage AS stage, c.status AS status, cp.name AS companyName,
+       c.title AS title, c.tags AS tags, c.extra AS extra, m.last_at AS lastFollowupAt
+     ${from} ${where} ${order} LIMIT ?`,
+  ).all(...params, o.limit) as RawContactRow[];
+  return { rows, total };
+}
+
 export function buildHarnessTools(ctx: ToolCtx) {
   // 身份档案：一处读，供单封与批量两处成信时自落款（免得留 {{firstName}} 占位）
   const sender = readIdentity();
   const searchContacts = tool({
     name: "search_contacts",
-    description: "在本地联系人库按姓名/邮箱/公司名关键词检索，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段）。涉及客户的事实性回答必须且只能基于本工具返回的数据。绝对不要用本工具查运价、邮件或公司公开背景（那是 quote_search / inbox_search / company_backcheck）。",
+    description: "在本地联系人库检索/筛选联系人，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段）。"
+      + "两种用法：①按关键词（姓名/邮箱/公司名）找人；②按结构化条件圈人——country 国家、stage 阶段(cold/f1-f4)、industry 行业、silenceDays 沉默天数、validEmail 仅有效邮箱、hasPhone 仅有电话，可组合。"
+      + "冷开发/批量跟进要用②按前置条件精确圈人（如「巴西的冷客户」=country:巴西 + stage:cold），别用单字母关键词全库扫。"
+      + "涉及客户的事实性回答必须且只能基于本工具返回的数据。绝对不要用本工具查运价、邮件或公司公开背景（那是 quote_search / inbox_search / company_backcheck）。",
     parameters: searchContactsSchema,
     execute: async (args) => {
       const cached = cachedRead(ctx, "search_contacts", args);
       if (cached) return cached;
-      // 按词切分匹配（live 评测实锤：模型常传全名 "Juan Garcia"，整串 LIKE 匹配不上单列 firstName/lastName → 误判查无此人）
-      const perToken = args.query.split(/\s+/).filter(Boolean).slice(0, 4).map(tok => {
-        const p = `%${tok}%`;
-        return or(like(contacts.email, p), like(contacts.firstName, p), like(contacts.lastName, p), like(companies.name, p));
-      });
-      // hasPhone 过滤：只返回有电话号码的联系人
-      if (args.hasPhone) {
-        perToken.push(and(sql`${contacts.phone} IS NOT NULL`, sql`${contacts.phone} != ''`));
+      // 阶段值归一 + 当面纠错（非法值不静默降级，对齐 inbox_search 过滤词表原则）
+      const stageNorm = normStage(args.stage);
+      if ((args.stage ?? "").trim() && stageNorm === undefined) {
+        return finishRead(ctx, "search_contacts", args, failOut("bad_filter",
+          `stage 值「${args.stage}」不存在。有效值只有：cold / f1 / f2 / f3 / f4（冷开发=cold，跟进1..4=f1..f4）。多数联系人是 cold；不确定就去掉本过滤直接查。`));
       }
-      // A2：真总数（不带 total 时模型会拿"本批行数"当全库数，live 评测实锤过同类坑）
-      const total = getDb()
-        .select({ n: count() })
-        .from(contacts)
-        .leftJoin(companies, eq(contacts.companyId, companies.id))
-        .where(and(...perToken))
-        .all()[0]?.n ?? 0;
+      // 按词切分匹配（live 评测实锤：模型常传全名 "Juan Garcia"，整串 LIKE 匹配不上单列 → 误判查无此人）
+      const tokens = (args.query ?? "").split(/\s+/).filter(Boolean).slice(0, 4);
+      const silence = args.silenceDays && args.silenceDays > 0 ? args.silenceDays : null;
+      const hasStructFilter = !!(args.country || stageNorm || args.industry || silence || args.validEmail);
       const limit = Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50);
-      // B：最近跟进时间（读时合并口径：interactions ∪ inbox 邮件取较新者，与 CRM 看板同源）
+      // 无任何检索/筛选条件 → 拒绝全库扫（冷开发"给了前置条件还全量扫"的根因就是没条件也硬扫）
+      if (!tokens.length && !hasStructFilter && !args.hasPhone && args.sortBy !== "stale") {
+        return failOut("no_criteria",
+          "给一个检索关键词，或至少一个筛选条件（country 国家 / stage 阶段 / industry 行业 / silenceDays 沉默天数 / hasPhone 有电话）。不要用单字母全库扫——那会拉回几千人且选不准。");
+      }
+      const filtersApplied = [
+        args.country ? `国家~${args.country}` : "", stageNorm ? `阶段=${stageNorm}` : "",
+        args.industry ? `行业~${args.industry}` : "", silence ? `沉默≥${silence}天` : "",
+        args.validEmail ? "仅有效邮箱" : "", args.hasPhone ? "仅有电话" : "",
+        args.sortBy === "stale" ? "按沉默排序" : "",
+      ].filter(Boolean);
+      // B：最近跟进时间（读时合并口径：interactions ∪ inbox 邮件取较新者，与 CRM 看板同源）—— drizzle 路径用
       const mergedLatest = (ids: number[]): Map<number, string> => {
         const m = new Map<number, string>();
         if (!ids.length) return m;
@@ -687,48 +799,26 @@ export function buildHarnessTools(ctx: ToolCtx) {
         stage: string | null; status: string | null; lastFollowupAt: string | null;
       };
       let out: ContactHit[];
-      if (args.sortBy === "stale") {
-        // 精确版沉默排序：一条 SQL 聚合完成（CTE 合并两表取最晚，未跟进者排最前）。
-        // 探针实测全库 8714 行 16ms——JS 侧"先取 400 行再排"会漏掉 400 名开外的人，弃用。
-        const conds: string[] = [];
-        const params: string[] = [];
-        for (const tok of args.query.split(/\s+/).filter(Boolean).slice(0, 4)) {
-          const p = `%${tok}%`;
-          conds.push("(c.email LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR cp.name LIKE ?)");
-          params.push(p, p, p, p);
-        }
-        const staleRows = getRawDb().prepare(
-          `WITH last_act AS (
-             SELECT contact_id AS cid, MAX(created_at) AS at FROM interactions GROUP BY contact_id
-             UNION ALL
-             SELECT matched_contact_id, MAX(received_at) FROM inbox_messages WHERE matched_contact_id IS NOT NULL GROUP BY matched_contact_id
-           ), merged AS (SELECT cid, MAX(at) AS last_at FROM last_act GROUP BY cid)
-           SELECT c.id AS id, c.email AS email, c.first_name AS firstName, c.last_name AS lastName,
-                  c.country AS country, c.stage AS stage, c.status AS status, cp.name AS companyName,
-                  c.title AS title, c.tags AS tags, c.extra AS extra,
-                  m.last_at AS lastFollowupAt
-           FROM contacts c
-           LEFT JOIN merged m ON m.cid = c.id
-           LEFT JOIN companies cp ON cp.id = c.company_id
-           ${conds.length ? "WHERE " + conds.join(" AND ") : ""}
-           ORDER BY (m.last_at IS NULL) DESC, m.last_at ASC
-           LIMIT ?`,
-        ).all(...params, limit) as Array<{
-          id: number; email: string; firstName: string | null; lastName: string | null;
-          country: string | null; stage: string | null; status: string | null;
-          companyName: string | null; lastFollowupAt: string | null;
-          title: string | null; tags: string | null; extra: string | null;
-        }>;
-        out = staleRows.map(r => ({
-          id: r.id,
-          name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
-          email: r.email, company: r.companyName, country: r.country,
-          stage: r.stage, status: r.status,
-          title: r.title, tags: tagsArr(r.tags),
-          preferences: (() => { try { const e = JSON.parse(r.extra || "{}"); return Array.isArray(e.preferences) ? e.preferences : []; } catch { return []; } })(),
-          lastFollowupAt: r.lastFollowupAt ?? null,
-        }));
+      let total: number;
+      if (hasStructFilter || args.sortBy === "stale") {
+        // 带结构化筛选或沉默排序 → 统一 CTE 选择器：一次算清命中行 + 真总数（含 silenceDays 日期归一比较）
+        const sel = selectContactsRaw({
+          tokens, country: args.country ?? null, stage: stageNorm ?? null, industry: args.industry ?? null,
+          silenceDays: silence, validEmail: args.validEmail ?? null, hasPhone: args.hasPhone ?? null,
+          stale: args.sortBy === "stale", limit,
+        });
+        total = sel.total;
+        out = sel.rows.map(mapContactHit) as ContactHit[];
       } else {
+        // 纯关键词（可带 hasPhone）→ 保留原 drizzle 路径，行为与既往一致
+        const perToken = tokens.map(tok => {
+          const p = `%${tok}%`;
+          return or(like(contacts.email, p), like(contacts.firstName, p), like(contacts.lastName, p), like(companies.name, p));
+        });
+        if (args.hasPhone) perToken.push(and(sql`${contacts.phone} IS NOT NULL`, sql`${contacts.phone} != ''`));
+        const where = perToken.length ? and(...perToken) : undefined;
+        total = getDb().select({ n: count() }).from(contacts)
+          .leftJoin(companies, eq(contacts.companyId, companies.id)).where(where).all()[0]?.n ?? 0;
         const baseRows = getDb()
           .select({
             id: contacts.id, email: contacts.email,
@@ -740,7 +830,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
           })
           .from(contacts)
           .leftJoin(companies, eq(contacts.companyId, companies.id))
-          .where(and(...perToken))
+          .where(where)
           .limit(limit)
           .all();
         const latest = mergedLatest(baseRows.map(r => r.id));
@@ -757,8 +847,29 @@ export function buildHarnessTools(ctx: ToolCtx) {
       audit(ctx, "search_contacts", "read", args, out, "auto");
       // 空结果给显式收敛信号：模型往往会换词重试直至 max turns（live 评测实锤）
       if (out.length === 0) {
-        return okOut({ results: [], total: 0, notice: "库中没有匹配该关键词的联系人。请直接如实告知用户查无此人，不要用相同参数重复调用本工具。" });
+        return okOut({
+          results: [], total: 0, ...(filtersApplied.length ? { filtersApplied } : {}),
+          notice: filtersApplied.length
+            ? `没有符合筛选条件（${filtersApplied.join("、")}）的联系人。如实告知用户，别用相同条件重复调用；可放宽某个条件再试。`
+            : "库中没有匹配该关键词的联系人。请直接如实告知用户查无此人，不要用相同参数重复调用本工具。",
+        });
       }
+      // 工作台：命中的人此前跨轮即丢，下一轮要么重扫要么把别处的人混进来（跨国错配写进草稿的温床）。
+      rememberWork(ctx.conversationId, {
+        kind: "contacts",
+        refId: fingerprint({ q: args.query, sortBy: args.sortBy, hasPhone: args.hasPhone, country: args.country, stage: stageNorm, industry: args.industry, silenceDays: silence, validEmail: args.validEmail, limit: args.limit }),
+        toolName: "search_contacts",
+        contextLine: `联系人${args.query ? `「${args.query}」` : ""}${filtersApplied.length ? `[${filtersApplied.join("、")}]` : ""}：命中 ${total}，返回 ${out.length}；`
+          + out.slice(0, 5).map(c => `${c.name}(${c.company || "-"}/${c.country || "-"}/${c.stage || "-"})`).join("、"),
+        payload: {
+          query: args.query ?? null, total, returned: out.length,
+          filters: { sortBy: args.sortBy ?? null, hasPhone: args.hasPhone ?? null, country: args.country ?? null, stage: stageNorm ?? null, industry: args.industry ?? null, silenceDays: silence, validEmail: args.validEmail ?? null },
+          hits: out.slice(0, 30).map(c => ({
+            id: c.id, name: c.name, email: c.email, company: c.company ?? null,
+            country: c.country ?? null, stage: c.stage ?? null, lastFollowupAt: c.lastFollowupAt ?? null,
+          })),
+        },
+      });
       const QUIET_NOTE = "本结果卡不会展示给用户（静默检索）：正文禁止复述联系人名单或按行描述，直接给结论；"
         + "只允许引用本批 results 里的人——此前对话或其他来源的联系人（姓名/公司/备注）一律不得混入本轮回答，results 里没有就明说未检索到。";
       const completeNote = total <= out.length
@@ -768,7 +879,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (out.length === 1 && total === 1) {
         const one = out[0]!;
         return okOut({
-          results: out, total,
+          results: out, total, ...(filtersApplied.length ? { filtersApplied } : {}),
           actions: [promptAction(
             "给 TA 写一封开发信",
             `给联系人 #${one.id} ${one.name}（${one.company || "无公司名"}${one.country ? `，${one.country}` : ""}）写一封开发信，先想清楚切入点再动笔`,
@@ -778,7 +889,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // P1-5：多命中 → 两种批量路径任选：整批各生成一封入队（写动作），或续问聚焦
       const batch = out.slice(0, 10);
       return okOut({
-        results: out, total, ...completeNote,
+        results: out, total, ...completeNote, ...(filtersApplied.length ? { filtersApplied } : {}),
         actions: [
           registerAction({
             conversationId: ctx.conversationId, toolName: "search_contacts",
@@ -1033,22 +1144,41 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "按 messageId 读取一封邮件的完整信息：全文正文（懒加载，含 IMAP 原文）、"
       + "发件人/收件人/抄送、时间、分类、意图、附件文件名。用户要「原文/全文/完整内容」时用；"
       + "只要摘要用 email_summarize。正文超长会截断并标注。",
-    parameters: z.object({ messageId: z.number().int().describe("inbox_search 返回的 id") }),
+    parameters: z.object({ messageId: z.number().int().describe("inbox_search 返回的 id；只能照抄本轮检索结果里的 id，检索不到就如实告知，严禁凭记忆猜测或编造 id") }),
     execute: async (args) => {
       const gateNote = gate(ctx, "email_read_full");
       if (gateNote) return gateNote;
       const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, args.messageId)).get();
       if (!row) return failOut("not_found", `邮件 #${args.messageId} 不存在，先 inbox_search 拿 id`);
       const bodyR = await getBody(args.messageId);
-      const full = bodyR.success ? bodyR.data : (row.bodyPreview || "");
+      // 落盘正文是原始 HTML（含签名档 base64 内嵌图），原样给模型和对话卡都是垃圾；
+      // 统一转纯文本再返回
+      const full = bodyR.success ? htmlToText(bodyR.data) : (row.bodyPreview || "");
       const CAP = 12_000;
       audit(ctx, "email_read_full", "read", args, { id: row.id, len: full.length }, "auto");
+      // 工作台：邮件正文此前只在当轮上下文里，下一轮就蒸发（读过却答"没写柜型"的根因）。
+      // contextLine 带正文要点摘录（空白折叠 350 字），让柜型/起运港/目的港等跨轮仍可见；
+      // payload 存结构化头 + 更长正文摘录，供后续 generate_draft 程序化直取（见闭环规范 Phase 2）。
+      rememberWork(ctx.conversationId, {
+        kind: "email", refId: String(row.id), toolName: "email_read_full",
+        contextLine: `邮件#${row.id} ${row.fromName || row.fromEmail}「${row.subject ?? "无主题"}」`
+          + `${row.intent ? `[${row.intent}]` : ""}：${full.replace(/\s+/g, " ").trim().slice(0, 350)}`,
+        payload: {
+          id: row.id, from: row.fromEmail, fromName: row.fromName, to: row.to || null, cc: row.cc || null,
+          subject: row.subject, receivedAt: row.receivedAt, classification: row.classification, intent: row.intent || null,
+          bodyExcerpt: full.replace(/\s+/g, " ").trim().slice(0, 2000),
+        },
+      });
       return finishRead(ctx, "email_read_full", args, okOut({
         id: row.id, from: row.fromEmail, fromName: row.fromName,
         to: row.to || null, cc: row.cc || null, subject: row.subject,
         receivedAt: row.receivedAt, classification: row.classification, intent: row.intent || null,
         body: full.slice(0, CAP),
-        ...(full.length > CAP ? { notice: `正文共 ${full.length} 字，已截断到 ${CAP} 字；要存档用 export_artifact。` } : {}),
+        // 弱模型读到全文后常停下来反问用户而不是起草；把下一步直接铺到脚边
+        ...(full.length > CAP
+          ? { notice: `正文共 ${full.length} 字，已截断到 ${CAP} 字；要存档用 export_artifact。` }
+          : {}),
+        nextStep: `用户若是想回复这封邮件：直接调 generate_draft 传 messageId=${row.id}（回信模式，自动带来信全文并逐条应答），不要反问用户要正文、语言或立场。`,
       }));
     },
   });
@@ -1232,6 +1362,31 @@ export function buildHarnessTools(ctx: ToolCtx) {
         } : {}),
       };
       audit(ctx, "quote_search", "read", args, out, "auto");
+      // 工作台：查到的真运价此前跨轮只剩"共 N 条"一行，起草时拿不到价 → 编占位（P2 根因）。
+      // 这里把命中行按查询指纹落库，跨轮可复述、且供 generate_draft 程序化直取（Phase 2）。
+      if (total > 0) {
+        const qrows = (out.quotes ?? []) as unknown as Array<Record<string, unknown>>;
+        const rows = qrows.slice(0, 20).map(q => ({
+          carrier: q.carrier ?? null, container: q.container ?? null, pol: q.pol ?? null,
+          pod: q.podRaw ?? null, price: q.oceanUsd ?? null,
+          validFrom: q.validFrom ?? null, validTo: q.validTo ?? null, note: q.note ?? null,
+        }));
+        const route = [args.pod || args.q || args.lane, args.container].filter(Boolean).join(" ");
+        const top = rows.slice(0, 3).map(r =>
+          `${r.carrier ?? "—"} ${r.pol ?? "—"}→${r.pod ?? "—"} ${r.container ?? ""} $${r.price ?? "议价"}`).join("；");
+        rememberWork(ctx.conversationId, {
+          kind: "rates",
+          refId: fingerprint({ q: args.q, pod: args.pod, lane: args.lane, container: args.container, carrier: args.carrier }),
+          toolName: "quote_search",
+          contextLine: `运价 ${route || "全航线"}：命中 ${total} 条，最低 $${rows[0]?.price ?? "—"}${top ? `；${top}` : ""}`,
+          payload: {
+            q: args.q ?? null, pod: args.pod ?? null, lane: args.lane ?? null,
+            container: args.container ?? null, carrier: args.carrier ?? null,
+            total, cheapest: rows[0]?.price ?? null, rows,
+            mirrorSyncedAt: (out.mirror as { latestSyncAt?: string } | undefined)?.latestSyncAt ?? null,
+          },
+        });
+      }
       // 空结果不进读缓存：同词再查也要真跑一遍，才走得到 L2→L3 的分层结论
       const payload = okOut(out);
       return total === 0 ? payload : finishRead(ctx, "quote_search", args, payload);
@@ -1320,16 +1475,30 @@ export function buildHarnessTools(ctx: ToolCtx) {
     execute: async (args) => {
       const cached = cachedRead(ctx, "inbox_search", args);
       if (cached) return cached;
-      const INBOX_CLASSES = ["inquiry", "reply", "bounce", "auto_reply", "normal"];
+      // 词表必须镜像 inbox.service.ts 的 Classification——曾写成 inquiry/reply/auto_reply/normal，
+      // 与落库值 replied/autoreply/other/sent 对不上：模型照旧文案传 reply → 静默 0 条 → 连环假「查无」
+      const INBOX_CLASSES = ["replied", "bounce", "autoreply", "other", "sent"] as const;
+      const INTENT_VALUES = ["price_inquiry", "schedule_request", "cooperation", "follow_up", "other"] as const;
       const q0 = (args.query ?? "").trim();
       const cls = (args.classification ?? "").trim().toLowerCase();
       const conds = [];
+      // 非法过滤值直接报错纠正，不静默降级成「不过滤」或空结果：
+      // 模型分不清「真空」和「我拼错词」，静默 0 条只会换来连环盲试（实测一轮烧 3 次调用）
+      if (cls && !INBOX_CLASSES.includes(cls as (typeof INBOX_CLASSES)[number])) {
+        return finishRead(ctx, "inbox_search", args, failOut("bad_filter",
+          `classification 值「${cls}」不存在。有效值只有：${INBOX_CLASSES.join(" / ")}。改用有效值重查一次即可。`));
+      }
+      const intentF = (args.intentFilter ?? "").trim();
+      if (intentF && !INTENT_VALUES.includes(intentF as (typeof INTENT_VALUES)[number])) {
+        return finishRead(ctx, "inbox_search", args, failOut("bad_filter",
+          `intentFilter 值「${intentF}」不存在。有效值只有：${INTENT_VALUES.join(" / ")}；多数邮件意图为空，建议去掉本过滤直接用 query 查。`));
+      }
       if (q0) {
         const q = `%${q0}%`;
-        conds.push(or(like(inboxMessages.fromEmail, q), like(inboxMessages.subject, q), like(inboxMessages.bodyPreview, q)));
+        // fromName 必须参战：发件人称呼（如 GCRA Fortune Freight Inc.）常不在邮箱地址里
+        conds.push(or(like(inboxMessages.fromEmail, q), like(inboxMessages.fromName, q), like(inboxMessages.subject, q), like(inboxMessages.bodyPreview, q)));
       }
-      if (INBOX_CLASSES.includes(cls)) conds.push(eq(inboxMessages.classification, cls));
-      const intentF = (args.intentFilter ?? "").trim();
+      if (cls) conds.push(eq(inboxMessages.classification, cls));
       if (intentF) conds.push(eq(inboxMessages.intent, intentF));
       // 「未读」指待我处理的来信：我方自己发出的副本（classification=sent）也是 is_read=0，
       // 不排除会把"我发出去的邮件"算成未读，计数与清单一起失真（用户实测抓到过）
@@ -1363,6 +1532,23 @@ export function buildHarnessTools(ctx: ToolCtx) {
         return finishRead(ctx, "inbox_search", args,
           okOut({ total: 0, messages: [], notice: "收件箱中没有匹配的邮件。请直接如实告知用户，不要重复调用本工具。" }));
       }
+      // 工作台：检索到的邮件条目跨轮留存，后续"读第 N 封/回复它"能直接拿到真实 messageId，不靠模型记忆猜 id。
+      rememberWork(ctx.conversationId, {
+        kind: "inbox",
+        refId: fingerprint({ q: q0, cls, intent: intentF, unread: args.unreadOnly, limit: args.limit }),
+        toolName: "inbox_search",
+        contextLine: `邮件检索「${q0 || "全部"}」${cls ? `[${cls}]` : ""}${intentF ? `[意图:${intentF}]` : ""}${args.unreadOnly ? "(未读)" : ""}：命中 ${matchedTotal}，返回 ${raw.length}；`
+          + raw.slice(0, 5).map(m => `#${m.id} ${m.from}「${m.subject ?? "无主题"}」${m["收到时间"] ?? ""}`).join("；"),
+        payload: {
+          query: q0 ?? null, classification: cls ?? null, intent: intentF ?? null,
+          unreadOnly: args.unreadOnly ?? false, total: matchedTotal,
+          hits: raw.slice(0, 30).map(m => ({
+            id: m.id, from: m.from, fromEmail: m.fromEmail, subject: m.subject ?? null,
+            classification: m.classification ?? null, intent: m.intent ?? null,
+            收到时间: m["收到时间"] ?? null, isRead: m.isRead,
+          })),
+        },
+      });
       const defaultLimit = Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50);
       // P1-1：真实客户来信（询盘/回复）但库中无此联系人 → 附「创建联系人」写入动作
       const actions: AnyAction[] = [];
@@ -1626,41 +1812,90 @@ export function buildHarnessTools(ctx: ToolCtx) {
     name: "generate_draft",
     description: "生成一封开发信/跟进信/回信的草稿（带 SUBJECT: 主题行 + 正文，支持 EN/ES/PT）。"
       + "本工具只产出文本、不发送；用户可用结果卡按钮一键存素材库或入队。"
-      + "写什么由你从对话与上下文里已有的材料决定：如果邮件正文已经在上下文里，就直接照着它写，"
-      + "绝对不要为了『起草/回复邮件』先去调 company_backcheck 或其他检索工具（那是跑题）；"
+      + "用户要「回复某封邮件」时必须传 messageId（来自 inbox_search）走回信模式——草稿会针对对方来信逐条应答，"
+      + "收件人自动从来信解析，无需 contact/contactId；这时不要先 email_read_full 搬运原文（工具自己会读）。"
+      + "开发信/跟进信不传 messageId：写什么由你从对话与上下文里已有的材料决定，"
+      + "绝对不要为了『起草邮件』先去调 company_backcheck 或其他检索工具（那是跑题）；"
       + "上下文中没有的关键数字（如成交价、柜型）用 {{占位}} 标出并在结尾一句话提示，不要连环追问。"
       + "边界：只用于给客户写开发信/跟进信/回信；寒暄、自我介绍、翻译、改写一段现成文字都不要调本工具。"
-      + "已知收件人 contactId 时才带上它（结果卡才会出现「入队」按钮）。",
+      + "开发信模式已知收件人 contactId 时才带上它（结果卡才会出现「入队」按钮）。",
     parameters: generateDraftSchema,
     execute: async (args) => {
       const note = gate(ctx, "generate_draft");
       if (note) return note;
-      // 收件人可由 contact/contactId 任一定位；定位到就用档案补全姓名与公司（少一步 = 弱模型少一次掉链子）
-      const target = args.contactId || args.contact ? pickTarget(args) : null;
-      const person = target && target.ok ? target.person : null;
-      if (target && !target.ok) {
-        audit(ctx, "generate_draft", "read", args, undefined, "auto", "未定位到收件人");
-        return failOut(target.why, target.why === "ambiguous"
-          ? `「${args.contact}」匹配到多位联系人，请改用 contactId 指定其一：${candidatesText(target.candidates)}`
-          : `库里找不到「${args.contact}」；不知道对方是否建档时，先调 search_contacts，或直接给我公司名继续写`);
+      let companyName: string, contactName: string, lang: string, tplName: string;
+      let draftContactId: number | null;
+      let replySubject: string | null = null;
+      let ratesAttached = 0;          // 回信里注入的真实运价条数（0=没查到匹配价）
+      let inquiryNoRates = false;     // 是询价邮件但工作台无匹配价 → 出稿后提示先查价
+      let r: Result<string>;
+      if (args.messageId) {
+        // —— 回信模式（docs/agent-draft-reply-spec.md）：针对来信逐条应答 ——
+        const row = getDb().select().from(inboxMessages).where(eq(inboxMessages.id, args.messageId)).get();
+        if (!row) {
+          audit(ctx, "generate_draft", "read", args, undefined, "auto", `邮件 #${args.messageId} 不存在`);
+          return failOut("not_found", `邮件 #${args.messageId} 不存在，先 inbox_search 拿 id`);
+        }
+        const bodyR = await getBody(args.messageId);
+        const bodyText = (bodyR.success ? htmlToText(bodyR.data) : (row.bodyPreview || "")).slice(0, 4000);
+        if (!bodyText.trim()) {
+          audit(ctx, "generate_draft", "read", args, undefined, "auto", "来信正文为空");
+          return failOut("empty_body", "该邮件没有可用正文，无法据以起草回复；可先 email_read_full 确认");
+        }
+        // 收件人：来信关联联系人优先，否则 fromEmail 精确匹配；都不中不阻塞出稿（actions 少一个入队而已）
+        const linked = row.matchedContactId ? pickTarget({ contactId: row.matchedContactId }) : null;
+        const rep = linked && linked.ok ? linked.person : pickByEmail(row.fromEmail);
+        companyName = args.companyName || rep?.company || row.fromName || row.fromEmail;
+        contactName = args.contactName || rep?.name || row.fromName || row.fromEmail;
+        draftContactId = rep?.id ?? null;
+        const explicit = (args.language ?? "").toUpperCase();
+        const langOk = ["EN", "ES", "PT"].includes(explicit) ? explicit : "";
+        lang = langOk || "EN";
+        // 闭环：解析来信询价要素 + 从会话工作台拉此前查到的匹配真价，据真数据起草（灭掉占位编造）
+        const inq = parseEmailInquiry(bodyText);
+        const matched = pickRatesForEmail(inq, listWork(ctx.conversationId, "rates", 8));
+        const replyRates = matched?.rows ?? null;
+        ratesAttached = replyRates?.length ?? 0;
+        inquiryNoRates = !!(inq.pod || inq.container || inq.pol) && ratesAttached === 0;
+        r = await generateEmailReply({
+          language: langOk || undefined,
+          companyName, contactName,
+          fromEmail: row.fromEmail, subject: row.subject,
+          bodyText, focus: args.focus ?? null, sender,
+          rates: replyRates, emailFacts: inq,
+        });
+        replySubject = row.subject ? (/^re[:\s]/i.test(row.subject) ? row.subject : `Re: ${row.subject}`) : null;
+        tplName = `${companyName} · AI 回信`.slice(0, 60);
+      } else {
+        // —— 开发信模式：收件人可由 contact/contactId 任一定位；定位到就用档案补全姓名与公司 ——
+        const target = args.contactId || args.contact ? pickTarget(args) : null;
+        const person = target && target.ok ? target.person : null;
+        if (target && !target.ok) {
+          audit(ctx, "generate_draft", "read", args, undefined, "auto", "未定位到收件人");
+          return failOut(target.why, target.why === "ambiguous"
+            ? `「${args.contact}」匹配到多位联系人，请改用 contactId 指定其一：${candidatesText(target.candidates)}`
+            : `库里找不到「${args.contact}」；不知道对方是否建档时，先调 search_contacts，或直接给我公司名继续写`);
+        }
+        companyName = args.companyName || person?.company || person?.name || "客户";
+        contactName = args.contactName || person?.name || companyName;
+        draftContactId = person?.id ?? args.contactId ?? null;
+        lang = (["EN", "ES", "PT"].includes((args.language ?? "EN").toUpperCase()) ? args.language!.toUpperCase() : "EN");
+        r = await generateEmailDraft({
+          language: lang as "EN" | "ES" | "PT",
+          companyName,
+          contactName,
+          backcheck: args.focus ? ({ summary: args.focus } as BackcheckReport) : null,
+          sender,
+        });
+        tplName = `${companyName} · AI 开发信`.slice(0, 60);
       }
-      const companyName = args.companyName || person?.company || person?.name || "客户";
-      const contactName = args.contactName || person?.name || companyName;
-      const r = await generateEmailDraft({
-        language: (["EN", "ES", "PT"].includes((args.language ?? "EN").toUpperCase()) ? args.language!.toUpperCase() : "EN") as "EN" | "ES" | "PT",
-        companyName,
-        contactName,
-        backcheck: args.focus ? ({ summary: args.focus } as BackcheckReport) : null,
-        sender,
-      });
       if (!r.success) {
         audit(ctx, "generate_draft", "read", args, undefined, "auto", r.error);
         return failOut("generate_failed", `草稿生成失败：${r.error}`);
       }
-      // 拆 SUBJECT 行 → 主题/正文（结果卡动作与入队都要用）
-      const { subject, body } = parseDraft(r.data, `Following up — ${companyName}`);
-      const lang = args.language ?? "EN";
-      const tplName = `${companyName} · AI 开发信`.slice(0, 60);
+      // 拆 SUBJECT 行 → 主题/正文（结果卡动作与入队都要用）；回信模式主题强制带 Re:
+      let { subject, body } = parseDraft(r.data, `Following up — ${companyName}`);
+      if (replySubject) subject = replySubject;
 
       const actions: AnyAction[] = [
         registerAction({
@@ -1680,12 +1915,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
           },
         }),
       ];
-      const draftContactId = person?.id ?? args.contactId;
       if (draftContactId) {
         actions.push(registerAction({
           conversationId: ctx.conversationId, toolName: "generate_draft",
           label: "入队发给这位联系人",
-          confirm: `把这封信加入发送队列，收件人 ${person ? `${person.name}（` : ""}#${draftContactId}${person ? "）" : ""}`,
+          confirm: `把这封信加入发送队列，收件人 #${draftContactId} ${contactName}`,
           detail: "入队 ≠ 发送：队列建好后不会自动开始，仍要你在「发送中心」点「开始」",
           diff: [
             { field: "subject", label: "主题", from: "—", to: subject },
@@ -1700,9 +1934,24 @@ export function buildHarnessTools(ctx: ToolCtx) {
           },
         }));
       }
+      // 工作台：草稿本身也留一条，后续"把刚才那封发出去/存素材库"能跨轮引用
+      rememberWork(ctx.conversationId, {
+        kind: "draft",
+        refId: args.messageId ? `msg-${args.messageId}` : `to-${draftContactId ?? companyName}`,
+        toolName: "generate_draft",
+        contextLine: `草稿 致 ${companyName}「${subject}」${lang}${ratesAttached ? `，已引用真价 ${ratesAttached} 条` : ""}`,
+        payload: { subject, bodyExcerpt: body.slice(0, 2000), language: lang, contactId: draftContactId, ratesAttached, messageId: args.messageId ?? null },
+      });
       // 正文只放一份（subject/body）：整条结果受推送上限约束，重复字段会挤掉 actions
-      const out = { subject, body, language: lang, contactId: draftContactId ?? null, actions };
-      audit(ctx, "generate_draft", "read", args, { subject, length: body.length, actions: actions.length }, "auto");
+      const out = {
+        subject, body, language: lang, contactId: draftContactId ?? null, actions,
+        ...(ratesAttached ? { ratesUsed: ratesAttached } : {}),
+        ...(inquiryNoRates ? {
+          notice: "这封是询价邮件，但本会话工作台里没有匹配到的已查运价，草稿只能走「报价稍后补」话术、不编数字。"
+            + "要出带具体价的回复：先用 quote_search 按来信的起运港/目的港/柜型查一次，再重新调 generate_draft（会自动带上刚查到的价）。",
+        } : {}),
+      };
+      audit(ctx, "generate_draft", "read", args, { subject, length: body.length, actions: actions.length, ratesAttached }, "auto");
       return okOut(out);
     },
   });
@@ -1844,9 +2093,47 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  const listTemplatesTool = tool({
+    name: "list_templates",
+    description: "列出素材库邮件模板（名称/语言/主题/正文预览，只读）。批量发信用户说「用系统内置模板」「用现成模板」时先调它挑一条，"
+      + "再把选中模板的 subject/body 原样传给 send_queue_add（{{}} 变量照留，系统会按联系人替换）。",
+    parameters: z.object({ language: optStr(8).nullable().optional().describe("按语言过滤：EN/ES/PT；省略=全部") }),
+    execute: async (args) => {
+      const gateNote = gate(ctx, "list_templates");
+      if (gateNote) return gateNote;
+      const cached = cachedRead(ctx, "list_templates", args);
+      if (cached) return cached;
+      const lang = (args.language || "").trim().toUpperCase();
+      const r = await listTemplatesSvc(["EN", "ES", "PT"].includes(lang) ? lang : undefined);
+      if (!r.success) {
+        audit(ctx, "list_templates", "read", args, undefined, "auto", r.error);
+        return failOut("list_failed", `读取素材库失败：${r.error}`);
+      }
+      audit(ctx, "list_templates", "read", args, { total: r.data.length }, "auto");
+      return finishRead(ctx, "list_templates", args, okOut({
+        total: r.data.length,
+        templates: r.data.slice(0, 30).map(t => ({
+          id: t.id, name: t.name, language: t.language, subject: t.subject,
+          bodyPreview: (t.body || "").slice(0, 300),
+        })),
+        ...(r.data.length === 0
+          ? { notice: "素材库暂无启用中的模板：可先 generate_draft 起草一版给用户过目，用户认可后即可直接入队。" }
+          : {}),
+      }));
+    },
+  });
+
   const sendQueueAdd = tool({
     name: "send_queue_add",
-    description: "把一封邮件加入发送队列。触发时机：用户明确说「把/给 X 发一封邮件」「发给 X」「发报价给 X」时直接调用本工具入队（收件人可用 contactIds 或 contact=邮箱/姓名，本工具会自己在库里定位，不必先调 search_contacts）—— 系统随后会弹人工确认框，那一步就是征求同意，因此不要只在正文里问「要不要发」而不调用本工具。本工具只入队不发送：队列建好后处于未启动状态，用户仍需在「发送中心」点「开始」才真正外发。主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
+    description: "把邮件加入发送队列（只入队不发送：队列建好处于未启动状态，用户仍需在「发送中心」手动点「开始」才真正外发）。"
+      + "发信交互规则——用户提到发信时，只在没说清的情况下用一句话问「单独发还是批量发」，然后："
+      + "【单独发】详细配置：收件人（contact/contactIds，工具自己定位，不必先 search_contacts）+ 内容（可先 generate_draft 起草给用户过目，认可后入队）。"
+      + "【批量发】不要追问发件账号/发件人身份/语言（账号由系统按健康度与日配额自动轮换），流程三步走完："
+      + "① search_contacts 圈定收件人（筛选条件有歧义才问一句，如「只发巴西还是全部 cold？」，把命中数报给用户）；"
+      + "② 内容：用户说用系统/现成模板 → 先 list_templates 挑一条、subject/body 原样传入（{{}} 变量照留）；用户没说 → 生成一版草稿给用户过目后再入队；"
+      + "③ 直接调本工具入队，contactIds 一次最多 2000。"
+      + "系统随后会弹人工确认框，那一步就是征求同意，不要只在正文里问「要不要发」而不调用本工具。"
+      + "主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
     parameters: sendQueueAddSchema,
     execute: async (args) => {
       const gateNote = gate(ctx, "send_queue_add");
@@ -2053,17 +2340,20 @@ export function buildHarnessTools(ctx: ToolCtx) {
   // needsApproval 一律由注册表派生：登记为 sideEffect:"write" 就必须人工确认。
   // 各工具不再自己写一份——漏写不再是「静默执行」的成因（export_artifact 曾把注册表
   // 改成 write/需审批却没接 needsApproval，元数据与真实行为脱节、测试还全绿）。
-  // 闸门只向上加严：只可能把 needsApproval 置 true，绝不把任何工具置成免审批。
-  // 结构锁见 tests/unit/agent-approval-gate.test.ts。
+  // 闸门只向上加严：只可能把 needsApproval 置真，绝不把任何工具置成免审批。
+  // 关键：SDK 的 tool() 会把 needsApproval 归一成「函数」，运行时 toolExecution 无条件
+  // `await tool.needsApproval(ctx,args,callId)` 当函数调；这里若覆盖成布尔 true，就会
+  // `true(...)` → TypeError: needsApproval is not a function，凡调到 write 工具的回合直接崩。
+  // 所以必须赋一个返回 true 的函数，而不是布尔。结构锁见 tests/unit/agent-approval-gate.test.ts。
   const tools = [
     searchContacts, recordFollowup, deleteContacts, readProgramConfig, updateProgramConfig,
     updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
-    companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, sendQueueAdd,
+    companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, listTemplatesTool, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
   ];
   for (const t of tools) {
     const name = (t as unknown as { name?: string }).name ?? "";
-    if (requiresApprovalOf(name)) (t as unknown as { needsApproval?: unknown }).needsApproval = true;
+    if (requiresApprovalOf(name)) (t as unknown as { needsApproval?: unknown }).needsApproval = async () => true;
   }
   return tools;
 }

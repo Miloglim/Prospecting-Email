@@ -9,6 +9,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { getDb } from "../../db";
 import { agentMessages, agentFacts } from "../../db/schema/agent";
 import { chat as llmChat } from "../ai.service";
+import { recallWorkBlock } from "./working-memory";
 import type { ChatMsg } from "./harness";
 
 /** 每次请求携带的历史条数上限（system 除外），防上下文膨胀 */
@@ -25,17 +26,19 @@ export async function loadConversation(convId: string): Promise<ChatMsg[]> {
     .where(eq(agentMessages.conversationId, convId))
     .orderBy(asc(agentMessages.id)).all()
     .filter(r => r.role === "user" || r.role === "assistant");   // error 卡片只给人看，不进模型
-  const factBlock = recallFactBlock(convId);
+  // 注入块：会话工作台（结构化真数据，主）在前 + 过渡期保留瘦事实（尚未迁移到工作台的工具）在后。
+  // 工作台缺表时 recallWorkBlock 自带 try/catch 返回 []，不影响既有行为（见闭环规范 §5.3）。
+  const inject = [...recallWorkBlock(convId), ...recallFactBlock(convId)];
   if (rows.length <= HISTORY_LIMIT) {
     const recent = rows.map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
-    return [...factBlock, ...recent];
+    return [...inject, ...recent];
   }
   const dropped = rows.slice(0, rows.length - HISTORY_LIMIT);
   const recent = rows.slice(-HISTORY_LIMIT).map(r => ({ role: r.role as "user" | "assistant", content: r.content }));
   const summary = await summarizeEarlier(dropped);
   return [
     { role: "user", content: `【系统注入·此前对话摘要（${dropped.length} 条已压缩，不必再提）】\n${summary}` },
-    ...factBlock,
+    ...inject,
     ...recent,
   ];
 }

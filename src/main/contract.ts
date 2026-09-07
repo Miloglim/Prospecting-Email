@@ -117,14 +117,13 @@ export const IPC = {
     BACKCHECK:      chan(PREFIX.AI, "backcheck"),
     GENERATE_DRAFT: chan(PREFIX.AI, "generateDraft"),
     SUMMARIZE_EMAIL: chan(PREFIX.AI, "summarizeEmail"),
-    /** 模型端点：生效状态 / 列表 / 增删改 / 密钥 / 激活 / 思考 / 连通性测试 */
+    /** 模型端点：生效状态 / 列表 / 增删改 / 密钥 / 激活 / 连通性测试 */
     ENDPOINT_STATUS: chan(PREFIX.AI, "endpointStatus"),
     PROFILES:        chan(PREFIX.AI, "profiles"),
     PROFILE_UPSERT:  chan(PREFIX.AI, "profileUpsert"),
     PROFILE_DELETE:  chan(PREFIX.AI, "profileDelete"),
     PROFILE_KEY:     chan(PREFIX.AI, "profileKey"),
     PROFILE_ACTIVATE: chan(PREFIX.AI, "profileActivate"),
-    PROFILE_THINKING: chan(PREFIX.AI, "profileThinking"),
     PROFILE_TEST:    chan(PREFIX.AI, "profileTest"),
     /** 出网代理自动检测结果（只读；无需用户配置） */
     PROXY_INFO:      chan(PREFIX.AI, "proxyInfo"),

@@ -177,7 +177,7 @@ describe("agent 回合现场 store", () => {
     expect(mod.getConv(id).sending).toBe(true);               // 续跑的 done 还没来，回合不算结束
   });
 
-  it("⑧ 错误落点在气泡上且作废排队自动发送", async () => {
+  it("⑧ 错误落点在气泡上；排队消息不蒸发而是退回输入框（一次性取走）", async () => {
     const id = "conv-error";
     await openConversation(id);
     await mod.send(id, "问一句");
@@ -186,8 +186,12 @@ describe("agent 回合现场 store", () => {
 
     const conv = mod.getConv(id);
     expect(conv.sending).toBe(false);
-    expect(conv.queued).toBeNull();
+    expect(conv.queued).toBeNull();                    // 不自动补发：错误后立刻重发可能连环炸
+    expect(conv.rejectedInput).toBe("排一条");          // 但话要还给用户，不静默吞
     expect(conv.messages.at(-1)).toMatchObject({ role: "ai", error: true, content: "模型调用失败: 余额不足" });
+    expect(mod.takeRejectedInput(id)).toBe("排一条");   // 页面取走塞回输入框
+    expect(mod.getConv(id).rejectedInput).toBeNull();   // 一次性
+    expect(mod.takeRejectedInput(id)).toBeNull();
   });
 
   it("⑨ 删除会话连带清掉现场缓存", async () => {

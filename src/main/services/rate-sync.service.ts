@@ -13,7 +13,7 @@ import { netFetch } from "../net-proxy";
 // 规范：docs/rates-remote-source-spec.md（同步）+ docs/rates-query-fallback-spec.md（查询三段式）
 
 /** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
-const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "http://192.168.189.229:8788";
+const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "https://l5ruag9m.qwenwork.host";
 /** 台账工作台跳转与报价截图 URL 都用它：界面层经 IPC/镜像字段取值，不再各自硬编码 IP */
 export function remoteBase(): string { return REMOTE_BASE; }
 /**

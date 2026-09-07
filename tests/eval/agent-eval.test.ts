@@ -183,8 +183,7 @@ function judge(card: EvalCard, ev: Collected, db: Driz): Verdict {
 
 // ── 跑批 ──
 const LIVE = (process.env.AGENT_EVAL || "").trim() === "live";
-// 评测固定关思考：思考档会吞答案(gr-lang)且延迟 10 倍(rate-honest-empty 79s)，测的是"工具编排智商"不是推理
-process.env.AGENT_THINKING = "";
+// 思考已全局恒定关闭（思考开关已从产品移除），评测无需再显式关：思考档会吞答案(gr-lang)且延迟 10 倍
 const results: Array<{ id: string; group: string; pass: boolean; attribution: string; note: string; tools: string; ms: number; usage?: TurnUsage }> = [];
 let sandbox: Driz;
 /** 每张卡开跑时的跟进备注基线（种子自带一条），写操作落库校验按增量判断 */

@@ -83,10 +83,6 @@ export function registerAiIPC() {
     if (!id) return failResult("缺少端点 id");
     return Provider.activateProfile(id);
   });
-  ipcMain.handle(IPC.AI.PROFILE_THINKING, (_e, input: { id?: string; thinking?: boolean }) => {
-    if (!input?.id) return failResult("缺少端点 id");
-    return Provider.setProfileThinking(input.id, !!input.thinking);
-  });
   ipcMain.handle(IPC.AI.PROFILE_TEST, async (_e, id: string) => {
     if (!id) return failResult("缺少端点 id");
     Log.debug("ai.profileTest", id);
