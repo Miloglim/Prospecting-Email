@@ -751,9 +751,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (out.length === 0) {
         return okOut({ results: [], total: 0, notice: "库中没有匹配该关键词的联系人。请直接如实告知用户查无此人，不要用相同参数重复调用本工具。" });
       }
+      const QUIET_NOTE = "本结果卡不会展示给用户（静默检索）：正文禁止复述联系人名单或按行描述，直接给结论；"
+        + "只允许引用本批 results 里的人——此前对话或其他来源的联系人（姓名/公司/备注）一律不得混入本轮回答，results 里没有就明说未检索到。";
       const completeNote = total <= out.length
-        ? { complete: true as const, notice: `命中数据已全部返回（共 ${total} 条），无需再调用本工具，直接作答。沉默天数请直接引用 lastFollowupAt 与正文计算结果，不要自己换算。` }
-        : { notice: `共命中 ${total} 条，本批返回前 ${out.length} 条（sortBy:'stale' 时为沉默最久的前若干名）。回答时必须说明「共 ${total} 条，展示前 ${out.length} 条」，不要把本批行数说成总数。` };
+        ? { complete: true as const, notice: `命中数据已全部返回（共 ${total} 条），无需再调用本工具，直接作答。沉默天数请直接引用 lastFollowupAt 与正文计算结果，不要自己换算。${QUIET_NOTE}` }
+        : { notice: `共命中 ${total} 条，本批返回前 ${out.length} 条（sortBy:'stale' 时为沉默最久的前若干名）。回答时必须说明「共 ${total} 条，展示前 ${out.length} 条」，不要把本批行数说成总数。${QUIET_NOTE}` };
       // 唯一命中 → 直接续问写开发信（带上 contactId，草稿结果卡才能长出「入队」按钮）
       if (out.length === 1 && total === 1) {
         const one = out[0]!;

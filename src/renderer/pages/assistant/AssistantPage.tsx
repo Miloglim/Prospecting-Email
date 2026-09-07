@@ -46,6 +46,9 @@ function asRows(detail?: string): Record<string, unknown>[] | null {
   return null;
 }
 
+/** 中间检索类工具：结果卡静默（表格不上屏，只留状态行）——它们是给模型的中间依据，不是回答 */
+const QUIET_TOOLS = new Set(["search_contacts"]);
+
 /** 常见字段中文表头（未收录键原样显示） */
 const COL_LABELS: Record<string, string> = {
   podRaw: "目的港", lane: "航线", carrier: "船司", container: "柜型", oceanUsd: "运费USD",
@@ -441,6 +444,11 @@ function ArtifactBlock({ chip, done, onAction }: {
       <span>已{toolLabel(chip.tool)}{brief && <span className="text-gray-400"> · {brief}</span>}</span>
     </div>
   );
+  // 中间检索类工具（联系人检索等）：结果表不上屏——它们是给模型看的中间依据，
+  // 直接渲染成表格会让用户误以为是回答（实测翻车）。过程折叠区内只留状态行。
+  if (QUIET_TOOLS.has(chip.tool ?? "")) {
+    return <div className="py-1">{header}</div>;
+  }
 
   if (parsed?.artifact && !rows) {
     return (
