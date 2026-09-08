@@ -205,10 +205,50 @@ describe("范围两分：跟进看板 vs 联系人库（此前混为一谈导致
     expect(body).not.toMatch(/[一-鿿]/);                          // 中文国名绝不进客户邮件
   });
 
-  it("看板范围内没有该国客户时当面说清，不硬凑", () => {
-    const r = buildRateUpdatePlan({ country: "巴西" });         // 默认 board：Nina 是冷客户不在看板
-    expect(r.success).toBe(false);
-    expect(r.success ? "" : r.error).toContain("跟进看板");
+  it("看板里没有该国客户 → 空方案带原因与建议范围（不再是失败，也不许被说成权限问题）", () => {
+    const r = buildRateUpdatePlan({ country: "巴西" });         // Nina 是冷客户，不在看板
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.groups.length).toBe(0);
+    expect(r.data.emptyReason).toContain("冷客户");
+    expect(r.data.suggestScope).toBe("contacts");
+  });
+
+  it("statuses 显式圈状态：只要「已触达」就不含已回复的那位", () => {
+    const v = view({ statuses: ["reached"] });
+    expect(groupOf(v, "SANTOS", "EN")?.customers).toBe(1);       // 只剩 Juan（Cleo 是 replied）
+  });
+});
+
+describe("参数误用的纠偏（模型会把国家名塞进 port）", () => {
+  const call = async (args: unknown, conversationId = "ru-fix") => {
+    const ctx = { conversationId, counts: new Map<string, number>(), failures: new Map<string, number>() };
+    const T = Object.fromEntries(
+      ((buildHarnessTools(ctx) ?? []) as unknown as Array<{ name?: string }>).map(t => [t.name ?? "", t]),
+    ) as Record<string, { invoke: (r: unknown, i: string) => Promise<string> }>;
+    return JSON.parse(await T["rate_update_plan"].invoke({}, JSON.stringify(args))) as Record<string, never>;
+  };
+
+  it("port=巴西 → 自动按国家处理并说明纠正了什么", async () => {
+    const out = await call({ scope: "contacts", port: "巴西" }, "ru-fix-a") as {
+      ok: boolean; corrected?: string; groups?: Array<{ pod: string; basis: string }>;
+    };
+    expect(out.ok).toBe(true);
+    expect(out.corrected).toContain("按国家处理");
+    expect(out.groups?.map(g => g.pod)).toEqual(["RIO DE JANEIRO"]);
+    expect(out.groups?.[0]?.basis).toBe("country");
+  });
+
+  it("空方案回 empty:true + 建议范围动作，且 notice 禁提权限", async () => {
+    const out = await call({ port: "巴西" }, "ru-fix-b") as {
+      ok: boolean; empty?: boolean; emptyReason?: string; suggestScope?: string;
+      notice?: string; actions?: Array<{ text?: string }>;
+    };
+    expect(out.ok).toBe(true);
+    expect(out.empty).toBe(true);
+    expect(out.suggestScope).toBe("contacts");
+    expect(out.notice).toContain("权限");
+    expect((out.actions ?? []).map(a => a.text ?? "").join(" ")).toContain('scope="contacts"');
   });
 });
 

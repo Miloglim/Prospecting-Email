@@ -27,6 +27,8 @@ interface PlanView {
   totals: { customers: number; covered: number; groups: number; quotes: number; truncated: number; uncoveredTotal: number };
   groups: GroupRow[];
   uncovered: Array<{ contactId: number; name: string; reason: string; detail: string }>;
+  emptyReason?: string | null;
+  suggestScope?: "board" | "contacts" | null;
 }
 interface GroupBody {
   key: string; pod: string; language: string; subject: string; bodyHtml: string;
@@ -180,7 +182,16 @@ export function RateUpdatePanel({ open, onClose, defaultStages, contactIds }: {
             </div>
             <div className="flex-1 overflow-y-auto">
               {planData.groups.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有可推的组（下面看未覆盖原因）" className="mt-8" />
+                <div className="p-3">
+                  <Alert type="info" showIcon message="这一轮没组出方案"
+                    description={planData.emptyReason || "没有符合条件的客户，或她们的港口在台账当期都没有有效价"}
+                    action={planData.suggestScope ? (
+                      <Button size="small" type="link" className="!px-0"
+                        onClick={() => setRange(planData.suggestScope!)}>
+                        {planData.suggestScope === "contacts" ? "改用联系人库范围" : "改回跟进看板范围"}
+                      </Button>
+                    ) : null} />
+                </div>
               ) : planData.groups.map(g => (
                 <div
                   key={g.key}

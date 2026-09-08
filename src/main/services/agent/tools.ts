@@ -26,7 +26,7 @@ import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
 import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
-import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups } from "../rate-update.service";
+import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry } from "../rate-update.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
@@ -457,9 +457,12 @@ export const quoteSearchSchema = z.object({
 export const rateUpdatePlanSchema = z.object({
   scope: optStr(12).describe("圈人范围：不传/board=跟进看板（已触达+已回复，默认）；contacts=联系人库全量（含没开发过的冷客户）。"
     + "用户说「所有巴西客户」「冷客户也一起发」这类才传 contacts"),
-  country: optStr(40).describe("按国家/地区收窄（中英文都认，如 巴西/Brazil）。用户点名某个国家/地区时传它；不传=不限国家"),
+  country: optStr(40).describe("按国家/地区收窄（中英文都认，如 巴西/Brazil）。用户点名某个国家/地区时传它；不传=不限国家。"
+    + "**国家名一律传这里，不要塞进 port**（port 只放目的港，如 Santos/BRSSZ）"),
   stages: z.preprocess((v: unknown) => toWords(v), z.array(z.string().max(16)).max(8).nullable().optional())
     .describe("一般不用传。只有用户明确说「只推报价中/试单那批」时才传（reaching/quoting/trial/cooperating/other）"),
+  statuses: z.preprocess((v: unknown) => toWords(v), z.array(z.string().max(16)).max(5).nullable().optional())
+    .describe("按联系人状态圈人（用户直接说「status=已触达/reached 的那批」时才传）：reached/replied/bounced/autoreply/cold"),
   port: optStr(60).describe("只推某个目的港（英文港名或 UN/LOCODE，如 Santos/BRSSZ）；省略=按每位客户自己的港口偏好分组"),
   contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50).nullable().optional())
     .describe("只给指定的这几位客户推（来自 search_contacts 的 id）；省略=按范围圈定"),
@@ -2608,11 +2611,22 @@ export function buildHarnessTools(ctx: ToolCtx) {
     execute: async (args) => {
       const cached = cachedRead(ctx, "rate_update_plan", args);
       if (cached) return cached;
+      // 容错：模型常把国家名塞进 port（用户说「巴西的」→ port=巴西）。认得是国家就纠回 country，
+      // 别让一次参数误用变成「查无此人」，更别让模型因此去自由发挥编原因
+      let country = args.country ?? undefined;
+      let port = args.port ?? undefined;
+      let corrected = "";
+      if (port && looksLikeCountry(port)) {
+        corrected = `把「${port}」按国家处理（port 只放目的港）`;
+        country = country ?? looksLikeCountry(port) ?? undefined;
+        port = undefined;
+      }
       const r = buildRateUpdatePlan({
         scope: args.scope === "contacts" ? "contacts" : "board",
-        country: args.country ?? undefined,
+        country,
         stages: args.stages?.map(s => s.toLowerCase()),
-        port: args.port ?? undefined,
+        statuses: args.statuses?.map(s => (["cold", "未触达", "none"].includes(s.toLowerCase()) ? "" : s.toLowerCase())),
+        port,
         contactIds: args.contactIds?.length ? args.contactIds : undefined,
         includeReplied: args.includeReplied ?? undefined,
         quotesPerGroup: args.quotesPerGroup ?? undefined,
@@ -2620,15 +2634,34 @@ export function buildHarnessTools(ctx: ToolCtx) {
       });
       if (!r.success) {
         audit(ctx, "rate_update_plan", "read", args, undefined, "auto", r.error);
-        return failOut("no_plan", r.error);
+        // 失败口径钉死：这是数据范围问题，不是权限问题（实测模型会把没圈到人解释成「账号未启用该能力，请找管理员」）
+        return failOut("no_plan", r.error + "。", {
+          notice: "如实把这句话说给用户：范围里没圈到符合条件的客户。"
+            + "严禁把它说成权限不足、账号未启用、需要联系管理员或功能没开——不存在这种东西。"
+            + "换范围（scope=contacts）或换筛选条件再试一次即可。",
+        });
       }
       const plan = r.data;
       const view = planView(plan);
       const biggest = [...plan.groups].sort((a, b) => b.customers.length - a.customers.length)[0];
       const laneLevelGroups = plan.groups.filter(g => g.laneLevel).map(g => g.label);
       audit(ctx, "rate_update_plan", "read", args, { planId: plan.id, groups: plan.totals.groups, covered: plan.totals.covered }, "auto");
+      // 空方案：如实给原因 + 建议换的范围（一键续问），不要让它变成模型自由发挥的空间
+      if (plan.emptyReason) {
+        return okOut({
+          ...view, empty: true,
+          notice: `一个组都没成：${plan.emptyReason}。原话告诉用户这个原因，并问一句要不要改用「联系人库」范围重试`
+            + (plan.suggestScope ? `（scope="${plan.suggestScope}"）` : "")
+            + "。这跟权限、账号、功能开关完全无关，一个字都不许往那方面提；也不要转去逐家 search_contacts 自己拼名单。",
+          actions: plan.suggestScope
+            ? [promptAction(plan.suggestScope === "contacts" ? "改用联系人库范围重试" : "改回跟进看板范围重试",
+              `给跟进客户更新运价：改用 scope="${plan.suggestScope}" 重新出方案${country ? `，country=${country}` : ""}`)]
+            : [],
+        });
+      }
       const out = finishRead(ctx, "rate_update_plan", args, okOut({
         ...view,
+        ...(corrected ? { corrected } : {}),
         // 邮件正文的纯文本形态（service 生成，不是模型写的）：用户问「信长什么样」时原样贴出
         preview: biggest
           ? {

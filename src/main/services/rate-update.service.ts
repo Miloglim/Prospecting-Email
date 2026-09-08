@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { getDb } from "../db";
 import { contacts } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
-import { inArray, notInArray } from "drizzle-orm";
+import { inArray, sql as dsql } from "drizzle-orm";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 import { normalizeLang, buildDynamicQueue, startQueue, getQueueItems, getSendStatus, type SendItem, type EnqueueResult } from "./send.service";
@@ -80,6 +80,9 @@ export interface RateUpdatePlan {
   groups: RateUpdateGroup[];
   uncovered: UncoveredCustomer[];
   totals: { customers: number; covered: number; groups: number; quotes: number; truncated: number; uncoveredTotal: number };
+  /** 圈到 0 人时的如实说明（这不是权限问题，也不许被说成权限问题）与建议换的范围 */
+  emptyReason: string | null;
+  suggestScope: "board" | "contacts" | null;
 }
 
 export interface RateUpdateOpts {
@@ -89,6 +92,8 @@ export interface RateUpdateOpts {
   country?: string;
   /** CRM 管线阶段收窄（reaching/quoting/trial/cooperating/other）；默认除 lost 全取。scope=contacts 时忽略 */
   stages?: string[];
+  /** 直接按联系人状态圈人（用户说「status=已触达的那批」时用）：reached/replied/''/bounced/autoreply */
+  statuses?: string[];
   /** 指定客户（省略=按 scope/country/stages 圈定） */
   contactIds?: number[];
   /** 只看某个港（中英文/别名均可，内部归一后比对） */
@@ -249,7 +254,7 @@ const PLACEHOLDER_EMAIL = /no\.email|noreply|no-reply|example\.com|test@|@test|n
 
 function scopeContacts(o: {
   scope: "board" | "contacts"; includeReplied: boolean; stages: string[];
-  country?: string | null; ids?: number[]; maxContacts: number;
+  statuses?: string[]; country?: string | null; ids?: number[]; maxContacts: number;
 }): ScopeRow[] {
   const select = {
     id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
@@ -257,11 +262,12 @@ function scopeContacts(o: {
     country: contacts.country,
   };
   const db = getDb();
-  const rows = o.scope === "contacts"
-    // 联系人库全量：只剔退信/自动回复（这两个状态=地址或人已死），冷客户也在内
-    ? db.select(select).from(contacts).where(notInArray(contacts.status, ["bounced", "autoreply"])).all()
-    : db.select(select).from(contacts)
-      .where(inArray(contacts.status, o.includeReplied ? ["reached", "replied"] : ["reached"])).all();
+  // 显式给了状态就照它来（用户会说「status=已触达的那批」），否则用范围默认口径
+  const statuses = o.statuses?.length
+    ? o.statuses
+    : o.scope === "contacts" ? ["", "reached", "replied"] : (o.includeReplied ? ["reached", "replied"] : ["reached"]);
+  const rows = db.select(select).from(contacts)
+    .where(inArray(dsql`coalesce(${contacts.status}, '')`, statuses)).all();
   const want = o.ids?.length ? new Set(o.ids) : null;
   const countryProbe = o.country?.trim().toLowerCase() ?? "";
   const countryWords = countryProbe ? countryMatchWords(countryProbe) : [];
@@ -294,6 +300,16 @@ const COUNTRY_ALIAS: Record<string, string[]> = {
   马来西亚: ["malaysia"], 新加坡: ["singapore"], 印尼: ["indonesia"], 菲律宾: ["philippines"],
   韩国: ["korea"], 日本: ["japan"], 澳大利亚: ["australia"], 新西兰: ["new zealand"],
 };
+/** 这个词是不是我们认识的国家名（中英双向）；是就返回规范中文名。用于纠正误塞进 port 的国家名 */
+export function looksLikeCountry(word: string | null | undefined): string | null {
+  const w = (word ?? "").trim().toLowerCase();
+  if (!w) return null;
+  if (COUNTRY_ALIAS[w]) return w;
+  const byEn = Object.entries(COUNTRY_ALIAS).find(([, ens]) => ens.some(e => e === w));
+  if (byEn) return byEn[0];
+  return Object.keys(COUNTRY_ALIAS).find(cn => cn.toLowerCase() === w) ?? null;
+}
+
 /** 查询词 → 该国的比对词集合（中文原词 + 英文别名；给的是英文就反查中文，两边都能匹配 country 字段） */
 export function countryMatchWords(word: string): string[] {
   const w = word.trim().toLowerCase();
@@ -425,6 +441,8 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
     country: opts.country?.trim() || null,
     includeReplied: opts.includeReplied ?? true,
     stages: opts.stages?.length ? opts.stages.filter(s => ALL_STAGES.includes(s) && s !== "lost") : ALL_STAGES.filter(s => s !== "lost"),
+    /** 显式状态圈人（用户说「status=已触达」）；未给则按 scope 的默认口径 */
+    statuses: opts.statuses?.length ? [...new Set(opts.statuses.map(s => s.trim()))] : undefined,
     quotesPerGroup: clampInt(opts.quotesPerGroup, 1, MAX_QUOTES_PER_GROUP, 12),
     maxGroups: clampInt(opts.maxGroups, 1, 40, 24),
     days: clampInt(opts.days, 7, 365, 90),
@@ -438,12 +456,32 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
   if (opts.port?.trim() && !portFilter) return failResult(`「${opts.port.trim()}」在台账里不是可识别的目的港，先确认港名或按航线查`);
 
   const rows = scopeContacts({
-    scope: o.scope, includeReplied: o.includeReplied, stages: o.stages,
+    scope: o.scope, includeReplied: o.includeReplied, stages: o.stages, statuses: o.statuses,
     country: o.country, ids: opts.contactIds, maxContacts: o.maxContacts,
   });
   const scopeLabel = o.scope === "contacts"
-    ? `联系人库${o.country ? `（${o.country}）` : ""}` : "跟进看板（已触达/已回复）";
-  if (!rows.length) return failResult(`${scopeLabel}里没有符合条件的客户`);
+    ? `联系人库${o.country ? `里的「${o.country}」客户` : ""}` : `跟进看板（已触达${o.includeReplied ? "/已回复" : ""}）${o.country ? `里的「${o.country}」客户` : ""}`;
+  const emptyPlan = (reason: string, suggest: "board" | "contacts" | null): Result<RateUpdatePlan> => okResult({
+    id: newId(), createdAt: now.toISOString(),
+    scope: {
+      scope: o.scope, stages: o.stages, includeReplied: o.includeReplied,
+      country: o.country, port: portFilter ?? (opts.port?.trim() || null),
+      days: o.days, quotesPerGroup: o.quotesPerGroup,
+    },
+    groups: [], uncovered: [],
+    totals: { customers: 0, covered: 0, groups: 0, quotes: 0, truncated: 0, uncoveredTotal: 0 },
+    emptyReason: reason, suggestScope: suggest,
+  });
+  // 圈到 0 人是数据事实，不是故障：如实带原因 + 建议换哪个范围，别让模型自己去猜（它猜就会编出「权限没开」这种话）
+  if (!rows.length) {
+    const suggest = o.scope === "board" ? "contacts" as const : null;
+    return emptyPlan(
+      o.country
+        ? `${scopeLabel}一个也没有（${o.country}的客户目前都在联系人库里当冷客户，没进过跟进看板）`
+        : `${scopeLabel}里没有符合条件的客户`,
+      suggest,
+    );
+  }
   const names = companyNameMap();
   const derived = deriveCustomerPorts(rows.map(r => r.id), { days: o.days, maxContacts: o.maxContacts, now });
   const portsById = new Map<number, CustomerPorts>(derived.map(d => [d.contactId, d]));
@@ -602,6 +640,9 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
       quotes: groups.reduce((s, g) => s + g.quotes.length, 0),
       truncated, uncoveredTotal: uncovered.length,
     },
+    emptyReason: groups.length ? null : (o.country
+      ? `圈到 ${rows.length} 位客户，但她们的偏好港与国家方向在台账当期都没有有效价` : "圈到客户了但没有任何港口当期有有效报价"),
+    suggestScope: null,
   };
   rememberPlan(plan);
   Log.debug("rateUpdate.plan", `${plan.id}: ${rows.length} 人 → ${groups.length} 组/${covered} 人，未覆盖 ${uncovered.length}`);
@@ -716,6 +757,8 @@ export function planView(plan: RateUpdatePlan): Record<string, unknown> {
     planId: plan.id,
     scope: plan.scope,
     totals: plan.totals,
+    emptyReason: plan.emptyReason,
+    suggestScope: plan.suggestScope,
     groups: plan.groups.map(g => ({
       pod: g.pod, label: g.label, lane: g.lane, language: g.language,
       basis: g.basis, laneLevel: g.laneLevel,
