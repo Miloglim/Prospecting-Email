@@ -409,6 +409,70 @@ export function InboxList() {
     message.success(`已标为 ${TYPE[t]?.label || t}`);
   };
 
+  // ── 键盘选择层（实测缺口：选择只有鼠标三件套，Ctrl+A 被浏览器抢去「全选文字」，看着像坏了）──
+  // Ctrl/Cmd+A 全选（虚拟列表按全量选，不只看得见的那几行）· Esc 清空 · ↑/↓ 移动并打开
+  // （Shift 扩选）· Space 切换选中 · Delete 删除所选（走既有确认弹窗）。输入框/弹层内一律不劫持。
+  const batchDelRef = useRef(batchDel);
+  batchDelRef.current = batchDel;
+  const kbRef = useRef({ items, sid, sel, last, viewed, groupMode: view === "sender" && !senderFilter });
+  kbRef.current = { items, sid, sel, last, viewed, groupMode: view === "sender" && !senderFilter };
+
+  const scrollRowIntoView = useCallback((idx: number) => {
+    const el = listRef.current;
+    if (!el) return;
+    const top = idx * ROW_H;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW_H - el.clientHeight;
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable
+        || t.closest?.(".ant-modal-wrap, .ant-drawer, .ant-popover"))) return;
+      const s = kbRef.current;
+      if (s.groupMode) return;                 // 发信人分组视图没有邮件选择语义，不抢键
+      const n = s.items.length;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();                    // 不给浏览器原生「全选文字」留机会
+        setSel(new Set(s.items.map(i => i.id)));
+        if (n) setLast(s.sid ?? s.items[0]!.id);
+        return;
+      }
+      if (e.key === "Escape") { setSel(new Set()); setMenu(null); return; }
+      if (e.key === "Delete" && s.sel.size) { e.preventDefault(); batchDelRef.current(); return; }
+      if (e.key === " " && s.sid !== null) {
+        e.preventDefault();
+        const id = s.sid;
+        setSel(prev => { const ns = new Set(prev); if (ns.has(id)) ns.delete(id); else ns.add(id); return ns; });
+        return;
+      }
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && n) {
+        e.preventDefault();
+        const dir = e.key === "ArrowDown" ? 1 : -1;
+        const cur = s.items.findIndex(i => i.id === s.sid);
+        const next = cur < 0 ? 0 : Math.min(n - 1, Math.max(0, cur + dir));
+        const it = s.items[next]!;
+        if (e.shiftKey && s.sid !== null && cur >= 0) {
+          const anchor = s.items.findIndex(i => i.id === (s.last ?? s.sid));
+          const [f, tt] = anchor <= next ? [anchor, next] : [next, anchor];
+          setSel(new Set(s.items.slice(Math.max(0, f), tt + 1).map(i => i.id)));
+        } else {
+          setSel(new Set([it.id]));
+          setLast(it.id);
+        }
+        setSid(it.id);
+        scrollRowIntoView(next);
+        // 与点击同语义：打开即算已读
+        const nv = new Set(s.viewed); nv.add(mk(it)); setViewed(nv); saveViewed(nv);
+        readMut.mutate([it.id]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scrollRowIntoView]);
+
   // 统计基于全量数据，未读只看有分类的
   const allItems = data?.success ? data.data || [] : [];
   const counts: Record<string, number> = { bounce: 0, replied: 0, autoreply: 0, sent: 0, other: 0 };
@@ -433,8 +497,8 @@ export function InboxList() {
           <input
             placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)}
             style={{ flex: 1, border: "1px solid #e5e5e5", borderRadius: 5, padding: "2px 7px", fontSize: 10, outline: "none", minWidth: 0, lineHeight: "16px" }} />
-          {sel.size > 1 && <button onClick={batchRead} className="btn" style={{ padding: "2px 6px", fontSize: 10, borderRadius: 5, lineHeight: "16px" }}>已读</button>}
-          {sel.size > 1 && <button onClick={batchDel} className="btn" style={{ padding: "2px 6px", fontSize: 10, color: "#e5484d", borderColor: "#fecaca", borderRadius: 5, lineHeight: "16px" }}>删({sel.size})</button>}
+          {sel.size > 1 && <button onClick={batchRead} className="btn" title="Ctrl+A 全选 · ↑↓ 移动（Shift 扩选）· Space 切换选中" style={{ padding: "2px 6px", fontSize: 10, borderRadius: 5, lineHeight: "16px" }}>已读</button>}
+          {sel.size > 1 && <button onClick={batchDel} className="btn" title="已选 {n} 封 · Delete 键同样可删（有确认）· Esc 取消选择" style={{ padding: "2px 6px", fontSize: 10, color: "#e5484d", borderColor: "#fecaca", borderRadius: 5, lineHeight: "16px" }}>删({sel.size})</button>}
         </div>
         {/* 拉取进度弹窗 — 分账号详细显示 */}
         <Modal title="拉取邮件" open={fetching} footer={null} closable={false} width={420}>

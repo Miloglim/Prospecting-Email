@@ -717,8 +717,13 @@ function PlanCard({ items }: { items: PlanStep[] }) {
 interface FeedItemDto {
   key: string; text: string; prompt: string;
   tone: "urgent" | "mail" | "intel" | "neutral";
-  bucket: "followup" | "mail" | "intel" | "static";
+  bucket: "followup" | "mail" | "intel" | "static" | "action";
   href?: string; contactId?: number;
+  /** 一键采纳型：点击直接落库（不经模型），规范 docs/mail-action-suggestion-spec.md §4 */
+  action?: {
+    kind: "addContact" | "markReached"; email: string;
+    firstName?: string | null; lastName?: string | null; contactId?: number | null;
+  };
 }
 interface FeedDto { greeting: string; items: FeedItemDto[] }
 
@@ -1067,6 +1072,32 @@ export function AssistantPage() {
     stopTurn(key);
   };
 
+  /** 一键采纳型建议：点击直接落库，不经模型也不再叠确认框（点这一下就是显式授权）。
+   *  成功才 dismiss（当天不再提）；失败保留在原位，用户还能再点。
+   *  执行后联系人服务会 nudge() → 服务端重算并推 suggestions:changed，气泡就地消失。 */
+  const [actionBusy, setActionBusy] = useState<Set<string>>(new Set());
+  const applyFeedAction = async (it: FeedItemDto) => {
+    const a = it.action;
+    if (!a || actionBusy.has(it.key)) return;
+    setActionBusy(s => new Set(s).add(it.key));
+    try {
+      const r = await window.api.invoke("contacts:upsert", {
+        email: a.email,
+        firstName: a.firstName ?? undefined,
+        lastName: a.lastName ?? undefined,
+        status: "reached",          // 已触达 = 进跟进列表的开关（crm listPipeline 只筛 status='reached'）
+      }) as IpcResult<{ id?: number }>;
+      if (!r?.success) { message.error(`没办成：${r?.error || "未知错误"}`); return; }
+      await window.api.invoke("agent:dismissSuggestion", it.key);
+      const who = [a.firstName, a.lastName].filter(Boolean).join(" ") || a.email;
+      message.success(a.kind === "addContact" ? `已把 ${who} 加入联系人，并标为已触达` : `已把 ${who} 标为已触达，在跟进列表里了`);
+    } catch (err) {
+      message.error(`没办成：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setActionBusy(s => { const n = new Set(s); n.delete(it.key); return n; });
+    }
+  };
+
   /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
     if (!approval) return;
@@ -1308,12 +1339,16 @@ export function AssistantPage() {
                         style={{ animationDelay: `${i * 45}ms` }}
                         title={it.text}
                         onClick={() => {
+                          if (it.action) { void applyFeedAction(it); return; }   // 一键采纳：直接办，不发起对话
                           void window.api.invoke("agent:dismissSuggestion", it.key);   // 当天不再推荐同一条
                           void handleSend(it.prompt);
                         }}
                       >
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TONE_DOT[it.tone]}${it.tone === "urgent" ? " breathe" : ""}`} />
                         <span className="text-[13px] text-gray-700 truncate">{it.text}</span>
+                        {it.action && (
+                          <span className="shrink-0 text-[11px] text-teal-600">{actionBusy.has(it.key) ? "处理中…" : "点一下办"}</span>
+                        )}
                         {it.href && (
                           <a
                             className="shrink-0 text-[11px] text-gray-400 hover:text-teal-600 opacity-0 group-hover/bubble:opacity-100 transition-opacity"

@@ -10,6 +10,7 @@ import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
 import { nudge as nudgeSuggestions } from "./suggestion-bus";
+import { linkInboxForContact } from "./inbox-link";
 import * as XLSX from "xlsx";
 
 // ── 导入：列名别名 → 字段映射 ──
@@ -290,8 +291,9 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
     }
 
     saveDatabase();
-    nudgeSuggestions();   // 联系人变化 → 建议流热更新（沉默名单/往来匹配可能变）
     const updated = getDb().select().from(contacts).where(eq(contacts.id, existing.id)).get()!;
+    linkInboxForContact(updated.id, updated.email);   // 存量邮件即时挂链（改过邮箱也能当场看到往来，不必等重启）
+    nudgeSuggestions();   // 联系人变化 → 建议流热更新（沉默名单/往来匹配可能变）
     return okResult(updated);
   }
 
@@ -315,9 +317,10 @@ export async function upsertContact(input: Partial<InsertContactRow> & { id?: nu
     updatedAt: now,
   } as InsertContactRow).run();
   saveDatabase();
+  const created = getDb().select().from(contacts).where(eq(contacts.email, input.email)).get()!;
+  linkInboxForContact(created.id, created.email);   // 新建即挂链：先收信后建档的往来历史当场可见（治「重启才同步」）
   nudgeSuggestions();   // 新建联系人 → 建议流热更新
 
-  const created = getDb().select().from(contacts).where(eq(contacts.email, input.email)).get()!;
   return okResult(created);
 }
 
@@ -518,6 +521,7 @@ export async function importContacts(params: {
   );
 
   let imported = 0, skipped = 0;
+  const importedEmails: string[] = [];
 
   for (const row of dataRows) {
     const email = (row[emailIdx] || "").toLowerCase().trim();
@@ -598,6 +602,7 @@ export async function importContacts(params: {
     try {
       getDb().insert(contacts).values(insert as InsertContactRow).run();
       imported++;
+      importedEmails.push(email);
       existingSet.add(email);
     } catch (err) {
       Log.warn("contact.import", `跳过 ${email}: ${err instanceof Error ? err.message : String(err)}`);
@@ -605,7 +610,16 @@ export async function importContacts(params: {
     }
   }
 
-  if (imported > 0) saveDatabase();
+  if (imported > 0) {
+    saveDatabase();
+    // 导入的联系人也可能早已来过信（先收信后导入档案）：当场挂链，别等重启跑迁移
+    for (const e of importedEmails) {
+      const c = getDb().select({ id: contacts.id, email: contacts.email }).from(contacts)
+        .where(dsql`lower(${contacts.email}) = ${e}`).get();
+      if (c) linkInboxForContact(c.id, c.email);
+    }
+    nudgeSuggestions();
+  }
   Log.info("contact.import", `导入 ${imported} 条，跳过 ${skipped} 条`);
   return okResult({ imported, skipped });
 }

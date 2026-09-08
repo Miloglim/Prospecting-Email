@@ -145,6 +145,15 @@ describe("scanDueCampaigns（到期触点 → 入队，引擎侧硬闸）", () =
     expect(enqueued[0]!.autoStart).toBe(false);
   });
 
+  it("无启用模板 → 程序预设句库兜底组装，触点照常入队", async () => {
+    const cid = seedCampaign([1], true);
+    h.db!.delete(schema.templates).run();          // 素材库空：initial/followup1 都没有用户模板
+    await campaign.scanDueCampaigns();
+    expect(enqueued).toHaveLength(1);              // assembleEmail 句库兜底，不再因缺模板顺延
+    const t = h.db!.select().from(schema.sendCampaignTargets).where(eq(schema.sendCampaignTargets.campaignId, cid)).get()!;
+    expect(t.status).toBe("queued");
+  });
+
   it("引擎硬闸：目标联系人已变 replied → 标 skipped，绝不入队", async () => {
     const cid = seedCampaign([1], true);
     h.db!.update(schema.contacts).set({ status: "replied" }).where(eq(schema.contacts.id, 1)).run();

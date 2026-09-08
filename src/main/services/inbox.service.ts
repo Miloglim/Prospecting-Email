@@ -193,6 +193,9 @@ export function matchContactIds(emails: string[]): string {
   return [...ids].join(",");
 }
 
+// 存量邮件即时回填已抽到 inbox-link.ts（contact.service 也要调，放这里会与
+// inbox.service ↔ contact.service 现有依赖成环）。
+
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 /** 系统地址关键词 — 退信里必然出现但绝不是被退联系人 */

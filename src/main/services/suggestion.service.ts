@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { and, count, desc, eq, gt, gte, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
 import { APP_ROOT } from "../config";
 import { getDb } from "../db";
 import { contacts } from "../db/schema/contacts";
@@ -11,6 +11,7 @@ import { Log } from "../logger";
 import { checkReminders, type ReminderContact } from "./crm.service";
 import { getSendStatus, getQueueItems } from "./send.service";
 import { ratesDiff, type RatesDiff } from "./rate-sync.service";
+import { internalDomains } from "./inbox.service";
 
 // ── 新对话「行动建议」信息流（docs/suggestion-feed-spec.md）──────────
 // 形态：开场气泡里 3–4 个可点 chip。候选全部本地生成（SQL+拼装，零模型调用），
@@ -19,7 +20,17 @@ import { ratesDiff, type RatesDiff } from "./rate-sync.service";
 // 「MSC 美西线 40HQ 降到 $2800」这类结构化事实，而本地拼装更快更准。
 
 export type Tone = "urgent" | "mail" | "intel" | "neutral";
-export type Bucket = "followup" | "mail" | "intel" | "static";
+export type Bucket = "followup" | "mail" | "intel" | "static" | "action";
+
+/** 一键采纳的行动载荷（规范 docs/mail-action-suggestion-spec.md §3-4）：
+ *  点击 chip 直接走 contacts:upsert，不经模型、不再叠一层确认框 */
+export interface ReplyAction {
+  kind: "addContact" | "markReached";
+  email: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  contactId?: number | null;
+}
 
 export interface FeedItem {
   key: string;          // 去重 / dismissed 记忆用（跨重算稳定）
@@ -29,6 +40,7 @@ export interface FeedItem {
   bucket: Bucket;
   href?: string;        // 可选：跳转查看（联系人/队列页）
   contactId?: number;   // ctx 锚点命中时置顶用
+  action?: ReplyAction; // 有它 = 一键执行型建议（点击先执行 IPC，成功后再 dismiss）
 }
 
 export interface SuggestionFeed {
@@ -56,6 +68,7 @@ export const beijingDay = (at = Date.now()) => new Date(at + 8 * 3600_000).toISO
 export interface Candidate {
   bucket: Bucket; key: string; text: string; tone: Tone; score: number;
   prefix?: Prefix; href?: string; contactId?: number; freshAt?: number;
+  action?: ReplyAction;
 }
 
 export interface FeedInputs {
@@ -68,6 +81,8 @@ export interface FeedInputs {
     unreplied: { id: number; from: string; subject: string; receivedAt: string; contactId: number | null } | null;
     bounce3d: number;
   };
+  /** 客户回复带来的一键行动（新客建档 / 老客放回跟进列表），来源见 gatherReplyActions */
+  replyActions: ReplyAction[];
   diff: RatesDiff | null;
   /** pod 主段 → 最近 30 天有往来的联系人（intel 桶「可以给 XX 同步」用） */
   related: Map<string, { id: number; name: string }>;
@@ -125,6 +140,26 @@ export function collectCandidates(inp: FeedInputs): Candidate[] {
           ? `队列暂停中，还压着 ${send.pendingGroups} 组待发`
           : `队列还压着 ${send.pendingGroups} 组待发，看看卡在哪`,
         score: 15, prefix: "准备发信", href: "#/queue",
+      });
+    }
+  }
+
+  // A2. 一键行动（客户回复 → 建档 / 放回跟进列表）
+  // 新客刚回信是黄金窗口，分数压在行情/运价类之上；同桶 ≤2 由 selectItems 统一管
+  for (const a of inp.replyActions) {
+    const who = [a.firstName, a.lastName].filter(Boolean).join(" ") || a.email;
+    if (a.kind === "addContact") {
+      out.push({
+        bucket: "action", key: `act:new:${a.email.toLowerCase()}`, tone: "urgent",
+        text: `把 ${who}（${a.email}）加入联系人并标为已触达`,
+        score: 100, action: a, href: "#/customers?view=table",
+      });
+    } else {
+      out.push({
+        bucket: "action", key: `act:reached:${a.contactId ?? a.email.toLowerCase()}`, tone: "mail",
+        text: `把 ${who} 放回跟进列表（标为已触达）`,
+        score: 80, contactId: a.contactId ?? undefined, action: a,
+        href: a.contactId ? `#/customers?view=table&detail=${a.contactId}` : "#/customers?view=table",
       });
     }
   }
@@ -258,6 +293,7 @@ export function selectItems(cands: Candidate[], inp: FeedInputs, rotate = 0): Fe
         prompt: c.prefix ? withPrefix(c.prefix, c.text) : c.text,
         ...(c.href ? { href: c.href } : {}),
         ...(c.contactId ? { contactId: c.contactId } : {}),
+        ...(c.action ? { action: c.action } : {}),
       });
     }
     return picked;
@@ -325,6 +361,88 @@ export function dismiss(key: string): void {
 // ── 取数（全本地 SQL，毫秒级；单块失败只让建议变少，不炸空态）──────
 
 const DAY = 86400_000;
+
+// ── 客户回复 → 一键行动（规范 docs/mail-action-suggestion-spec.md）────────
+// 解析工作其实早在邮件落库时就做完了（classification + 联系人匹配，见 inbox.ipc 的入库路径），
+// 这里不二次调模型，只查这张已解析完的表：classification='replied' AND my_role='to'。
+
+/** from_name 常带签名尾巴：「Isabella Mendes | Three Logistics」「Mandy深圳运去哪(奥南)」 */
+export function cleanPersonName(raw: string | null | undefined): { firstName: string | null; lastName: string | null } {
+  const s = (raw || "").replace(/[|(（].*$/, "").replace(/\s{2,}/g, " ").trim();
+  if (!s) return { firstName: null, lastName: null };
+  const parts = s.split(/\s+/);
+  return { firstName: parts[0] ?? null, lastName: parts.length > 1 ? parts.slice(1).join(" ") : null };
+}
+
+/** 公共/机器人信箱的「回复」不是客户意向（noreply、postmaster、mailer-daemon、info@…）。
+ *  只认「本地名整个就是这个词（可跟数字/分隔后缀）」——`marketing.manager@…` 是真人，不能误杀。 */
+const BOT_LOCAL = /^(noreply|no-reply|donotreply|do-not-reply|postmaster|mailer-daemon|bounce|bounces|abuse|admin|support|info|sales|marketing|news|notify|notification|automated|auto-reply|webmaster)([-_.]?\d*)?$/i;
+export function isBotMailbox(email: string): boolean {
+  const local = (email.split("@")[0] || "").trim();
+  return !local || BOT_LOCAL.test(local);
+}
+
+export interface ReplyActionSourceRow { fromEmail: string; fromName: string | null }
+export interface ReplyActionContact {
+  id: number; email: string; status: string | null; firstName: string | null; lastName: string | null;
+}
+
+/**
+ * 纯决策（导出供单测）：近期「客户回复」来信 + 库内已有联系人 + 我方内部域列表 → 一键行动清单。
+ * 规则：内部域名（同事互转）与公共信箱排除；同邮箱只出一条（取最新一封）；
+ *      库里没有 → addContact；有但 status≠reached → markReached；已在跟进列表（reached）→ 不出。
+ */
+export function decideReplyActions(
+  rows: ReplyActionSourceRow[],
+  existing: ReplyActionContact[],
+  internalDomains: string[],
+): ReplyAction[] {
+  const byEmail = new Map(existing.map(c => [c.email.trim().toLowerCase(), c]));
+  const seen = new Set<string>();
+  const out: ReplyAction[] = [];
+  for (const r of rows) {
+    const email = (r.fromEmail || "").trim();
+    const key = email.toLowerCase();
+    const domain = (key.split("@")[1] || "").trim();
+    if (!key.includes("@") || !domain.includes(".")) continue;
+    if (seen.has(key)) continue;
+    // 我方内部域名（同事之间的 Re: 转发在分类里也是 replied，不是客户回复）
+    if (internalDomains.some(d => d && (domain === d || domain.endsWith(`.${d}`)))) continue;
+    if (isBotMailbox(email)) continue;
+    seen.add(key);
+    const hit = byEmail.get(key);
+    if (!hit) {
+      const nm = cleanPersonName(r.fromName);
+      out.push({ kind: "addContact", email, firstName: nm.firstName, lastName: nm.lastName });
+    } else if (hit.status !== "reached") {
+      out.push({
+        kind: "markReached", email, contactId: hit.id,
+        firstName: hit.firstName, lastName: hit.lastName,
+      });
+    }
+  }
+  return out;
+}
+
+/** 取数：任何一步失败只让候选变少，不打挂整个 feed */
+function gatherReplyActions(): ReplyAction[] {
+  try {
+    const db = getDb();
+    const mails = db.select({
+      fromEmail: inboxMessages.fromEmail, fromName: inboxMessages.fromName,
+    }).from(inboxMessages).where(and(
+      eq(inboxMessages.classification, "replied"),
+      eq(inboxMessages.myRole, "to"),
+    )).orderBy(desc(inboxMessages.receivedAt)).limit(40).all();
+    if (!mails.length) return [];
+    const emails = [...new Set(mails.map(m => (m.fromEmail || "").trim().toLowerCase()).filter(Boolean))];
+    const hits = db.select({
+      id: contacts.id, email: contacts.email, status: contacts.status,
+      firstName: contacts.firstName, lastName: contacts.lastName,
+    }).from(contacts).where(inArray(contacts.email, emails)).all();
+    return decideReplyActions(mails, hits, internalDomains()).slice(0, 4);
+  } catch { return []; }
+}
 
 function gatherMail(now: number): FeedInputs["mail"] {
   const out: FeedInputs["mail"] = { unread: 0, latest: null, unreplied: null, bounce3d: 0 };
@@ -438,6 +556,7 @@ export function feed(ctx?: string, rotate = 0): SuggestionFeed {
     reminders: gatherReminders(),
     send: gatherSend(),
     mail: gatherMail(now),
+    replyActions: gatherReplyActions(),
     diff,
     related: gatherRelated(tokens),
     dismissed: dismissedSet(),

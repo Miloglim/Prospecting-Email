@@ -22,7 +22,7 @@ import { okResult, failResult, type Result } from "../../errors";
 import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
 import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
-import { getSendStatus, getQueueItems, startDynamicSend } from "../send.service";
+import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
 import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
@@ -489,8 +489,9 @@ export const sendQueueAddSchema = z.object({
   contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(2000))
     .describe("收件联系人 id 列表；也接受字符串数组或 \"1,2\" 形式。只有一个收件人时可改用 contact。批量发信一次最多 2000 个，更多分多次调用"),
   contact: optStr(80).describe("单个收件人的邮箱/姓名/公司名（本工具会自己定位人，无需先调 search_contacts）"),
-  subject: z.string().min(1).max(150).describe("邮件主题（可含 {{company}}/{{firstName}} 变量；用素材库模板时原样传模板主题）"),
-  body: z.string().min(1).max(8000).describe("邮件正文（纯文本/简单 HTML，可含联系人变量；用素材库模板时原样传模板正文）"),
+  subject: z.string().max(150).nullable().optional().describe("邮件主题（可含 {{company}}/{{firstName}} 变量；用素材库模板时原样传模板主题）。usePreset=true 时省略"),
+  body: z.string().max(8000).nullable().optional().describe("邮件正文（纯文本/简单 HTML，可含联系人变量；用素材库模板时原样传模板正文）。usePreset=true 时省略"),
+  usePreset: optBool().describe("用程序内置句库组装（无需模板，按每个联系人的阶段/语言/客户类型自动拼装；已回复/已触达自动排除）。素材库没有启用模板、用户说「用系统内置/程序自带的内容」时传 true，此时 subject/body 省略"),
 });
 
 export const campaignCreateSchema = z.object({
@@ -2150,7 +2151,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
   const listTemplatesTool = tool({
     name: "list_templates",
     description: "列出素材库邮件模板（名称/语言/主题/正文预览，只读）。批量发信用户说「用系统内置模板」「用现成模板」时先调它挑一条，"
-      + "再把选中模板的 subject/body 原样传给 send_queue_add（{{}} 变量照留，系统会按联系人替换）。",
+      + "再把选中模板的 subject/body 原样传给 send_queue_add（{{}} 变量照留，系统会按联系人替换）。"
+      + "素材库为空/无启用模板时不是死路：send_queue_add 传 usePreset=true 走程序内置句库（按联系人阶段/语言自动组装）。",
     parameters: z.object({ language: optStr(8).nullable().optional().describe("按语言过滤：EN/ES/PT；省略=全部") }),
     execute: async (args) => {
       const gateNote = gate(ctx, "list_templates");
@@ -2171,7 +2173,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
           bodyPreview: (t.body || "").slice(0, 300),
         })),
         ...(r.data.length === 0
-          ? { notice: "素材库暂无启用中的模板：可先 generate_draft 起草一版给用户过目，用户认可后即可直接入队。" }
+          ? { notice: "素材库暂无启用中的模板。两条路：① generate_draft 起草一版给用户过目，认可后入队；"
+              + "② 用程序内置句库（系统预设）：send_queue_add 传 usePreset=true，按每个联系人的阶段/语言自动组装，无需模板。" }
           : {}),
       }));
     },
@@ -2187,7 +2190,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "② 内容：用户说用系统/现成模板 → 先 list_templates 挑一条、subject/body 原样传入（{{}} 变量照留）；用户没说 → 生成一版草稿给用户过目后再入队；"
       + "③ 直接调本工具入队，contactIds 一次最多 2000。"
       + "系统随后会弹人工确认框，那一步就是征求同意，不要只在正文里问「要不要发」而不调用本工具。"
-      + "主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。",
+      + "主题与正文可含 {{company}}/{{firstName}}/{{lastName}} 变量。"
+      + "素材库没有启用中的模板 → 传 usePreset=true 用程序内置句库组装（无需 subject/body），这就是「系统内置模板」路径。",
     parameters: sendQueueAddSchema,
     execute: async (args) => {
       const gateNote = gate(ctx, "send_queue_add");
@@ -2209,6 +2213,25 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (ids.length === 0) {
         audit(ctx, "send_queue_add", "write", args, undefined, "approved", "缺少收件人");
         return failOut("missing_recipient", "缺少收件人。请给 contactIds（或单个 contact：邮箱/姓名）。");
+      }
+      // 程序预设路径（用户拍板：素材库为空也该能用系统内置句库）：按每个联系人的
+      // 阶段/语言/客户类型组装，已回复/已触达在 builder 内被硬排除
+      if (args.usePreset) {
+        const qr = buildAdaptiveQueue([], ids);
+        if (!qr.success) {
+          audit(ctx, "send_queue_add", "write", args, undefined, "approved", qr.error);
+          return failOut("preset_failed", qr.error);
+        }
+        const q = await startQueue(qr.data, false);
+        audit(ctx, "send_queue_add", "write", args, { preset: true, queued: q.success ? q.data.queuedCount : 0 }, "approved", q.success ? undefined : q.error);
+        if (!q.success) return failOut("enqueue_failed", q.error);
+        return okOut({
+          preset: true, queuedCount: q.data.queuedCount, batchId: q.data.batchId,
+          notice: `已按程序预设句库组装 ${q.data.queuedCount} 封并入队（批次 ${q.data.batchId.slice(0, 8)}）。入队 ≠ 发送：请到发送中心核对后点开始。`,
+        });
+      }
+      if (!args.subject?.trim() || !args.body?.trim()) {
+        return failOut("missing_content", "缺主题或正文。用素材库模板就把模板的 subject/body 原样传；没有启用模板可用 usePreset=true 走程序预设句库。");
       }
       const r = await startDynamicSend(ids, args.subject, args.body, false);
       if (!r.success) {

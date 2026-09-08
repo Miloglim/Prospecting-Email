@@ -9,6 +9,7 @@ import { and, eq, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { sendCampaigns, sendCampaignTargets, contacts, templates } from "../db/schema";
 import { buildDynamicQueue, type SendItem } from "./send.service";
+import { assembleEmail, type Stage } from "./sentence-library";
 import { Log } from "../logger";
 import { okResult, failResult, type Result } from "../errors";
 
@@ -184,6 +185,7 @@ export async function scanDueCampaigns(): Promise<void> {
       t: sendCampaignTargets,
       cStatus: contacts.status,
       cLanguage: contacts.language,
+      cClientType: contacts.clientType,
       companyName: contacts.lastName,
       email: contacts.email,
     }).from(sendCampaignTargets)
@@ -223,14 +225,24 @@ export async function scanDueCampaigns(): Promise<void> {
           .where(and(eq(sendCampaignTargets.contactId, t.contactId), eq(sendCampaignTargets.status, "queued")))
           .get()?.n ?? 0;
         if (inflight > 0) { markTarget(t.id, "pending", plusDays(1), t.round, t.lastSentAt); continue; }
+        // 内容：用户模板优先；没有启用模板 → 程序预设句库兜底（拍板 §0.5-3：无人值守内容=模板或预设）
+        let subject: string;
+        let body: string;
         const tpl = pickCampaignTemplate(step.stage, row.cLanguage, step.templateId);
-        if (!tpl) {
-          Log.warn("campaign.scan", `任务 ${campaignId} 缺 stage=${step.stage} 的启用模板，触点顺延 1 天`);
-          markTarget(t.id, "pending", plusDays(1), t.round, t.lastSentAt);
-          continue;
+        if (tpl) {
+          subject = tpl.subject; body = tpl.body;
+        } else {
+          const lang = ["ES", "PT"].includes((row.cLanguage ?? "").toUpperCase())
+            ? ((row.cLanguage as string).toUpperCase() as "ES" | "PT") : "EN";
+          const ctv = (row.cClientType ?? "").toLowerCase();
+          const a = assembleEmail({
+            lang, clientType: ctv === "direct" ? "direct" : ctv === "peer" ? "peer" : "general",
+            stage: step.stage as Stage, includeCompany: true,
+          });
+          subject = a.subject; body = a.body;
         }
         // buildDynamicQueue 自按联系人变量渲染 subject/body（含公司分组/BCC 语义），传原始模板即可
-        const qr = buildDynamicQueue([t.contactId], tpl.subject, tpl.body);
+        const qr = buildDynamicQueue([t.contactId], subject, body);
         if (!qr.success || !qr.data.length) {
           Log.warn("campaign.scan", `任务 ${campaignId} 组装失败 contact=${t.contactId}: ${qr.success ? "空" : qr.error}`);
           markTarget(t.id, "pending", plusDays(1), t.round, t.lastSentAt);

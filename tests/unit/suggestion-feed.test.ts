@@ -15,7 +15,9 @@ import * as schema from "../../src/main/db/schema";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "suggest-feed-"));
 
-vi.mock("../../src/main/config", () => ({ APP_ROOT: TMP }));
+// APP_ROOT 之外还要 DB_PATH：suggestion.service 现在复用 inbox.service 的 internalDomains()
+// （客户回复一键行动要排除我方内部域名的互转），后者经 config 取库路径
+vi.mock("../../src/main/config", () => ({ APP_ROOT: TMP, DB_PATH: path.join(TMP, "prospector.db") }));
 vi.mock("../../src/main/logger", () => ({
   Log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
 }));
@@ -75,6 +77,7 @@ const emptyInputs = (over: Partial<FeedInputs> = {}): FeedInputs => ({
   reminders: null,
   send: null,
   mail: { unread: 0, latest: null, unreplied: null, bounce3d: 0 },
+  replyActions: [],
   diff: null,
   related: new Map(),
   dismissed: new Set(),
