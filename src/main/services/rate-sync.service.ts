@@ -8,6 +8,7 @@ import { rateQuotes, spaceQuotes, type InsertRateQuoteRow, type InsertSpaceQuote
 import { okResult, failResult, type Result } from "../errors";
 import { netFetch } from "../net-proxy";
 import { nudge } from "./suggestion-bus";
+import type { QuoteRowRaw } from "./rates-clean";   // 仅类型：清洗器是纯模块，不引运行时依赖
 
 // ── 运价 / 舱位同步服务 ──────────────────────────────────────────
 // 链路：公司电脑台账（board_server）→ 本服务分页拉取 + 归一化 → 两张只读镜像：
@@ -605,6 +606,33 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
     .limit(Math.min(f.limit ?? 20, 5000))
     .all();
   // 截图走 board_server 现成的 /images/ 静态服务（只取 basename 防穿越），拼成绝对 URL 给界面
+  const base = remoteBase();
+  return okResult(rows.map(({ imageName, ...rest }) => ({
+    ...rest,
+    imageUrl: imageUrlOf(imageName, base),
+  })));
+}
+
+/**
+ * 清洗器用的原始行（只走主进程内部，不进 QuoteDto/IPC 投影）：
+ * 除展示字段外还要 `message_text`（三列柜型价与目免要按港在原文里定位）、`container_raw`、
+ * `validity_raw`、`synced_at`、`status`。规范 docs/rates-answer-chain-spec.md §5-1。
+ */
+export function listQuoteRaws(f: QuoteFilters, maxRows = 200): Result<Array<QuoteRowRaw & { imageUrl: string | null }>> {
+  const conds = quoteConds(f);
+  const rows = getDb().select({
+    carrier: rateQuotes.carrier, pol: rateQuotes.pol, podRaw: rateQuotes.podRaw, lane: rateQuotes.lane,
+    container: rateQuotes.container, containerRaw: rateQuotes.containerRaw, oceanUsd: rateQuotes.oceanUsd,
+    freeDays: rateQuotes.freeDays, etd: rateQuotes.etd, validityRaw: rateQuotes.validityRaw,
+    validFrom: rateQuotes.validFrom, validTo: rateQuotes.validTo,
+    note: rateQuotes.note, sourceGroup: rateQuotes.sourceGroup, sender: rateQuotes.sender,
+    msgTime: rateQuotes.msgTime, syncedAt: rateQuotes.syncedAt, status: rateQuotes.status,
+    messageText: rateQuotes.messageText, imageName: rateQuotes.imageName,
+  }).from(rateQuotes)
+    .where(conds.length ? and(...conds) : undefined)
+    .orderBy(rateQuotes.oceanUsd)
+    .limit(Math.min(maxRows, 5000))
+    .all();
   const base = remoteBase();
   return okResult(rows.map(({ imageName, ...rest }) => ({
     ...rest,

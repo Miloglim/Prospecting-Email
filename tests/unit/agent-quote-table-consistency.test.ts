@@ -32,17 +32,8 @@ vi.mock("../../src/main/config", async (importOriginal) => {
   return { ...actual, APP_ROOT: TMP, DB_PATH: path.join(TMP, "prospector.db") };
 });
 
-// 标准化层打桩：行内容由用例控制（真实 queryStandard 依赖 data/rates-standard.json，不可确定）。
-// resolveQueryPod/podRawExpansion 等其余导出保持原样（镜像查询路径要用）。
-const stdRowsMock = vi.fn<(word: string) => unknown[]>(() => []);
-vi.mock("../../src/main/services/rates-standard", async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>;
-  return {
-    ...actual,
-    queryStandard: (word: string, opts?: unknown) => stdRowsMock(word),
-    standardToMarkdown: (rows: unknown[]) => `|STD|${(rows as unknown[]).length}|`,
-  };
-});
+// 标准化参考层已退役（规范 docs/rates-answer-chain-spec.md §5-4）：两张表现在只有一个来源——
+// 镜像行经 rates-clean 清洗透视。这里不再打桩 rates-standard，只锁结果。
 
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 
@@ -66,56 +57,77 @@ function freshDb(): void {
   ]) { try { raw.run(s); } catch { /* 列已存在 */ } }
   h.db = drizzle(raw, { schema });
   h.db.insert(rateQuotes).values([
+    // 港级行：pod_raw 就是具体港
     { recordId: "r-santos", pol: "宁波", podRaw: "SANTOS", lane: "南美东",
-      carrier: "MSC", container: "40HQ", oceanUsd: 3200, validTo: "2099-12-31", syncedAt: new Date().toISOString() },
+      carrier: "MSC", container: "40HQ", oceanUsd: 3200, validFrom: "2026-09-01", validTo: "2099-12-31",
+      note: "含 EBS", sourceGroup: "宁波舱位滚动更新群", sender: "张三 13800000000", syncedAt: new Date().toISOString() },
+    // 航线级行：pod_raw 是航线名，只有 L2（航线展开）才捞得到
+    { recordId: "r-caribbean", pol: "厦门", podRaw: "加勒比", lane: "加勒比",
+      carrier: "HMM", container: "40HQ", oceanUsd: 2500, validTo: "2099-12-31",
+      syncedAt: new Date().toISOString() },
   ] as never).run();
 }
 
 const run = async (args: unknown) => JSON.parse(await call(T("quote_search"), args)) as {
-  total?: number; count?: number; userTable?: string; customerTable?: string; standardCount?: number; notice?: string;
+  total?: number; count?: number; userTable?: string; customerTable?: string;
+  standardCount?: number; notice?: string; actions?: Array<{ label: string }>;
 };
 
-describe("quote_search 三源归一（两表与 total/quotes 同源；customerTable 全英文）", () => {
+describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-spec §2/§3）", () => {
   beforeAll(async () => {
     if (!SQLLIB) SQLLIB = await initSqlJs({ locateFile: f => path.resolve(process.cwd(), "node_modules/sql.js/dist", f) });
   });
   beforeEach(() => {
     freshDb();
     ctx.counts.clear(); ctx.failures.clear();
-    stdRowsMock.mockReset();
     toolByName = Object.fromEntries((buildHarnessTools(ctx) as unknown as ToolLike[]).map(t => [t.name ?? "", t]));
     T = (name) => toolByName[name]!;
   });
 
-  it("镜像命中 + 参考层有行 → userTable 用标准化透视表，customerTable 走英文出口，无降级提示", async () => {
-    stdRowsMock.mockReturnValue([{ pod: "SANTOS", ports: ["SANTOS"] }]);
+  it("L1 精准港命中 → userTable 是 12 列中文工作表（出处三列必备），未同意不出客户表", async () => {
     const r = await run({ pod: "SANTOS" });
     expect(r.total).toBeGreaterThan(0);
-    expect(r.userTable).toBe("|STD|1|");
-    expect(r.customerTable).toContain("| CARRIER | POL | POD |");
+    expect((r.userTable ?? "").split("\n")[0]).toBe(
+      "| 船司 | 起运港 | 目的港 | 20GP | 40HQ/HC | 40NOR | 目免 | 有效期 | 备注 | 来源 | 发送人 | 入库时间 |");
+    expect(r.userTable).toContain("MSC");
+    expect(r.userTable).toContain("宁波舱位滚动更新群");   // 来源（信息出处，用户点名要的三列之一）
+    expect(r.userTable).toMatch(/\d{1,2} Sep/);            // 有效期格式化后仍在（1 Sep – 31 Dec）
+    expect(r.customerTable).toBe("");                     // 没同意做成客户报价表 → 不生成
+    expect((r.actions ?? []).map(a => a.label)).toContain("做成客户报价表");
+    expect(r.standardCount).toBeUndefined();              // 参考层已退役
+    expect(r.notice).not.toContain("标准化参考层");
+  });
+
+  it("forCustomer=true（用户点头）→ 英文十一列对外表，且一个汉字都不许有", async () => {
+    const r = await run({ pod: "SANTOS", forCustomer: true });
+    expect((r.customerTable ?? "").split("\n")[0]).toBe(
+      "| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |");
     expect(r.customerTable).toContain("MSC");
-    // 对外交付物里不许出现一个汉字
-    expect(r.customerTable).not.toMatch(/[\u4e00-\u9fa5]/);
-    expect(r.notice).not.toContain("标准化参考层另有");
+    expect(r.customerTable).toContain("SANTOS");
+    expect(r.customerTable).not.toMatch(/[一-鿿]/);
+    expect((r.actions ?? []).map(a => a.label)).not.toContain("做成客户报价表");   // 已经出过了
   });
 
-  it("镜像未命中 + 参考层有行 → 两张表强制为空，降级为参考提示（不许冒充结果）", async () => {
-    stdRowsMock.mockReturnValue([{ pod: "MANZANILLO", ports: ["MANZANILLO"] }, { pod: "MANZANILLO", ports: ["MANZANILLO"] }]);
-    const r = await run({ pod: "MANZANILLO" });
+  it("L1 没有该具体港的价 → L2 按航线展开命中，并明确标注是航线级报价", async () => {
+    const r = await run({ pod: "VERACRUZ" });        // 港级行里没有 VERACRUZ
+    expect(r.total).toBeGreaterThan(0);              // 靠航线级（加勒比）捞回来
+    expect(r.notice).toContain("航线级");
+    expect(r.userTable).toContain("加勒比");         // 工作表保留原样，让操作者看出是航线级
+  });
+
+  it("航线级命中做对外表时 POD 展开成查询目标港（客户表里不能出现中文航线名）", async () => {
+    const r = await run({ pod: "VERACRUZ", forCustomer: true });
+    expect(r.customerTable).toContain("VERACRUZ");
+    expect(r.customerTable).not.toMatch(/[一-鿿]/);
+  });
+
+  it("两段都查不到 → 两张表强制为空（治「共 0 条却显示有价」），走定论口径", async () => {
+    const r = await run({ pod: "NOSUCHPORTXYZ" });
     expect(r.total).toBe(0);
-    expect(r.customerTable).toBe("");
     expect(r.userTable).toBe("");
-    expect(r.standardCount).toBe(2);                       // 参考层数量如实透出，但不是结果
-    expect(r.notice).toContain("标准化参考层另有 2 条");
-    expect(r.notice).toContain("不作为报价依据");
-  });
-
-  it("镜像未命中 + 参考层也无 → 干净的 0，无 standardCount 无降级提示", async () => {
-    stdRowsMock.mockReturnValue([]);
-    const r = await run({ pod: "VALPARAISO" });
-    expect(r.total).toBe(0);
     expect(r.customerTable).toBe("");
     expect(r.standardCount).toBeUndefined();
-    expect(r.notice).not.toContain("标准化参考层另有");
+    expect(r.notice).not.toContain("标准化参考层");
+    expect(r.notice).toMatch(/查不到|没有/);
   });
 });

@@ -54,8 +54,9 @@ sender/msg_time/image_name/record_id）同名直取。数值容忍字符串带�
 - **设置页切换卡**（设置 → API 与服务 → 运价台账）：分段按钮「公司局域网 / 公网镜像」，
   切换即保存并**自动重新同步**（不给用户留「保存 + 测试连接」两步），显示当前地址、镜像条数与上次同步时间。
   同步失败不删旧镜像，只提示「已切到 X，但这次没同步上」。
-- **离线建表脚本同口径**：`scripts/build-rates-standard.py` 的 `IMAGES_BASE` 默认也是局域网，
-  换源同样走 `RATES_REMOTE_URL`。（此前它写死过公网地址，生成的 938 条截图链接全是死链。）
+- **离线建表层已退役**（2026-09-08）：`scripts/build-rates-standard.py` 与 `data/rates-standard.json` 已移除，
+  两张表统一由 `rates-clean` 在查询时从实时镜像行算（规范 `rates-answer-chain-spec.md` §3/§5）。
+  曾踩过的坑记此备查：该脚本的 `IMAGES_BASE` 写死过公网地址，生成的 938 条截图链接全是死链。
 - 定时同步：启动后 5 秒首拉 + 每 4 小时轮询（默认 240 分钟，`RATES_REMOTE_MINUTES` 可覆盖）；
   同步中防重入；自动同步失败只记日志，手动同步失败才弹提示。
 

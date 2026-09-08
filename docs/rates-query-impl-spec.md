@@ -77,7 +77,8 @@ ETD-6取消，亏仓费CNY300/柜
 `src/main/services/rate-sync.service.ts`、`src/main/services/agent/tools.ts`、
 `src/renderer/pages/rates/RateBoard.tsx`、`tests/unit/agent-tools-inbox.test.ts`
 **删除**：`src/main/services/rates-standard.ts`（`resolveQueryPod` 与词表加载搬进 `rates-clean.ts`）
-**保留不动**：`src/main/services/rates-portmap.json`（词表）、`data/rates-standard.json`（不再被读）、`scripts/build-rates-standard.py`（下一期改成只产词表）
+**保留**：`src/main/services/rates-portmap.json`（词表）。**已删**（2026-09-08）：`data/rates-standard.json` 与 `scripts/build-rates-standard.py`；
+`rates-standard.ts` 暂保留为纯词表归一模块（`resolveQueryPod`/`podRawExpansion`），并入 `rates-clean.ts` 时一并删除。
 
 ---
 
