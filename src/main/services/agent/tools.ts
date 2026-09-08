@@ -1159,9 +1159,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
 
   const emailReadFull = tool({
     name: "email_read_full",
-    description: "按 messageId 读取一封邮件的完整信息：全文正文（懒加载，含 IMAP 原文）、"
-      + "发件人/收件人/抄送、时间、分类、意图、附件文件名。用户要「原文/全文/完整内容」时用；"
-      + "只要摘要用 email_summarize。正文超长会截断并标注。",
+    description: "按 messageId 读取一封邮件的完整信息：全文正文（本地没有会自动走 IMAP 懒加载）、"
+      + "发件人/收件人/抄送、时间、分类、意图、附件文件名。"
+      + "两种必用场景：①用户要「原文/全文/完整内容」；②上下文邮件注记标了「仅为预览/前段」时，"
+      + "总结或起草回复前必须先读本工具拿全文——预览不是全文，凭它作答就是编造。"
+      + "读全文不需要征求用户同意，直接读；只要摘要用 email_summarize。正文超长会截断并标注。",
     parameters: z.object({ messageId: z.number().int().describe("inbox_search 返回的 id；只能照抄本轮检索结果里的 id，检索不到就如实告知，严禁凭记忆猜测或编造 id") }),
     execute: async (args) => {
       const gateNote = gate(ctx, "email_read_full");
@@ -1846,8 +1848,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
     name: "generate_draft",
     description: "生成一封开发信/跟进信/回信的草稿（带 SUBJECT: 主题行 + 正文，支持 EN/ES/PT）。"
       + "本工具只产出文本、不发送；用户可用结果卡按钮一键存素材库或入队。"
-      + "用户要「回复某封邮件」时必须传 messageId（来自 inbox_search）走回信模式——草稿会针对对方来信逐条应答，"
-      + "收件人自动从来信解析，无需 contact/contactId；这时不要先 email_read_full 搬运原文（工具自己会读）。"
+      + "用户要「回复某封邮件」时必须传 messageId（来自 inbox_search 或上下文邮件锚点「邮件 #N」）走回信模式——"
+      + "草稿会针对对方来信逐条应答，收件人自动从来信解析，无需 contact/contactId；" +
+      "有邮件锚点时绝不允许退回 contact/company 模式凭摘要或预览写（那等于替对方编话）；"
+      + "这时不要先 email_read_full 搬运原文（工具自己会读）。"
       + "开发信/跟进信不传 messageId：写什么由你从对话与上下文里已有的材料决定，"
       + "绝对不要为了『起草邮件』先去调 company_backcheck 或其他检索工具（那是跑题）；"
       + "上下文中没有的关键数字（如成交价、柜型）用 {{占位}} 标出并在结尾一句话提示，不要连环追问。"

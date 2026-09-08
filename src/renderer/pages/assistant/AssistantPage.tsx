@@ -14,9 +14,9 @@ import "highlight.js/styles/github.css";
 import remarkGfm from "remark-gfm";
 import { DiamondLogo } from "../../components/DiamondLogo";
 import {
-  clearQueued, enqueue, markAction, navigate as openConversation,
+  markAction, navigate as openConversation,
   nextKey, pushLocal, pushLocalText, resetDraft, resolveApproval as submitApproval, send as sendTurn,
-  setBudgetAsk, setCtx as setConvCtx, stop as stopTurn, takeRejectedInput, useActiveConvKey, useConvState,
+  setBudgetAsk, setCtx as setConvCtx, stop as stopTurn, useActiveConvKey, useConvState, whenIdle,
 } from "../../hooks/useAgentTranscript";
 import type { ApprovalReq, Msg, PlanStep } from "../../hooks/useAgentTranscript";
 import { ensureToolMeta, toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
@@ -784,7 +784,7 @@ export function AssistantPage() {
    */
   const key = useActiveConvKey();
   const {
-    messages, sending, loading: convLoading, approval, budgetAsk, queued, rejectedInput,
+    messages, sending, loading: convLoading, approval, budgetAsk,
     sessionUsage, followUps, doneActions, ctx,
   } = useConvState(key);
   // 工具中文名来自注册表（经 agent:toolMeta）：到达后本组件批量刷新一次
@@ -1011,9 +1011,15 @@ export function AssistantPage() {
     const t = raw.trim();
     if (!t) return;
     if (sending) {
-      // 排队输入：斜杠命令不排队（语义依赖空闲输入），普通问题单槽排队等本轮结束
-      if (t.startsWith("/")) { pushLocalText(key, "等这轮回答结束后再使用快捷命令。"); return; }
-      enqueue(key, t);
+      // 豆包式插队：生成中来新消息 → 立即打断当前回答（已生成内容保留），紧接着处理新消息。
+      // 快捷命令语义依赖空闲输入，不随打断执行。
+      if (t.startsWith("/")) { pushLocalText(key, "生成中的回答不被快捷命令打断——等回答结束后再用。"); return; }
+      stopTurn(key);
+      void (async () => {
+        if (!(await whenIdle(key, 3000))) { pushLocalText(key, "上一轮收尾超时，请重发这条消息。"); return; }
+        jumpToBottomNow();
+        void sendTurn(key, t);
+      })();
       return;
     }
     if (t.startsWith("/")) {
@@ -1056,17 +1062,10 @@ export function AssistantPage() {
     ? SLASH_COMMANDS.filter(c => c.cmd.startsWith(inputVal.split(/\s+/)[0]!)).slice(0, 6)
     : [];
 
-  /** 停止只管当前会话：审批卡、排队、请示卡一并收掉（现场本身不动，已生成的内容留着） */
+  /** 停止只管当前会话：审批卡、请示卡一并收掉（现场本身不动，已生成的内容留着） */
   const handleStop = () => {
     stopTurn(key);
   };
-
-  // 回合出错时排队消息不静默蒸发：退回输入框（输入框已有新内容就不覆盖），用户自己决定重发
-  useEffect(() => {
-    if (!rejectedInput) return;
-    setInputVal(prev => (prev.trim() ? prev : rejectedInput));
-    takeRejectedInput(key);
-  }, [rejectedInput, key]);
 
   /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
@@ -1450,13 +1449,6 @@ export function AssistantPage() {
             </Tag>
           </div>
         )}
-        {queued && (
-          <div className="pb-2">
-            <Tag closable color="blue" onClose={() => clearQueued(key)}>
-              已排队 · {queued.length > 24 ? `${queued.slice(0, 24)}…` : queued} · 回答结束 5 秒后自动发出（点 × 取消）
-            </Tag>
-          </div>
-        )}
         {budgetAsk && !sending && (
           <div className="mb-2 flex items-center gap-3 max-w-[720px] border border-teal-200 bg-teal-50/60 rounded-lg px-3 py-2">
             <span className="text-[12.5px] text-gray-700 flex-1">这轮先告一段落 — 要接着做的话我随时继续。</span>
@@ -1473,13 +1465,13 @@ export function AssistantPage() {
           onSubmit={(text) => { setInputVal(""); handleSend(text); }}
           onCancel={handleStop}
           actions={(ori, { components }) => {
-            // 运行中发送键不再兼职停止键（「点发送=停止」是插队机制没人发现的元凶）：
-            // 上箭头=插队发送（本轮结束自动发出，与回车同路），停止独立成键；空闲交还默认按钮
+            // 运行中：上箭头=豆包式插队（立即打断当前回答并处理新消息，与回车同路），
+            // 停止独立成键；空闲交还默认按钮
             if (!sending) return ori;
             const { LoadingButton } = components;
             return (
               <div className="flex items-center gap-1.5">
-                <Tooltip title="插队发送：本轮回答结束后自动发出">
+                <Tooltip title="打断当前回答，立即回复这条">
                   <Button type="primary" shape="circle" icon={<ArrowUpOutlined />}
                     disabled={!inputVal.trim()}
                     onClick={() => { const t = inputVal.trim(); if (t) { setInputVal(""); handleSend(t); } }} />

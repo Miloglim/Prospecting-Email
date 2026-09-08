@@ -174,7 +174,7 @@ function resolveContextNote(ctxRaw: string | undefined): string | undefined {
 }
 
 /** 发起一轮对话。立即返回会话/消息 ID，正文与结束/错误状态走事件推送。 */
-export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: string; messageId: string }> {
+export async function chat(push: PushFn, input: ChatInput): Promise<Result<{ conversationId: string; messageId: string }>> {
   const text = input?.text?.trim();
   if (!text) return failResult("参数错误: text 必填");
 
@@ -190,12 +190,23 @@ export function chat(push: PushFn, input: ChatInput): Result<{ conversationId: s
   const conversationId = input.conversationId?.trim() || crypto.randomUUID();
   const messageId = crypto.randomUUID();
 
+  // 豆包式插队（用户拍板）：生成中来新消息 → 立即打断当前回答（已生成内容保留），
+  // 等它落定后接着处理新消息，不排队不给缓冲。打断必须发生在新用户消息落库之前，
+  // 否则旧回合的 done 事件会晚于新消息，现场顺序就乱了。
+  let rt = runtime.get(conversationId);
+  if (!rt) { rt = { abort: null, running: false }; runtime.set(conversationId, rt); }
+  if (rt.running) {
+    rt.abort?.abort();
+    const t0 = Date.now();
+    while (rt.running && Date.now() - t0 < 5000) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    if (rt.running) return failResult("打断上一轮超时，请稍后重试");
+  }
+
   ensureConversation(conversationId, text);
   appendMessage(conversationId, "user", text);
 
-  let rt = runtime.get(conversationId);
-  if (!rt) { rt = { abort: null, running: false }; runtime.set(conversationId, rt); }
-  if (rt.running) return failResult("上一轮回答仍在进行中，请先停止");
   const state = rt;
 
   // 异步流式回合（不阻塞 IPC 返回）

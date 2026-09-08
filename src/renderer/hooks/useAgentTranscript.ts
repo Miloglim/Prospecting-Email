@@ -75,10 +75,6 @@ export interface ConvState {
   approval: ApprovalReq | null;
   /** 本轮被步数上限截断 → 「继续吗」请示卡 */
   budgetAsk: boolean;
-  /** 排队输入（单槽） */
-  queued: string | null;
-  /** 回合出错被退回的排队消息：页面取走塞回输入框即清（错误不静默吞用户的话） */
-  rejectedInput: string | null;
   sessionUsage: { input: number; output: number } | null;
   followUps: string[];
   doneActions: Record<string, string>;
@@ -159,12 +155,9 @@ const DEFAULT_FOLLOW_UPS = ["我今天该跟进谁", "总结一下我的未读�
 
 // ── 条目存储 ────────────────────────────────────────────
 
-/** 排队消息在回合结束后的缓冲时长：给用户留看完答案/叫停的时间窗 */
-const QUEUED_SEND_DELAY_MS = 5000;
-
 const BLANK: ConvState = Object.freeze({
   messages: [], sending: false, loaded: false, loading: false, approval: null, budgetAsk: false,
-  queued: null, rejectedInput: null, sessionUsage: null, followUps: [], doneActions: {}, turnUser: "", turnText: "",
+  sessionUsage: null, followUps: [], doneActions: {}, turnUser: "", turnText: "",
   turnTools: [], flushGen: 0, followGen: 0, liveReasoning: null,
 }) as ConvState;
 
@@ -287,7 +280,6 @@ function onChunk(d: ChunkEv): void {
 function onDone(d: DoneEv): void {
   const key = keyOf(d.conversationId);
   const u = d.usage;
-  const queued = entries.get(key)?.queued ?? null;
   const gen = entries.get(key)?.flushGen ?? 0;
   patch(key, s => {
     let next: ConvState = sealReasoning(s);
@@ -303,25 +295,11 @@ function onDone(d: DoneEv): void {
       sending: false,
       followUps: ruleFollowUps(s.turnTools),
       turnTools: [],
-      // 排队消息在 5 秒缓冲期内保持 queued（标签可见、可点 × 撤队），到点才清
-      ...(queued ? {} : { budgetAsk: !!d.capped }),   // 排了下一条就不打扰
+      budgetAsk: !!d.capped,
       ...(u ? { sessionUsage: { input: (s.sessionUsage?.input ?? 0) + (u.input ?? 0), output: (s.sessionUsage?.output ?? 0) + (u.output ?? 0) } } : {}),
     };
     return next;
   });
-  // 排队输入：本轮收尾后默认等 5 秒再自动发出（用户拍板：此前 120ms 直接插队没有缓冲时间，
-  // 用户来不及看完答案/叫停）。缓冲期内点 × 撤队、停止或切会话（flushGen 变）都会取消；
-  // 用户手动开出新回合则保持排队，等那一轮 done 后再发，不丢消息。
-  if (queued) {
-    setTimeout(() => {
-      const cur = entries.get(key);
-      if (!cur || (cur.flushGen ?? 0) !== gen) return;        // 停止 / 切会话（queued 已退回输入框）
-      if (cur.queued !== queued) return;                      // 用户点 × 撤了
-      if (cur.sending) return;                                // 手动开了新回合 → 保持排队等下一轮 done
-      patch(key, s => ({ ...s, queued: null }));
-      void send(key, queued);
-    }, QUEUED_SEND_DELAY_MS);
-  }
   // 追问引导：规则版已先占位，再让 AI 覆盖（代数守卫，迟到结果不盖新一轮）
   const cur = entries.get(key);
   const userText = cur?.turnUser ?? "";
@@ -355,14 +333,14 @@ function onErrorEv(d: ErrorEv): void {
       const m = msgs[i]!;
       if (m.role === "ai" && m.streaming) {
         msgs[i] = { ...m, streaming: false, loading: false, error: true, content: message };
-        return { ...sealed, messages: msgs, sending: false, queued: null, rejectedInput: s.queued, budgetAsk: false, flushGen: sealed.flushGen + 1 };
+        return { ...sealed, messages: msgs, sending: false, budgetAsk: false, flushGen: sealed.flushGen + 1 };
       }
     }
     // 没有骨架气泡可挂（空列表 / 已被封口）→ 另起一条错误气泡，错误信息绝不吞掉
     return {
       ...sealed,
       messages: [...msgs, { key: nextKey(), role: "ai" as const, content: message, error: true }],
-      sending: false, queued: null, rejectedInput: s.queued, budgetAsk: false, flushGen: sealed.flushGen + 1,
+      sending: false, budgetAsk: false, flushGen: sealed.flushGen + 1,
     };
   });
   window.dispatchEvent(new Event(CONVS_CHANGED));
@@ -590,20 +568,14 @@ export async function send(key: string, raw: string): Promise<void> {
   window.dispatchEvent(new Event(CONVS_CHANGED));   // 新会话立即可见（标题已在主进程生成）
 }
 
-/** 排队输入（单槽）：本轮 done 后自动发出 */
-export function enqueue(key: string, text: string): void {
-  patch(key, s => ({ ...s, queued: text }));
-}
-
-export function clearQueued(key: string): void {
-  patch(key, s => ({ ...s, queued: null }));
-}
-
-/** 取走「回合出错退回」的排队消息（一次性：页面塞回输入框后调用即清） */
-export function takeRejectedInput(key: string): string | null {
-  const t = entries.get(key)?.rejectedInput ?? null;
-  if (t) patch(key, s => ({ ...s, rejectedInput: null }));
-  return t;
+/** 等会话空闲（回合落定）；超时返回 false。豆包式打断后衔接新回合用 */
+export async function whenIdle(key: string, timeoutMs = 3000): Promise<boolean> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (!entries.get(key)?.sending) return true;
+    await new Promise(r => setTimeout(r, 30));
+  }
+  return !entries.get(key)?.sending;
 }
 
 /** 中断本会话生成（其他会话的回合不受影响） */
@@ -611,7 +583,7 @@ export function stop(key: string): void {
   const s = entries.get(key);
   if (!s) return;
   patch(key, prev => ({
-    ...prev, approval: null, queued: null, budgetAsk: false, flushGen: prev.flushGen + 1,
+    ...prev, approval: null, budgetAsk: false, flushGen: prev.flushGen + 1,
   }));
   if (s.id) void window.api.invoke("agent:stop", s.id);
 }

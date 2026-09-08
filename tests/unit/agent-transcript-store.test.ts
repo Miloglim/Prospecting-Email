@@ -125,24 +125,26 @@ describe("agent 回合现场 store", () => {
     expect(thinkChips[0]!.chip?.detail).toContain("最后给结论");
   });
 
-  it("⑤ 排队输入在上一轮 done 后自动发出（走同一条发送管线，默认 5 秒缓冲）", async () => {
+  it("⑤ 生成中再来一条 = 豆包式插队：走 stop 打断 + 空闲后发第二条", async () => {
     const id = "conv-queue";
     await openConversation(id);        // 先装会话：flush 用的是真 setTimeout，假计时器会把它冻住
     vi.useFakeTimers();
     await mod.send(id, "第一条");
-    mod.enqueue(id, "第二条");
-    expect(mod.getConv(id).queued).toBe("第二条");
+    expect(mod.getConv(id).sending).toBe(true);
 
-    emit("agent:done", { conversationId: id });
-    await vi.advanceTimersByTimeAsync(1000);  // 缓冲期内：不发（用户拍板：不再 120ms 直接插队）
-    expect(mod.getConv(id).queued).toBe("第二条");
-    expect(invoke.mock.calls.filter(c => c[0] === "agent:chat")).toHaveLength(1);
+    // 页面层语义：sending 时 handleSend → stopTurn + whenIdle + sendTurn。
+    // store 层验证：stop 走 agent:stop 且不再有排队态；空闲后第二条正常进管线。
+    mod.stop(id);
+    expect(invoke.mock.calls.some(c => c[0] === "agent:stop")).toBe(true);
+    expect(mod.getConv(id).queued).toBeUndefined();          // 排队机制已移除
 
-    await vi.advanceTimersByTimeAsync(5000);  // 缓冲期满：自动发出
+    emit("agent:done", { conversationId: id, stopped: true });
+    await vi.advanceTimersByTimeAsync(100);                  // 冲刷 whenIdle 轮询
+    expect(mod.getConv(id).sending).toBe(false);
+    await mod.send(id, "第二条");
     const calls = invoke.mock.calls.filter(c => c[0] === "agent:chat");
     expect(calls).toHaveLength(2);
     expect((calls[1]![1] as { text: string }).text).toBe("第二条");
-    expect(mod.getConv(id).queued).toBeNull();
   });
 
   it("⑥ 新草稿发送时定住真实 id，事件按该 id 接得上（首包前切页也不丢第一条）", async () => {
@@ -181,21 +183,15 @@ describe("agent 回合现场 store", () => {
     expect(mod.getConv(id).sending).toBe(true);               // 续跑的 done 还没来，回合不算结束
   });
 
-  it("⑧ 错误落点在气泡上；排队消息不蒸发而是退回输入框（一次性取走）", async () => {
+  it("⑧ 错误落点在气泡上，回合正常收尾", async () => {
     const id = "conv-error";
     await openConversation(id);
     await mod.send(id, "问一句");
-    mod.enqueue(id, "排一条");
     emit("agent:error", { conversationId: id, message: "模型调用失败: 余额不足" });
 
     const conv = mod.getConv(id);
     expect(conv.sending).toBe(false);
-    expect(conv.queued).toBeNull();                    // 不自动补发：错误后立刻重发可能连环炸
-    expect(conv.rejectedInput).toBe("排一条");          // 但话要还给用户，不静默吞
     expect(conv.messages.at(-1)).toMatchObject({ role: "ai", error: true, content: "模型调用失败: 余额不足" });
-    expect(mod.takeRejectedInput(id)).toBe("排一条");   // 页面取走塞回输入框
-    expect(mod.getConv(id).rejectedInput).toBeNull();   // 一次性
-    expect(mod.takeRejectedInput(id)).toBeNull();
   });
 
   it("⑨ 删除会话连带清掉现场缓存", async () => {
