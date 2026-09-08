@@ -10,33 +10,21 @@
 
 import { listQuotes, countQuotes, normalizeContainer, type QuoteDto } from "../rate-sync.service";
 import { resolveQueryPod, podRawExpansion } from "../rates-standard";
-import { cleanQuoteRow, pivotQuotes, customerQuoteMarkdown, type CleanQuote, type QuoteRowRaw } from "../rates-clean";
+import { cleanQuoteRow, pivotQuotes, customerQuoteMarkdown, polExpansion, type CleanQuote, type QuoteRowRaw } from "../rates-clean";
 import type { EmailInquiry, RateRow, RatesPayload } from "./email-parse";
 
 /**
  * 镜像里的 pol 是中文群名（宁波/天津/蛇口/华南基本港…），来信写的是 NINGBO/CNNBG。
- * 映射成「可接受的 pol 集合」而不是单值：华南基本港这类群名覆盖深圳/蛇口/盐田/南沙。
- * 对不上返回 null —— 起运港不做硬过滤（硬过滤会把群名行整批漏掉），只用于分区排序。
+ * 委托 rates-clean.polExpansion 做语义展开（蛇口/盐田/南沙/深圳/华南 互为同群；LOCODE 也在那份词表），
+ * 不再自养第二份对照表。对不上返回 null —— 起运港不做硬过滤（硬过滤会把群名行整批漏掉），只用于分区排序。
  */
-const POL_SETS: Array<{ keys: string[]; accept: string[] }> = [
-  { keys: ["NINGBO", "CNNBG", "宁波"], accept: ["宁波"] },
-  { keys: ["SHANGHAI", "CNSHA", "上海"], accept: ["上海"] },
-  { keys: ["QINGDAO", "CNTAO", "青岛"], accept: ["青岛"] },
-  { keys: ["TIANJIN", "CNTXG", "TSN", "XINGANG", "天津", "新港"], accept: ["天津", "新港"] },
-  { keys: ["XIAMEN", "CNXMN", "厦门"], accept: ["厦门"] },
-  { keys: ["DALIAN", "CNDLC", "大连"], accept: ["大连"] },
-  { keys: ["LIANYUNGANG", "CNLYG", "连云港"], accept: ["连云港"] },
-  // 华南：盐田/蛇口/深圳/南沙 与群名「华南基本港」互相都算对得上
-  { keys: ["SHEKOU", "CNSHK", "YANTIAN", "CNYTN", "SHENZHEN", "CNSZX", "NANSHA", "CNNSA", "蛇口", "盐田", "深圳", "南沙"],
-    accept: ["蛇口", "盐田", "深圳", "南沙", "华南基本港", "华南"] },
-  { keys: ["GUANGZHOU", "CNGZG", "广州"], accept: ["广州", "南沙", "华南基本港", "华南"] },
-];
-
 export function mirrorPolSet(inq: Pick<EmailInquiry, "pol" | "polCode">): string[] | null {
-  const probe = [inq.polCode, inq.pol].filter(Boolean).join(" ").toUpperCase();
+  const probe = [inq.polCode, inq.pol].filter(Boolean).join(" ");
   if (!probe.trim()) return null;
-  for (const s of POL_SETS) {
-    if (s.keys.some(k => probe.includes(k.toUpperCase()))) return s.accept;
+  // 逐词试：来信常把 LOCODE 和港名写在一起（"CNNBG Ningbo"），任一词认得出就用它的群
+  for (const word of probe.split(/[^A-Za-z\u4e00-\u9fa5]+/)) {
+    const hit = polExpansion(word);
+    if (hit) return hit.values;
   }
   return null;
 }

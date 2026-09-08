@@ -12,7 +12,7 @@ import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
 import { resolveQueryPod, podRawExpansion } from "../rates-standard";
 // 两张表的唯一出口（规范 docs/rates-answer-chain-spec.md §3）：清洗器算列，模型只许原样贴
-import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, type CleanQuote } from "../rates-clean";
+import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, type CleanQuote } from "../rates-clean";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -459,6 +459,8 @@ export const quoteSearchSchema = z.object({
   lane: optStr(20).describe("航线（库里真实存在的航线名，如 加勒比/南美东/地东），不传则全航线"),
   carrier: optStr(10).describe("船司三字码，如 CMA/MSK/MSC；不看船司就省略或传空"),
   pod: optStr(60).describe("目的港关键词（中英文均可，模糊匹配）；不限则省略或传空"),
+  pol: optStr(40).describe("起运港（蛇口/盐田/南沙/深圳/华南/宁波…中英文与常用 LOCODE 都认）。"
+    + "台账把华南的货记在群名「华南基本港」下，工具会自动把蛇口等展开到同群口径并在命中时提示；不限则省略或传空"),
   container: optStr(10).describe("柜型，如 20GP/40GP/40HQ/NOR（写 40HC 也会自动归一）；不限则省略或传空"),
   includeExpired: optBool().describe("是否包含已过有效期记录，默认 false"),
   limit: optInt().describe("返回条数，默认 20，按价格升序"),
@@ -1315,6 +1317,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
       };
       const podQ = trimmed(args.pod);
       const qQ = trimmed(args.q);
+      // 起运港语义群：用户说「蛇口」，台账把华南的货记在群名「华南基本港」下——展开成同群集合一起命中，
+      // 并在命中时提示模型如实标注（不说成蛇口专属价）。认不出就是 null，按原词 LIKE 兜底。
+      const polQ = trimmed(args.pol);
+      const polSet = polQ ? polExpansion(polQ) : null;
       // 口语后缀去掉（「加勒比线」「南美东航线」→ 加勒比 / 南美东）
       const laneQ = trimmed(args.lane)?.replace(/航线$/, "").replace(/线$/, "").trim() || undefined;
       // 港口归一：用户任意写法→标准港名；并把航线级/区域级 podRaw 展开进过滤
@@ -1338,6 +1344,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const filtersBase = {
         carrier: trimmed(args.carrier)?.toUpperCase(),
         pod: isRegionQuery ? undefined : podQ,
+        pol: polQ,
+        polExtra: polSet?.values,
         terms: termWords.length ? termWords : undefined,
         // 脏柜型归一（40HC→40HQ 等），识别不了则原样大写透传
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
@@ -1482,6 +1490,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
             + "答复时必须说明「以下是该航线基本港的报价，适用 X」，不要当成 X 港的专属价。");
         } else if (laneLevelRows.length) {
           noticeLines.push(`命中里有 ${laneLevelRows.length} 条是航线级报价（目的港列显示为航线名），答复时逐条区分清楚。`);
+        }
+        if (polSet?.expanded && polQ) {
+          noticeLines.push(`起运港「${polQ}」的货在台账记在群名下（如「华南基本港」覆盖蛇口/盐田/南沙）——`
+            + `命中行里 POL 列是群名的就是这类，答复时说明是同群适用价，别说成「${polQ}专属价」。`);
         }
         noticeLines.push(
           "回答格式（固定，勿自由发挥，规范 docs/rates-answer-chain-spec.md §3）：① 第一句原样采用 answer（数字与船司不改）；"

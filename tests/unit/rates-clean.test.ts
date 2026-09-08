@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   cleanPol, cleanPod, cleanCarrier, parsePrices, cleanFreeDays, cleanEtd, quoteState,
   stripLaneTag, fmtValidity, fmtEtdShort, cleanQuoteRow, pivotQuotes, groupByPol,
-  cleanTableMarkdown, customerQuoteMarkdown, locatePodLines, type QuoteRowRaw,
+  cleanTableMarkdown, customerQuoteMarkdown, locatePodLines, polExpansion, type QuoteRowRaw,
 } from "../../src/main/services/rates-clean";
 
 // 真源实测原文 A：一条消息拆成 4 个 pod 行，价对四港共享（USD3300/3900+）
@@ -263,5 +263,32 @@ describe("尾缀剥离护栏", () => {
     expect(stripLaneTag("PANAMA (MANZANILLO PA/BALBOA)", "加勒比").podRaw).toBe("PANAMA (MANZANILLO PA/BALBOA)");
     expect(stripLaneTag("MANZANILLO", "墨西哥").podRaw).toBe("MANZANILLO");
     expect(stripLaneTag("ISTANBUL 伊斯坦布尔(土耳其) 地东", null)).toEqual({ podRaw: "ISTANBUL 伊斯坦布尔(土耳其)", lane: "地东" });
+  });
+});
+
+describe("起运港语义群：蛇口/盐田/南沙/深圳/华南 互为同群（查价与回信排序共用）", () => {
+  it("蛇口展开到华南基本港群，且群内别名原文一并收编", () => {
+    const e = polExpansion("蛇口")!;
+    expect(e.expanded).toBe(true);
+    expect(e.values).toContain("华南基本港");
+    expect(e.values).toContain("深圳");          // 台账 pol 列可能存原词「深圳」
+    expect(e.values).toContain("华南");
+  });
+
+  it("宁波：别名原文收编（NINGBO/CNNBG 互认），但不算群展开", () => {
+    const e = polExpansion("CNNBG")!;
+    expect(e.values).toContain("宁波");
+    expect(e.values).toContain("CNNBG");
+    expect(e.expanded).toBe(false);
+  });
+
+  it("用户说的就是群名本身 → 无需再解释", () => {
+    expect(polExpansion("华南基本港")).toMatchObject({ expanded: false });
+  });
+
+  it("认不出的港返回 null，不猜", () => {
+    expect(polExpansion("Mombasa")).toBeNull();
+    expect(polExpansion("")).toBeNull();
+    expect(polExpansion(null)).toBeNull();
   });
 });

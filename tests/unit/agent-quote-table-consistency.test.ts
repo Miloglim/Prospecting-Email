@@ -61,6 +61,10 @@ function freshDb(): void {
     { recordId: "r-santos", pol: "宁波", podRaw: "SANTOS", lane: "南美东",
       carrier: "MSC", container: "40HQ", oceanUsd: 3200, validFrom: "2026-09-01", validTo: "2099-12-31",
       note: "含 EBS", sourceGroup: "宁波舱位滚动更新群", sender: "张三 13800000000", syncedAt: new Date().toISOString() },
+    // 群名行：台账把华南的货记在「华南基本港」下——用户说蛇口时应被语义群捞到并如实标注
+    { recordId: "r-santos-south", pol: "华南基本港", podRaw: "SANTOS", lane: "南美东",
+      carrier: "CMA", container: "40HQ", oceanUsd: 3350, validFrom: "2026-09-01", validTo: "2099-12-31",
+      sourceGroup: "华南基本港群", syncedAt: new Date().toISOString() },
     // 航线级行：pod_raw 是航线名，只有 L2（航线展开）才捞得到
     { recordId: "r-caribbean", pol: "厦门", podRaw: "加勒比", lane: "加勒比",
       carrier: "HMM", container: "40HQ", oceanUsd: 2500, validTo: "2099-12-31",
@@ -108,6 +112,14 @@ describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-s
     const r = await run({ pod: "巴西" });
     expect(r.total).toBeGreaterThan(0);
     expect((r.quotes ?? []).some(q => q.podRaw === "SANTOS")).toBe(true);
+  });
+
+  it("起运港语义群：pol=蛇口 + pod=SANTOS → 台账记在「华南基本港」群名下的行也要命中，并提示如实标注", async () => {
+    const r = await run({ pol: "蛇口", pod: "SANTOS" });
+    expect(r.total).toBeGreaterThan(0);
+    expect((r.quotes ?? []).some(q => q.pol === "华南基本港")).toBe(true);
+    expect(r.notice).toContain("华南基本港");
+    expect(r.notice).toContain("蛇口");
   });
 
   it("forCustomer=true（用户点头）→ 英文十一列对外表，且一个汉字都不许有", async () => {

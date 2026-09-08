@@ -564,7 +564,7 @@ export function startAutoSync(): void {
   }, 5_000);
 }
 
-export interface QuoteFilters { lane?: string; /** 国别/区域查询的航线集合（regionLanes 扩展，精确命中整条航线） */ lanes?: string[]; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[]; /** 跨字段并集词：每个词同时比对 lane/pod_raw/pol，词之间 AND（规范 rates-query-fallback-spec §1） */ terms?: string[] }
+export interface QuoteFilters { lane?: string; /** 国别/区域查询的航线集合（regionLanes 扩展，精确命中整条航线） */ lanes?: string[]; carrier?: string; pol?: string; /** 起运港语义群展开集（polExpansion 的 values，精确等值 OR 进过滤） */ polExtra?: string[]; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[]; /** 跨字段并集词：每个词同时比对 lane/pod_raw/pol，词之间 AND（规范 rates-query-fallback-spec §1） */ terms?: string[] }
 
 export interface QuoteDto {
   podRaw: string; lane: string | null; carrier: string | null; container: string | null;
@@ -586,8 +586,12 @@ function quoteConds(f: QuoteFilters) {
   // 国别/区域查询：regionLanes 扩展出的航线集合，inArray 精确命中（宁滥勿缺，行上 pod 可见）
   if (f.lanes?.length) conds.push(inArray(rateQuotes.lane, f.lanes));
   if (f.carrier) conds.push(like(rateQuotes.carrier, `%${f.carrier}%`));   // 模糊 + ASCII 大小写不敏感（zim→ZIM）
-  // 起运港模糊匹配（界面筛选与列序对齐：船司→起运港→目的港→柜型）
-  if (f.pol) conds.push(like(rateQuotes.pol, `%${f.pol}%`));
+  // 起运港：原词模糊 + 语义群展开集（蛇口→华南基本港，见 rates-clean.polExpansion）精确等值
+  if (f.pol) {
+    const polConds = [like(rateQuotes.pol, `%${f.pol}%`)];
+    for (const extra of f.polExtra ?? []) polConds.push(eq(rateQuotes.pol, extra));
+    conds.push(or(...polConds));
+  }
   if (f.pod) {
     // 港口归一展开：pod=SANTOS 也要命中 podRaw=「南美东」/区域码 的航线级行
     const podConds = [like(rateQuotes.podRaw, `%${f.pod}%`)];

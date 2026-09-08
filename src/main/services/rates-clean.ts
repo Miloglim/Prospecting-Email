@@ -15,19 +15,55 @@ export type PolStandard = typeof POL_STANDARD[number];
 const POL_ALIASES: Record<string, PolStandard[]> = {
   "深圳": ["蛇口", "盐田", "南沙"], "SHENZHEN": ["蛇口", "盐田", "南沙"], "SZX": ["蛇口", "盐田", "南沙"],
   "大铲湾": ["蛇口", "盐田", "南沙"], "DACHANWAN": ["蛇口", "盐田", "南沙"],
-  "蛇口": ["蛇口"], "SHEKOU": ["蛇口"],
-  "盐田": ["盐田"], "YANTIAN": ["盐田"], "YAT": ["盐田"],
-  "南沙": ["南沙"], "NANSHA": ["南沙"], "NSA": ["南沙"],
-  "广州": ["南沙"], "GUANGZHOU": ["南沙"],
+  "蛇口": ["蛇口"], "SHEKOU": ["蛇口"], "CNSHK": ["蛇口"],
+  "盐田": ["盐田"], "YANTIAN": ["盐田"], "YAT": ["盐田"], "CNYTN": ["盐田"],
+  "南沙": ["南沙"], "NANSHA": ["南沙"], "NSA": ["南沙"], "CNNSA": ["南沙"],
+  "广州": ["南沙"], "GUANGZHOU": ["南沙"], "CNGZG": ["南沙"],
   "华南基本港": ["华南基本港"], "华南": ["华南基本港"],
-  "上海": ["上海"], "SHANGHAI": ["上海"], "SHA": ["上海"],
-  "厦门": ["厦门"], "XIAMEN": ["厦门"], "XMN": ["厦门"],
-  "宁波": ["宁波"], "宁波港": ["宁波"], "NINGBO": ["宁波"], "NGB": ["宁波"], "NGBO": ["宁波"],
-  "青岛": ["青岛"], "QINGDAO": ["青岛"], "TAO": ["青岛"],
+  "上海": ["上海"], "SHANGHAI": ["上海"], "SHA": ["上海"], "CNSHA": ["上海"],
+  "厦门": ["厦门"], "XIAMEN": ["厦门"], "XMN": ["厦门"], "CNXMN": ["厦门"],
+  "宁波": ["宁波"], "宁波港": ["宁波"], "NINGBO": ["宁波"], "NGB": ["宁波"], "NGBO": ["宁波"], "CNNBG": ["宁波"],
+  "青岛": ["青岛"], "QINGDAO": ["青岛"], "TAO": ["青岛"], "CNTAO": ["青岛"],
   "天津": ["天津"], "天津新港": ["天津"], "新港": ["天津"], "TIANJIN": ["天津"],
-  "TSN": ["天津"], "XINGANG": ["天津"],
-  "大连": ["大连"], "DALIAN": ["大连"], "DLC": ["大连"],
+  "TSN": ["天津"], "XINGANG": ["天津"], "CNTXG": ["天津"],
+  "大连": ["大连"], "DALIAN": ["大连"], "DLC": ["大连"], "CNDLC": ["大连"],
 };
+
+/**
+ * 起运港语义群：台账里的「华南基本港」是群名，蛇口/盐田/南沙的货都从它走——
+ * 用户说「蛇口到 SANTOS」，只按字面匹配会把华南基本港的价整批漏掉（实测痛点）。
+ * 群内命中必须如实标注群名，不能说成蛇口专属价。深圳/广州是城市/港区，展开到所属群。
+ */
+const POL_GROUPS: Partial<Record<PolStandard, PolStandard[]>> = {
+  "蛇口": ["蛇口", "盐田", "南沙", "华南基本港"],
+  "盐田": ["盐田", "蛇口", "南沙", "华南基本港"],
+  "南沙": ["南沙", "蛇口", "盐田", "华南基本港"],
+  "华南基本港": ["华南基本港"],
+  // 其余七值各自成群（上海就是上海），无需单列
+};
+
+/** 用户说的起运港 → 台账里应视同命中的写法集合。expanded=true 表示展开到了群（呈现时必须标注群名）。
+ *  认不出返回 null（不猜）；中英文/常用 LOCODE 都认。查价与回信排序共用这一份，不养第二份口径。 */
+const polClusterCache = new Map<string, PolStandard[]>();
+
+export function polExpansion(word: string | null | undefined): { values: PolStandard[]; expanded: boolean } | null {
+  const probe = (word ?? "").trim().replace(/[（(][^（）()]*[)）]/g, "").trim();
+  if (!probe) return null;
+  const base = POL_ALIASES[probe] ?? POL_ALIASES[probe.toUpperCase()] ?? POL_ALIASES[probe.replace(/\s+/g, "").toUpperCase()];
+  if (!base) return null;
+  const key = [...base].sort().join("|");
+  const cached = polClusterCache.get(key);
+  if (cached) return { values: cached, expanded: base.some(b => (POL_GROUPS[b]?.length ?? 1) > 1) };
+  const set = new Set<PolStandard>();
+  for (const b of base) for (const g of POL_GROUPS[b] ?? [b]) set.add(g);
+  // 反向收编：台账 pol 列可能存「华南」「深圳」这类原词——凡别名落在同群里的写法都视同命中
+  for (const [alias, targets] of Object.entries(POL_ALIASES)) {
+    if (targets.some(t => set.has(t))) set.add(alias as PolStandard);
+  }
+  const values = dedupe([...set]);
+  polClusterCache.set(key, values);
+  return { values, expanded: base.some(b => (POL_GROUPS[b]?.length ?? 1) > 1) };
+}
 /** 实测存在但不在十值白名单里的口岸：保留原文、标 unverified，不硬塞进十值 */
 const POL_SPLIT_RE = /[/、,，;；&|+()\s（）]+/;
 

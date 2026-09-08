@@ -107,8 +107,10 @@ describe("回信自查台账价", () => {
     expect(podQueryWord(inq({}))).toBeNull();
   });
 
-  it("起运港映射成集合：CNNBG→宁波；深圳系→含华南基本港；未知港→null（不硬过滤）", () => {
-    expect(mirrorPolSet(inq({ pol: "Porto de Ningbo", polCode: "CNNBG" }))).toEqual(["宁波"]);
+  it("起运港映射成集合：CNNBG→宁波（同群全部写法都算命中）；深圳系→含华南基本港；未知港→null（不硬过滤）", () => {
+    const nb = mirrorPolSet(inq({ pol: "Porto de Ningbo", polCode: "CNNBG" }))!;
+    expect(nb).toContain("宁波");
+    expect(nb).toContain("CNNBG");            // 同群别名原文也收进来：台账 pol 列可能存原词
     const sz = mirrorPolSet(inq({ pol: "Shenzhen", polCode: "CNSZX" }));
     expect(sz).toContain("华南基本港");
     expect(mirrorPolSet(inq({ pol: "Mombasa", polCode: "KEMBA" }))).toBeNull();
