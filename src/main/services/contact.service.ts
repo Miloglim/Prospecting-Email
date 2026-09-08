@@ -1,16 +1,16 @@
-import { getDb } from "../db";
+import { getDb, getRawDb } from "../db";
 import { contacts, type ContactRow, type InsertContactRow } from "../db/schema/contacts";
 import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { crmStages, crmRelations } from "../db/schema/crm";
 import { inboxMessages, inboxBounceMatches } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
-import { eq, like, or, and, count, desc, sql as dsql, type SQL } from "drizzle-orm";
+import { eq, like, or, and, count, desc, inArray, sql as dsql, type SQL } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase } from "../db";
 import { nudge as nudgeSuggestions } from "./suggestion-bus";
-import { linkInboxForContact } from "./inbox-link";
+import { linkInboxForContact, linkInboxForContacts } from "./inbox-link";
 import * as XLSX from "xlsx";
 
 // ── 导入：列名别名 → 字段映射 ──
@@ -544,101 +544,118 @@ export async function importContacts(params: {
   let imported = 0, skipped = 0;
   const importedEmails: string[] = [];
 
-  for (const row of dataRows) {
-    const email = (row[emailIdx] || "").toLowerCase().trim();
-    if (!email) { skipped++; continue; }
-    if (existingSet.has(email)) { skipped++; continue; }
+  // 公司 Map 预载 + 全程单事务：1500+ 行导入原先逐行查公司（无索引全表扫）+ 每行一个隐式事务
+  // （每行一次 WAL fsync），是导入时整程序冻死的主因之一。
+  const companyMap = new Map<string, { id: number; domain: string | null }>(
+    getDb().select().from(companies).all().map(c => [c.name, { id: c.id, domain: c.domain }]),
+  );
 
-    // 收集映射字段
-    const fields: Record<string, string> = {};
-    for (const [header, field] of Object.entries(mapping)) {
-      if (!field || field === "email") continue;
-      const idx = headers.indexOf(header);
-      const val = (row[idx] || "").trim();
-      if (val) fields[field] = val;
-    }
+  const runImport = getRawDb().transaction(() => {
+    for (const row of dataRows) {
+      const email = (row[emailIdx] || "").toLowerCase().trim();
+      if (!email) { skipped++; continue; }
+      if (existingSet.has(email)) { skipped++; continue; }
 
-    // 旧 PE 中文值 → 新系统 key 翻译
-    const STAGE_XLATE: Record<string, string> = {
-      "冷开发": "cold", "跟进1": "f1", "跟进2": "f2", "跟进3": "f3", "跟进4": "f4",
-      "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4",
-    };
-    const STATUS_XLATE: Record<string, string> = {
-      "未触达": "", "已触达": "reached", "有回复": "replied", "已回复": "replied",
-      "退信": "bounced", "自动回复": "autoreply",
-    };
-    const CTYPE_XLATE: Record<string, string> = { "代理": "agent", "直客": "direct", "同行": "agent" };
-    if (fields.stage) {
-      if (STAGE_XLATE[fields.stage] !== undefined) fields.stage = STAGE_XLATE[fields.stage]!;
-      else fields.stage = fields.stage.toLowerCase(); // 大小写归一化（F1→f1）
-    }
-    if (fields.status !== undefined && STATUS_XLATE[fields.status] !== undefined) fields.status = STATUS_XLATE[fields.status]!;
-    if (fields.clientType && CTYPE_XLATE[fields.clientType]) fields.clientType = CTYPE_XLATE[fields.clientType]!;
-
-    // 公司名 → companyId（含 domain 更新）
-    let companyId: number | null = null;
-    if (fields.companyName) {
-      let company = getDb().select().from(companies).where(eq(companies.name, fields.companyName)).get();
-      if (!company) {
-        getDb().insert(companies).values({
-          name: fields.companyName,
-          domain: fields.companyDomain || null,
-          createdAt: now, updatedAt: now,
-        }).run();
-        company = getDb().select().from(companies).where(eq(companies.name, fields.companyName)).get()!;
-      } else if (fields.companyDomain && !company.domain) {
-        getDb().update(companies).set({ domain: fields.companyDomain, updatedAt: now })
-          .where(eq(companies.id, company.id)).run();
+      // 收集映射字段
+      const fields: Record<string, string> = {};
+      for (const [header, field] of Object.entries(mapping)) {
+        if (!field || field === "email") continue;
+        const idx = headers.indexOf(header);
+        const val = (row[idx] || "").trim();
+        if (val) fields[field] = val;
       }
-      companyId = company.id;
-      delete fields.companyName;
-    }
-    delete fields.companyDomain;
 
-    // 备注 / 退信原因 → extra JSON
-    let extra: Record<string, unknown> = {};
-    if (fields.extraNote) {
-      extra.note = fields.extraNote;
-      delete fields.extraNote;
-    }
+      // 旧 PE 中文值 → 新系统 key 翻译
+      const STAGE_XLATE: Record<string, string> = {
+        "冷开发": "cold", "跟进1": "f1", "跟进2": "f2", "跟进3": "f3", "跟进4": "f4",
+        "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4",
+      };
+      const STATUS_XLATE: Record<string, string> = {
+        "未触达": "", "已触达": "reached", "有回复": "replied", "已回复": "replied",
+        "退信": "bounced", "自动回复": "autoreply",
+      };
+      const CTYPE_XLATE: Record<string, string> = { "代理": "agent", "直客": "direct", "同行": "agent" };
+      if (fields.stage) {
+        if (STAGE_XLATE[fields.stage] !== undefined) fields.stage = STAGE_XLATE[fields.stage]!;
+        else fields.stage = fields.stage.toLowerCase(); // 大小写归一化（F1→f1）
+      }
+      if (fields.status !== undefined && STATUS_XLATE[fields.status] !== undefined) fields.status = STATUS_XLATE[fields.status]!;
+      if (fields.clientType && CTYPE_XLATE[fields.clientType]) fields.clientType = CTYPE_XLATE[fields.clientType]!;
 
-    const insert: Record<string, unknown> = {
-      email,
-      companyId,
-      source: "import",
-      stage: fields.stage || "cold",
-      status: fields.status || "",
-      extra: Object.keys(extra).length > 0 ? JSON.stringify(extra) : "{}",
-      createdAt: fields.createdAt || now,
-      updatedAt: now,
-    };
-    delete fields.createdAt;
-    delete fields.status;
-    // ponytail: 字段已写入 insert，从 fields 中移除避免重复写
-    for (const [k, v] of Object.entries(fields)) {
-      if (k === "stage") continue;
-      insert[k] = v;
-    }
+      // 公司名 → companyId（Map 命中零查询；新公司插完即入 Map，同批同名公司只建一次）
+      let companyId: number | null = null;
+      if (fields.companyName) {
+        let company = companyMap.get(fields.companyName);
+        if (!company) {
+          getDb().insert(companies).values({
+            name: fields.companyName,
+            domain: fields.companyDomain || null,
+            createdAt: now, updatedAt: now,
+          }).run();
+          // last_insert_rowid() 跨驱动稳(sql.js / better-sqlite3 都支持)，不赌 drizzle run() 返回形状
+          const got = getRawDb().prepare("SELECT last_insert_rowid() AS id").get() as { id: number };
+          company = { id: Number(got.id), domain: fields.companyDomain || null };
+          companyMap.set(fields.companyName, company);
+        } else if (fields.companyDomain && !company.domain) {
+          getDb().update(companies).set({ domain: fields.companyDomain, updatedAt: now })
+            .where(eq(companies.id, company.id)).run();
+          company.domain = fields.companyDomain;
+        }
+        companyId = company.id;
+        delete fields.companyName;
+      }
+      delete fields.companyDomain;
 
-    try {
-      getDb().insert(contacts).values(insert as InsertContactRow).run();
-      imported++;
-      importedEmails.push(email);
-      existingSet.add(email);
-    } catch (err) {
-      Log.warn("contact.import", `跳过 ${email}: ${err instanceof Error ? err.message : String(err)}`);
-      skipped++;
+      // 备注 / 退信原因 → extra JSON
+      let extra: Record<string, unknown> = {};
+      if (fields.extraNote) {
+        extra.note = fields.extraNote;
+        delete fields.extraNote;
+      }
+
+      const insert: Record<string, unknown> = {
+        email,
+        companyId,
+        source: "import",
+        stage: fields.stage || "cold",
+        status: fields.status || "",
+        extra: Object.keys(extra).length > 0 ? JSON.stringify(extra) : "{}",
+        createdAt: fields.createdAt || now,
+        updatedAt: now,
+      };
+      delete fields.createdAt;
+      delete fields.status;
+      // ponytail: 字段已写入 insert，从 fields 中移除避免重复写
+      for (const [k, v] of Object.entries(fields)) {
+        if (k === "stage") continue;
+        insert[k] = v;
+      }
+
+      try {
+        getDb().insert(contacts).values(insert as InsertContactRow).run();
+        imported++;
+        importedEmails.push(email);
+        existingSet.add(email);
+      } catch (err) {
+        Log.warn("contact.import", `跳过 ${email}: ${err instanceof Error ? err.message : String(err)}`);
+        skipped++;
+      }
     }
-  }
+  });
+  runImport();
 
   if (imported > 0) {
     saveDatabase();
-    // 导入的联系人也可能早已来过信（先收信后导入档案）：当场挂链，别等重启跑迁移
-    for (const e of importedEmails) {
-      const c = getDb().select({ id: contacts.id, email: contacts.email }).from(contacts)
-        .where(dsql`lower(${contacts.email}) = ${e}`).get();
-      if (c) linkInboxForContact(c.id, c.email);
+    // 导入的联系人也可能早已来过信（先收信后导入档案）：当场挂链，别等重启跑迁移。
+    // 分块按唯一索引取回 id（原先逐邮箱 lower(email) 全表扫），再批量一次扫描收件箱回填
+    const importedEntries: Array<{ contactId: number; email: string }> = [];
+    for (let i = 0; i < importedEmails.length; i += 500) {
+      const chunk = importedEmails.slice(i, i + 500);
+      const rows = getDb().select({ id: contacts.id, email: contacts.email }).from(contacts)
+        .where(inArray(contacts.email, chunk)).all();
+      for (const r of rows) importedEntries.push({ contactId: r.id, email: r.email });
     }
+    linkInboxForContacts(importedEntries);
     nudgeSuggestions();
   }
   Log.info("contact.import", `导入 ${imported} 条，跳过 ${skipped} 条`);

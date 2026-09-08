@@ -329,11 +329,23 @@ const toIds = (v: unknown): number[] => {
  *  刻意保留大小写——分组键（如 "SANTOS|EN"）要原样比对，需要小写的调用方自己转。 */
 const toWords = (v: unknown, max = 8): string[] => {
   const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,;]+/) : [];
-  return [...new Set(raw.map(s => String(s).trim()).filter(Boolean))].slice(0, max);
+  return [...new Set(raw.map(s => String(s).trim()).filter(s => s && !isNoneish(s)))].slice(0, max);
 };
-/** 可选字符串：空串/全空格/null 一律归一为「未填」，不留给下游判 */
+/** 模型（尤其经 compat 网关的 agnes / deepseek）会把「没填」写成 Python 风格字符串 "None"，
+ *  或塞 "N/A" "-" "/"「不限」当占位。不归一就会被当成真实筛选值——实测报
+ *  「『None』在台账里不是可识别的目的港」、stage 值「None」不存在，模型原样重试 4 次
+ *  烧掉 68k 输入什么也没交付。按本文件既定原则①：能用归一解决的绝不硬拒。 */
+const NONEISH = new Set(["none", "null", "undefined", "nil", "n/a", "-", "—", "--", "/", "无", "不限", "全部", "所有", "任意"]);
+/** 单个值是不是「等于没填」 */
+export function isNoneish(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v !== "string") return false;
+  const t = v.trim();
+  return !t || NONEISH.has(t.toLowerCase());
+}
+/** 可选字符串：空串/全空格/null/「None 类占位」一律归一为「未填」，不留给下游判 */
 const optStr = (max: number) => z.preprocess(
-  (v: unknown) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
+  (v: unknown) => (isNoneish(v) ? undefined : v),
   z.string().max(max).nullable().optional(),
 );
 

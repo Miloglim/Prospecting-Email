@@ -811,10 +811,27 @@ export function markReplied(id: number): Result<void> {
 
 // ── 标记已读 / 删除 ──
 
+/** 程序内标读待回写服务器 \Seen 的队列：键 accountId|messageId（IMAP 抓取轮开始时统一回写，
+ *  否则未读校准会按服务器视角把程序内的已读改回未读——已读"复活"的根因） */
+const pendingSeen = new Map<string, { accountId: number; messageId: string }>();
+
+export function takePendingSeen(accountId: number): Array<{ messageId: string }> {
+  const out: Array<{ messageId: string }> = [];
+  for (const [k, v] of pendingSeen) {
+    if (v.accountId === accountId) { out.push({ messageId: v.messageId }); pendingSeen.delete(k); }
+  }
+  return out;
+}
+
 export function markRead(id: number): Result<void> {
   if (!Number.isInteger(id) || id <= 0) return failResult("无效的 ID");
+  const row = getDb().select({ accountId: inboxMessages.accountId, messageId: inboxMessages.messageId })
+    .from(inboxMessages).where(eq(inboxMessages.id, id)).get();
   getDb().update(inboxMessages).set({ isRead: 1 })
     .where(eq(inboxMessages.id, id)).run();
+  if (row?.accountId && row.messageId) {
+    pendingSeen.set(`${row.accountId}|${row.messageId}`, { accountId: row.accountId, messageId: row.messageId });
+  }
   saveDatabase();
   return okResult(undefined);
 }

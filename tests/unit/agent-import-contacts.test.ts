@@ -14,10 +14,29 @@ import { eq } from "drizzle-orm";
 // ═══════════════════════════════════════════════════════════════════
 
 type Driz = ReturnType<typeof drizzle<typeof schema>>;
-const h = { db: null as unknown as Driz };
+const h = { db: null as unknown as Driz, raw: null as unknown as SqlJsDatabase };
+
+// better-sqlite3 同形 shim：prepare().all/get + transaction(fn)()。导入管线 P2 后走单事务（getRawDb().transaction），
+// mock 不能再返回 null。
+function rawShim(raw: SqlJsDatabase) {
+  return {
+    prepare(sql: string) {
+      const all = (...params: unknown[]) => {
+        const st = raw.prepare(sql);
+        if (params.length) st.bind(params as never);
+        const out: unknown[] = [];
+        while (st.step()) out.push(st.getAsObject());
+        st.free();
+        return out;
+      };
+      return { all, get: (...params: unknown[]) => (all(...params)[0] ?? null) };
+    },
+    transaction: (fn: () => void) => () => fn(),
+  };
+}
 
 vi.mock("../../src/main/db", () => ({
-  getDb: () => h.db, saveDatabase: () => {}, getRawDb: () => null,
+  getDb: () => h.db, saveDatabase: () => {}, getRawDb: () => rawShim(h.raw),
 }));
 vi.mock("../../src/main/logger", () => ({ Log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }));
 vi.mock("../../src/main/services/ai.service", () => ({
@@ -46,6 +65,7 @@ let SQLLIB: Awaited<ReturnType<typeof initSqlJs>>;
 function newSandbox(): void {
   const raw: SqlJsDatabase = new SQLLIB.Database();
   raw.run(DDL);
+  h.raw = raw;
   h.db = drizzle(raw, { schema });
 }
 

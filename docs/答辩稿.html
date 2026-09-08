@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prospector AI 创新大赛答辩稿</title>
+<style>
+  :root {
+    --bg: #09090b;
+    --bg-secondary: #18181b;
+    --bg-tertiary: #1f1f23;
+    --border: #27272a;
+    --text: #e4e4e7;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --brand: #6054f1;
+    --brand-soft: #1a1759;
+    --brand-text: #cfd8ff;
+    --accent: #27d2bf;
+    --accent-soft: #123f3c;
+    --accent-text: #ccfbf1;
+    --success: #1dc981;
+    --warning: #efaa17;
+    --danger: #e8463a;
+    --radius: 8px;
+    --radius-card: 12px;
+    --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.7;
+    padding: 0;
+  }
+
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 48px 56px 80px;
+  }
+
+  /* ── Title ── */
+  .title-block {
+    text-align: center;
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+  }
+  .title-block h1 {
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.5px;
+  }
+  .title-block .subtitle {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .title-block .badge {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 4px 14px;
+    border-radius: 999px;
+    background: var(--brand-soft);
+    border: 1px solid var(--brand);
+    color: var(--brand-text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  /* ── Section ── */
+  .section {
+    margin-bottom: 48px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .section-number {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--brand-soft);
+    border: 1px solid var(--brand);
+    color: var(--brand-text);
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .section-title {
+    font-size: 19px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Table ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  td { color: var(--text); }
+  tr:last-child td { border-bottom: none; }
+
+  /* ── Code ── */
+  code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--bg-tertiary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--brand-text);
+  }
+  pre {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* ── List ── */
+  ul, ol {
+    padding-left: 22px;
+    margin: 8px 0;
+  }
+  li {
+    margin-bottom: 6px;
+    color: var(--text);
+  }
+
+  /* ── Pill ── */
+  .pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .pill-read { background: rgba(29,201,129,0.12); color: var(--success); border: 1px solid rgba(29,201,129,0.3); }
+  .pill-write { background: rgba(234,70,58,0.12); color: var(--danger); border: 1px solid rgba(234,70,58,0.3); }
+  .pill-brand { background: var(--brand-soft); color: var(--brand-text); border: 1px solid var(--brand); }
+
+  /* ── Highlight ── */
+  .highlight-box {
+    background: var(--brand-soft);
+    border: 1px solid var(--brand);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin: 12px 0;
+  }
+  .highlight-box .highlight-title {
+    color: var(--brand-text);
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+  .highlight-box p {
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  /* ── Architecture SVG ── */
+  .arch-diagram {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .arch-diagram svg { width: 100%; height: auto; display: block; }
+
+  /* ── Callout ── */
+  .callout {
+    display: flex;
+    gap: 12px;
+    padding: 16px 20px;
+    border-left: 3px solid var(--brand);
+    background: var(--bg-secondary);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    margin: 12px 0;
+  }
+  .callout .callout-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: var(--brand-soft);
+    color: var(--brand-text);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .callout .callout-body {
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  /* ── Layer list ── */
+  .layer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .layer-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .layer-num {
+    flex-shrink: 0;
+    min-width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--brand-soft);
+    border: 1px solid var(--brand);
+    color: var(--brand-text);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .layer-item .layer-content {
+    flex: 1;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .layer-item .layer-content strong {
+    color: var(--brand-text);
+    font-weight: 600;
+  }
+  .layer-item .layer-content .layer-desc {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    text-align: center;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  @media (max-width: 640px) {
+    .page { padding: 24px 20px 40px; }
+    .title-block h1 { font-size: 22px; }
+    .section-title { font-size: 16px; }
+    table { font-size: 13px; }
+    th, td { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ════════════ Title ════════════ -->
+  <div class="title-block">
+    <h1>Prospector — AI 原生货代客户开发工具</h1>
+    <div class="subtitle">AI 创新大赛答辩稿 &nbsp;|&nbsp; v5.3.0 &nbsp;|&nbsp; 2026-09-08</div>
+    <span class="badge">国际货代 / 外贸销售 AI 工作台</span>
+  </div>
+
+  <!-- ════════════ Q1 产品形态 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">1</div>
+      <div class="section-title">产品形态</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">概述</div>
+      <p><strong>Prospector</strong> 是一款面向国际货代/外贸销售人员的 <strong>AI 原生桌面应用</strong>（Electron + React + TypeScript），版本 v5.3.0。产品定位是货代销售的"一站式 AI 客户开发工作台"，将七大功能整合到一个桌面应用中。</p>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th style="width:20%">功能模块</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>客户库</td><td>联系人/公司管理，批量导入，标签分类</td></tr>
+        <tr><td>AI 邮件撰写</td><td>基于客户背景生成 EN/ES/PT 个性化冷邮件</td></tr>
+        <tr><td>公司背调</td><td>通过 Exa/Tavily 获取行业、进口活动、适配点</td></tr>
+        <tr><td>批量发送</td><td>多账号轮换、熔断器、时间窗口、日配额管理</td></tr>
+        <tr><td>收件箱管理</td><td>IMAP 拉取 + 自动分类（询盘/回复/退信/自动回复）</td></tr>
+        <tr><td>CRM 管线</td><td>看板视图、到期提醒、活动时间线、静默逾期标记</td></tr>
+        <tr><td>运价看板</td><td>局域网运价同步 &rarr; 本地镜像 &rarr; 离线查询</td></tr>
+      </tbody>
+    </table>
+
+    <div class="highlight-box">
+      <div class="highlight-title">核心特征</div>
+      <p>桌面端形态（Windows NSIS 安装包），本地 SQLite 存储，数据不上云（除配置的模型端点和搜索服务外）。AI Agent 贯穿全流程——20 个工具覆盖读/写/生成/搜索全链路，所有写操作需用户审批。</p>
+    </div>
+  </div>
+
+  <!-- ════════════ Q2 工作流架构图 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">2</div>
+      <div class="section-title">工作流架构图</div>
+    </div>
+
+    <div class="arch-diagram">
+      <svg viewBox="0 0 720 500" width="100%" height="auto">
+        <defs>
+          <marker id="arrow-doc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+            <path d="M1 1 L7 4 L1 7 Z" fill="#a1a1aa" />
+          </marker>
+          <marker id="arrow-brand-doc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+            <path d="M1 1 L7 4 L1 7 Z" fill="#6054f1" />
+          </marker>
+        </defs>
+        <!-- 用户输入 -->
+        <rect x="300" y="16" width="120" height="36" rx="18" fill="#18181b" stroke="#27272a" />
+        <text x="360" y="40" text-anchor="middle" fill="#e4e4e7" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="500">用户输入</text>
+        <!-- 箭头 -->
+        <path d="M 360 52 L 360 72" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arrow-doc)" />
+        <!-- 前端 -->
+        <rect x="270" y="72" width="180" height="44" rx="8" fill="#18181b" stroke="#27272a" />
+        <text x="360" y="99" text-anchor="middle" fill="#e4e4e7" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="500">前端 React 页面</text>
+        <!-- 箭头 -->
+        <path d="M 360 116 L 360 136" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arrow-doc)" />
+        <!-- IPC -->
+        <rect x="175" y="136" width="370" height="44" rx="8" fill="#18181b" stroke="#27272a" />
+        <text x="360" y="163" text-anchor="middle" fill="#e4e4e7" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="500">IPC 通信层 · Contract · Transport · Preload</text>
+        <!-- 箭头 -->
+        <path d="M 360 180 L 360 200" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arrow-doc)" />
+        <!-- Agent Harness 核心 -->
+        <rect x="110" y="200" width="500" height="60" rx="8" fill="#1a1759" stroke="#6054f1" stroke-width="1.5" />
+        <text x="360" y="224" text-anchor="middle" fill="#cfd8ff" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="600">Agent Harness 智能核心</text>
+        <text x="360" y="244" text-anchor="middle" fill="#6054f1" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="12">工具编排 · 策略门控 · 记忆注入 · 反射校验 · 审计日志</text>
+        <!-- 箭头 (brand) -->
+        <path d="M 360 260 L 360 284" stroke="#6054f1" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arrow-brand-doc)" />
+        <!-- 业务服务层 -->
+        <rect x="110" y="284" width="500" height="52" rx="8" fill="#18181b" stroke="#27272a" />
+        <text x="360" y="306" text-anchor="middle" fill="#e4e4e7" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="500">业务服务层</text>
+        <text x="360" y="324" text-anchor="middle" fill="#a1a1aa" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="12">Contact · Send · Inbox · CRM · Rates · Research · Campaign</text>
+        <!-- 箭头 -->
+        <path d="M 360 336 L 360 356" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arrow-doc)" />
+        <!-- SQLite -->
+        <rect x="230" y="356" width="260" height="44" rx="8" fill="#18181b" stroke="#27272a" />
+        <text x="360" y="383" text-anchor="middle" fill="#e4e4e7" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="14" font-weight="500">SQLite（Drizzle ORM · WAL）</text>
+        <!-- 箭头 dashed -->
+        <path d="M 360 400 L 360 420" stroke="#a1a1aa" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 4" fill="none" marker-end="url(#arrow-doc)" />
+        <!-- 外部服务 -->
+        <rect x="150" y="420" width="420" height="36" rx="18" fill="#1f1f23" stroke="#27272a" stroke-dasharray="4 4" />
+        <text x="360" y="443" text-anchor="middle" fill="#a1a1aa" font-family="SF Pro Text, PingFang SC, sans-serif" font-size="12">LLM API · Exa/Tavily · IMAP/SMTP · 运价看板</text>
+      </svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">数据流向</div>
+      <p>用户输入 &rarr; 前端 React 页面 &rarr; IPC 通信层 &rarr; <strong style="color: var(--brand-text)">Agent Harness 核心</strong> &rarr; 业务服务层 &rarr; SQLite 数据层 &rarr; 外部服务（LLM/搜索/邮件/运价）</p>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Agent 单轮执行管线（Harness 内部）</div>
+<pre><code>用户消息
+  &rarr; 上下文锚点解析（contact:id / company:id / message:id）
+  &rarr; 记忆加载（工作记忆 30 条 + 工具事实注入 + 超限压缩摘要）
+  &rarr; Agent.run()（带工具定义的 LLM 调用）
+    &rarr; 工具调用 &rarr; 策略门控检查
+      &rarr; 读操作：工具缓存命中？ &rarr; 幂等检查 &rarr; 执行 &rarr; 审计日志
+      &rarr; 写操作：审批门控 &rarr; 前端动作卡片 &rarr; 用户确认 &rarr; 闭包执行
+    &rarr; 返回结果给 LLM，继续多轮
+  &rarr; 反射校验（数字溯源）
+  &rarr; 流式输出 &rarr; 前端渲染</code></pre>
+    </div>
+
+    <div class="callout">
+      <div class="callout-icon">i</div>
+      <div class="callout-body">IPC 通道规模：17 个域、100+ 通道，Contract 统一命名（<code>domain:action</code> 格式），Transport 薄路由（&le;15 行），Preload 白名单暴露。</div>
+    </div>
+  </div>
+
+  <!-- ════════════ Q3 关键技术决策 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">3</div>
+      <div class="section-title">关键技术决策</div>
+    </div>
+
+    <div class="layer-list">
+      <div class="layer-item">
+        <div class="layer-num">1</div>
+        <div class="layer-content">
+          <strong>Electron 桌面端而非 Web 应用</strong>
+          <div class="layer-desc">货代行业数据敏感性极高——客户联系方式、公司背调数据、邮件往来都是核心资产，必须留在本地。SMTP/IMAP 邮件协议需要本地网络环境，运价看板运行在局域网内。SQLite + WAL 模式提供零配置的本地并发读写。选择 Electron 是数据安全主权和部署便捷性的平衡。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">2</div>
+        <div class="layer-content">
+          <strong>严格三层分离架构</strong>
+          <div class="layer-desc">Services 层禁止 <code>import electron</code>（纯逻辑可测试，<code>Result&lt;T&gt;</code> 返回值）；Transport 层 &le;15 行（仅校验 + 委托，禁止直接 DB 访问）；Contract 层统一 IPC 通道命名（<code>domain:action</code>，禁止连字符/下划线/驼峰）。确保业务逻辑与 Electron 运行时解耦，30+ 单元测试可直接验证服务层。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">3</div>
+        <div class="layer-content">
+          <strong>OpenAI Agents SDK 驱动的 Agent 架构</strong>
+          <div class="layer-desc">选择 <code>@openai/agents</code> 而非自研 Agent 框架。核心设计是工具注册表（TOOL_MANIFEST）作为单一数据源——策略规则、UI 标签、审批要求、预算限制全部从 Manifest 派生。三级权限模型：L0 读（自动执行）/ L2 写（需审批）/ L3 删除（不注册为工具）。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">4</div>
+        <div class="layer-content">
+          <strong>写操作审批门控 + 动作卡片模式</strong>
+          <div class="layer-desc">所有 <code>sideEffect=write</code> 的工具必须经用户审批。写操作以闭包形式注册在服务端，前端仅渲染动作卡片并传回 <code>actionId</code>，无法直接执行写操作。每次工具执行写入 <code>agent_tool_calls</code> 审计表。实现"AI 建议、人类决策"的安全范式。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">5</div>
+        <div class="layer-content">
+          <strong>Drizzle ORM + better-sqlite3</strong>
+          <div class="layer-desc">类型安全 ORM（Zod schema &rarr; Drizzle schema），WAL 模式保证并发读写安全，迁移脚本幂等设计（列增加/重命名/数据回填自动执行）。11 张核心表覆盖完整业务域。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ Q4 技术能力运用 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">4</div>
+      <div class="section-title">技术能力运用</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">AI / LLM 能力</div>
+      <table>
+        <thead>
+          <tr><th style="width:22%">能力</th><th>实现方式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Agent 工具调用</td><td>20 个工具覆盖客户搜索、邮件撰写、运价查询、市场研究、CRM 跟进、发信任务等全场景</td></tr>
+          <tr><td>多语言邮件生成</td><td>基于客户国家/类型/跟进阶段，从句库 + 预设模板生成 EN/ES/PT 个性化冷邮件</td></tr>
+          <tr><td>公司背调</td><td>Exa/Tavily 搜索 &rarr; 行业/进口活动/适配点结构化输出</td></tr>
+          <tr><td>收件箱智能分类</td><td>规则引擎（退信/自动回复/询盘/回复）+ LLM 意图兜底</td></tr>
+          <tr><td>每日 AI 建议</td><td>AI 生成带 <code>{slot}</code> 占位符的模板，展示时填充实时数据快照</td></tr>
+          <tr><td>航线运价研究</td><td>多源检索 &rarr; 页面验证 &rarr; 交叉验证 &rarr; 可信度分级 &rarr; 结构化报告</td></tr>
+          <tr><td>会话记忆</td><td>工作记忆（30 条最近消息）+ 工具事实持久化（<code>agent_facts</code>）+ 超限压缩</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">工程能力</div>
+      <table>
+        <thead>
+          <tr><th style="width:22%">能力</th><th>实现方式</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>类型安全</td><td>TypeScript 5.6 严格模式 + <code>noUncheckedIndexedAccess</code> + Zod 4.5 运行时校验</td></tr>
+          <tr><td>邮件引擎</td><td>多账号轮换、熔断器（<code>consecutiveFails</code> / <code>circuitOpenAt</code>）、时间窗口（21:00-08:00）、分组延迟（300-600s）、日配额（1500 封）</td></tr>
+          <tr><td>运价同步</td><td>局域网看板 Python 服务器 &rarr; 标准化 JSON &rarr; 本地镜像表，离线可查</td></tr>
+          <tr><td>端点管理</td><td>多 Provider Profile（Agnes 2.5 Flash / DeepSeek），端点家族检测，思维链控制注入</td></tr>
+          <tr><td>测试体系</td><td>Vitest 30+ 单元测试 + 集成测试 + Agent Eval（<code>agent-eval.test.ts</code>）</td></tr>
+          <tr><td>自动更新</td><td>electron-updater + GitHub Releases</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ════════════ Q5 AI 原生创新点 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">5</div>
+      <div class="section-title">AI 原生创新点和核心亮点</div>
+    </div>
+
+    <div class="layer-list">
+      <div class="layer-item">
+        <div class="layer-num">1</div>
+        <div class="layer-content">
+          <strong>数字反射器（Reflector）—— AI 回答的数字溯源校验</strong>
+          <div class="layer-desc">Agent 回答中出现的所有数字，必须能在工具输出中找到来源。不匹配时自动触发轻量级修正（<code>chatJson</code>），仍无法对齐时附加不确定性声明。解决 LLM"数字幻觉"行业痛点——在运价、客户数、邮件统计等场景中，一个编造的数字可能导致商业误判。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">2</div>
+        <div class="layer-content">
+          <strong>写操作审批门控 + 动作卡片</strong>
+          <div class="layer-desc">AI 不能直接执行任何写操作（删客户、发邮件、改 CRM 阶段）。写操作以闭包形式注册在服务端，前端仅渲染动作卡片，用户确认后服务端执行闭包，全程审计可追溯。"AI 可信执行"在 B2B 销售场景的工程化落地。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">3</div>
+        <div class="layer-content">
+          <strong>工具注册表单一数据源</strong>
+          <div class="layer-desc"><code>TOOL_MANIFEST</code> 是所有工具元数据的唯一来源——策略规则、UI 标签、审批要求、预算限制全部从 Manifest 派生。新增工具只需在 Manifest 注册一处，Harness 系统提示、前端 toolMeta、策略门控全链路自动生效。消除工具定义散落导致的不一致风险。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">4</div>
+        <div class="layer-content">
+          <strong>五分钟写操作幂等</strong>
+          <div class="layer-desc"><code>conversationId + toolName + 参数hash</code> &rarr; 5 分钟去重窗口，防止 Agent 在同一对话中重复执行相同写操作（如重复创建 CRM 跟进记录）。仅缓存成功结果，失败不幂等——允许重试。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">5</div>
+        <div class="layer-content">
+          <strong>每日 AI 建议卡片的模板化设计</strong>
+          <div class="layer-desc">AI 生成的是带 <code>{slot}</code> 占位符的模板而非硬编码数字，展示时实时填充当前数据快照。六大卡片组（查运价/看市场行情/管邮件/跟进客户/准备发信/账号与公司），每张卡片隐藏方法论前缀（如"仅用本地运价镜像，不得虚构市场价格"），将研究纪律编码进提示词。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">6</div>
+        <div class="layer-content">
+          <strong>工具事实记忆（Tool Facts）</strong>
+          <div class="layer-desc">工具执行结果不仅返回给 LLM，还持久化到 <code>agent_facts</code> 表。后续轮次中 Agent 可直接引用之前的工具结果，无需重新查询。超过工作记忆限制时旧消息被压缩为摘要，工具事实保持完整——降低 API 成本的同时保持上下文连续性。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="highlight-box">
+      <div class="highlight-title">核心亮点总结</div>
+      <p>Prospector 不是"AI 聊天 + CRM"的简单叠加，而是将<strong>数字反射校验、写操作安全门控、工具事实记忆、模板化建议引擎、工具注册表单一数据源</strong>五大 AI 原生能力，深度嵌入货代销售从客户开发 &rarr; 邮件触达 &rarr; 收件管理 &rarr; CRM 跟进 &rarr; 运价决策的完整闭环。数据安全留在本地，AI 能力贯穿全流程。</p>
+    </div>
+  </div>
+
+  <!-- ════════════ Q6 Agent 调用与鉴权 ════════════ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-number">6</div>
+      <div class="section-title">Agent 与业务服务层的调用行为与鉴权</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">调用方式：进程内直接函数调用</div>
+      <p>Agent 工具层（<code>tools.ts</code>）<strong>直接 import</strong> 业务服务层函数，在同一个 Electron 主进程内以函数调用的方式执行。不经过 IPC、不经过网络、不经过任何中间认证层——因为 Agent 和业务服务运行在同一个进程里。</p>
+<pre><code>// tools.ts 的实际 import
+import { upsertContact, importContacts } from "../contact.service";
+import { getBody, markRead } from "../inbox.service";
+import { checkReminders, setStage } from "../crm.service";
+import { startQueue, getSendStatus } from "../send.service";
+import { listQuotes, countQuotes } from "../rate-sync.service";
+import { generateEmailDraft, searchCompany } from "../ai.service";</code></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-title">鉴权机制：代码级五层策略门控</div>
+      <p>Agent 与业务服务之间没有传统鉴权（没有 token、session、RBAC），而是用<strong>代码级硬约束</strong>实现等价安全控制链：</p>
+    </div>
+
+    <div class="layer-list">
+      <div class="layer-item">
+        <div class="layer-num">1</div>
+        <div class="layer-content">
+          <strong>工具注册表单一数据源（Manifest）</strong>
+          <div class="layer-desc"><code>manifest.ts</code> 是所有工具元数据的唯一事实源。每个工具登记 <code>spec.sideEffect</code>（read/write）：<span class="pill pill-read">read</span> 无需审批，<span class="pill pill-write">write</span> 必须审批。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">2</div>
+        <div class="layer-content">
+          <strong>策略层从 Manifest 派生（Policy）</strong>
+          <div class="layer-desc">判据<strong>只看 <code>sideEffect === "write"</code></strong>，不看 <code>requiresApproval</code> 字段。即使误写 <code>requiresApproval: false</code>，闸门仍拦得住——判据只可加严不可放宽。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">3</div>
+        <div class="layer-content">
+          <strong>构建时强制注入审批闸门</strong>
+          <div class="layer-desc"><code>buildHarnessTools()</code> 构建完成后统一扫描，对 write 类工具强制注入 <code>needsApproval = async () =&gt; true</code>。即使工具 execute 里忘了写审批逻辑，闸门仍然生效。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">4</div>
+        <div class="layer-content">
+          <strong>SDK 中断流 + 用户审批</strong>
+          <div class="layer-desc"><code>needsApproval</code> 返回 <code>true</code> 时 SDK 中断执行 &rarr; Harness 推 <code>agent:approval</code> 事件 &rarr; 前端显示动作卡片 &rarr; 用户确认/拒绝 &rarr; <code>resolveApproval</code> 恢复或终止。未确认的写操作存在内存 Map 中，重启自动作废。</div>
+        </div>
+      </div>
+      <div class="layer-item">
+        <div class="layer-num">5</div>
+        <div class="layer-content">
+          <strong>运行时防护</strong>
+          <div class="layer-desc">预算守卫（每轮调用上限）+ 熔断器（连续失败 2 次暂停）+ 幂等去重（5 分钟窗口）+ 读缓存（命中不占预算）+ 审计日志（<code>agent_tool_calls</code> 表全量记录）。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <div class="callout-icon">!</div>
+      <div class="callout-body"><strong>为什么不用传统鉴权：</strong>Agent 不是外部调用方——它和业务服务在同一个进程内，本质上是应用自身的能力。传统鉴权解决"外部不可信调用方验证身份"的问题，而这里的问题是"AI 模型的工具调用行为需要受控"。用代码级策略门控比网络鉴权更直接、更难绕过：没有 token 可以泄露、没有 API 网关可以绕过、写操作的执行权始终在用户手里。</div>
+    </div>
+
+    <div class="highlight-box">
+      <div class="highlight-title">设计原则</div>
+      <p>判据只可加严不可放宽——审批门控的判据只看 <code>sideEffect</code>，不依赖各工具自觉实现。审核不靠"自觉"，靠代码级强制注入。</p>
+    </div>
+  </div>
+
+  <!-- ════════════ Footer ════════════ -->
+  <div class="footer">
+    Prospector v5.3.0 &nbsp;&middot;&nbsp; AI 创新大赛答辩稿 &nbsp;&middot;&nbsp; 2026-09-08
+  </div>
+
+</div>
+
+</body>
+</html>

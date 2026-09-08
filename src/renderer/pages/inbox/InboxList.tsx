@@ -40,16 +40,8 @@ const FILTERS = [
   { key: "other", label: "其他", dot: "#8b8b8b" },
 ];
 
-// ── 未读追踪 ──
-
-function loadViewed(): Set<string> {
-  try { const s = localStorage.getItem("inbox-v"); return s ? new Set(JSON.parse(s)) : new Set(); }
-  catch { return new Set(); }
-}
-function saveViewed(s: Set<string>) {
-  try { localStorage.setItem("inbox-v", JSON.stringify([...s].slice(-2000))); } catch { /* */ }
-}
-function mk(m: InboxItem) { return `${m.accountId || ""}|${m.messageId || ""}|${m.fromEmail}|${m.subject || ""}`; }
+// ── 未读追踪：真源 = DB isRead（抓取认 \Seen + 程序内标读回写服务器 + 校准对齐，
+//    见 main/transport/inbox.ipc.ts 的未读校准）——列表未读点直接读行的 isRead 字段
 
 function shortTime(s: string): string {
   if (!s) return "";
@@ -99,7 +91,6 @@ export function InboxList() {
 
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [last, setLast] = useState<number | null>(null);
-  const [viewed, setViewed] = useState<Set<string>>(loadViewed);
   const [menu, setMenu] = useState<{ x: number; y: number; item: InboxItem } | null>(null);
   // 虚拟滚动：只渲染可视区，避免千余封邮件全量渲染卡顿
   const ROW_H = 58; // 固定行高（压缩后：主题/发信人/标记三行的紧凑高度）
@@ -152,6 +143,7 @@ export function InboxList() {
   });
   const readMut = useMutation({
     mutationFn: (ids: number[]) => Promise.all(ids.map(id => window.api.invoke("inbox:markRead", id))),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbox"] }),
   });
   const delMut = useMutation({
     mutationFn: (ids: number[]) => Promise.all(ids.map(id => window.api.invoke("inbox:delete", id))),
@@ -383,9 +375,8 @@ export function InboxList() {
     } else if (e.ctrlKey || e.metaKey) { ns.has(id) ? ns.delete(id) : ns.add(id); }
     else { ns = ns.has(id) && ns.size === 1 ? new Set() : new Set([id]); }
     setSel(ns); setLast(id); setSid(id);
-    const nv = new Set(viewed); nv.add(mk(item)); setViewed(nv); saveViewed(nv);
     readMut.mutate([id]);
-  }, [items, sel, last, viewed]);
+  }, [items, sel, last]);
 
   const ctxMenu = useCallback((e: React.MouseEvent, item: InboxItem) => {
     e.preventDefault();
@@ -396,9 +387,8 @@ export function InboxList() {
   useEffect(() => { if (!menu) return; const c = () => setMenu(null); document.addEventListener("click", c); return () => document.removeEventListener("click", c); }, [menu]);
 
   const batchRead = () => {
-    const ids = [...sel], nv = new Set(viewed);
-    items.filter(i => sel.has(i.id)).forEach(i => nv.add(mk(i)));
-    setViewed(nv); saveViewed(nv); readMut.mutate(ids); message.success("已标为已读");
+    readMut.mutate([...sel]);
+    message.success("已标为已读");
   };
   const batchDel = () => {
     if (!sel.size) return;
@@ -414,8 +404,8 @@ export function InboxList() {
   // （Shift 扩选）· Space 切换选中 · Delete 删除所选（走既有确认弹窗）。输入框/弹层内一律不劫持。
   const batchDelRef = useRef(batchDel);
   batchDelRef.current = batchDel;
-  const kbRef = useRef({ items, sid, sel, last, viewed, groupMode: view === "sender" && !senderFilter });
-  kbRef.current = { items, sid, sel, last, viewed, groupMode: view === "sender" && !senderFilter };
+  const kbRef = useRef({ items, sid, sel, last, groupMode: view === "sender" && !senderFilter });
+  kbRef.current = { items, sid, sel, last, groupMode: view === "sender" && !senderFilter };
 
   const scrollRowIntoView = useCallback((idx: number) => {
     const el = listRef.current;
@@ -465,7 +455,6 @@ export function InboxList() {
         setSid(it.id);
         scrollRowIntoView(next);
         // 与点击同语义：打开即算已读
-        const nv = new Set(s.viewed); nv.add(mk(it)); setViewed(nv); saveViewed(nv);
         readMut.mutate([it.id]);
       }
     };
@@ -478,7 +467,7 @@ export function InboxList() {
   const counts: Record<string, number> = { bounce: 0, replied: 0, autoreply: 0, sent: 0, other: 0 };
   allItems.forEach(i => { const t = i.classification || "other"; if (counts[t] !== undefined) counts[t]++; });
   const nCounts: Record<string, number> = { bounce: 0, replied: 0, autoreply: 0, other: 0 };
-  allItems.forEach(i => { if (!viewed.has(mk(i))) { const t = i.classification || "other"; if (nCounts[t] !== undefined) nCounts[t]++; } });
+  allItems.forEach(i => { if (!i.isRead) { const t = i.classification || "other"; if (nCounts[t] !== undefined) nCounts[t]++; } });
 
   // ── 渲染 ──
 
@@ -646,7 +635,7 @@ export function InboxList() {
                   {visibleItems.map((i, idx) => {
                     const realIdx = startIdx + idx;
                     const t = TYPE[i.classification || "other"]!;
-                const isNew = !viewed.has(mk(i));
+                const isNew = !i.isRead;
                 const isSel = sel.has(i.id);
                 const isAct = i.id === sid;
                 return (
@@ -658,13 +647,13 @@ export function InboxList() {
                       boxSizing: "border-box",
                       display: "flex", alignItems: "center", gap: 6,
                       padding: "6px 12px 6px 9px", cursor: "pointer",
-                      background: isAct ? "rgba(0,0,0,.04)" : "transparent",
-                      borderLeft: isAct ? "3px solid #1a1a1a" : "3px solid transparent",
+                      background: isAct ? "rgba(0,0,0,.04)" : isSel ? "rgba(0,191,165,.07)" : "transparent",
+                      borderLeft: isAct ? "3px solid #1a1a1a" : isSel ? "3px solid rgba(0,191,165,.45)" : "3px solid transparent",
                       borderBottom: "1px solid #f5f5f5",
                       transition: "background .12s",
                     }}
-                    onMouseEnter={e => { if (!isAct) (e.currentTarget as HTMLElement).style.background = "rgba(0,0,0,.015)"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isAct ? "rgba(0,0,0,.04)" : "transparent"; }}
+                    onMouseEnter={e => { if (!isAct && !isSel) (e.currentTarget as HTMLElement).style.background = "rgba(0,0,0,.015)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isAct ? "rgba(0,0,0,.04)" : isSel ? "rgba(0,191,165,.07)" : "transparent"; }}
                   >
                     <span style={{ flexShrink: 0, width: 10, textAlign: "center" }}>
                       <span style={{ color: t.dot, fontSize: 8, lineHeight: 1, display: "inline-block", transform: isNew ? "scale(1.8)" : "scale(1)", transition: "transform .3s ease" }}>●</span>

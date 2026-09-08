@@ -82,6 +82,15 @@ if (bootHash === "" || bootHash === "#" || bootHash === "#/") {
 
 export const router = createRouter({ routeTree, history: createHashHistory() });
 
+/** 路由级 keep-alive 注册表（AppLayout 消费）：页面切走后保持挂载、只隐藏。
+ *  只登记重页面（发送中心/客户），其余路由维持 TanStack 默认的卸载语义，行为零变化。
+ *  治的实测问题：发送中心每次从别的页面回来整树重挂 —— 8634+ 行选人表重新初始化、
+ *  队列页查询回到 loading 态闪「正在发送」转圈，而真正的发送一直在主进程后台跑着。 */
+export const KEEPALIVE_ROUTE_COMPONENTS: Record<string, React.ComponentType> = {
+  "/campaigns": SendCenter,
+  "/customers": CustomersPage,
+};
+
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;

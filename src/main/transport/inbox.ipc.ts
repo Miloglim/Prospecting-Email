@@ -329,6 +329,25 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     await client.connect();
     await client.mailboxOpen("INBOX");
 
+    // 回写程序内标读（\Seen）：校准前先把用户在本程序里点开/标读的邮件同步到服务器，
+    // 否则下面的未读校准会按服务器视角把这些行改回未读 —— 已读"复活"的根因。
+    try {
+      const pending = InboxService.takePendingSeen(accountId);
+      if (pending.length) {
+        let synced = 0;
+        for (const p of pending.slice(0, 300)) {
+          try {
+            const seenUids = (await client.search({ header: { "message-id": p.messageId } }, { uid: true })) || [];
+            const su = seenUids[seenUids.length - 1];
+            if (su && await client.messageFlagsAdd(String(su), ["\\Seen"], { uid: true })) synced++;
+          } catch { /* 单封失败不影响其余回写 */ }
+        }
+        if (synced) Log.info("inbox.imap.seen", `${account.email}: 回写 ${synced}/${pending.length} 封程序内已读到服务器`);
+      }
+    } catch (e) {
+      Log.warn("inbox.imap.seen", `\Seen 回写失败（不影响抓取）: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // 拉近 FETCH_DAYS 天：SEARCH SINCE 按时间窗口，替代 uid 增量（+1 天缓冲时区差）
     const since = new Date(Date.now() - (FETCH_DAYS + 1) * 86400_000);
     const uids = (await client.search({ since }, { uid: true })) || [];

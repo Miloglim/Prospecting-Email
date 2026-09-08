@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS companies (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 按公司名查 id（导入逐行、联系人档案保存等高频路径）；原先零索引全表扫
+CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name);
 CREATE TABLE IF NOT EXISTS contacts (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   email text NOT NULL UNIQUE,
@@ -39,6 +41,8 @@ CREATE TABLE IF NOT EXISTS contacts (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 不少链路按 lower(email) 匹配（收信挂链、回复匹配、agent 查人），UNIQUE 索引救不了表达式
+CREATE INDEX IF NOT EXISTS idx_contacts_lower_email ON contacts(lower(email));
 -- 联系人页/选人页高频查询路径：updated_at 排序、status/stage/client_type 筛选、company_id 关联
 CREATE INDEX IF NOT EXISTS idx_contacts_updated_at ON contacts(updated_at);
 CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
@@ -70,6 +74,11 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
   received_at text NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 挂链回填（新建/导入联系人认领存量邮件）：只扫未认领行，表达式索引直接命中 lower(from_email)，
+-- 否则每位联系人都全表扫一遍收件箱 —— 1500+ 导入时整程序冻死的根因
+CREATE INDEX IF NOT EXISTS idx_inbox_unmatched_from ON inbox_messages(lower(from_email)) WHERE matched_contact_id IS NULL;
+-- 客户详情「邮件往来」按 matched_contact_id 取数；回填后的事件补齐也走它
+CREATE INDEX IF NOT EXISTS idx_inbox_matched ON inbox_messages(matched_contact_id);
 CREATE TABLE IF NOT EXISTS interactions (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   contact_id integer NOT NULL REFERENCES contacts(id),

@@ -49,6 +49,8 @@ export function QueuePage() {
     queryKey: ["send", "status"],
     queryFn: () => window.api.invoke("send:status") as Promise<{ success: boolean; data?: SendStatus }>,
     refetchInterval: 2000,
+    // 缓存被 GC 或后台刷新时保留上一份数据渲染，绝不闪「正在发送」转圈
+    placeholderData: prev => prev,
   });
 
   const { data: queueData } = useQuery({
@@ -56,6 +58,7 @@ export function QueuePage() {
     queryFn: () => window.api.invoke("send:getQueue") as Promise<{ success: boolean; data?: QueueItem[] }>,
     // 队列项变化由下方 send:progress 事件 invalidate 驱动，轮询只作兜底 → 低频即可（原 3s 全量拉取是进页卡顿元凶之一）
     refetchInterval: 15000,
+    placeholderData: prev => prev,
   });
 
   // destroyOnHidden 下切到队列 tab 时 CampaignList 已卸载，其事件监听随之消失 ——
