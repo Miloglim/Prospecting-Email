@@ -12,6 +12,9 @@ import { companies } from "../db/schema/companies";
 import { eq } from "drizzle-orm";
 import { getDecryptedPassword } from "../services/account.service";
 import { loadConfig, saveConfig } from "../config";
+import { embedInlineImages } from "../services/inline-images";
+import { netFetch } from "../net-proxy";
+import * as fs from "fs";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -22,21 +25,66 @@ function stripHtml(s: string): string {
 }
 const isHtml = (s: string) => /<[a-z][\s\S]*>/i.test(s);
 
-/** 把 HTML 里的 base64 内联图片转成 cid 附件（主流邮件客户端会过滤 base64 内联图，cid 附件才可靠） */
-function inlineImagesToCid(html: string): { html: string; attachments: Array<{ filename: string; content: Buffer; cid: string }> } {
-  const attachments: Array<{ filename: string; content: Buffer; cid: string }> = [];
-  let idx = 0;
-  const newHtml = html.replace(/<img\b[^>]*\bsrc="(data:image\/[^"]+)"/gi, (match, dataUrl: string) => {
-    const m = dataUrl.match(/^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (!m || !m[1] || !m[2]) return match;
-    const ext = m[1] === "jpeg" ? "jpg" : m[1];
-    const cid = `img${idx}@prospector`;
-    attachments.push({ filename: `img${idx}.${ext}`, content: Buffer.from(m[2], "base64"), cid });
-    idx++;
-    return match.replace(dataUrl, `cid:${cid}`);
-  });
-  return { html: newHtml, attachments };
+/**
+ * 取图片字节：file:/// 与本地绝对路径读盘；http(s) 走 netFetch。读不到/超大一律 null——发信不因此失败
+ * （裂图风险有日志与签名保存期提示）。为什么必须转 cid：客户端会过滤 base64 内联图，
+ * 而 file:///、局域网 http、Word/Outlook 粘贴带来的悬空 cid 引用，收件人端更是必然看不到。
+ */
+const IMG_MAX_BYTES = 4 * 1024 * 1024;
+
+/** file:///C:/x.png、file:///C:\x、C:/x、/srv/x、\\nas\x → 可读的本地路径 */
+function localPathFromSrc(src: string): string | null {
+  let s = src.trim();
+  if (/^file:/i.test(s)) {
+    s = decodeURIComponent(s.replace(/^file:\/\/\/?/i, "").split("?")[0] ?? "");
+    if (/^[a-z]:[\\/]/i.test(s)) return s.replace(/\//g, "\\");      // Windows：C:/x → C:\x
+    return s;
+  }
+  if (/^[a-z]:[\\/]/i.test(s) || s.startsWith("/") || s.startsWith("\\\\")) {
+    return decodeURIComponent(s.split("?")[0] ?? "");
+  }
+  return null;
 }
+
+function extOf(name: string, mime?: string | null): string {
+  if (mime) {
+    if (mime.includes("png")) return "png";
+    if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
+    if (mime.includes("gif")) return "gif";
+    if (mime.includes("webp")) return "webp";
+  }
+  const m = /\.(png|jpe?g|gif|webp|bmp)/i.exec(name);
+  const e = m?.[1]?.toLowerCase();
+  return !e ? "png" : e === "jpeg" ? "jpg" : e;
+}
+
+async function loadInlineImage(src: string): Promise<{ buffer: Buffer; ext: string } | null> {
+  const local = localPathFromSrc(src);
+  if (local) {
+    try {
+      const buf = await fs.promises.readFile(local);
+      if (!buf.length || buf.length > IMG_MAX_BYTES) return null;
+      return { buffer: buf, ext: extOf(local) };
+    } catch (err) {
+      Log.debug("send.image", `本地图片读不到：${local}（${err instanceof Error ? err.message : "?"}）`);
+      return null;
+    }
+  }
+  if (/^https?:\/\//i.test(src)) {
+    try {
+      const res = await netFetch(src, { headers: { Accept: "image/*" } });
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length || buf.length > IMG_MAX_BYTES) return null;
+      return { buffer: buf, ext: extOf(src.split("?")[0] ?? "", res.headers.get("content-type")) };
+    } catch (err) {
+      Log.debug("send.image", `远程图片拉不到：${src.slice(0, 80)}（${err instanceof Error ? err.message : "?"}）`);
+      return null;
+    }
+  }
+  return null;
+}
+
 
 
 // ── SMTP 连接池（按账号缓存）─────────────────────────────────────
@@ -118,7 +166,12 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     if (isHtml(body) || isHtml(signature)) {
       const bodyHtml = isHtml(body) ? body : escapeHtml(body).replace(/\n/g, "<br>");
       const sigHtml = isHtml(signature) ? signature : escapeHtml(signature).replace(/\n/g, "<br>");
-      const { html, attachments } = inlineImagesToCid(bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""));
+      const embedded = await embedInlineImages(bodyHtml + (sigHtml ? `<br><br>${sigHtml}` : ""), loadInlineImage);
+      const { html, attachments } = embedded;
+      if (embedded.unresolved.length) {
+        Log.warn("send.image", `${embedded.unresolved.length} 处图片引用发信端取不到（悬空 cid:/相对路径/读不到），`
+          + `收件人可能看到裂图——请把这些图片直接粘贴进签名（会自动转内嵌）：${embedded.unresolved.slice(0, 3).join(" | ")}`);
+      }
       mailOptions = {
         from, bcc: emails, ...ccField, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),

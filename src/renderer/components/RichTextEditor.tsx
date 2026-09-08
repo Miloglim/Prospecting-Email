@@ -1,5 +1,6 @@
 import { useRef, useEffect } from "react";
 import type { CSSProperties, ClipboardEvent } from "react";
+import { deadImageRefs } from "../lib/signature";
 
 /** contenteditable 富文本编辑器 — 粘贴保留 HTML 格式，图片转 base64 data URL。
  *  兼容 antd Form.Item：接收 value/onChange 作为受控组件。 */
@@ -50,18 +51,27 @@ export function RichTextEditor({ value, onChange, placeholder, style, className 
     }
   };
 
+  const dead = deadImageRefs(value);
   return (
-    <div
-      ref={ref}
-      contentEditable
-      suppressContentEditableWarning
-      className={`rich-editor ${className || ""}`}
-      style={{ minHeight: 60, ...style }}
-      onInput={emit}
-      onBlur={emit}
-      onPaste={handlePaste}
-      data-placeholder={placeholder || ""}
-    />
+    <>
+      <div
+        ref={ref}
+        contentEditable
+        suppressContentEditableWarning
+        className={`rich-editor ${className || ""}`}
+        style={{ minHeight: 60, ...style }}
+        onInput={emit}
+        onBlur={emit}
+        onPaste={handlePaste}
+        data-placeholder={placeholder || ""}
+      />
+      {dead.length > 0 && (
+        <div className="text-[11px] text-amber-600 mt-1">
+          有 {dead.length} 处图片引用收件人会看不到（如「{dead[0]}」——从 Word/Outlook 复制的签名常留这种引用）。
+          请删掉它们，改用「直接粘贴图片」插入：粘贴的图片会自动内嵌进邮件，发出去不会裂。
+        </div>
+      )}
+    </>
   );
 }
 
