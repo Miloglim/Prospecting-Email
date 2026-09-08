@@ -39,6 +39,12 @@ CREATE TABLE IF NOT EXISTS contacts (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+-- 联系人页/选人页高频查询路径：updated_at 排序、status/stage/client_type 筛选、company_id 关联
+CREATE INDEX IF NOT EXISTS idx_contacts_updated_at ON contacts(updated_at);
+CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
+CREATE INDEX IF NOT EXISTS idx_contacts_stage ON contacts(stage);
+CREATE INDEX IF NOT EXISTS idx_contacts_client_type ON contacts(client_type);
+CREATE INDEX IF NOT EXISTS idx_contacts_company_id ON contacts(company_id);
 CREATE TABLE IF NOT EXISTS crm_relations (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
   contact_id_a integer NOT NULL REFERENCES contacts(id),

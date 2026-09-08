@@ -177,6 +177,7 @@ export function registerSendIPC() {
   ipcMain.handle(IPC.SEND.GET_TIME_BUCKETS, () => SendService.getTimeBuckets());
   ipcMain.handle(IPC.SEND.GET_STAGE_BUCKETS, () => SendService.getStageBuckets());
   ipcMain.handle(IPC.SEND.GET_SEND_TIME_BUCKETS, () => SendService.getSendTimeBuckets());
+  ipcMain.handle(IPC.SEND.GET_PICKER_STATS, () => SendService.getPickerStats());
   ipcMain.handle(IPC.SEND.GET_QUOTA, () => ({ success: true as const, data: SendService.getQuotaStatus() }));
   ipcMain.handle(IPC.SEND.PREVIEW, (_e, payload) => {
     // 句库预览：{ lang, clientType, stage }

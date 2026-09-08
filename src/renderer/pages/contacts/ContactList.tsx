@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from "react";
-import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Tooltip, Modal, Dropdown } from "antd";
+import { Table, Button, Input, Space, Drawer, Tag, message, Form, Select, Popover, Checkbox, Modal, Dropdown } from "antd";
 import { PlusOutlined, SearchOutlined, DeleteOutlined, SettingOutlined, ImportOutlined, PartitionOutlined, MailOutlined, ExportOutlined } from "@ant-design/icons";
 import type { TableColumnsType } from "antd";
 import { useQueryClient } from "@tanstack/react-query";
@@ -13,10 +13,10 @@ const DEFAULT_COLS = ["name", "email", "companyName", "clientType", "status", "s
 
 interface ColDef { key: string; title: string; width?: number; render: (c: Contact) => ReactNode; }
 
+// 单元格用原生 title 悬浮提示：50 行 × 10 列若包 antd Tooltip（含操作列共 ~500 实例），
+// 每次进页挂载开销是"切页卡一下"的主体；原生 title 零组件成本，Chromium 上表现一致
 const Muted = ({ v }: { v: string | null | undefined }) => (
-  <Tooltip title={v || undefined}>
-    <span className="text-xs text-gray-500 block truncate">{v || "-"}</span>
-  </Tooltip>
+  <span className="text-xs text-gray-500 block truncate" title={v || undefined}>{v || "-"}</span>
 );
 const Dash = () => <span className="text-xs text-gray-300">—</span>;
 const fmtDate = (s: string | null | undefined) =>
@@ -31,12 +31,12 @@ const COLUMN_DEFS: ColDef[] = [
     key: "name", title: "姓名", width: 120,
     render: (c) => {
       const name = [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email.split("@")[0];
-      return <Tooltip title={name}><span className="text-xs font-medium text-gray-800 block truncate">{name}</span></Tooltip>;
+      return <span className="text-xs font-medium text-gray-800 block truncate" title={name}>{name}</span>;
     },
   },
   {
     key: "email", title: "邮箱", width: 200,
-    render: (c) => <Tooltip title={c.email}><span className="text-xs font-mono text-blue-600 block truncate">{c.email}</span></Tooltip>,
+    render: (c) => <span className="text-xs font-mono text-blue-600 block truncate" title={c.email}>{c.email}</span>,
   },
   { key: "companyName", title: "公司", width: 140, render: (c) => <Muted v={c.companyName} /> },
   { key: "title", title: "职位", width: 120, render: (c) => <Muted v={c.title} /> },
@@ -82,6 +82,7 @@ const COLUMN_DEFS: ColDef[] = [
 
 export function ContactList() {
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<{
     stage?: string; status?: string; tags?: string; clientType?: string; country?: string;
@@ -99,14 +100,20 @@ export function ContactList() {
   });
   const [form] = Form.useForm();
 
-  const { data, isLoading, error } = useContacts({ search, page, ...filters });
+  // 搜索防抖：输入逐键触发查询会连续打"COUNT+JOIN+LIKE+ORDER BY"全表扫描（主进程同步查询，会阻塞事件循环）
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data, isLoading, error } = useContacts({ search: debouncedSearch, page, ...filters });
   const upsertContact = useUpsertContact();
   const deleteContact = useDeleteContact();
   const qc = useQueryClient();
 
   // 跨页全选：拉取当前 search/筛选下的全部 id（服务端分页时表头全选只能选当前页 50 条）
   const selectAllMatched = async () => {
-    const r = await window.api.invoke("contacts:listIds", { search, ...filters }) as
+    const r = await window.api.invoke("contacts:listIds", { search: debouncedSearch, ...filters }) as
       { success: boolean; data?: { ids: number[] }; error?: string };
     if (r?.success && r.data) {
       setSelectedRowKeys(r.data.ids);
@@ -152,7 +159,7 @@ export function ContactList() {
     setExporting(true);
     try {
       const result = kind === "contacts"
-        ? await window.api.invoke("export:contactsToExcel", { search })
+        ? await window.api.invoke("export:contactsToExcel", { search: debouncedSearch })
         : await window.api.invoke("export:notesToCsv");
       const r = result as { success: boolean; data?: string; error?: string };
       if (!r?.success) { message.error(r?.error || "导出失败"); return; }
@@ -199,7 +206,8 @@ export function ContactList() {
       setAddOpen(true);
       window.location.hash = rawHash.split("?")[0]!;
     }
-  }, [contacts, isLoading]);
+    // 只需挂载时解析一次：深链参数读后即清回裸 hash，列表数据刷新无需重跑
+  }, [form]);
 
   const updateCols = (cols: string[]) => {
     setVisibleCols(cols);
@@ -215,34 +223,33 @@ export function ContactList() {
       title: "", key: "actions", width: 96, fixed: "right" as const,
       render: (_: unknown, r: Contact) => (
         <Space size={0} style={{ display: "flex", justifyContent: "center" }}>
-          <Tooltip title="在收件箱中搜索">
-            <Button type="text" size="small" icon={<MailOutlined />}
-              className="btn-hover-color"
-              style={{ color: "#bbb" }}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                window.location.hash = `#/inbox?search=${encodeURIComponent(r.email)}`;
-              }}
-            />
-          </Tooltip>
-          <Tooltip title={r.status === "reached" ? "在CRM中查看" : "未进入CRM管线"}>
-            <Button type="text" size="small" icon={<PartitionOutlined />}
-              disabled={r.status !== "reached"}
-              className="btn-hover-color"
-              style={{ color: r.status === "reached" ? "#bbb" : "#d9d9d9" }}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (r.status !== "reached") return;
-                window.location.hash = `#/customers?view=board&detail=${r.id}`;
-              }}
-            />
-          </Tooltip>
+          <Button type="text" size="small" icon={<MailOutlined />}
+            className="btn-hover-color"
+            style={{ color: "#bbb" }}
+            title="在收件箱中搜索"
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              window.location.hash = `#/inbox?search=${encodeURIComponent(r.email)}`;
+            }}
+          />
+          <Button type="text" size="small" icon={<PartitionOutlined />}
+            disabled={r.status !== "reached"}
+            className="btn-hover-color"
+            style={{ color: r.status === "reached" ? "#bbb" : "#d9d9d9" }}
+            title={r.status === "reached" ? "在CRM中查看" : "未进入CRM管线"}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (r.status !== "reached") return;
+              window.location.hash = `#/customers?view=board&detail=${r.id}`;
+            }}
+          />
           <Button type="text" size="small" icon={<DeleteOutlined />}
             loading={deletingId === r.id}
             className="btn-hover-color"
             style={{ color: "#bbb" }}
+            title="删除"
             onDoubleClick={(e) => e.stopPropagation()}
             onClick={async (e) => {
               e.stopPropagation();
@@ -281,6 +288,10 @@ export function ContactList() {
       </div>
     </div>
   );
+
+  // scroll.x 用数字：每列已有固定 width，"max-content" 会让 Table 挂载时同步测量内容宽度并强制回流
+  const tableScrollX = COLUMN_DEFS.filter(d => visibleCols.includes(d.key))
+    .reduce((s, d) => s + (d.width || 100), 0) + 96 /* 操作列 */ + 32 /* 多选列 */;
 
   return (
     <div className="space-y-3">
@@ -364,7 +375,7 @@ export function ContactList() {
         rowKey="id"
         loading={isLoading}
         size="small"
-        scroll={{ x: "max-content" }}
+        scroll={{ x: tableScrollX }}
         className="[&_.ant-table-thead>tr>th]:!text-[11px] [&_.ant-table-thead>tr>th]:!text-gray-400 [&_.ant-table-thead>tr>th]:!font-medium"
         pagination={{
           current: page, pageSize: 50, total, onChange: setPage,

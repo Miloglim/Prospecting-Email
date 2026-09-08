@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 
 export interface Contact {
   id: number;
@@ -35,6 +35,8 @@ export function useContacts(params?: { search?: string; page?: number } & Contac
       data?: { items: Contact[]; total: number };
       error?: string;
     }>,
+    // 翻页/筛选/搜索变更时保留上一份数据展示，不闪加载态
+    placeholderData: keepPreviousData,
   });
 }
 

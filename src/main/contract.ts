@@ -56,6 +56,8 @@ export const IPC = {
     GET_TIME_BUCKETS: chan(PREFIX.SEND, "getTimeBuckets"),
     GET_STAGE_BUCKETS: chan(PREFIX.SEND, "getStageBuckets"),
     GET_SEND_TIME_BUCKETS: chan(PREFIX.SEND, "getSendTimeBuckets"),
+    /** 选人页轻量统计：never 集合 + 最近发送档位（替代上面两个全表桶查询在选人页的调用） */
+    GET_PICKER_STATS: chan(PREFIX.SEND, "getPickerStats"),
     PREVIEW:          chan(PREFIX.SEND, "preview"),
     GET_QUOTA:        chan(PREFIX.SEND, "getQuota"),
     DYNAMIC:          chan(PREFIX.SEND, "dynamic"),

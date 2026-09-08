@@ -26,7 +26,7 @@ import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
 import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
-import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry } from "../rate-update.service";
+import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry, countryMatchWords } from "../rate-update.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
@@ -355,6 +355,7 @@ export const searchContactsSchema = z.object({
   hasPhone: optBool().describe("传 true = 只返回有电话号码的联系人（适合「有电话的客户」「要打电话的名单」类问题）"),
   country: optStr(60).describe("按国家/地区筛选（模糊匹配联系人或公司的国家字段，如 巴西/Brazil/Mexico）；冷开发按国别圈人时用"),
   stage: optStr(16).describe("按发送阶段筛选，只认 cold/f1/f2/f3/f4（cold=还没开发过的冷客户）；也认中文别名 冷开发/跟进1..4。传别的值会当面报错并列出有效值"),
+  status: optStr(16).describe("按发送状态筛选：reached=已触达 / replied=已回复 / bounced=退信 / autoreply=自动回复 / none=未触达(没发过或没触达过)。也认中文别名(已触达/已回复/退信/自动回复/未触达)。注意与 stage 是两个维度：stage=开发漏斗步骤(cold/f1-f4)，status=邮件发送结果。「跟进中的客户」= status:reached 或 replied。传别的值会当面报错"),
   industry: optStr(60).describe("按公司主营品类筛选（模糊匹配公司行业字段，如 家具/家具制造/furniture）"),
   silenceDays: optInt().describe("只要最近跟进早于 N 天的（含从未跟进过的）；冷开发挑沉默客户用，如 30=一个月没动静的"),
   validEmail: optBool().describe("传 true = 排除占位/无效邮箱（如 xxx@no.email 这类导入占位），只留能真发出去的"),
@@ -728,6 +729,26 @@ function normStage(raw: string | null | undefined): string | null | undefined {
   return STAGE_ALIAS[t] ?? STAGE_ALIAS[low] ?? undefined;
 }
 
+const STATUS_VALUES = ["reached", "replied", "bounced", "autoreply", "none"];
+const STATUS_ALIAS: Record<string, string> = {
+  reached: "reached", 已触达: "reached", 触达: "reached", 触达过: "reached",
+  replied: "replied", 已回复: "replied", 回复: "replied", 回复过: "replied",
+  bounced: "bounced", 已退信: "bounced", 退信: "bounced",
+  autoreply: "autoreply", 自动回复: "autoreply",
+  none: "none", 未触达: "none", 无状态: "none", 未发送: "none", 没发过: "none",
+};
+const STATUS_LABEL: Record<string, string> = {
+  reached: "已触达", replied: "已回复", bounced: "退信", autoreply: "自动回复", none: "未触达",
+};
+/** 归一发送状态：空→null（不过滤）；合法/别名→标准值（none=空状态哨兵，筛未触达用）；非法→undefined（当面纠错） */
+function normStatus(raw: string | null | undefined): string | null | undefined {
+  const t = (raw ?? "").trim();
+  if (!t) return null;
+  const low = t.toLowerCase();
+  if (STATUS_VALUES.includes(low)) return low;
+  return STATUS_ALIAS[t] ?? STATUS_ALIAS[low] ?? undefined;
+}
+
 type RawContactRow = {
   id: number; email: string; firstName: string | null; lastName: string | null;
   country: string | null; stage: string | null; status: string | null; companyName: string | null;
@@ -746,8 +767,8 @@ function mapContactHit(r: RawContactRow) {
 }
 
 interface ContactSelectOpts {
-  tokens: string[]; country?: string | null; stage?: string | null; industry?: string | null;
-  silenceDays?: number | null; validEmail?: boolean | null; hasPhone?: boolean | null;
+  tokens: string[]; country?: string | null; stage?: string | null; status?: string | null;
+  industry?: string | null; silenceDays?: number | null; validEmail?: boolean | null; hasPhone?: boolean | null;
   stale?: boolean; limit: number;
 }
 /**
@@ -763,8 +784,19 @@ function selectContactsRaw(o: ContactSelectOpts): { rows: RawContactRow[]; total
     conds.push("(c.email LIKE ? OR c.first_name LIKE ? OR c.last_name LIKE ? OR cp.name LIKE ?)");
     const p = `%${tok}%`; params.push(p, p, p, p);
   }
-  if (o.country) { conds.push("(c.country LIKE ? OR cp.country LIKE ?)"); const p = `%${o.country.trim()}%`; params.push(p, p); }
+  if (o.country) {
+    // 国家词中英加宽：数据归一后 country 多为英文(Brazil)，用户/模型常给中文「巴西」。
+    // 对照表与运价链路共用（rate-update.service 唯一事实源）；认不出的词原样 LIKE，不猜。
+    const words = countryMatchWords(o.country.trim()).map(w => w.toLowerCase());
+    const cond = words.map(() => "(lower(c.country) LIKE ? OR lower(cp.country) LIKE ?)").join(" OR ");
+    conds.push(`(${cond})`);
+    for (const w of words) { const p = `%${w}%`; params.push(p, p); }
+  }
   if (o.stage) { conds.push("c.stage = ?"); params.push(o.stage); }
+  if (o.status) {
+    if (o.status === "none") conds.push("(c.status IS NULL OR c.status = '')");   // 未触达=空状态
+    else { conds.push("c.status = ?"); params.push(o.status); }
+  }
   if (o.industry) { conds.push("cp.industry LIKE ?"); params.push(`%${o.industry.trim()}%`); }
   if (o.hasPhone) conds.push("(c.phone IS NOT NULL AND c.phone != '')");
   if (o.validEmail) conds.push("(instr(c.email,'@')>0 AND lower(c.email) NOT LIKE '%no.email%')");
@@ -798,8 +830,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
   const sender = readIdentity();
   const searchContacts = tool({
     name: "search_contacts",
-    description: "在本地联系人库检索/筛选联系人，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段）。"
-      + "两种用法：①按关键词（姓名/邮箱/公司名）找人；②按结构化条件圈人——country 国家、stage 阶段(cold/f1-f4)、industry 行业、silenceDays 沉默天数、validEmail 仅有效邮箱、hasPhone 仅有电话，可组合。"
+    description: "在本地联系人库检索/筛选联系人，返回结构化记录（含 id/姓名/邮箱/公司/国家/阶段/发送状态）。"
+      + "两种用法：①按关键词（姓名/邮箱/公司名）找人；②按结构化条件圈人——country 国家(中英文都认，如 巴西/Brazil)、"
+      + "stage 阶段(cold/f1-f4)、status 发送状态(reached=已触达/replied=已回复/bounced=退信/none=未触达)、"
+      + "industry 行业、silenceDays 沉默天数、validEmail 仅有效邮箱、hasPhone 仅有电话，可组合。"
       + "冷开发/批量跟进要用②按前置条件精确圈人（如「巴西的冷客户」=country:巴西 + stage:cold），别用单字母关键词全库扫。"
       + "涉及客户的事实性回答必须且只能基于本工具返回的数据。绝对不要用本工具查运价、邮件或公司公开背景（那是 quote_search / inbox_search / company_backcheck）。",
     parameters: searchContactsSchema,
@@ -812,18 +846,25 @@ export function buildHarnessTools(ctx: ToolCtx) {
         return finishRead(ctx, "search_contacts", args, failOut("bad_filter",
           `stage 值「${args.stage}」不存在。有效值只有：cold / f1 / f2 / f3 / f4（冷开发=cold，跟进1..4=f1..f4）。多数联系人是 cold；不确定就去掉本过滤直接查。`));
       }
+      // 发送状态归一 + 当面纠错（与 stage 同一原则）
+      const statusNorm = normStatus(args.status);
+      if ((args.status ?? "").trim() && statusNorm === undefined) {
+        return finishRead(ctx, "search_contacts", args, failOut("bad_filter",
+          `status 值「${args.status}」不存在。有效值：reached(已触达) / replied(已回复) / bounced(退信) / autoreply(自动回复) / none(未触达，即还没发过或没触达过)。「跟进中的客户」= reached 和 replied，两个都要就分两次查。不确定就去掉本过滤直接查。`));
+      }
       // 按词切分匹配（live 评测实锤：模型常传全名 "Juan Garcia"，整串 LIKE 匹配不上单列 → 误判查无此人）
       const tokens = (args.query ?? "").split(/\s+/).filter(Boolean).slice(0, 4);
       const silence = args.silenceDays && args.silenceDays > 0 ? args.silenceDays : null;
-      const hasStructFilter = !!(args.country || stageNorm || args.industry || silence || args.validEmail);
+      const hasStructFilter = !!(args.country || stageNorm || statusNorm || args.industry || silence || args.validEmail);
       const limit = Math.min(args.limit && args.limit > 0 ? args.limit : 10, 50);
       // 无任何检索/筛选条件 → 拒绝全库扫（冷开发"给了前置条件还全量扫"的根因就是没条件也硬扫）
       if (!tokens.length && !hasStructFilter && !args.hasPhone && args.sortBy !== "stale") {
         return failOut("no_criteria",
-          "给一个检索关键词，或至少一个筛选条件（country 国家 / stage 阶段 / industry 行业 / silenceDays 沉默天数 / hasPhone 有电话）。不要用单字母全库扫——那会拉回几千人且选不准。");
+          "给一个检索关键词，或至少一个筛选条件（country 国家 / stage 阶段 / status 发送状态 / industry 行业 / silenceDays 沉默天数 / hasPhone 有电话）。不要用单字母全库扫——那会拉回几千人且选不准。");
       }
       const filtersApplied = [
         args.country ? `国家~${args.country}` : "", stageNorm ? `阶段=${stageNorm}` : "",
+        statusNorm ? `状态=${STATUS_LABEL[statusNorm] ?? statusNorm}` : "",
         args.industry ? `行业~${args.industry}` : "", silence ? `沉默≥${silence}天` : "",
         args.validEmail ? "仅有效邮箱" : "", args.hasPhone ? "仅有电话" : "",
         args.sortBy === "stale" ? "按沉默排序" : "",
@@ -858,7 +899,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (hasStructFilter || args.sortBy === "stale") {
         // 带结构化筛选或沉默排序 → 统一 CTE 选择器：一次算清命中行 + 真总数（含 silenceDays 日期归一比较）
         const sel = selectContactsRaw({
-          tokens, country: args.country ?? null, stage: stageNorm ?? null, industry: args.industry ?? null,
+          tokens, country: args.country ?? null, stage: stageNorm ?? null, status: statusNorm ?? null,
+          industry: args.industry ?? null,
           silenceDays: silence, validEmail: args.validEmail ?? null, hasPhone: args.hasPhone ?? null,
           stale: args.sortBy === "stale", limit,
         });

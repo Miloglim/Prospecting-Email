@@ -9,6 +9,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
+      // 页面切换频繁（路由无 keep-alive），默认 5min 回收会让重页面每次进都全量重拉
+      gcTime: 15 * 60_000,
       retry: 1,
       refetchOnWindowFocus: false,
     },

@@ -1,14 +1,16 @@
-import { useMemo, useState, useRef, useLayoutEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useLayoutEffect } from "react";
 import { Table, Tag, Input, Button, Select, Space, Popover, Empty, Tooltip } from "antd";
 import { SearchOutlined, RightOutlined, ClearOutlined } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 
 /**
  * 邮件发送第一步：Excel 式高密度联系人选择表
- * - 一次性拉全量（库内几千级，sql.js 本就整库在内存，无分页压力）
- * - 列筛选（状态/阶段/国家/语言/类型）+ 关键字搜索 + 快捷分桶 chips（数据源复用三个桶查询，跨组件共享 react-query 缓存）
+ * - 一次性拉全量（库内几千级，slim 投影只取展示列，IPC 体积 ~1.2MB）
+ * - 列筛选（状态/阶段/国家/语言/类型）+ 关键字搜索 + 快捷分桶 chips
  * - preserveSelectedRowKeys：筛选变化不丢勾选
  * - 底部汇总条：已选 N 人 · M 家公司，可展开逐个移除
+ * - 缓存纪律：slim 全量 + pickerStats 均 staleTime 10min、placeholderData 保旧值 ——
+ *   进页先渲染缓存（不再"每次都在加载"），超时才后台静默刷新
  */
 
 interface PickRow {
@@ -19,8 +21,11 @@ interface PickRow {
   status: string | null; stage: string | null; assignee: string | null;
 }
 
-interface Bucket { key: string; label: string; description: string; contacts: { id: number }[]; count: number }
-type BucketList = Result2<Bucket[]>;
+interface PickerStats {
+  neverIds: number[];
+  lastSent: Array<{ id: number; label: string }>;
+}
+type StatsResult = Result2<PickerStats>;
 interface Result2<T> { success: boolean; data?: T }
 
 const STAGE_LABELS: Record<string, string> = { cold: "Cold", f1: "F1", f2: "F2", f3: "F3", f4: "F4" };
@@ -48,34 +53,28 @@ export function ContactPicker({ value, onChange, onNext }: {
 
   const { data: listData, isLoading } = useQuery({
     queryKey: ["contacts", "allForPick"],
-    queryFn: () => window.api.invoke("contacts:list", { page: 1, pageSize: 100000 }) as Promise<{
+    queryFn: () => window.api.invoke("contacts:list", { page: 1, pageSize: 100000, slim: true }) as Promise<{
       success: boolean; data?: { items: PickRow[]; total: number };
     }>,
-    staleTime: 60_000,
+    staleTime: 10 * 60_000,
+    placeholderData: keepPreviousData,
   });
   const rows = useMemo(() => listData?.success ? listData.data?.items || [] : [], [listData]);
 
-  // 复用发送页三个桶查询（同 queryKey → 同缓存），把桶成员反解成联系人标签
-  const { data: statusBuckets } = useQuery({
-    queryKey: ["send", "statusBuckets"],
-    queryFn: () => window.api.invoke("send:getTimeBuckets") as Promise<BucketList>,
-    staleTime: 60_000,
-  });
-  const { data: sendTimeBuckets } = useQuery({
-    queryKey: ["send", "sendTimeBuckets"],
-    queryFn: () => window.api.invoke("send:getSendTimeBuckets") as Promise<BucketList>,
-    staleTime: 60_000,
+  // 轻量统计（主进程两条聚合 SQL，替代旧的两个全表桶查询）：never 集合 + 最近发送档位
+  const { data: statsData } = useQuery({
+    queryKey: ["send", "pickerStats"],
+    queryFn: () => window.api.invoke("send:getPickerStats") as Promise<StatsResult>,
+    staleTime: 10 * 60_000,
+    placeholderData: keepPreviousData,
   });
 
-  const neverIds = useMemo(() => {
-    const b = (statusBuckets?.data || []).find(x => x.key === "never");
-    return new Set((b?.contacts || []).map(c => c.id));
-  }, [statusBuckets]);
+  const neverIds = useMemo(() => new Set(statsData?.data?.neverIds || []), [statsData]);
   const lastSentMap = useMemo(() => {
     const m = new Map<number, string>();
-    for (const b of sendTimeBuckets?.data || []) for (const c of b.contacts || []) m.set(c.id, b.label);
+    for (const e of statsData?.data?.lastSent || []) m.set(e.id, e.label);
     return m;
-  }, [sendTimeBuckets]);
+  }, [statsData]);
 
   const statusOf = (r: PickRow): string => r.status || (neverIds.has(r.id) ? "never" : "");
   const statusLabel = (r: PickRow) => {
@@ -158,6 +157,14 @@ export function ContactPicker({ value, onChange, onNext }: {
     return () => ro.disconnect();
   }, []);
 
+  // 万行虚拟表的挂载是同步重活，若在路由转场中一起挂会卡住首帧（页面白了才见内容）。
+  // 先绘制骨架（useEffect 在首帧 paint 之后执行，setTimeout 再让一拍），下一拍才挂表
+  const [tableReady, setTableReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setTableReady(true), 0);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 210px)", minHeight: 420 }}>
       {/* 工具栏 */}
@@ -190,34 +197,40 @@ export function ContactPicker({ value, onChange, onNext }: {
         </Space>
       </div>
 
-      {/* 高密度虚拟表格 */}
+      {/* 高密度虚拟表格（延迟一拍挂载，见上 tableReady） */}
       <div ref={boxRef} className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden bg-white">
-        <Table<PickRow>
-          className="row-select-table"
-          size="small"
-          virtual
-          dataSource={filtered}
-          columns={columns as never}
-          rowKey="id"
-          loading={isLoading}
-          pagination={false}
-          scroll={{ x: 1060, y: boxH }}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的联系人" /> }}
-          rowSelection={{
-            selectedRowKeys: value,
-            preserveSelectedRowKeys: true,
-            columnWidth: 44,
-            fixed: true,
-            onChange: keys => onChange(keys as number[]),
-          }}
-          onRow={(r) => ({
-            onClick: (e) => {
-              // 点击行 = 勾选/取消（Excel 式快捷操作）；点在选中框上不重复触发
-              if ((e.target as HTMLElement).closest(".ant-table-selection-column")) return;
-              selectedSet.has(r.id) ? onChange(value.filter(id => id !== r.id)) : onChange([...value, r.id]);
-            },
-          })}
-        />
+        {tableReady ? (
+          <Table<PickRow>
+            className="row-select-table"
+            size="small"
+            virtual
+            dataSource={filtered}
+            columns={columns as never}
+            rowKey="id"
+            loading={isLoading}
+            pagination={false}
+            scroll={{ x: 1060, y: boxH }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的联系人" /> }}
+            rowSelection={{
+              selectedRowKeys: value,
+              preserveSelectedRowKeys: true,
+              columnWidth: 44,
+              fixed: true,
+              onChange: keys => onChange(keys as number[]),
+            }}
+            onRow={(r) => ({
+              onClick: (e) => {
+                // 点击行 = 勾选/取消（Excel 式快捷操作）；点在选中框上不重复触发
+                if ((e.target as HTMLElement).closest(".ant-table-selection-column")) return;
+                selectedSet.has(r.id) ? onChange(value.filter(id => id !== r.id)) : onChange([...value, r.id]);
+              },
+            })}
+          />
+        ) : (
+          <div className="h-full w-full flex items-center justify-center">
+            <span className="text-xs text-gray-300">加载联系人…</span>
+          </div>
+        )}
       </div>
 
       {/* 汇总条 */}

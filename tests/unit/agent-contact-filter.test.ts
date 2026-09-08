@@ -192,3 +192,65 @@ describe("search_contacts 结构化筛选", () => {
     expect(r.results![0]!.name).toBe("Ana");
   });
 });
+
+describe("search_contacts 国家别名与发送状态（2026-09-08 数据归一后的两个活 bug 回归）", () => {
+  beforeAll(async () => {
+    if (!SQLLIB) SQLLIB = await initSqlJs({ locateFile: f => path.resolve(process.cwd(), "node_modules/sql.js/dist", f) });
+  });
+  beforeEach(() => {
+    newSandbox();
+    ctx.counts.clear(); ctx.failures.clear();
+    T = Object.fromEntries((buildHarnessTools(ctx) as unknown as ToolLike[]).map(t => [t.name ?? "", t]));
+  });
+
+  it("country 中文「巴西」命中英文写法 Brazil（归一后 country 全为英文，中文 LIKE 曾返回 0 条）", async () => {
+    const r = await run({ country: "巴西" });
+    expect(r.total).toBe(3);
+    expect(r.results!.every(c => c.country === "Brazil")).toBe(true);
+    expect(r.filtersApplied).toContain("国家~巴西");
+  });
+
+  it("country 中文别名可与 stage 组合：「巴西」的冷客户", async () => {
+    const r = await run({ country: "巴西", stage: "cold" });
+    expect(r.results!.map(c => c.id).sort()).toEqual([1, 4]);
+  });
+
+  it("country 对照表外的词原样 LIKE，不猜别名", async () => {
+    const r = await run({ country: "危地马拉" });
+    expect(r.total).toBe(0);
+  });
+
+  it("status:reached 只回已触达（「status 等于已触达」从此有了直接表达）", async () => {
+    h.raw.run("UPDATE contacts SET status='reached' WHERE id=1");
+    h.raw.run("UPDATE contacts SET status='replied' WHERE id=2");
+    const r = await run({ status: "reached" });
+    expect(r.results!.map(c => c.id)).toEqual([1]);
+    expect(r.filtersApplied).toContain("状态=已触达");
+  });
+
+  it("status 认中文别名：已回复", async () => {
+    h.raw.run("UPDATE contacts SET status='replied' WHERE id=2");
+    const r = await run({ status: "已回复" });
+    expect(r.results!.map(c => c.id)).toEqual([2]);
+  });
+
+  it("status:none 哨兵筛空状态（未触达 = 空串或 NULL）", async () => {
+    h.raw.run("UPDATE contacts SET status='replied' WHERE id=2");
+    const r = await run({ status: "未触达" });
+    expect(r.results!.map(c => c.id).sort()).toEqual([1, 3, 4]);
+  });
+
+  it("status 非法值 → bad_filter 当面纠错", async () => {
+    const r = await run({ status: "active" });
+    expect(r.ok).toBe(false);
+    expect(r.error!.code).toBe("bad_filter");
+    expect(r.error!.message).toContain("reached");
+  });
+
+  it("country + status 组合：巴西的已触达客户", async () => {
+    h.raw.run("UPDATE contacts SET status='reached' WHERE id=1");
+    h.raw.run("UPDATE contacts SET status='reached' WHERE id=3");   // 墨西哥的已触达，不该入选
+    const r = await run({ country: "巴西", status: "已触达" });
+    expect(r.results!.map(c => c.id)).toEqual([1]);
+  });
+});

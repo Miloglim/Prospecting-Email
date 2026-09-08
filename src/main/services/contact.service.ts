@@ -125,10 +125,24 @@ function buildContactWhere(params?: {
   return (conds.length ? and(...conds) : dsql`1=1`) as SQL;
 }
 
-export async function listContacts(params?: {
+/** 选人页瘦行：只取展示列，砍掉 extra/tags/sourceDetail 等大字段（IPC 体积 3.2MB → ~1.2MB） */
+export interface SlimContactRow {
+  id: number; email: string; companyId: number | null;
+  firstName: string | null; lastName: string | null;
+  country: string | null; language: string | null;
+  clientType: string | null; stage: string | null; status: string | null;
+  assignee: string | null; companyName: string | null;
+}
+
+export interface ListContactsParams {
   page?: number; pageSize?: number; search?: string;
   stage?: string; status?: string; tags?: string; clientType?: string; country?: string;
-}): Promise<Result<{ items: (ContactRow & { companyName: string | null })[]; total: number }>> {
+  slim?: boolean;
+}
+
+export async function listContacts(params?: ListContactsParams): Promise<Result<{ items: (ContactRow & { companyName: string | null })[]; total: number }>>;
+export async function listContacts(params: ListContactsParams & { slim: true }): Promise<Result<{ items: SlimContactRow[]; total: number }>>;
+export async function listContacts(params: ListContactsParams = {}): Promise<Result<{ items: Array<(ContactRow & { companyName: string | null }) | SlimContactRow>; total: number }>> {
   const page = params?.page || 1;
   const pageSize = params?.pageSize || 50;
   const where = buildContactWhere(params);
@@ -138,17 +152,24 @@ export async function listContacts(params?: {
     .from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
     .where(where).get()?.n) || 0;
 
-  // 真分页：SQL LIMIT/OFFSET
-  const items = getDb().select({
+  const slimColumns = {
     id: contacts.id, email: contacts.email, companyId: contacts.companyId,
     firstName: contacts.firstName, lastName: contacts.lastName,
-    title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl,
-    country: contacts.country, language: contacts.language, clientType: contacts.clientType,
-    stage: contacts.stage, status: contacts.status,
-    tags: contacts.tags, extra: contacts.extra,
+    country: contacts.country, language: contacts.language,
+    clientType: contacts.clientType, stage: contacts.stage, status: contacts.status,
     assignee: contacts.assignee,
+  };
+  const fullColumns = {
+    ...slimColumns,
+    title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl,
+    tags: contacts.tags, extra: contacts.extra,
     source: contacts.source, sourceDetail: contacts.sourceDetail,
     createdAt: contacts.createdAt, updatedAt: contacts.updatedAt,
+  };
+
+  // 真分页：SQL LIMIT/OFFSET
+  const items = getDb().select({
+    ...(params?.slim ? slimColumns : fullColumns),
     companyName: companies.name,
   }).from(contacts).leftJoin(companies, eq(contacts.companyId, companies.id))
     .where(where)
@@ -157,7 +178,7 @@ export async function listContacts(params?: {
     .offset((page - 1) * pageSize)
     .all();
 
-  return okResult({ items, total });
+  return okResult({ items, total } as { items: Array<(ContactRow & { companyName: string | null }) | SlimContactRow>; total: number });
 }
 
 /** 收件箱匹配用：全量联系人 id/email/companyName（不分页，供右侧匹配栏建邮箱索引） */

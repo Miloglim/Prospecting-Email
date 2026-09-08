@@ -54,9 +54,18 @@ export function QueuePage() {
   const { data: queueData } = useQuery({
     queryKey: ["send", "queue"],
     queryFn: () => window.api.invoke("send:getQueue") as Promise<{ success: boolean; data?: QueueItem[] }>,
-    // 队列项变化由 send:progress 事件 invalidate 驱动，轮询只作兜底 → 低频即可（原 3s 全量拉取是进页卡顿元凶之一）
+    // 队列项变化由下方 send:progress 事件 invalidate 驱动，轮询只作兜底 → 低频即可（原 3s 全量拉取是进页卡顿元凶之一）
     refetchInterval: 15000,
   });
+
+  // destroyOnHidden 下切到队列 tab 时 CampaignList 已卸载，其事件监听随之消失 ——
+  // 这里必须自己监听，否则发送中看队列只能等 15s 轮询
+  useEffect(() => {
+    const off = window.api.on("send:progress", () => {
+      qc.invalidateQueries({ queryKey: ["send", "queue"] });
+    });
+    return off;
+  }, [qc]);
 
   const status = statusData?.success ? statusData.data : null;
   const items = queueData?.success ? queueData.data || [] : [];
@@ -75,14 +84,18 @@ export function QueuePage() {
     return () => clearInterval(t);
   }, [status?.delayUntil]);
 
-  // 折叠已发送的组 + 多组时默认收起
+  // 折叠已发送的组 + 长队列默认收起
+  // 修复：空闲(未开始发送)时百组队列曾全部展开渲染 —— 每组全部收件人 Tag
+  // 同步挂载上千组件，是切到队列 tab 卡住的主因。现在 ≥10 组无论是否在发送，
+  // 默认只展开锚点组：发送中=当前组；空闲=首个待发组（复盘时兜底首个失败组）
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   useEffect(() => {
-    if (items.length >= 10 && isRunning) {
-      // 超过 10 组时只展开当前发送项，其余收起
+    if (items.length >= 10) {
       const folded = new Set(items.map(i => i.id));
-      const currentId = status?.currentItem?.id;
-      if (currentId) folded.delete(currentId);
+      const anchor = isRunning
+        ? status?.currentItem?.id
+        : (items.find(i => i.status === "pending") || items.find(i => i.status === "failed"))?.id;
+      if (anchor) folded.delete(anchor);
       setCollapsed(folded);
     } else if (!isRunning && items.length > 0) {
       setCollapsed(new Set(items.filter(i => i.status === "sent").map(i => i.id)));

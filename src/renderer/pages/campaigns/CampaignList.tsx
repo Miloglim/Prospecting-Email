@@ -131,7 +131,13 @@ export function CampaignList({ goToQueue }: { goToQueue: () => void }) {
   const selectedCount = quotaRemaining >= 0 ? Math.min(rawCount, quotaRemaining) : rawCount;
 
   useEffect(() => {
-    const off = window.api.on("send:progress", () => qc.invalidateQueries({ queryKey: ["send"] }));
+    // 只失效轻量状态查询 —— 按前缀失效 ["send"] 会连带 statusBuckets/pickerStats 等聚合查询，
+    // 发送中每组推送一次都会全表重扫（旧版"边发边卡"的元凶之一）
+    const off = window.api.on("send:progress", () => {
+      qc.invalidateQueries({ queryKey: ["send", "status"] });
+      qc.invalidateQueries({ queryKey: ["send", "queue"] });
+      qc.invalidateQueries({ queryKey: ["send", "quota"] });
+    });
     return off;
   }, [qc]);
 
