@@ -1897,7 +1897,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
         // 客户报价表（英文十一列）：有真价就随草稿一起出，模型只负责原样嵌入。
         // POD 用归一后的标准港名（航线级行也展开到该港；多港粘连只留目标港）。
         const tablePod = selfRates?.pod ?? podQueryWord(inq) ?? (typeof matched?.pod === "string" ? matched.pod : null);
-        const quoteTable = replyRates?.length ? customerQuoteTable(replyRates, tablePod, inq) : "";
+        // 出表优先用台账原始行（目免/船期/有效期原文齐全）；工作台来的只有精简行也能出
+        const quoteTable = replyRates?.length ? customerQuoteTable(selfRates?.dtos ?? replyRates, tablePod, inq) : "";
         quoteTableAttached = !!quoteTable;
         r = await generateEmailReply({
           language: langOk || undefined,

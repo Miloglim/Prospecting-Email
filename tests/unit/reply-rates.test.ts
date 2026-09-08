@@ -32,7 +32,7 @@ vi.mock("../../src/main/config", async (importOriginal) => {
 });
 
 const { parseEmailInquiry } = await import("../../src/main/services/agent/email-parse");
-const { lookupReplyRates, mirrorPolSet, podQueryWord, customerQuoteTable, fmtValidityEn, fmtEtdEn, fmtFtEn } =
+const { lookupReplyRates, mirrorPolSet, podQueryWord, customerQuoteTable } =
   await import("../../src/main/services/agent/reply-rates");
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>>;
@@ -195,25 +195,24 @@ describe("客户报价表（英文十一列）", () => {
     expect(rows.map(r => r[2])).toEqual(["SANTOS", "SANTOS"]);
   });
 
-  it("起运港与来信对得上时用来信的英文写法（客户看的就是自己问的港）；未注明船司给 /", () => {
+  it("起运港出英文大写港名（清洗器的十值口岸表）；「未注明」不是船司名 → /", () => {
     const t = customerQuoteTable([
       { carrier: "EMC", container: "40HQ", pol: "宁波", pod: "SANTOS", price: 8800, validFrom: null, validTo: null, note: null },
       { carrier: "未注明", container: "40HQ", pol: "宁波", pod: "SANTOS", price: 9900, validFrom: null, validTo: null, note: null },
     ], "SANTOS", inq({ pol: "Porto de Ningbo", polCode: "CNNBG" }));
     const rows = t.split("\n").slice(2).map(cells);
-    expect(rows[0]![1]).toBe("CNNBG");
-    expect(rows[1]![0]).toBe("/");                  // 「未注明」不是船司名
+    expect(rows[0]![1]).toBe("NINGBO");
+    expect(rows[1]![0]).toBe("/");
   });
 
-  it("日期格式：跨月、单端、认不出的一律不猜", () => {
-    expect(fmtValidityEn("2026-08-28", "2026-09-03")).toBe("28 Aug-3 Sep");
-    expect(fmtValidityEn("2026-09-08", "2026-09-14")).toBe("8-14 Sep");
-    expect(fmtValidityEn(null, "2026-09-14")).toBe("14 Sep");
-    expect(fmtValidityEn(null, null)).toBe("/");
-    expect(fmtEtdEn("EVER FIT 027W，9.6晚开")).toBe("6 Sep");
-    expect(fmtEtdEn("待定")).toBe("/");
-    expect(fmtFtEn("21 combined")).toBe("21");
-    expect(fmtFtEn(null)).toBe("/");
+  it("日期/目免格式一律走清洗器：跨月有效期、自由文本船期、目免取天数", () => {
+    const t = customerQuoteTable([
+      { carrier: "CMA", container: "40HQ", pol: "天津", pod: "SANTOS", price: 8000, validFrom: "2026-08-28", validTo: "2026-09-03", note: null, ft: "21 combined", etd: "EVER FIT 027W，9.6晚开" },
+    ], "SANTOS");
+    const row = cells(t.split("\n")[2]!);
+    expect(row[8]).toMatch(/^28 Aug\s*[–-]\s*3 Sep$/);
+    expect(row[7]).toBe("6 Sep");
+    expect(row[6]).toBe("21");
   });
 
   it("空行不出表（回信里不塞一张只有表头的空表）", () => {

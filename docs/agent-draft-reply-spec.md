@@ -76,30 +76,34 @@
    **不再要求模型「先 quote_search 再重调本工具」**——弱模型实测不照做，等于把活推回给用户。
 5. **审计**：`generate_draft` 的 result 带 `ratesAttached` 与 `ratesSelfQueried`（区分价从哪来）。
 
-### 客户报价表（已落地：`reply-rates.customerQuoteTable`）
+### 客户报价表（单一出口：委托 `rates-clean`）
 
-英文十一列 `CARRIER/POL/POD/20GP/40HQ|HC/40NOR/FT/ETD/VALIDITY/TT/REMARK`，机械生成、模型只许原样嵌入：
+英文十一列 `CARRIER/POL/POD/20GP/40HQ|HC/40NOR/FT/ETD/VALIDITY/TT/REMARK`。
+**表体一律由运价清洗器生成**：`cleanQuoteRow` → `pivotQuotes` → `customerQuoteMarkdown`
+（船司标准缩写、多港拆分、三列柜型价透视、目免/船期/有效期格式、缺项 `/`、TT 恒 `/`
+都在 `rates-clean.ts` 里锁死并有 32 条单测）。回信侧不写第二套透视/格式化逻辑——
+`rates-clean` 转绿（commit 01cb3df）后已完成合并，`quote_search` 与回信共用同一实现。
 
-- **CARRIER**：群内简称/长名 → 国际标准缩写（`CMA CGM`→CMA、`MAERSK`→MSK、`EVERGREEN`→EMC…）；
-  「未注明/未知/N/A/-」不是船司名 → `/`。
-- **POL**：镜像是中文群名 → 英文大写港名（宁波→NINGBO、华南基本港→CHINA BASE PORTS）；
-  该行起运港与**来信要求的起运港**对得上时，用来信的写法（如 `CNNBG`）——客户看的就是自己问的那个港。
-  认不出的中文群名 → `/`（不音译、不猜）。
-- **POD**：一律用查询归一后的标准港名（`SANTOS`）。航线级行（podRaw=南美东）与多港粘连行
-  （`SANTOS/ITAJAI`）都收敛到目标港，满足「不得粘连港口、有多个港口要分离并提取目标港口」。
-- **透视**：同船司 + 同起运港的多柜型行合并成一行三列价；缺的柜型 `/`。多起运港天然拆行（POL 唯一）。
-- **FT**：目免只取天数（`21天`/`21 combined` → `21`）；**ETD**：`2026-09-12`/`9.6晚开` → `12 Sep`/`6 Sep`，
-  认不出 → `/`；**VALIDITY**：同月 `8-14 Sep`、跨月 `28 Aug-3 Sep`、单端给单个日期、都没有 `/`。
-- **TT**：恒 `/`（台账没有航程数据，不猜）。
-- **REMARK**：只留客户看得懂的（附加费/免费期/直转航），剔手机号与座机；内部溯源
-  （来源群/发送人/入库时间）**不进客户表**，它们只在工作表里。
-- 数据支撑：`QuoteDto` 尾部补 `etd`（尾部追加不改表格卡前 7 键的展示序）；
-  `ReplyRateRow` 在 `RateRow` 上补可选 `ft`/`etd`（向后兼容工作台里早先存的 payload）。
+`reply-rates.customerQuoteTable(rows, pod, inq?)` 只做三件适配：
 
-**与运价清洗工作流的关系**：`rates-clean.customerQuoteMarkdown` 是同一张表的另一个实现（服务
-`quote_search` 的「做成客户报价表」出口）。两处口径已按同一份规范写死，等它单测转绿后
-**二者合并为一个出口**（谁调用谁），不许长期并存两套透视逻辑——列名/占位/日期格式一旦漂移，
-客户拿到的就是两张不一样的报价单。
+1. **行形状归一**：台账自查的 `QuoteDto`（字段全：目免/船期/有效期原文/来源群）与会话工作台的
+   `RateRow`（精简）都能进；拿不到的字段给 `null`，由清洗器按既定降级处理，不猜。
+   `lookupReplyRates` 因此额外透出 `dtos`，出表优先用原始行。
+2. **航线级行的 POD 换成查询目标港**：`podRaw=南美东` 这类中文航线名直接进清洗器会让客户表
+   出现中文 POD；换成目标港（`SANTOS`）即「航线级报价展开到具体港」。多港粘连行
+   （`SANTOS/ITAJAI`）由清洗器 `cleanPod` 拆开取目标港。
+3. **备注剔联系方式**：手机号/座机在进清洗器前抹掉——客户报价表是对外交付物，
+   同事的号码不能跟着价格发出去。
+
+**POL 口径**：用清洗器的口岸英文表（宁波→NINGBO、华南基本港→SOUTH CHINA），
+**不再**改成来信的 LOCODE 写法（早前版本曾用 `CNNBG`）。两种都合规，但必须与 `quote_search`
+出口那一张表逐字一致，否则客户会收到两张不一样的报价单。
+
+`messageText`（整条群消息原文，几 KB）不为出表回捞：缺了就走结构化字段；等 `quote_search`
+那条线接上清洗器后，两侧自然共用同一批带原文的行。
+
+数据支撑：`QuoteDto` 尾部补 `etd`（尾部追加不改表格卡前 7 键的展示序）；
+`ReplyRateRow` 在 `RateRow` 上补可选 `ft`/`etd`（向后兼容工作台里早先存的 payload）。
 
 ### 验收（增量）
 
@@ -108,8 +112,8 @@
   `mirrorPolSet` 对 CNNBG→宁波、CNSZX→含华南基本港、未知港→null；
   台账自查按起运港分区 + 价升序，过期与错柜型不许混进来；抽不到目的港返回 null（不查、不猜）。
 - 单测（客户报价表）：表头十一列锁死、TT 恒 `/`；同船司同起运港多柜型合并成一行三列、缺项 `/`；
-  POL 中文群名→英文大写、与来信对齐时用来信写法；POD 收敛到标准港名（航线级/多港粘连行同样）；
-  `CMA CGM`→CMA、「未注明」→`/`；VALIDITY 同月/跨月/单端、ETD 自由文本取日、FT 只取天数；
+  POL 走清洗器英文表（宁波→NINGBO）；POD 收敛到标准港名（航线级/多港粘连行同样）；
+  `CMA CGM`→CMA、「未注明」→`/`；跨月有效期、自由文本船期（`9.6晚开`→`6 Sep`）、目免取天数；
   备注剔手机号；空行不出表。
 - 单测（`tests/unit/agent-draft-reply.test.ts`）：工作台无价时 `generateEmailReply` 收到自查真价
   （`rates` 非空、`ratesSelfQueried` 进审计）；台账也没有时返回 `inquiryNoRates` 的 notice。
