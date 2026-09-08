@@ -540,7 +540,7 @@ const NOTE_EN: Array<[RegExp, string]> = [
   [/可(?=\s*[-+])/g, " "],
   [/含\s*/g, " incl. "],
   [/降价更新/g, "rate update"],
-  [/参考价格/g, "ref. rate"],
+  [/参考价格/g, " ref. rate"],
   [/图片价格表/g, "price sheet"],
   [/可以继续收货/g, "open for booking"],
   [/拖班到\s*/g, "shifted to "],
@@ -550,16 +550,16 @@ const NOTE_EN: Array<[RegExp, string]> = [
   [/开船/g, "sailing"],
   [/截关/g, "closing"],
   [/高柜/g, "HQ"],
-  [/南美东/g, "S.America"],
-  [/南美西/g, "W.S.America"],
-  [/加勒比/g, "Caribbean"],
-  [/中美洲/g, "Central America"],
-  [/地东/g, "Med-E"],
-  [/地西/g, "Med-W"],
+  [/南美东/g, "S.America "],
+  [/南美西/g, "W.S.America "],
+  [/加勒比/g, "Caribbean "],
+  [/中美洲/g, "Central America "],
+  [/地东/g, "Med-E "],
+  [/地西/g, "Med-W "],
   [/蛇口/g, "SHEKOU"], [/盐田/g, "YANTIAN"], [/南沙/g, "NANSHA"],
   [/宁波/g, "NINGBO"], [/青岛/g, "QINGDAO"], [/天津/g, "TIANJIN"],
   [/上海/g, "SHANGHAI"], [/厦门/g, "XIAMEN"], [/大连/g, "DALIAN"],
-  [/（/g, "("], [/）/g, ")"],
+  [/（/g, " ("], [/）/g, ") "],
   [/，/g, ", "], [/；/g, "; "], [/：/g, ": "],
 ];
 
@@ -570,7 +570,9 @@ export function customerRemarkEn(raw: string | null | undefined): string {
   if (INTERNAL_REMARK.test(s)) return "/";
   let out = s;
   for (const [re, en] of NOTE_EN) out = out.replace(re, en);
-  out = out.replace(/\s{2,}/g, " ").replace(/\s+([,;])/g, "$1").trim();
+  out = out
+    .replace(/\(\s+/g, "(").replace(/\s+\)/g, ")")     // 括号内侧不留空格
+    .replace(/\s{2,}/g, " ").replace(/\s+([,;])/g, "$1").trim();
   return /[\u4e00-\u9fa5]/.test(out) ? "/" : (out || "/");
 }
 

@@ -363,9 +363,12 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     // 退信去重：退信服务同一秒批量发多封相同 subject/发件人/时间的退信（messageId 各不相同），只留一封
     const bounceSeen = new Set<string>();
     const bounceUids: number[] = []; // 本轮新增的退信 uid，扫完后复用同一连接批量拉原文
-    const stream = client.fetch(scanUids, { uid: true, envelope: true }, { uid: true });
+    const stream = client.fetch(scanUids, { uid: true, envelope: true, flags: true }, { uid: true });
     for await (const msg of stream) {
       scanned++;
+      // 已读状态跟服务器对齐：抓取时就认 \Seen 标志（此前一律落未读，服务器读过的
+      // 邮件在本程序里永远显示未读 ——「1650 封未读」假象的来源之一）
+      const seen = (msg.flags as Set<string> | undefined)?.has("\\seen") ?? false;
 
       const env = msg.envelope as Record<string, unknown>;
       const msgId = (env.messageId as string) || null;
@@ -409,6 +412,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         to: toList, cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         relatedContactIds,
+        isRead: seen ? 1 : 0,
         receivedAt: date,
       }).run();
       if (msgId) existing.add(msgId);
@@ -421,7 +425,7 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
         to: toList, cc: ccList, myRole,
         matchedContactId: contact?.id || null,
         relatedContactIds,
-        isRead: 0, receivedAt: date,
+        isRead: seen ? 1 : 0, receivedAt: date,
         createdAt: new Date().toISOString(),
       });
 
@@ -431,6 +435,40 @@ async function doImapFetch(accountId: number): Promise<Result<InboxService.Inbox
     if (inserted > 0) saveDatabase();
     pushProgress(accountId, scanned, scanUids.length, account.email);
     Log.info("inbox.imap", `${account.email}: 扫描 ${scanned} 封，新增 ${inserted} 封`);
+
+    // ── 未读校准（治「本地 1650 封未读、服务器一封未读都没有」的假象）──
+    // 此前抓取从不读 \Seen 标志，历史邮件在本地一律未读。以服务器为准：
+    // SEARCH UNSEEN 只回真未读集（便宜）；本地未读行里不在该集的全部标已读，在集内的标回未读。
+    try {
+      const unseenUids = (await client.search({ seen: false }, { uid: true })) || [];
+      const unseenMsgIds = new Set<string>();
+      if (unseenUids.length) {
+        const ustream = client.fetch(unseenUids, { uid: true, envelope: true }, { uid: true });
+        for await (const um of ustream) {
+          const mid = (um.envelope as Record<string, unknown> | undefined)?.messageId as string | undefined;
+          if (mid) unseenMsgIds.add(mid);
+        }
+      }
+      const accRows = getDb().select({
+        id: inboxMessages.id, messageId: inboxMessages.messageId, isRead: inboxMessages.isRead,
+      }).from(inboxMessages).where(eq(inboxMessages.accountId, accountId)).all();
+      let markedRead = 0;
+      let markedUnread = 0;
+      for (const r of accRows) {
+        const serverUnseen = !!(r.messageId && unseenMsgIds.has(r.messageId));
+        if (serverUnseen && r.isRead === 0) continue;
+        if (!serverUnseen && r.isRead === 1) continue;
+        getDb().update(inboxMessages).set({ isRead: serverUnseen ? 0 : 1 })
+          .where(eq(inboxMessages.id, r.id)).run();
+        if (serverUnseen) markedUnread++; else markedRead++;
+      }
+      if (markedRead || markedUnread) {
+        saveDatabase();
+        Log.info("inbox.imap.calibrate", `${account.email}: 未读校准完成（服务器未读 ${unseenUids.length}）→ 标已读 ${markedRead}、标未读 ${markedUnread}`);
+      }
+    } catch (e) {
+      Log.warn("inbox.imap.calibrate", `未读校准失败（不影响抓取）: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // ── 退信原文补全 ──
     // 元数据阶段只拉了信封，而退信的 from 是 mailer-daemon，被退地址只在原文（含 DSN 段）里。

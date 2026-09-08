@@ -84,7 +84,7 @@
 都在 `rates-clean.ts` 里锁死并有 32 条单测）。回信侧不写第二套透视/格式化逻辑——
 `rates-clean` 转绿（commit 01cb3df）后已完成合并，`quote_search` 与回信共用同一实现。
 
-`reply-rates.customerQuoteTable(rows, pod, inq?)` 只做三件适配：
+`reply-rates.customerQuoteTable(rows, pod, inq?)` 只做四件适配：
 
 1. **行形状归一**：台账自查的 `QuoteDto`（字段全：目免/船期/有效期原文/来源群）与会话工作台的
    `RateRow`（精简）都能进；拿不到的字段给 `null`，由清洗器按既定降级处理，不猜。
@@ -94,6 +94,13 @@
    （`SANTOS/ITAJAI`）由清洗器 `cleanPod` 拆开取目标港。
 3. **备注剔联系方式**：手机号/座机在进清洗器前抹掉——客户报价表是对外交付物，
    同事的号码不能跟着价格发出去。
+4. **REMARK 全英文（2026-09-08 用户定案，会话导出实锤）**：清洗器出口
+   `rates-clean.customerRemarkEn` 三道闸——内部操作语整条判丢（成本价/批价/刷箱/可以申请…→ `/`）、
+   有限词表机械译英（重柜费/吨及以上/含/delay至/拖班到/南美东/十值口岸…）、译完仍含中文置 `/`。
+   **宁可空，绝不中英混排给客户**；9 条真备注钉在 `tests/unit/customer-remark-en.test.ts`。
+
+**与 quote_search 两表分离对齐**：`quote_search` 现在回 `userTable`（中文工作表，含报价单截图＝
+信息来源）与 `customerTable`（本出口生成的英文表）两张，回信只嵌后者；模型不再自己挑表。
 
 **POL 口径**：用清洗器的口岸英文表（宁波→NINGBO、华南基本港→SOUTH CHINA），
 **不再**改成来信的 LOCODE 写法（早前版本曾用 `CNNBG`）。两种都合规，但必须与 `quote_search`
