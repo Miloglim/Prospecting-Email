@@ -20,6 +20,7 @@ import {
 } from "../../hooks/useAgentTranscript";
 import type { ApprovalReq, Msg, PlanStep } from "../../hooks/useAgentTranscript";
 import { ensureToolMeta, toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
+import { HomeCards } from "./HomeCards";
 
 // 工具元数据（注册表派生的中文名/追问引导）：模块加载即取，到达后订阅处统一刷新
 void ensureToolMeta();
@@ -714,40 +715,6 @@ function PlanCard({ items }: { items: PlanStep[] }) {
   );
 }
 
-/**
- * 新对话「行动建议」流（docs/suggestion-feed-spec.md）：布局与旧版一致（居中大 Logo+标题），
- * 建议区为豆包式「想法气泡」——自然宽度、居中流式排布、3–4 个可点。
- * feed 由主进程本地实时拼装（零模型调用，真实候选不足 3 条时从预备库补齐），
- * 数据事件驱动 suggestions:changed 热更新；每次切换会话回骨架态重新拉（本地毫秒级）。
- * 渲染端只做展示与点击。IPC 失败时用下面这份极简兜底（正常路径主进程自带预备库降级，
- * 这里只防「连 IPC 都不通」的极端情况，不重复维护方法论前缀）。
- */
-interface FeedItemDto {
-  key: string; text: string; prompt: string;
-  tone: "urgent" | "mail" | "intel" | "neutral";
-  bucket: "followup" | "mail" | "intel" | "static" | "action";
-  href?: string; contactId?: number;
-  /** 一键采纳型：点击直接落库（不经模型），规范 docs/mail-action-suggestion-spec.md §4 */
-  action?: {
-    kind: "addContact" | "markReached"; email: string;
-    firstName?: string | null; lastName?: string | null; contactId?: number | null;
-  };
-}
-interface FeedDto { greeting: string; items: FeedItemDto[] }
-
-const FEED_FALLBACK: FeedDto = {
-  greeting: "你好。有什么要办的，直接说。",
-  items: [
-    { key: "fb-rates", text: "查一下运价台账现在覆盖了哪些航线", prompt: "查一下运价台账现在覆盖了哪些航线", tone: "neutral", bucket: "static" },
-    { key: "fb-mail", text: "总结一下我的未读邮件", prompt: "总结一下我的未读邮件", tone: "neutral", bucket: "static" },
-  ],
-};
-
-/** 气泡内的 tone 小圆点（状态色：红=紧急 蓝=邮件 绿=资讯 灰=常规/预备库） */
-const TONE_DOT: Record<FeedItemDto["tone"], string> = {
-  urgent: "bg-red-400", mail: "bg-sky-400", intel: "bg-emerald-400", neutral: "bg-gray-300",
-};
-
 function readConvFromHash(): string | undefined {
   const raw = window.location.hash;
   const qs = raw.includes("?") ? raw.split("?")[1] : "";
@@ -813,13 +780,6 @@ export function AssistantPage() {
   /** 动作卡：待确认的写入动作（确认弹窗属于「这一屏」，不进现场） */
   const [pendingWrite, setPendingWrite] = useState<ActionDto | null>(null);
   const [writing, setWriting] = useState(false);
-  /**
-   * 新对话「行动建议」流。null = 还没拿到（先显示骨架 chip，初值不写死兜底防闪——UI 铁律）；
-   * feed 由主进程本地实时拼装，suggestions:changed 事件驱动热更新（规范 docs/suggestion-feed-spec.md）。
-   */
-  const [feed, setFeed] = useState<FeedDto | null>(null);
-  /** 「换一批」页码：数据热更新时归零（新数据来了就重新给最优的一组） */
-  const [rotate, setRotate] = useState(0);
   /** 已自动发送过的 ?q=（防止 hashchange 回环重复发送） */
   const askedRef = useRef<string | null>(null);
   /** hashchange 回调拿不到最新闭包里的 handleSend，用 ref 转发 */
@@ -993,31 +953,8 @@ export function AssistantPage() {
     viewKeyRef.current = key;
     setInputVal("");
     setPendingWrite(null);
-    setFeed(null);      // 建议流回骨架态：每次切换都重新拉，本地毫秒级但骨架要在（用户明确要求）
-    setRotate(0);
     void refreshStatus();   // 期间可能在设置页换了端点
   }, [key]);
-
-  // 建议流：进空态拉一次（带 ctx 锚点与「换一批」页码）；数据事件驱动 suggestions:changed 就地热更新。
-  // 只在真要显示开场气泡时订阅，带历史的会话不该白跑一趟
-  const showCards = messages.length === 0 && !convLoading;
-  useEffect(() => {
-    if (!showCards) return;
-    let alive = true;
-    const pull = async (rot: number) => {
-      const r = await window.api.invoke("agent:suggestions", ctx, rot) as IpcResult<FeedDto>;
-      if (alive) setFeed(r?.success && r.data && Array.isArray(r.data.items) ? r.data : FEED_FALLBACK);
-    };
-    void pull(rotate);
-    // 推送是 ctx-less 全局 feed；带锚点的会话收到事件后重拉（置顶在服务端算）
-    const off = window.api.on("suggestions:changed", (data) => {
-      if (!alive) return;
-      setRotate(0);
-      if (ctx) { void pull(0); return; }
-      if (data && typeof data === "object" && Array.isArray((data as FeedDto).items)) setFeed(data as FeedDto);
-    });
-    return () => { alive = false; off(); };
-  }, [showCards, ctx, rotate]);
 
   /** 入口：斜杠命令本地解析（/help、/新对话、/缺口 就地处理，不发起请求），其余交给 store 发起回合 */
   const handleSend = async (raw: string): Promise<void> => {
@@ -1083,29 +1020,6 @@ export function AssistantPage() {
   /** 一键采纳型建议：点击直接落库，不经模型也不再叠确认框（点这一下就是显式授权）。
    *  成功才 dismiss（当天不再提）；失败保留在原位，用户还能再点。
    *  执行后联系人服务会 nudge() → 服务端重算并推 suggestions:changed，气泡就地消失。 */
-  const [actionBusy, setActionBusy] = useState<Set<string>>(new Set());
-  const applyFeedAction = async (it: FeedItemDto) => {
-    const a = it.action;
-    if (!a || actionBusy.has(it.key)) return;
-    setActionBusy(s => new Set(s).add(it.key));
-    try {
-      const r = await window.api.invoke("contacts:upsert", {
-        email: a.email,
-        firstName: a.firstName ?? undefined,
-        lastName: a.lastName ?? undefined,
-        status: "reached",          // 已触达 = 进跟进列表的开关（crm listPipeline 只筛 status='reached'）
-      }) as IpcResult<{ id?: number }>;
-      if (!r?.success) { message.error(`没办成：${r?.error || "未知错误"}`); return; }
-      await window.api.invoke("agent:dismissSuggestion", it.key);
-      const who = [a.firstName, a.lastName].filter(Boolean).join(" ") || a.email;
-      message.success(a.kind === "addContact" ? `已把 ${who} 加入联系人，并标为已触达` : `已把 ${who} 标为已触达，在跟进列表里了`);
-    } catch (err) {
-      message.error(`没办成：${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setActionBusy(s => { const n = new Set(s); n.delete(it.key); return n; });
-    }
-  };
-
   /** 审批结论交给 store：确认后续跑的增量落到新开的骨架气泡上，done 收尾 */
   const handleApproval = async (approved: boolean) => {
     if (!approval) return;
@@ -1318,7 +1232,7 @@ export function AssistantPage() {
           </div>
         ) : messages.length === 0 ? (
           // 布局与旧版一致：居中大 Logo + 标题 + 副标题 + 底部提示；
-          // 建议区从卡片栅格换成豆包式「想法气泡」：自然宽度、居中流式排布、不排整齐
+          // 建议区为两张内置功能卡（运价查询 / 自动开发信，docs/home-cards-spec.md）
           // min-h-full 而非 h-full：窗口矮时内容可滚动不裁切，有余量时仍垂直居中
           <div className="min-h-full flex flex-col items-center justify-center gap-5 py-6">
             <div className="text-center">
@@ -1327,54 +1241,7 @@ export function AssistantPage() {
               <div className="text-xs text-gray-400 mt-1">已接入运价 / 邮件 / 客户 / 跟进 / 发信 11 项能力，写操作一律先弹确认</div>
             </div>
             <div className="w-full max-w-[min(56rem,92%)] flex flex-col items-center gap-3">
-              {feed === null ? (
-                // 骨架气泡：每次切换会话都出现（feed 在 [key] effect 里清空），宽度错落与真气泡同款
-                <div className="flex flex-wrap justify-center gap-2.5">
-                  {[220, 168, 264, 190].map((w, i) => (
-                    <div key={i} className="h-[34px] rounded-full border border-gray-100 px-4 flex items-center" style={{ width: w }}>
-                      <Skeleton active title={false} paragraph={{ rows: 1, width: "100%" }} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  <div className="text-[13px] text-gray-500 text-center leading-relaxed">{feed.greeting}</div>
-                  <div className="group/feed flex flex-wrap justify-center gap-2.5">
-                    {feed.items.map((it, i) => (
-                      <div
-                        key={it.key}
-                        className="group/bubble chip-in inline-flex items-center gap-2 max-w-[420px] rounded-full border border-gray-200/80 bg-white pl-3 pr-3.5 py-1.5 cursor-pointer hover:border-teal-300 hover:bg-teal-50/40 transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
-                        style={{ animationDelay: `${i * 45}ms` }}
-                        title={it.text}
-                        onClick={() => {
-                          if (it.action) { void applyFeedAction(it); return; }   // 一键采纳：直接办，不发起对话
-                          void window.api.invoke("agent:dismissSuggestion", it.key);   // 当天不再推荐同一条
-                          void handleSend(it.prompt);
-                        }}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TONE_DOT[it.tone]}${it.tone === "urgent" ? " breathe" : ""}`} />
-                        <span className="text-[13px] text-gray-700 truncate">{it.text}</span>
-                        {it.action && (
-                          <span className="shrink-0 text-[11px] text-teal-600">{actionBusy.has(it.key) ? "处理中…" : "点一下办"}</span>
-                        )}
-                        {it.href && (
-                          <a
-                            className="shrink-0 text-[11px] text-gray-400 hover:text-teal-600 opacity-0 group-hover/bubble:opacity-100 transition-opacity"
-                            onClick={(e) => { e.stopPropagation(); window.location.hash = it.href!; }}
-                          >查看</a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {feed.items.length >= 3 && (
-                    <button
-                      type="button"
-                      className="text-[12px] text-gray-400 hover:text-teal-600 opacity-0 group-hover/feed:opacity-100 transition-opacity"
-                      onClick={() => setRotate(r => r + 1)}
-                    >换一批</button>
-                  )}
-                </>
-              )}
+              <HomeCards onSend={(t) => { void handleSend(t); }} />
             </div>
             <div className="text-[11px] text-gray-400">
               输入 <code>/</code> 唤出快捷命令 · 多步任务会亮出任务清单 · 写操作先在对话里请你就地确认

@@ -14,6 +14,7 @@ const PREFIX = {
   AGENT:     "agent",
   RATES:     "rates",
   RATE_UPDATE: "rateUpdate",
+  DEV_LETTER: "devLetter",
   KB:        "kb",
   SYSTEM:    "system",
   UPDATE:    "update",
@@ -198,6 +199,10 @@ export const IPC = {
     ENQUEUE:    chan(PREFIX.RATE_UPDATE, "enqueue"),
     /** 单客户的港口偏好派生（详情面板「从来信推断」只读展示 + 一键采用为偏好） */
     PORTS:      chan(PREFIX.RATE_UPDATE, "ports"),
+  },
+  DEV_LETTER: {
+    /** 首页「自动开发信」卡片：按联系人库+限额给出推荐开发群组（确定性规则，无模型参与） */
+    RECOMMEND: chan(PREFIX.DEV_LETTER, "recommend"),
   },
   KB: {
     /** 读取 KB 中转配置（baseUrl/令牌是否已配/生效端点，不含明文令牌） */

@@ -13,7 +13,12 @@ import { HistoryPage } from "../history/HistoryPage";
  * 成本可忽略（send:status 2s 轮询负载极小），离开整个路由时随 SendCenter 卸载。
  */
 export function SendCenter() {
-  const [tab, setTab] = useState<string>("new");
+  // 初始 tab 支持 hash 参数（首页「自动开发信」跳转：#/campaigns?tab=new）
+  const [tab, setTab] = useState<string>(() => {
+    const h = window.location.hash;
+    const qs = h.includes("?") ? h.split("?")[1] : "";
+    return new URLSearchParams(qs).get("tab") || "tasks";
+  });
 
   return (
     <Tabs

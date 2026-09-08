@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { Button, Card, Checkbox, Tag, message, Progress, Popconfirm, Space, Tabs, Input, Select, Modal, Steps } from "antd";
-import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, UnorderedListOutlined, LeftOutlined } from "@ant-design/icons";
+import { PlayCircleOutlined, PauseCircleOutlined, SendOutlined, StopOutlined, UnorderedListOutlined, LeftOutlined, MailOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RichTextEditor, HtmlText } from "../../components/RichTextEditor";
 import { COUNTRIES } from "../../components/ContactDetail";
 import { ContactPicker } from "./ContactPicker";
+import { takeDevLetterPreset } from "../../lib/homeCards";
 
 const STAGE_LABELS: Record<string, string> = {
   initial: "初次", followup1: "跟进1", followup2: "跟进2", closing: "促单", reactivate: "激活",
@@ -32,6 +33,8 @@ interface SendStatus {
 
 export function CampaignList({ goToQueue }: { goToQueue: () => void }) {
   const [step, setStep] = useState(0);            // 0=选人表格 1=发送模式（第3步=发送中心内切到队列 tab）
+  // 首页「自动开发信」卡片的预选名单（一次性交接，读走即删）
+  const [presetNote, setPresetNote] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sendMode, setSendMode] = useState<string>("mine");
   const [instantSubject, setInstantSubject] = useState("");
@@ -126,6 +129,15 @@ export function CampaignList({ goToQueue }: { goToQueue: () => void }) {
   };
 
   // 选人统计：第一步高密度表格的多选结果（取代旧三栏分桶），受限于配额
+  // 首页「自动开发信」推荐名单接住：预选进选人器，最终发不发由用户在这里决定
+  useEffect(() => {
+    const p = takeDevLetterPreset();
+    if (p?.ids.length) {
+      setSelectedIds(p.ids);
+      setPresetNote(p.note);
+    }
+  }, []);
+
   const rawCount = selectedIds.length;
   const quotaRemaining = quotaData?.success ? quotaData.data?.remaining ?? -1 : -1;
   const selectedCount = quotaRemaining >= 0 ? Math.min(rawCount, quotaRemaining) : rawCount;
@@ -225,6 +237,14 @@ export function CampaignList({ goToQueue }: { goToQueue: () => void }) {
       <Steps size="small" current={step} className="!max-w-xl"
         items={[{ title: "选择联系人" }, { title: "发送模式" }, { title: "发送队列" }]} />
 
+      {step === 0 && presetNote && (
+        <div className="flex items-center gap-2 text-[12px] text-gray-500 bg-teal-50/60 border border-teal-100 rounded px-3 py-1.5 mb-2">
+          <MailOutlined className="text-teal-500" />
+          <span>{presetNote}——已为你预选，模板与发送模式在下一步确认。</span>
+          <Button size="small" type="text" className="!text-[11px] !px-1"
+            onClick={() => { setSelectedIds([]); setPresetNote(null); }}>清空重选</Button>
+        </div>
+      )}
       {step === 0 ? (
         <ContactPicker value={selectedIds} onChange={setSelectedIds} onNext={() => setStep(1)} />
       ) : (
