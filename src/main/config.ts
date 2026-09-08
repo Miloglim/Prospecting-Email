@@ -83,6 +83,12 @@ export interface RuntimeConfig {
   };
   /** 预设句库自定义主题（key = `${clientType}.${lang}`，如 direct.EN） */
   sentenceSubjects?: Record<string, string>;
+  /**
+   * 运价台账（board_server）地址来源。默认 lan = 公司局域网（截图/明细最全）；
+   * remote = 公网镜像地址（不在公司网时读数用，截图可能缺失）。
+   * url 非空时优先于 source（自定义地址）；RATES_REMOTE_URL 环境变量优先级最高。
+   */
+  rates?: { source?: "lan" | "remote"; url?: string };
 }
 
 export const DEFAULT_SCHEDULE: SendSchedule = {
@@ -98,6 +104,8 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   fromName: "",
   schedule: DEFAULT_SCHEDULE,
   test: { email: "", company: "", enabled: false, dryRun: false },
+  // 台账默认走公司局域网：内置行为跟以前一致，公网地址只是不在公司网时的备选（设置页可切）
+  rates: { source: "lan" },
   crm: {
     followupDays: { reaching: 3, quoting: 3, trial: 5, cooperating: 7, lost: 14, other: 7 },
     todoAdvanceDays: 2,
@@ -152,6 +160,7 @@ export function loadConfig(): RuntimeConfig {
     schedule: sched.success ? { ...DEFAULT_SCHEDULE, ...sched.data } : DEFAULT_SCHEDULE,
     test: test.success ? { ...DEFAULT_CONFIG.test, ...test.data } : DEFAULT_CONFIG.test,
     crm: { ...DEFAULT_CONFIG.crm, ...(raw.crm || {}), followupDays: { ...DEFAULT_CONFIG.crm.followupDays, ...(raw.crm?.followupDays || {}) } },
+    rates: { ...DEFAULT_CONFIG.rates, ...(raw.rates || {}) },
   };
 }
 

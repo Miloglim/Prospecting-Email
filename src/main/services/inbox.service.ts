@@ -576,6 +576,17 @@ export async function writeBodyFile(id: number, html: string): Promise<void> {
   await fs.promises.writeFile(bodyFilePath(id), html, "utf-8");
 }
 
+/**
+ * 只读本地落盘正文（同步、纯 fs、绝不触发 IMAP）：给上下文注入这类「毫秒级、拿不到就算了」
+ * 的场景用。返回 null = 正文没落盘（此时只有 bodyPreview，注入方必须如实标注为预览）。
+ */
+export function readLocalBodyHtml(id: number): string | null {
+  try {
+    const file = bodyFilePath(id);
+    return fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : null;
+  } catch { return null; }
+}
+
 /** insert 后立即调用：把正文写入刚插入的邮件（用 last_insert_rowid 拿自增 id） */
 export async function writeBodyForLastInsert(html: string): Promise<void> {
   if (!html) return;

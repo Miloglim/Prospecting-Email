@@ -520,6 +520,60 @@ const POL_EN: Record<string, string> = {
   "天津": "TIANJIN", "大连": "DALIAN",
 };
 
+// ── 客户表 REMARK 英化（用户定案：客户报价表全英文，中文/内部信息一律不出现在对外交付物里）──
+// 台账备注是中文群消息原文（内部操作语），这里做有限词表的机械替换；
+// 换完仍含中文 → 整条置 "/"（宁可空，绝不中英混排给客户）。
+
+/** 内部信息整条判丢：这些词进了客户表就是事故（成本价、内部舱位操作状态…） */
+const INTERNAL_REMARK = /成本价|底价|刷箱|批价|锁价|可以申请|抢舱|保舱|特价合约|合约舱|内部|对比\s*FAK/;
+
+/** 备注机械译英词表（有序：先中英文边界补空格防粘连，长模式在前） */
+const NOTE_EN: Array<[RegExp, string]> = [
+  [/([A-Za-z0-9%$])(?=[\u4e00-\u9fa5])/g, "$1 "],
+  [/([\u4e00-\u9fa5])(?=[A-Za-z0-9])/g, "$1 "],
+  [/重柜费\s*[:：]/g, "Heavy-duty surcharge: "],
+  [/随机抽单收碳排放/g, "random carbon audit"],
+  [/毛重/g, "gross weight"],
+  [/(\d+(?:\.\d+)?)\s*吨\s*及以上/g, "$1t and above "],
+  [/低于\s*(\d+(?:\.\d+)?)\s*吨/g, " under $1t "],
+  [/(\d+(?:\.\d+)?)\s*吨/g, "$1t "],
+  [/可(?=\s*[-+])/g, " "],
+  [/含\s*/g, " incl. "],
+  [/降价更新/g, "rate update"],
+  [/参考价格/g, "ref. rate"],
+  [/图片价格表/g, "price sheet"],
+  [/可以继续收货/g, "open for booking"],
+  [/拖班到\s*/g, "shifted to "],
+  [/delay\s*至\s*/gi, "delayed to "],
+  [/现舱/g, "spot space"],
+  [/舱位/g, "space"],
+  [/开船/g, "sailing"],
+  [/截关/g, "closing"],
+  [/高柜/g, "HQ"],
+  [/南美东/g, "S.America"],
+  [/南美西/g, "W.S.America"],
+  [/加勒比/g, "Caribbean"],
+  [/中美洲/g, "Central America"],
+  [/地东/g, "Med-E"],
+  [/地西/g, "Med-W"],
+  [/蛇口/g, "SHEKOU"], [/盐田/g, "YANTIAN"], [/南沙/g, "NANSHA"],
+  [/宁波/g, "NINGBO"], [/青岛/g, "QINGDAO"], [/天津/g, "TIANJIN"],
+  [/上海/g, "SHANGHAI"], [/厦门/g, "XIAMEN"], [/大连/g, "DALIAN"],
+  [/（/g, "("], [/）/g, ")"],
+  [/，/g, ", "], [/；/g, "; "], [/：/g, ": "],
+];
+
+/** 客户报价表专用：内部备注判丢 → 有限词表译英 → 残中文置 "/"。导出供单测。 */
+export function customerRemarkEn(raw: string | null | undefined): string {
+  const s = (raw || "").trim();
+  if (!s) return "/";
+  if (INTERNAL_REMARK.test(s)) return "/";
+  let out = s;
+  for (const [re, en] of NOTE_EN) out = out.replace(re, en);
+  out = out.replace(/\s{2,}/g, " ").replace(/\s+([,;])/g, "$1").trim();
+  return /[\u4e00-\u9fa5]/.test(out) ? "/" : (out || "/");
+}
+
 /** 客户报价表：列与占位锁死（POL/POD 唯一全大写、缺项 "/"、TT 恒 "/"），多起运港拆行 */
 export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
   const head = ["| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |",
@@ -532,7 +586,7 @@ export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
       const polEn = POL_EN[pol] ?? (pol || "");
       body.push(`| ${r.carrier || "/"} | ${polEn.toUpperCase() || "/"} | ${(r.pod || "").toUpperCase() || "/"} `
         + `| ${r.p20 ?? "/"} | ${r.p40 ?? "/"} | ${r.pNor ?? "/"} | ${r.freeDays ?? "/"} `
-        + `| ${fmtEtdShort(r.etd)} | ${fmtValidity(r.validFrom, r.validTo)} | / | ${r.note || "/"} |`);
+        + `| ${fmtEtdShort(r.etd)} | ${fmtValidity(r.validFrom, r.validTo)} | / | ${customerRemarkEn(r.note)} |`);
     }
   }
   return [...head, ...body].join("\n");

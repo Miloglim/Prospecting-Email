@@ -159,6 +159,9 @@ const DEFAULT_FOLLOW_UPS = ["我今天该跟进谁", "总结一下我的未读�
 
 // ── 条目存储 ────────────────────────────────────────────
 
+/** 排队消息在回合结束后的缓冲时长：给用户留看完答案/叫停的时间窗 */
+const QUEUED_SEND_DELAY_MS = 5000;
+
 const BLANK: ConvState = Object.freeze({
   messages: [], sending: false, loaded: false, loading: false, approval: null, budgetAsk: false,
   queued: null, rejectedInput: null, sessionUsage: null, followUps: [], doneActions: {}, turnUser: "", turnText: "",
@@ -300,18 +303,24 @@ function onDone(d: DoneEv): void {
       sending: false,
       followUps: ruleFollowUps(s.turnTools),
       turnTools: [],
-      queued: queued ? null : s.queued,
+      // 排队消息在 5 秒缓冲期内保持 queued（标签可见、可点 × 撤队），到点才清
       ...(queued ? {} : { budgetAsk: !!d.capped }),   // 排了下一条就不打扰
       ...(u ? { sessionUsage: { input: (s.sessionUsage?.input ?? 0) + (u.input ?? 0), output: (s.sessionUsage?.output ?? 0) + (u.output ?? 0) } } : {}),
     };
     return next;
   });
-  // 排队输入：本轮收尾后发出下一条（done 落定再发，120ms 让 sending 先落到 UI）
+  // 排队输入：本轮收尾后默认等 5 秒再自动发出（用户拍板：此前 120ms 直接插队没有缓冲时间，
+  // 用户来不及看完答案/叫停）。缓冲期内点 × 撤队、停止或切会话（flushGen 变）都会取消；
+  // 用户手动开出新回合则保持排队，等那一轮 done 后再发，不丢消息。
   if (queued) {
     setTimeout(() => {
-      if ((entries.get(key)?.flushGen ?? 0) !== gen) return;   // 期间停止 / 切会话 → 放弃
+      const cur = entries.get(key);
+      if (!cur || (cur.flushGen ?? 0) !== gen) return;        // 停止 / 切会话（queued 已退回输入框）
+      if (cur.queued !== queued) return;                      // 用户点 × 撤了
+      if (cur.sending) return;                                // 手动开了新回合 → 保持排队等下一轮 done
+      patch(key, s => ({ ...s, queued: null }));
       void send(key, queued);
-    }, 120);
+    }, QUEUED_SEND_DELAY_MS);
   }
   // 追问引导：规则版已先占位，再让 AI 覆盖（代数守卫，迟到结果不盖新一轮）
   const cur = entries.get(key);

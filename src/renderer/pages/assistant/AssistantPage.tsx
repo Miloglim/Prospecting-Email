@@ -884,11 +884,25 @@ export function AssistantPage() {
   const jumpToBottom = () => {
     const el = scrollerRef.current;
     if (!el) return;
-    programmaticUntilRef.current = Date.now() + 700;   // smooth 动画期间的连续 scroll 事件都算程序化
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    // instant：流式输出时内容每帧都在长，smooth 动画追不上增长 → 永远到不了底、跟随接不回来
+    programmaticUntilRef.current = Date.now() + 120;
+    el.scrollTop = el.scrollHeight;
     setAtBottom(true);
     setPendingBelow(false);
   };
+
+  /** 回合结束自动回底：输出期间用户上翻即解除跟随（尊重阅读）；回答收尾后把视图带回最新。
+   *  最近 3 秒还在手动滚动 = 正在读别处，不抢（复用免打扰窗口语义）。 */
+  useEffect(() => {
+    if (sending) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    if (Date.now() - lastUserScrollAtRef.current < 3000) return;
+    programmaticUntilRef.current = Date.now() + 120;
+    el.scrollTop = el.scrollHeight;
+    setAtBottom(true);
+    setPendingBelow(false);
+  }, [sending]);
 
   /** 发送时回底：不在底部且最近 2 秒没手动滚过 → 跳到底部等结果（instant，smooth 追不上）；
    *  用户刚滚过（<2s）= 正在阅读，不抢滚动条，只标「下方有新内容」。
@@ -1439,7 +1453,7 @@ export function AssistantPage() {
         {queued && (
           <div className="pb-2">
             <Tag closable color="blue" onClose={() => clearQueued(key)}>
-              已排队 · {queued.length > 24 ? `${queued.slice(0, 24)}…` : queued} · 回答结束后自动发出
+              已排队 · {queued.length > 24 ? `${queued.slice(0, 24)}…` : queued} · 回答结束 5 秒后自动发出（点 × 取消）
             </Tag>
           </div>
         )}

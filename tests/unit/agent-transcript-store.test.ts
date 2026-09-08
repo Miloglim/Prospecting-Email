@@ -125,7 +125,7 @@ describe("agent 回合现场 store", () => {
     expect(thinkChips[0]!.chip?.detail).toContain("最后给结论");
   });
 
-  it("⑤ 排队输入在上一轮 done 后自动发出（走同一条发送管线）", async () => {
+  it("⑤ 排队输入在上一轮 done 后自动发出（走同一条发送管线，默认 5 秒缓冲）", async () => {
     const id = "conv-queue";
     await openConversation(id);        // 先装会话：flush 用的是真 setTimeout，假计时器会把它冻住
     vi.useFakeTimers();
@@ -134,7 +134,11 @@ describe("agent 回合现场 store", () => {
     expect(mod.getConv(id).queued).toBe("第二条");
 
     emit("agent:done", { conversationId: id });
-    await vi.advanceTimersByTimeAsync(200);   // 假计时器下必须用 Async 版：顺手冲刷 send() 里的 await
+    await vi.advanceTimersByTimeAsync(1000);  // 缓冲期内：不发（用户拍板：不再 120ms 直接插队）
+    expect(mod.getConv(id).queued).toBe("第二条");
+    expect(invoke.mock.calls.filter(c => c[0] === "agent:chat")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5000);  // 缓冲期满：自动发出
     const calls = invoke.mock.calls.filter(c => c[0] === "agent:chat");
     expect(calls).toHaveLength(2);
     expect((calls[1]![1] as { text: string }).text).toBe("第二条");

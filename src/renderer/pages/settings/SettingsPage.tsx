@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card, Input, InputNumber, Button, message, notification, Table, Modal, Form, Tag, Space,
-  Switch, TimePicker, Tooltip, Badge, Popconfirm,
+  Switch, TimePicker, Tooltip, Badge, Popconfirm, Segmented,
 } from "antd";
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { RichTextEditor } from "../../components/RichTextEditor";
@@ -265,6 +265,63 @@ function KbDispatchCard() {
           {test.text}
         </div>
       )}
+    </SettingCard>
+  );
+}
+
+// ── 运价台账来源：内置默认局域网（截图与明细最全），不在公司网时可切公网镜像（能查价、截图缺）──
+// 切换即自动重新同步镜像，不留「保存 / 测试连接」两步（设置页只放必须项）
+function RatesSourceCard() {
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({
+    queryKey: ["rates", "config"],
+    queryFn: () => window.api.invoke("system:getConfig") as Promise<{
+      success: boolean; data?: { rates?: { source?: string; url?: string } };
+    }>,
+  });
+  const { data: st } = useQuery({
+    queryKey: ["rates", "status"],
+    queryFn: () => window.api.invoke("rates:status") as Promise<{
+      success: boolean;
+      data?: { remoteHost: string; total: number; lastSyncAt: string | null; lastError: string | null };
+    }>,
+  });
+  const [busy, setBusy] = useState(false);
+  const custom = (cfg?.data?.rates?.url || "").trim();
+  const source = cfg?.data?.rates?.source === "remote" ? "remote" : "lan";
+
+  const pick = async (next: "lan" | "remote") => {
+    if (busy || (next === source && !custom)) return;
+    setBusy(true);
+    try {
+      // 自定义地址一并清掉：分段按钮就是唯一入口，不留两套并存的地址来源
+      await window.api.invoke("system:updateConfig", { rates: { source: next, url: "" } });
+      const r = await window.api.invoke("rates:sync") as { success: boolean; error?: string; data?: { imported: number } };
+      const where = next === "lan" ? "公司局域网" : "公网镜像";
+      if (r?.success) message.success(`已切到${where}，重新同步 ${r.data?.imported ?? 0} 条运价`);
+      else message.warning(`已切到${where}，但这次没同步上：${r?.error || "台账连不上"}（镜像保留上次的数据）`);
+    } finally {
+      setBusy(false);
+      qc.invalidateQueries({ queryKey: ["rates"] });
+    }
+  };
+
+  return (
+    <SettingCard icon="" title="运价台账"
+      status={st?.success
+        ? <Tag color={st.data?.lastError ? "orange" : "green"}>镜像 {st.data?.total ?? 0} 条</Tag>
+        : <Tag>状态未知</Tag>}>
+      <div className="text-[11px] text-gray-400 mb-2">
+        运价与报价截图都来自公司台账。在公司网内用局域网（截图完整）；不在公司网时切公网镜像——能查价，但截图目录没部署，图会打不开。
+      </div>
+      <Segmented size="small" disabled={busy} value={source}
+        options={[{ label: "公司局域网", value: "lan" }, { label: "公网镜像", value: "remote" }]}
+        onChange={v => void pick(v as "lan" | "remote")} />
+      <div className="mt-2 text-[11px] text-gray-400">
+        当前地址：{custom || st?.data?.remoteHost || "—"}
+        {st?.data?.lastSyncAt ? ` · 上次同步 ${new Date(st.data.lastSyncAt).toLocaleString("zh-CN")}` : ""}
+        {busy ? " · 切换并重新同步中…" : ""}
+      </div>
     </SettingCard>
   );
 }
@@ -1302,6 +1359,7 @@ export function SettingsPage() {
           <ProviderCard />
           <SearchKeyCard />
           <KbDispatchCard />
+          <RatesSourceCard />
           <AgentConversationCard />
           <AgentAuditCard />
         </div>

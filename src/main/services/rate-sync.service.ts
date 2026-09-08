@@ -1,7 +1,7 @@
 import { and, eq, like, gte, isNull, or, desc, sql, type Column } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
-import { APP_ROOT } from "../config";
+import { APP_ROOT, loadConfig } from "../config";
 import { Log } from "../logger";
 import { getDb, saveDatabase } from "../db";
 import { rateQuotes, spaceQuotes, type InsertRateQuoteRow, type InsertSpaceQuoteRow } from "../db/schema/rates";
@@ -10,24 +10,37 @@ import { netFetch } from "../net-proxy";
 import { nudge } from "./suggestion-bus";
 
 // ── 运价 / 舱位同步服务 ──────────────────────────────────────────
-// 链路：公司电脑台账（board_server，局域网 HTTP）→
-//       本服务分页拉取 + 归一化 → 两张只读镜像：rate_quotes（运价）+ space_records（舱位）。
-// 程序只读镜像，不回写。服务地址为程序内置参数（RATES_REMOTE_URL 可覆盖，无 UI 配置），
+// 链路：公司电脑台账（board_server）→ 本服务分页拉取 + 归一化 → 两张只读镜像：
+//       rate_quotes（运价）+ space_records（舱位）。程序只读镜像，不回写。
+// 地址来源（优先级高→低）：RATES_REMOTE_URL 环境变量 > 设置页自定义 url >
+// 设置页选的源（lan=公司局域网，默认；remote=公网镜像）> 内置局域网地址。
 // 连接不上时给出简单提示；镜像保留上次同步成功的数据，失败不删旧。
 // 规范：docs/rates-remote-source-spec.md（同步）+ docs/rates-query-fallback-spec.md（查询三段式）
 
-/** 远程运价库地址（内置默认 = 公司电脑 board_server；RATES_REMOTE_URL 环境变量可覆盖） */
-const REMOTE_BASE = (process.env.RATES_REMOTE_URL || "").trim() || "https://l5ruag9m.qwenwork.host";
-/** 台账工作台跳转与报价截图 URL 都用它：界面层经 IPC/镜像字段取值，不再各自硬编码 IP */
-export function remoteBase(): string { return REMOTE_BASE; }
+/** 公司局域网台账 = 内置默认（报价截图与明细都在这台机器上） */
+export const LAN_BASE = "http://192.168.189.229:8788";
+/** 公网台账镜像：不在公司网时读数用。注意它的 /images/ 未部署，截图会 404 */
+export const REMOTE_BASE = "https://l5ruag9m.qwenwork.host";
+
+/** 台账工作台跳转与报价截图 URL 都用它：界面层经 IPC/镜像字段取值，不再各自硬编码地址 */
+export function remoteBase(): string {
+  const env = (process.env.RATES_REMOTE_URL || "").trim();
+  if (env) return env.replace(/\/+$/, "");
+  try {
+    const r = loadConfig().rates;
+    const custom = (r?.url || "").trim();
+    if (custom) return custom.replace(/\/+$/, "");
+    return r?.source === "remote" ? REMOTE_BASE : LAN_BASE;
+  } catch { return LAN_BASE; }   // 配置读不到（单测/首启）也按内置默认走
+}
 /**
- * board_server 局域网可达性探测：GET 根路径，3 秒内有任何 HTTP 响应即视为通
+ * board_server 可达性探测：GET 根路径，3 秒内有任何 HTTP 响应即视为通
  * （服务在跑就行，状态码不挑）；连不上/超时返回 false。
  * 用裸 fetch 不走 netFetch 代理——局域网 IP 经代理必然到不了。
  */
 export async function probeBoard(): Promise<boolean> {
   try {
-    await fetch(`${REMOTE_BASE}/`, { signal: AbortSignal.timeout(3000) });
+    await fetch(`${remoteBase()}/`, { signal: AbortSignal.timeout(3000) });
     return true;
   } catch { return false; }
 }
@@ -430,7 +443,7 @@ export async function sync(): Promise<Result<{ imported: number }>> {
   if (syncing) return failResult("上一次同步仍在进行中，请稍候");
   syncing = true;
   try {
-    const base = REMOTE_BASE.replace(/\/$/, "");
+    const base = remoteBase();
     const cur = encodeURIComponent("当前生效");
     const rates = await pullTable(base, "/api/rates", cur, mapRemoteRow);
     if (rates.unreachable) {
@@ -592,7 +605,7 @@ export function listQuotes(f: QuoteFilters): Result<QuoteDto[]> {
     .limit(Math.min(f.limit ?? 20, 5000))
     .all();
   // 截图走 board_server 现成的 /images/ 静态服务（只取 basename 防穿越），拼成绝对 URL 给界面
-  const base = REMOTE_BASE.replace(/\/$/, "");
+  const base = remoteBase();
   return okResult(rows.map(({ imageName, ...rest }) => ({
     ...rest,
     imageUrl: imageUrlOf(imageName, base),
@@ -654,7 +667,7 @@ export function listSpaces(f: SpaceFilters): Result<SpaceDto[]> {
     .orderBy(desc(spaceQuotes.msgTime))
     .limit(Math.min(f.limit ?? 8, 30))
     .all();
-  const base = REMOTE_BASE.replace(/\/$/, "");
+  const base = remoteBase();
   return okResult(rows.map(({ imageName, ...rest }) => ({
     ...rest,
     imageUrl: imageUrlOf(imageName, base),
@@ -667,8 +680,9 @@ export function status(): Result<{
 }> {
   const rows = getDb().select({ validTo: rateQuotes.validTo }).from(rateQuotes).all();
   const today = todayBeijing();
-  let host = REMOTE_BASE;
-  try { host = new URL(REMOTE_BASE).host; } catch { /* 保底原样 */ }
+  const boardBase = remoteBase();
+  let host = boardBase;
+  try { host = new URL(boardBase).host; } catch { /* 保底原样 */ }
   return okResult({
     total: rows.length,
     active: rows.filter(r => !r.validTo || r.validTo >= today).length,

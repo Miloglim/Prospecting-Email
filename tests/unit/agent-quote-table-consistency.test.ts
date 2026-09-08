@@ -8,9 +8,11 @@ import { BASE_SCHEMA_SQL } from "../../src/main/db/schema-sql";
 import { rateQuotes } from "../../src/main/db/schema/rates";
 
 // ═══════════════════════════════════════════════════════════════════
-// quote_search 三源归一（闭环规范 §5.1-A）：customerTable 必须与 total/quotes 同源。
-// 钉住用户实测的自相矛盾：镜像 total:0 / quotes:[]，customerTable 却由标准化层
-// 塞出了报价行（该层无有效期/柜型过滤）——「共 0 条却显示有价」，还会被当真价引用。
+// quote_search 三源归一（闭环规范 §5.1-A）：两张表都必须与 total/quotes 同源。
+// 钉住用户实测的自相矛盾：镜像 total:0 / quotes:[]，表却由标准化层塞出了报价行
+// （该层无有效期/柜型过滤）——「共 0 条却显示有价」，还会被当真价引用。
+// 两表分离（用户定案）：userTable=中文带来源给用户；customerTable=唯一出口英文十一列，
+// 内部备注判丢、绝不混中文。
 // ═══════════════════════════════════════════════════════════════════
 
 // 探测真源可达性：指向必然拒绝的端口 → 秒失败
@@ -70,10 +72,10 @@ function freshDb(): void {
 }
 
 const run = async (args: unknown) => JSON.parse(await call(T("quote_search"), args)) as {
-  total?: number; count?: number; customerTable?: string; standardCount?: number; notice?: string;
+  total?: number; count?: number; userTable?: string; customerTable?: string; standardCount?: number; notice?: string;
 };
 
-describe("quote_search 三源归一（customerTable 与 total/quotes 同源）", () => {
+describe("quote_search 三源归一（两表与 total/quotes 同源；customerTable 全英文）", () => {
   beforeAll(async () => {
     if (!SQLLIB) SQLLIB = await initSqlJs({ locateFile: f => path.resolve(process.cwd(), "node_modules/sql.js/dist", f) });
   });
@@ -85,19 +87,24 @@ describe("quote_search 三源归一（customerTable 与 total/quotes 同源）",
     T = (name) => toolByName[name]!;
   });
 
-  it("镜像命中 + 参考层有行 → 客户表用标准化透视表，total>0，无降级提示", async () => {
+  it("镜像命中 + 参考层有行 → userTable 用标准化透视表，customerTable 走英文出口，无降级提示", async () => {
     stdRowsMock.mockReturnValue([{ pod: "SANTOS", ports: ["SANTOS"] }]);
     const r = await run({ pod: "SANTOS" });
     expect(r.total).toBeGreaterThan(0);
-    expect(r.customerTable).toBe("|STD|1|");
+    expect(r.userTable).toBe("|STD|1|");
+    expect(r.customerTable).toContain("| CARRIER | POL | POD |");
+    expect(r.customerTable).toContain("MSC");
+    // 对外交付物里不许出现一个汉字
+    expect(r.customerTable).not.toMatch(/[\u4e00-\u9fa5]/);
     expect(r.notice).not.toContain("标准化参考层另有");
   });
 
-  it("镜像未命中 + 参考层有行 → customerTable 强制为空，降级为参考提示（不许冒充结果）", async () => {
+  it("镜像未命中 + 参考层有行 → 两张表强制为空，降级为参考提示（不许冒充结果）", async () => {
     stdRowsMock.mockReturnValue([{ pod: "MANZANILLO", ports: ["MANZANILLO"] }, { pod: "MANZANILLO", ports: ["MANZANILLO"] }]);
     const r = await run({ pod: "MANZANILLO" });
     expect(r.total).toBe(0);
     expect(r.customerTable).toBe("");
+    expect(r.userTable).toBe("");
     expect(r.standardCount).toBe(2);                       // 参考层数量如实透出，但不是结果
     expect(r.notice).toContain("标准化参考层另有 2 条");
     expect(r.notice).toContain("不作为报价依据");

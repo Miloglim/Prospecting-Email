@@ -1266,13 +1266,14 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
       // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
-      // 客户表格与 total/quotes 同源（闭环规范 §5.1-A，治"共 0 条却显示有价"的自相矛盾）：
-      // 镜像命中 → 优先标准化透视表（data/rates-standard.json，柜型三列透视、港口已归一），
-      // 无标准化行回退镜像行拼表；镜像未命中 → customerTable 一律为空——标准化层无有效期/
-      // 柜型过滤，冒充结果会让模型/工作台把可能过期的价当真，降级为 notice 里的参考提示。
+      // 两表分离（用户定案）：
+      //  · userTable = 给操作者自己看的中文表（标准化透视优先，含报价单截图 = 信息来源）
+      //  · customerTable = 对外交付物，唯一出口走 rates-clean 英文十一列（REMARK 已英化/判丢）
+      // 与 total/quotes 同源（闭环规范 §5.1-A，治「共 0 条却显示有价」）：镜像未命中 → 两表一律为空，
+      // 标准化层无有效期/柜型过滤，冒充结果会把过期价当真，降级为 notice 里的参考提示。
       const stdWord = podQ || qQ || laneQ;
       const stdRows = stdWord ? queryStandard(stdWord, { carrier: filters.carrier }) : [];
-      const customerTable = total > 0
+      const userTable = total > 0
         ? (stdRows.length
           ? standardToMarkdown(stdRows)
           : (r.data.length
@@ -1284,6 +1285,9 @@ export function buildHarnessTools(ctx: ToolCtx) {
             ].join("\n")
             : ""))
         : "";
+      // 客户表：与 userTable 同一批命中行，走 customerQuoteTable 唯一出口（港口归一/三列柜型价/
+      // 内部备注判丢全在那边锁死）；pod 传查询目标港，航线级中文 POD 由出口换成英文港名
+      const customerTable = total > 0 ? customerQuoteTable(r.data, resolveQueryPod(stdWord || "") || stdWord || null) : "";
       const cheapest = r.data[0] ?? null;
       const answer = cheapest
         ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
@@ -1345,10 +1349,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
         else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
         noticeLines.push(
           "回答格式（固定，勿自由发挥）：正文第一句原样采用 answer 字段（可微调语气，数字与船司不改）；明细表已由界面渲染成表格卡，正文禁止再手写表格或逐行复述报价——否则用户会看到两张表。",
-          "用户要「面向客户的运价表/报价表」时：把 customerTable 的 Markdown 原样贴进正文，这就是交付物；用户没明说「导出文件」就不要调 export_artifact。"
-            + (stdRows.length
-              ? "customerTable 已是标准化透视表（列：船司/起运港/目的港/20GP/40HQ&HC/40NOR/Freetime/Transit/有效期/报价单链接），港口已归一（航线级报价已展开到具体港），直接贴不要改列；报价单链接指向船司报价截图，可提示用户点击查看。"
-              : "customerTable 列固定：船司/起运港/目的港/柜型/价格/有效期，不带内部备注。"),
+          "两张表分工不同，别拿错：userTable 是给用户自己看的中文表（含报价单截图＝信息来源），用户要「看下价/整理价/导个表」时贴它；"
+            + "customerTable 是全英文对外交付物（列 CARRIER/POL/POD/20GP/40HQ-HC/40NOR/FT/ETD/VALIDITY/TT/REMARK，内部备注已判丢），"
+            + "只有「发给客户/写报价信」场景才贴它，原样贴不要改列。两表都没中文混排问题，customerTable 里绝不允许出现中文。"
+            + "用户没明说「导出文件」就不要调 export_artifact。",
           "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
         );
       }
@@ -1361,7 +1365,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
           + "不要拿更早的记录或外部印象当现状。");
       const out = {
         total, count: r.data.length, quotes: r.data,
-        answer, customerTable,
+        answer, userTable, customerTable,
         spaceCount: spaces.length,
         ...(spaces.length ? { spaces, spaceTable } : {}),
         ...(stdRows.length ? { standardCount: stdRows.length } : {}),
