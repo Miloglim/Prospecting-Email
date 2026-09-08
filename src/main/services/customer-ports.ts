@@ -11,7 +11,8 @@ import { ne, and, or, inArray, gte, desc, isNull, isNotNull, sql as dsql } from 
 import { readLocalBodyHtml, htmlToText } from "./inbox.service";
 import { parseEmailInquiry } from "./agent/email-parse";
 import { podQueryWord } from "./agent/reply-rates";
-import { normalizeContainer } from "./rate-sync.service";
+import { listQuotes, normalizeContainer } from "./rate-sync.service";
+import { resolveQueryPod } from "./rates-standard";
 
 export type PortSource = "manual" | "inbound";
 
@@ -105,20 +106,67 @@ export function cleanPortSegment(raw: string | null | undefined): string | null 
   return cut.trim() || null;
 }
 
-/** 港名归一：脏段剥离（"Santos - BRSSZ (Santos, SP)"）+ 别名/LOCODE → 镜像标准港名；拿不到返回 null，不猜 */
+/**
+ * 形态闸门（实锤教训）：来信「标签独行、值在下一行」的形态会把整句、邮件标题甚至签名当成目的港
+ * ——「QUICK UPDATE ON SPACE AVAILABLE.」「UMESH SHARMA INTEX GROUP <SALES6@…>」都建过组，
+ * 假港不仅污染名单，还会挤掉组数名额。不像港名的字符串一律不收（宁缺毋滥）。
+ */
+export function plausiblePortToken(word: string): boolean {
+  const s = word.trim();
+  if (s.length < 3 || s.length > 24) return false;
+  if (!/^[A-Z0-9][A-Z0-9 .&'/-]*$/i.test(s)) return false;         // 邮箱/尖括号/冒号等一律拒
+  if (/[<>@_;:|]/.test(s)) return false;
+  if ((s.match(/[0-9]/g) ?? []).length > 2) return false;          // 真港名极少带三个以上数字
+  if (s.split(/\s+/).length > 3) return false;                     // 超过三个词是句子不是港名
+  return !/\b(UPDATE|QUOTE|SPACE|ALERT|NOTICE|GROUP|COMPANY|LTD|SRL|SALES|INFO|URGENT|RE)\b|CONGESTI|RETARDOS|PRESENTAN/i.test(s);
+}
+
+// 「这词是不是真港」查一次记住（键=大写原词）：每客户偏好只有几个词，缓存够撑一整天
+const podKnownCache = new Map<string, string | null>();
+
+/** 台账（含过期行——港的存在性与时效无关）里是否有该目的港 */
+function mirrorHasPod(word: string): boolean {
+  try {
+    const r = listQuotes({ pod: word, includeExpired: true, limit: 1 });
+    return !!(r.success && r.data.length);
+  } catch { return false; }
+}
+
+/** 认证目的港：形态可信 + （词表归一后或原词）台账真有其港；认不出 null，绝不放行脏字符串 */
+export function knownPod(word: string | null | undefined): string | null {
+  const raw = (word ?? "").trim();
+  if (!raw) return null;
+  const key = raw.toUpperCase();
+  if (podKnownCache.has(key)) return podKnownCache.get(key) ?? null;
+  const tryOne = (w: string): string | null =>
+    (plausiblePortToken(w) && mirrorHasPod(w)) ? w : null;
+  const hit = tryOne(resolveQueryPod(key).trim().toUpperCase()) ?? tryOne(key);
+  podKnownCache.set(key, hit);
+  return hit;
+}
+
+/** 人工登记的港：只过形态闸门 + 词表归一，不查镜像（当期有没有价交给方案层判 no_live_rate） */
+export function manualPodName(raw: string | null | undefined): string | null {
+  const seg = cleanPortSegment(raw ?? null);
+  if (!seg) return null;
+  const up = seg.trim().toUpperCase();
+  if (!plausiblePortToken(up)) return null;
+  return resolveQueryPod(up).trim().toUpperCase() || null;
+}
+
+/** 港名归一（来信推断用）：脏段收紧 → 剥 LOCODE/括号 → knownPod 认证；认不出 null，不猜 */
 export function normalizePodName(inq: { pod: string | null; podCode: string | null }): string | null {
   if (!inq.pod && !inq.podCode) return null;
-  const word = podQueryWord({ pod: cleanPortSegment(inq.pod), podCode: inq.podCode });
-  if (!word) return null;
-  const up = word.trim().toUpperCase();
-  return up.length >= 2 ? up : null;
+  const probe = podQueryWord({ pod: cleanPortSegment(inq.pod), podCode: inq.podCode });
+  const byLoCode = inq.podCode ? resolveQueryPod(inq.podCode.toUpperCase()) : null;
+  return knownPod(probe) ?? knownPod(byLoCode);
 }
 
 /** 人工偏好 → PortPref（同港重复条目合并分数）；导出供单测与详情面板复用 */
 export function prefsFromManual(list: Array<{ pol: string; pod: string }>): PortPref[] {
   const map = new Map<string, PortPref>();
   for (const p of list) {
-    const pod = normalizePodName({ pod: p.pod, podCode: null });
+    const pod = manualPodName(p.pod);
     if (!pod) continue;
     const cur = map.get(pod);
     if (cur) {

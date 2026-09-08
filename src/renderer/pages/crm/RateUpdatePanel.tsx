@@ -4,19 +4,26 @@
 // 与 agent 工具 rate_update_plan / rate_update_enqueue 打的是同一个主进程 service，方案与入队口径完全一致；
 // 这里没有任何"开始发送"按钮——入队后仍要人到发送中心点开始（红线）。
 import { useEffect, useMemo, useState } from "react";
-import { Drawer, Button, Checkbox, Modal, Tag, Empty, Spin, Collapse, Alert, message, Tooltip } from "antd";
+import { Drawer, Button, Checkbox, Modal, Tag, Empty, Spin, Collapse, Alert, message, Tooltip, Segmented, Input } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ReloadOutlined, SendOutlined, ExportOutlined } from "@ant-design/icons";
 
 /** 与 rate-update.service.ts 的 planView/groups 投影对齐（渲染层不跨层 import 主进程类型，字段以 service 为准） */
 interface GroupRow {
-  key: string; pod: string; lane: string | null; language: string;
+  key: string; pod: string; label: string; lane: string | null; language: string;
+  /** 这组凭什么成立：pref=港口偏好；port=点名这个港；country=按国家当期代表港兜底 */
+  basis: "pref" | "port" | "country";
+  /** 命中航线级/区域基本港价（要在界面如实标出来） */
+  laneLevel: boolean;
   customers: number; quotes: number; minUsd: number | null; validTo: string | null;
   carriers: string; dropPct: number | null; subject: string;
 }
 interface PlanView {
   planId: string;
-  scope: { stages: string[]; includeReplied: boolean; port: string | null; days: number; quotesPerGroup: number };
+  scope: {
+    scope: "board" | "contacts"; stages: string[]; country: string | null; includeReplied: boolean;
+    port: string | null; days: number; quotesPerGroup: number;
+  };
   totals: { customers: number; covered: number; groups: number; quotes: number; truncated: number; uncoveredTotal: number };
   groups: GroupRow[];
   uncovered: Array<{ contactId: number; name: string; reason: string; detail: string }>;
@@ -47,19 +54,24 @@ export function RateUpdatePanel({ open, onClose, defaultStages, contactIds }: {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  // 范围两分：跟进看板（已触达/已回复）vs 联系人库全量（含没开发过的冷客户）——混起来就会「找不到客户」
+  const [range, setRange] = useState<"board" | "contacts">("board");
+  const [country, setCountry] = useState<string>("");
 
   const stagesKey = defaultStages?.join(",") ?? "";
   const idsKey = contactIds?.join(",") ?? "";
+  const countryKey = country.trim();
   const scopeArgs = () => {
-    const a: Record<string, unknown> = {};
-    if (defaultStages?.length) a.stages = defaultStages;
+    const a: Record<string, unknown> = { scope: range };
+    if (countryKey) a.country = countryKey;
+    if (range === "board" && defaultStages?.length) a.stages = defaultStages;
     if (contactIds?.length) a.contactIds = contactIds;
     return a;
   };
 
   // 方案：打开面板或点「重新生成」时才跑（每次都要扫客户 + 解析来信，不常驻轮询）
   const { data: plan, isFetching: planLoading, refetch } = useQuery({
-    queryKey: ["rate-update", "plan", stagesKey, idsKey, nonce],
+    queryKey: ["rate-update", "plan", stagesKey, idsKey, range, countryKey, nonce],
     queryFn: () => window.api.invoke("rateUpdate:plan", scopeArgs()) as Promise<Ipc<PlanView>>,
     enabled: open,
   });
@@ -117,7 +129,7 @@ export function RateUpdatePanel({ open, onClose, defaultStages, contactIds }: {
       open={open}
       onClose={onClose}
       width={960}
-      title="运价更新 · 按客户港口偏好定向投递"
+      title="运价更新 · 按客户港口偏好（或所在国家）定向投递"
       destroyOnHidden
       styles={{ body: { padding: 0, display: "flex", flexDirection: "column" } }}
       footer={
@@ -152,11 +164,17 @@ export function RateUpdatePanel({ open, onClose, defaultStages, contactIds }: {
           {/* 左：分组方案（一组 = 一封要发出去的邮件） */}
           <div className="w-[380px] flex-shrink-0 border-r border-gray-100 flex flex-col min-h-0">
             <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap">
+              <Segmented size="small" value={range} onChange={v => setRange(v as "board" | "contacts")}
+                options={[{ value: "board", label: "跟进看板" }, { value: "contacts", label: "联系人库" }]} />
+              <Input size="small" allowClear placeholder="国家，如 巴西" value={country} style={{ width: 118 }}
+                onChange={e => setCountry(e.target.value)}
+                onPressEnter={() => setNonce(n => n + 1)} onBlur={() => setNonce(n => n + 1)} />
               <span className="text-xs text-gray-500">
-                圈定 {planData.totals.customers} 位 → 可推 {planData.totals.covered} 位 / {planData.totals.groups} 个港
-                {planData.totals.uncoveredTotal > 0 ? ` · ${planData.totals.uncoveredTotal} 位本轮不推` : ""}
+                {contactIds?.length ? `已选 ${contactIds.length} 位`
+                  : `圈定 ${planData?.totals.customers ?? 0} 位 → 可推 ${planData?.totals.covered ?? 0} 位 / ${planData?.totals.groups ?? 0} 组`}
+                {planData && planData.totals.uncoveredTotal > 0 ? ` · ${planData.totals.uncoveredTotal} 位本轮不推` : ""}
               </span>
-              <Tooltip title="重新按当前客户与最新运价镜像算一遍方案">
+              <Tooltip title="按当前范围与最新运价镜像重新算一遍方案">
                 <Button size="small" type="text" icon={<ReloadOutlined />} onClick={() => { void refetch(); }} />
               </Tooltip>
             </div>
@@ -179,7 +197,17 @@ export function RateUpdatePanel({ open, onClose, defaultStages, contactIds }: {
                         setPicked(next);
                       }}
                     />
-                    <span className="text-sm font-medium">{g.pod}</span>
+                    <span className="text-sm font-medium">{g.label}</span>
+                    {g.basis === "country" && (
+                      <Tooltip title="TA 没登记港口偏好，按所在国家当期报价最多的港兜底">
+                        <Tag className="!mr-0" color="default">按国家</Tag>
+                      </Tooltip>
+                    )}
+                    {g.laneLevel && (
+                      <Tooltip title="台账给的是该航线/区域基本港价，不是这个港的专属价（邮件里也会这样注明）">
+                        <Tag className="!mr-0" color="orange">航线级价</Tag>
+                      </Tooltip>
+                    )}
                     <Tag className="!mr-0">{g.language}</Tag>
                     {g.dropPct != null && <Tag color="red" className="!mr-0">降 {g.dropPct}%</Tag>}
                   </div>

@@ -455,13 +455,15 @@ export const quoteSearchSchema = z.object({
 
 // ── 定向运价更新推送（规范 docs/rate-update-push-spec.md §5）─────────────
 export const rateUpdatePlanSchema = z.object({
+  scope: optStr(12).describe("圈人范围：不传/board=跟进看板（已触达+已回复，默认）；contacts=联系人库全量（含没开发过的冷客户）。"
+    + "用户说「所有巴西客户」「冷客户也一起发」这类才传 contacts"),
+  country: optStr(40).describe("按国家/地区收窄（中英文都认，如 巴西/Brazil）。用户点名某个国家/地区时传它；不传=不限国家"),
   stages: z.preprocess((v: unknown) => toWords(v), z.array(z.string().max(16)).max(8).nullable().optional())
-    .describe("只看这些跟进阶段（reaching 触达中 / quoting 报价中 / trial 试单 / cooperating 合作中 / other）；"
-      + "省略=除「已流失」外全部。已流失客户永远不参与运价更新"),
-  port: optStr(60).describe("只推某个目的港（中英文/别名都行，如 桑托斯/Santos/BRSSZ）；省略=按每位客户自己最关心的港分组"),
+    .describe("一般不用传。只有用户明确说「只推报价中/试单那批」时才传（reaching/quoting/trial/cooperating/other）"),
+  port: optStr(60).describe("只推某个目的港（英文港名或 UN/LOCODE，如 Santos/BRSSZ）；省略=按每位客户自己的港口偏好分组"),
   contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50).nullable().optional())
-    .describe("只给指定的这几位客户推（来自 search_contacts 的 id）；省略=跟进看板全量客户"),
-  includeReplied: optBool().describe("已回复的客户是否一起推，默认真；传 false 只推「触达中」还没回的"),
+    .describe("只给指定的这几位客户推（来自 search_contacts 的 id）；省略=按范围圈定"),
+  includeReplied: optBool().describe("已回复的客户是否一起推，默认真；传 false 只推还没回的"),
   quotesPerGroup: optInt().describe("每组邮件最多放几条报价，默认 12（最多 30）"),
   days: optInt().describe("港口偏好回溯多少天的来信，默认 90"),
 });
@@ -1277,7 +1279,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
         includeExpired: args.includeExpired ?? undefined,
       };
-      const laneWords = canon ? podRawExpansion(canon) : [];
+      const laneWords = [...new Set([podQ, qQ].filter((x): x is string => !!x)
+        .flatMap(w => podRawExpansion(resolveQueryPod(w))))];
       const limitN = args.limit && args.limit > 0 ? args.limit : 20;
       const first = listQuotes({ ...filtersBase, limit: limitN });
       const useLane = first.success && first.data.length === 0 && laneWords.length > 0;
@@ -1386,12 +1389,24 @@ export function buildHarnessTools(ctx: ToolCtx) {
           );
         } else {
           concluded = true;
-          noticeLines.push(!reachable || stale
-            ? `两轮都没命中。本地镜像共 ${opts.rows} 条、最近同步 ${syncAt}，局域网台账${reachable ? "可达" : "现在连不上"}`
-              + "——很可能是镜像没跟上真源。请照实说「本地镜像里查不到这条」，不要说成「该航线没有报价」；"
-              + "再给用户两条路：到「运价库」页点同步刷新镜像，或让你联网查当前市场行情。"
-            : `两轮都没命中，且镜像刚同步过（${syncAt}）、台账可达——可以确定台账里没有这个航线/港口。`
-              + "请如实告诉用户库里没有，并问一句要不要你联网查当前市场行情；用户明确同意前不要自行联网。");
+          // 先分清「有行但都过期」与「真没有」：放宽有效期再数一次（不放宽就会把存量说成没有）
+          let expiredOnly = 0;
+          try {
+            const loose = countQuotes({ ...filters, includeExpired: true });
+            expiredOnly = Number.isFinite(loose) ? loose : 0;
+          } catch { expiredOnly = 0; }
+          if (expiredOnly > 0) {
+            noticeLines.push(`台账里其实有 ${expiredOnly} 条符合这些条件的报价，但**都已过有效期**，所以当期无价可报——`
+              + "这跟「库里没有这个港/航线」是两件事，别说错。请照实说「有历史报价但已过期」，"
+              + "再问用户要不要联网查当前市场行情（用户同意前不要自行联网）。");
+          } else {
+            noticeLines.push(!reachable || stale
+              ? `两轮都没命中。本地镜像共 ${opts.rows} 条、最近同步 ${syncAt}，局域网台账${reachable ? "可达" : "现在连不上"}`
+                + "——很可能是镜像没跟上真源。请照实说「本地镜像里查不到这条」，不要说成「该航线没有报价」；"
+                + "再给用户两条路：到「运价库」页点同步刷新镜像，或让你联网查当前市场行情。"
+              : `两轮都没命中（放宽有效期后仍是 0 条），且镜像刚同步过（${syncAt}）、台账可达——可以确定台账里没有这个航线/港口。`
+                + "请如实告诉用户库里没有，并问一句要不要你联网查当前市场行情；用户明确同意前不要自行联网。");
+          }
         }
         // 两段都空才算「本地查不到」：L1 精准港 + L2 航线级（podExtra 展开）都为零才走到这里，
         // 口径仍按 rates-query-fallback-spec §3/§4 分「镜像没跟上」与「确实没有」两种说法
@@ -2581,16 +2596,21 @@ export function buildHarnessTools(ctx: ToolCtx) {
   // ── 定向运价更新推送（规范 docs/rate-update-push-spec.md §5）────────────────
   const rateUpdatePlan = tool({
     name: "rate_update_plan",
-    description: "给跟进中的客户做定向运价更新：一次调用就算完「谁在跟进、各自关心哪个港、该港当期真价是多少、邮件长什么样」，"
-      + "返回按目的港+语言分好的方案（每组=一封将要发出去的邮件）。用户说「给跟进的客户更新运价」「把新价同步给客户」时用，"
-      + "不要自己一家家 quote_search + generate_draft 手搓（必漏人、且价格会拼错）。"
-      + "本工具只读不算账：不写库、不入队、更不发送；出方案后必须把数字讲给用户听，等他点头再调 rate_update_enqueue。"
-      + "价格全部来自本地运价镜像台账（无当期有效价的港口会自动不入选，绝不编价、不拿别的港凑数）。",
+    description: "给客户做定向运价更新：一次调用算完「圈了谁、各自走哪个港、该港当期真价、邮件长什么样」，"
+      + "返回按目的港+语言分好的方案（每组=一封将要发出去的邮件）。用户说「给跟进的客户更新运价」「把新价同步给客户」时用；"
+      + "范围有两层：默认=跟进看板的客户（已触达+已回复）；用户说「所有巴西客户」「冷客户也一起发」时传 scope=contacts + country，"
+      + "**不要**改用 search_contacts 自己拼名单再逐家 quote_search（必漏人、价格也会拼错）。"
+      + "客户没登记港口偏好时，工具会按他所在国家当期报价最多的港兜底；再不行才列入未覆盖。"
+      + "参数什么都不传是最稳的用法（除非用户明确缩小范围）。"
+      + "本工具只读：不写库、不入队、不发送；出方案后把数字讲给用户听，等他点头再调 rate_update_enqueue。"
+      + "价格全部来自本地运价镜像台账，无当期有效价的港口自动不入选，绝不编价、不拿别的港凑数。",
     parameters: rateUpdatePlanSchema,
     execute: async (args) => {
       const cached = cachedRead(ctx, "rate_update_plan", args);
       if (cached) return cached;
       const r = buildRateUpdatePlan({
+        scope: args.scope === "contacts" ? "contacts" : "board",
+        country: args.country ?? undefined,
         stages: args.stages?.map(s => s.toLowerCase()),
         port: args.port ?? undefined,
         contactIds: args.contactIds?.length ? args.contactIds : undefined,
@@ -2605,23 +2625,30 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const plan = r.data;
       const view = planView(plan);
       const biggest = [...plan.groups].sort((a, b) => b.customers.length - a.customers.length)[0];
+      const laneLevelGroups = plan.groups.filter(g => g.laneLevel).map(g => g.label);
       audit(ctx, "rate_update_plan", "read", args, { planId: plan.id, groups: plan.totals.groups, covered: plan.totals.covered }, "auto");
       const out = finishRead(ctx, "rate_update_plan", args, okOut({
         ...view,
-        // 邮件正文的纯文本形态（ service 生成，不是模型写的）：用户问「信长什么样」时原样贴出
+        // 邮件正文的纯文本形态（service 生成，不是模型写的）：用户问「信长什么样」时原样贴出
         preview: biggest
           ? {
             groupKey: biggest.key, subject: biggest.subject,
             text: htmlToText(biggest.bodyHtml).replace(/\n{3,}/g, "\n\n").trim(),
           }
           : null,
+        laneLevelGroups,
         queueOccupied: pendingQueueGroups(),
-        notice: "方案表已在界面渲染成表格卡，正文不要再手抄一遍表（抄了就会跟卡里的数字打架）。"
-          + "对用户要说人话：圈了多少人、分成几个港、各港多少人几条价、有没有降价；"
-          + "uncovered 里的人必须如实交代原因（没推出港口偏好→建议到跟进看板「偏好设置」补录；台账当期无有效价→按查价口径说明，不等于这条线没有报价）。"
-          + "队列里若已有未发送批次（queueOccupied>0），提前告诉用户入队会清空它们。"
-          + "然后问一句要不要入队；用户点头才调 rate_update_enqueue（这一步会弹确认框）。你永远不能自己开始发送——"
-          + "入队后真正发出去那一下，是用户自己在发送中心点的，这句话要提前讲清。",
+        notice: "① 方案表已在界面渲染成表格卡，正文不要再手抄一遍表。"
+          + "② 事实白名单：你只能说 totals、groups[] 数字、每组 facts（真实表行）与 preview 里出现过的内容——"
+          + "船期延迟、中转、附加费、免箱期这类细节只要没在这些字段里，就不许提、不许凭印象补（这是本功能最高优先级的禁令）。"
+          + (laneLevelGroups.length
+            ? `③ ${laneLevelGroups.join("、")} 组命中的是航线级/区域基本港价（不是该港专属价），转述时必须说清这点，不能说成「X 港的本港报价」。`
+            : "③ 本次各组都是该目的港的本港报价。")
+          + "。④ uncovered 的人如实交代原因（no_port=偏好与来信都没推出港，且国家方向当期也没价；no_live_rate=台账当期无有效价，"
+          + "按查价口径说明，不等于这条线没有报价；over_cap=本轮组数上限没排上）。"
+          + "⑤ 队列若已有未发送批次（queueOccupied>0），提前告诉用户入队会清空它们，由他决定。"
+          + "⑥ 然后问一句要不要入队；用户点头才调 rate_update_enqueue（会弹确认框）。你永远不能自己开始发送——"
+          + "真正发出去那一下是用户自己在发送中心点的，这句要提前讲清。",
         nextStep: `用户认可后调 rate_update_enqueue，planId="${plan.id}"（只发其中几组就带 groupKeys，照抄 groups[].key）。`,
       }));
       return out;

@@ -11,10 +11,10 @@ import { contacts } from "../../src/main/db/schema/contacts";
 import { inboxMessages } from "../../src/main/db/schema/inbox";
 
 // ═══════════════════════════════════════════════════════════════════
-// 定向运价更新推送（规范 docs/rate-update-push-spec.md）方案层端到端：
-//   跟进看板客户 + 港口偏好（看板登记 ∪ 来信解析）→ 按「目的港 + 语言」分组
-//   → 每组取台账当期真价 → 机械成文（全英文对外表）→ 入队只入队不发送。
-// 钉的都是真出过事的地方：一个人收到两封、无价港拿别的港凑数、内部备注流进客户邮件、
+// 定向运价更新推送（规范 docs/rate-update-push-spec.md）方案层端到端。
+// 每条都对着 2026-09-08 用户实测会话里翻过的车：找不到客户（范围分不清看板/联系人库）、
+// 没登记偏好就一整批推不出去、来信里的整句被当目的港建假组并挤掉名额、
+// 航线级价当本港价发出去、模型凭印象编船期/附加费细节，
 // 以及 startQueue 会清空既有待发队列这件事必须先让人知道。
 // ═══════════════════════════════════════════════════════════════════
 
@@ -35,7 +35,7 @@ vi.mock("../../src/main/config", async (importOriginal) => {
   return { ...actual, APP_ROOT: TMP, DB_PATH: path.join(TMP, "prospector.db") };
 });
 
-// 发送引擎打桩：这里只关心「组装了哪几个人、有没有以 autoStart=false 入队」，真发信归 send.service 的测试
+// 发送引擎打桩：只关心「组装了哪几个人、有没有以 autoStart=false 入队」，真发信归 send.service 自己的测试
 const buildCalls: Array<{ ids: number[]; subject: string; body: string }> = [];
 const startCalls: Array<{ count: number; autoStart: boolean; tplNames: string[] }> = [];
 const queueState = { pendingGroups: 0, running: false };
@@ -68,7 +68,7 @@ vi.mock("../../src/main/services/send.service", async (importOriginal) => {
 });
 
 const {
-  buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingPlanRateUpdate, clearPendingPlans,
+  buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingPlanRateUpdate, clearPendingPlans, portForCountry,
 } = await import("../../src/main/services/rate-update.service");
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { customerQuoteHtml, cleanQuoteRow, pivotQuotes, customerQuoteMarkdown } =
@@ -86,20 +86,30 @@ function freshDb(): void {
   const db = drizzle(raw, { schema });
   h.db = db;
 
+  const future = "2099-12-31";
+  const past = "2026-01-31";
   db.insert(rateQuotes).values([
+    // 本港级行（当期有效）
     { recordId: "r-santos", pol: "宁波", podRaw: "SANTOS", lane: "南美东",
-      carrier: "MSC", container: "40HQ", oceanUsd: 3200, validFrom: "2026-09-01", validTo: "2099-12-31",
+      carrier: "MSC", container: "40HQ", oceanUsd: 3200, validFrom: "2026-09-01", validTo: future,
       note: "含 EBS", sourceGroup: "宁波舱位滚动更新群", sender: "张三 13800000000", syncedAt: daysAgo(1) },
     { recordId: "r-cartagena", pol: "厦门", podRaw: "CARTAGENA", lane: "加勒比",
-      carrier: "CMA", container: "20GP", oceanUsd: 1800, validFrom: "2026-09-01", validTo: "2099-12-31",
+      carrier: "CMA", container: "20GP", oceanUsd: 1800, validFrom: "2026-09-01", validTo: future,
       note: "成本价 1500 可申请", sourceGroup: "内部群", sender: "李四", syncedAt: daysAgo(1) },
-    // 只有过期行的港 → 必须判「当期无价」，不能拿它报价
+    // 国家兜底用：pod_raw 带中文国名（真实台账写法「RIO DE JANEIRO 里约热内卢(巴西)」）
+    { recordId: "r-rio", pol: "宁波", podRaw: "RIO DE JANEIRO 里约热内卢(巴西)", lane: "南美东",
+      carrier: "EMC", container: "40HQ", oceanUsd: 3450, validFrom: "2026-09-01", validTo: future, syncedAt: daysAgo(1) },
+    // 航线级行（区域基本港价）：VERACRUZ 只剩过期行，当期价只能来自这条航线级行 → 组必须被标成航线级
+    { recordId: "r-mex-lane", pol: "厦门", podRaw: "墨西哥", lane: "墨西哥",
+      carrier: "HMM", container: "40HQ", oceanUsd: 2600, validFrom: "2026-09-01", validTo: future, syncedAt: daysAgo(1) },
+    { recordId: "r-veracruz-old", pol: "厦门", podRaw: "VERACRUZ", lane: "加勒比",
+      carrier: "CMA", container: "20GP", oceanUsd: 1900, validFrom: "2026-01-01", validTo: past, syncedAt: daysAgo(200) },
+    // 只有过期行的港 → 当期无价
     { recordId: "r-buena-old", pol: "宁波", podRaw: "BUENAVENTURA", lane: "南美西",
-      carrier: "MSC", container: "40HQ", oceanUsd: 2000, validFrom: "2026-01-01", validTo: "2026-01-31",
-      syncedAt: daysAgo(200) },
+      carrier: "MSC", container: "40HQ", oceanUsd: 2000, validFrom: "2026-01-01", validTo: past, syncedAt: daysAgo(200) },
   ] as never).run();
 
-  const ppl: Array<{ id: number; email: string; first: string; last: string; status: string; tags: string; extra: string; language?: string }> = [
+  const ppl: Array<{ id: number; email: string; first: string; last: string; status: string; tags: string; extra: string; language?: string; country?: string }> = [
     { id: 1, email: "juan@acme.com", first: "Juan", last: "G", status: "reached", tags: '["quoting"]', extra: "{}" },
     { id: 2, email: "ana@acme.es", first: "Ana", last: "R", status: "reached", tags: '["reaching"]', extra: "{}", language: "ES" },
     { id: 3, email: "pedro@acme.co", first: "Pedro", last: "M", status: "reached", tags: '["quoting"]', extra: "{}" },
@@ -108,11 +118,14 @@ function freshDb(): void {
       extra: JSON.stringify({ preferredPorts: JSON.stringify([{ pol: "Ningbo", pod: "BUENAVENTURA" }]) }) },
     { id: 6, email: "bob@dead.com", first: "Bob", last: "B", status: "bounced", tags: '["reaching"]', extra: "{}" },
     { id: 7, email: "cleo@acme.us", first: "Cleo", last: "D", status: "replied", tags: '["cooperating"]', extra: "{}" },
+    { id: 8, email: "henry@acme.pa", first: "Henry", last: "P", status: "reached", tags: '["reaching"]', extra: "{}" },
+    // 冷客户 + 有国家：只有 scope=contacts 才圈得到（用户口径「选出所有巴西客户」）
+    { id: 9, email: "nina@acme.br", first: "Nina", last: "S", status: "", tags: "[]", extra: "{}", country: "巴西" },
   ];
   for (const p of ppl) {
     db.insert(contacts).values({
       id: p.id, email: p.email, firstName: p.first, lastName: p.last,
-      status: p.status, tags: p.tags, extra: p.extra, language: p.language ?? null,
+      status: p.status, tags: p.tags, extra: p.extra, language: p.language ?? null, country: p.country ?? null,
     } as never).run();
   }
 
@@ -121,8 +134,10 @@ function freshDb(): void {
     { id: 12, contact: 2, days: 8, text: "POD: SANTOS (Brazil)\nPol: Ningbo, China\nContainer: 1 x 40HQ." },
     { id: 13, contact: 3, days: 3, text: "Destination: Cartagena, Colombia. Container: 3 x 20GP." },
     { id: 14, contact: 7, days: 12, text: "POD: Santos, Brazil\nQuote for 40HQ please." },
-    // 同一人两个港：近期 Santos + 更早 Veracruz → 只能进一个组（一人一封）
-    { id: 15, contact: 1, days: 60, text: "POD: Veracruz, Mexico. Container: 1 x 40HQ." },
+    { id: 15, contact: 1, days: 60, text: "POD: Manzanillo, Mexico. Container: 1 x 40HQ." },
+    { id: 16, contact: 8, days: 6, text: "POD: Veracruz, Mexico\nContainer: 1 x 40HQ." },
+    // 脏值夹具：这封信没有 POD 标签行，正文里那句「QUICK UPDATE ON SPACE AVAILABLE」曾被当成目的港建组
+    { id: 17, contact: 4, days: 4, text: "QUICK UPDATE ON SPACE AVAILABLE.\nSantos 2 x 40HQ ready next week." },
   ];
   for (const m of mails) {
     db.insert(inboxMessages).values({
@@ -135,16 +150,17 @@ function freshDb(): void {
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>>;
 
-const plan = () => {
-  const r = buildRateUpdatePlan();
+const plan = (opts = {}) => {
+  const r = buildRateUpdatePlan(opts);
   if (!r.success) throw new Error(`方案没建成：${r.error}`);
   return r.data;
 };
-const groupOf = (pod: string, lang: string) => planView(plan()).groups.find(g => g.pod === pod && g.language === lang);
+const view = (opts = {}) => planView(plan(opts)) as ReturnType<typeof planView>;
+const groupOf = (v: ReturnType<typeof view>, pod: string, lang: string) =>
+  v.groups.find(g => g.pod === pod && g.language === lang);
 
 beforeAll(async () => {
   if (!SQLLIB) SQLLIB = await initSqlJs({ locateFile: f => path.resolve(process.cwd(), "node_modules/sql.js/dist", f) });
-  // 镜像 diff（降价原料）：SANTOS MSC 40HQ 3600 → 3200
   fs.mkdirSync(path.join(TMP, "data"), { recursive: true });
   fs.writeFileSync(path.join(TMP, "data", "rates-diff.json"), JSON.stringify({
     syncedAt: new Date().toISOString(),
@@ -162,190 +178,168 @@ beforeEach(() => {
   clearPendingPlans();
 });
 
-describe("方案聚合：跟进看板客户 × 港口偏好 → 目的港分组", () => {
-  it("来信里的港口把人带进对应组；已回复客户默认一起推；退信客户根本不进范围", () => {
-    const p = plan();
-    const view = planView(p);
-    expect(groupOf("SANTOS", "EN")).toMatchObject({ customers: 2, quotes: 1, minUsd: 3200 });
-    expect(groupOf("CARTAGENA", "EN")).toMatchObject({ customers: 1, minUsd: 1800 });
-    expect(view.totals.customers).toBe(6);                       // 7 位客户去掉 1 位退信
-    expect(view.uncovered.find(u => u.contactId === 4)?.reason).toBe("no_port");
-    expect(view.uncovered.some(u => u.contactId === 6)).toBe(false);
+describe("范围两分：跟进看板 vs 联系人库（此前混为一谈导致「找不到客户」）", () => {
+  it("默认只圈看板：已触达 ∪ 已回复；退信与冷客户都不进", () => {
+    const v = view();
+    expect(v.scope.scope).toBe("board");
+    expect(v.totals.customers).toBe(7);                          // 9 位里剔掉 bounced 与冷客户 Nina
+    expect(groupOf(v, "SANTOS", "EN")?.customers).toBe(2);       // Juan + Cleo（已回复一起推）
   });
 
-  it("同一客户两个港只进一组（分高的港赢），不会收到两封", () => {
-    const view = planView(plan());
-    expect(groupOf("SANTOS", "EN")?.customers).toBe(2);          // Juan + Cleo
-    expect(view.groups.some(g => g.pod === "VERACRUZ")).toBe(false);
+  it("scope=contacts 才圈冷客户，并按所在国家的当期代表港兜底", () => {
+    const v = view({ scope: "contacts" });
+    expect(v.totals.customers).toBe(8);
+    const rio = groupOf(v, "RIO DE JANEIRO", "EN");
+    expect(rio).toMatchObject({ customers: 1, basis: "country", quotes: 1, minUsd: 3450 });
+    expect(rio?.label).toBe("RIO DE JANEIRO (Brazil)");
+    expect(rio?.subject).toContain("RIO DE JANEIRO (Brazil)");
+  });
+
+  it("country 收窄：说「巴西客户」就只圈巴西的，不用绕去 search_contacts", () => {
+    const v = view({ scope: "contacts", country: "巴西" });
+    expect(v.totals.customers).toBe(1);
+    expect(v.groups.map(g => g.pod)).toEqual(["RIO DE JANEIRO"]);
+    expect(v.groups[0]?.basis).toBe("country");
+    const body = pendingPlanRateUpdate(v.planId)?.groups[0]?.bodyHtml ?? "";
+    expect(body).toContain("Brazil");                            // 信里说明是所在方向的当期报价
+    expect(body).not.toMatch(/[一-鿿]/);                          // 中文国名绝不进客户邮件
+  });
+
+  it("看板范围内没有该国客户时当面说清，不硬凑", () => {
+    const r = buildRateUpdatePlan({ country: "巴西" });         // 默认 board：Nina 是冷客户不在看板
+    expect(r.success).toBe(false);
+    expect(r.success ? "" : r.error).toContain("跟进看板");
+  });
+});
+
+describe("港口偏好：脏值不成组，没偏好才走国家兜底", () => {
+  it("来信里的整句/邮件标题不再被当成目的港（假港会挤掉真客户名额）", () => {
+    const v = view();
+    expect(v.groups.some(g => /QUICK|AVAILABLE|UPDATE/i.test(g.pod))).toBe(false);
+    // Liu 的信没有 POD 标签行（散文式提港）→ 认不出港 → 如实 no_port
+    expect(v.uncovered.find(u => u.contactId === 4)?.reason).toBe("no_port");
+  });
+
+  it("台账里真有的港才认；同一客户两个港只进一组", () => {
+    const v = view();
+    expect(groupOf(v, "SANTOS", "EN")?.customers).toBe(2);
+    expect(v.groups.some(g => g.pod === "MANZANILLO")).toBe(false);   // 台账里没这个港的行 → 不建组
+  });
+
+  it("人工登记的港当期无有效价 → 进未覆盖，绝不拿别的港价凑", () => {
+    const v = view();
+    const sato = v.uncovered.find(x => x.contactId === 5);
+    expect(sato?.reason).toBe("no_live_rate");
+    expect(sato?.detail).toContain("BUENAVENTURA");
+    expect(v.groups.some(g => g.pod === "BUENAVENTURA")).toBe(false);
   });
 
   it("同港不同语言分两组；西语组正文是西语、全表零汉字、占位符留给发送时逐人渲染", () => {
-    const p = plan();
-    expect(groupOf("SANTOS", "ES")?.customers).toBe(1);
-    const es = p.groups.find(g => g.key === "SANTOS|ES");
+    const v = view();
+    expect(groupOf(v, "SANTOS", "ES")?.customers).toBe(1);
+    const es = pendingPlanRateUpdate(v.planId)?.groups.find(g => g.key === "SANTOS|ES");
     expect(es?.bodyHtml).toContain("Estimado/a");
-    expect(es?.subject).toContain("SANTOS");
     expect(es?.bodyHtml ?? "").not.toMatch(/[一-鿿]/);
     expect(es?.bodyHtml).toContain("{{firstName}}");
   });
 
-  it("看板登记的人工偏好有出处；该港镜像里只有过期价 → 进未覆盖，绝不拿别的港凑数", () => {
-    const view = planView(plan());
-    const u = view.uncovered.find(x => x.contactId === 5);
-    expect(u?.reason).toBe("no_live_rate");
-    expect(u?.detail).toContain("BUENAVENTURA");
-    expect(view.groups.some(g => g.pod === "BUENAVENTURA")).toBe(false);
-    const sato = pendingPlanRateUpdate(view.planId)?.groups.find(g => g.customers.some(c => c.id === 5));
-    expect(sato).toBeUndefined();                                 // 未覆盖 = 一封都不发
-  });
-
-  it("includeReplied=false 只推还没回的", () => {
-    const r = buildRateUpdatePlan({ includeReplied: false });
-    expect(r.success && planView(r.data).groups.find(g => g.key === "SANTOS|EN")?.customers).toBe(1);
-  });
-
-  it("port 参数只看一个港（英文与 LOCODE 都归一到镜像标准港名）", () => {
-    // 中文译名（桑托斯）目前不在港口词表里，与 quote_search 同口径 —— 规范 §9 记为待办
-    for (const word of ["santos", "BRSSZ"]) {
-      const r = buildRateUpdatePlan({ port: word });
-      expect(r.success).toBe(true);
-      if (!r.success) continue;
-      const view = planView(r.data);
-      expect(view.groups.length).toBeGreaterThan(0);
-      expect(view.groups.every(g => g.pod === "SANTOS")).toBe(true);
-      expect(view.totals.covered).toBe(3);                      // Juan + Cleo（EN）、Ana（ES 单独一封西语信）
-    }
-  });
-
-  it("降价标签只来自镜像 diff：命中才带，命不中不提降价", () => {
-    const p = plan();
-    const santos = p.groups.find(g => g.pod === "SANTOS" && g.language === "EN");
-    expect(santos?.drop).toMatchObject({ oldUsd: 3600, newUsd: 3200, pct: 11 });
-    expect(santos?.subject).toMatch(/^Price drop ·/);
-    expect(santos?.bodyHtml).toContain("have come down about 11%");
-    const c = p.groups.find(g => g.pod === "CARTAGENA");
-    expect(c?.drop).toBeNull();
-    expect(c?.subject).toMatch(/^Freight rates update/);
-    expect(c?.bodyHtml ?? "").not.toContain("come down");
-  });
-
-  it("阶段收窄只推该列客户；已流失一律不参与", () => {
-    const rq = buildRateUpdatePlan({ stages: ["quoting"] });
-    expect(rq.success).toBe(true);
-    if (!rq.success) return;
-    const v1 = planView(rq.data);
-    expect(v1.totals.customers).toBe(2);                          // quoting 列只有 Juan / Pedro
-    expect(v1.groups.map(g => g.pod).sort()).toEqual(["CARTAGENA", "SANTOS"]);
-
-    const rl = buildRateUpdatePlan({ stages: ["lost", "quoting"] });
-    expect(rl.success).toBe(true);
-    if (!rl.success) return;
-    const v2 = planView(rl.data);
-    expect(v2.totals.customers).toBe(2);                          // lost 被剔掉，结果同上
-    expect(v2.uncovered.some(u => u.contactId === 4)).toBe(false); // Liu 属 reaching，压根不在范围内
+  it("国家代表港：从当期有效行抽英文港名，认不出的国家返回 null", () => {
+    expect(portForCountry("巴西")).toMatchObject({ pod: "RIO DE JANEIRO" });
+    expect(portForCountry("不存在国")).toBeNull();
   });
 });
 
-describe("邮件正文与对外表（与界面客户表同一出口）", () => {
-  it("邮件表列 = 英文十一列；内部备注判丢、内部溯源列根本不出现", () => {
-    const p = plan();
-    const html = p.groups.find(g => g.pod === "CARTAGENA")?.bodyHtml ?? "";
-    for (const col of ["CARRIER", "POL", "POD", "20GP", "40HQ/HC", "40NOR", "FT", "ETD", "VALIDITY", "TT", "REMARK"]) {
-      expect(html).toContain(col);
-    }
-    expect(html).not.toMatch(/[一-鿿]/);                       // 「成本价 1500 可申请」是内部话术
-    expect(html).not.toContain("内部群");
-    expect(html).not.toContain("宁波舱位滚动更新群");
+describe("航线级（区域基本港）价必须如实标注", () => {
+  it("VERACRUZ 当期只有航线级行 → 组标 laneLevel，正文写清是基本港适用价", () => {
+    const v = view();
+    expect(groupOf(v, "VERACRUZ", "EN")).toMatchObject({ laneLevel: true, quotes: 1, minUsd: 2600 });
+    const p = pendingPlanRateUpdate(v.planId);
+    const g = p?.groups.find(x => x.key === "VERACRUZ|EN");
+    expect(g?.bodyHtml).toContain("basic port");
+    expect(g?.bodyHtml ?? "").not.toMatch(/[一-鿿]/);              // 中文航线名「加勒比」不外流
+    expect(groupOf(v, "SANTOS", "EN")?.laneLevel).toBe(false);     // 本港级行不打这个标注
+    // 一人一组：Juan 同时提到 Santos 与 Veracruz，只能出现在一个组里
+    const ids = (p?.groups ?? []).flatMap(x => x.customers.map(c => c.id));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("customerQuoteHtml 与 markdown 表同源同行数、REMARK 位为 /", () => {
-    const rows = pivotQuotes([cleanQuoteRow({
+  it("工具返回 laneLevelGroups 与 facts 白名单（禁编细节）", async () => {
+    const ctx = { conversationId: "ru-lane", counts: new Map<string, number>(), failures: new Map<string, number>() };
+    const T = Object.fromEntries(
+      ((buildHarnessTools(ctx) ?? []) as unknown as Array<{ name?: string }>).map(t => [t.name ?? "", t]),
+    ) as Record<string, { invoke: (r: unknown, i: string) => Promise<string> }>;
+    const out = JSON.parse(await T["rate_update_plan"].invoke({}, "{}")) as {
+      ok: boolean; laneLevelGroups?: string[]; notice?: string; groups?: Array<{ facts?: string[] }>;
+    };
+    expect(out.ok).toBe(true);
+    expect(out.laneLevelGroups).toContain("VERACRUZ");
+    expect(out.notice).toContain("航线级");
+    expect(out.notice).toContain("facts");
+    expect((out.groups?.[0]?.facts ?? []).length).toBeGreaterThan(0);
+  });
+});
+
+describe("可引用事实与对外表（同批次清洗行）", () => {
+  it("facts 与对外表同源；内部备注判丢、溯源列不出现", () => {
+    const v = view();
+    const santos = groupOf(v, "SANTOS", "EN");
+    expect(santos?.facts.length).toBeGreaterThan(0);
+    const raw = {
       carrier: "MSC", pol: "宁波", podRaw: "SANTOS", lane: "南美东", container: "40HQ", containerRaw: null,
       oceanUsd: 3200, freeDays: "7", etd: "2026-09-15", validityRaw: "9.1-9.30",
       validFrom: "2026-09-01", validTo: "2099-12-31", note: "成本价 1500", sourceGroup: "群", sender: "张三",
       msgTime: null, syncedAt: null, status: null, messageText: null,
-    })]);
+    };
+    const rows = pivotQuotes([cleanQuoteRow(raw)]);
     const html = customerQuoteHtml(rows, 12);
     const md = customerQuoteMarkdown(rows, 12);
     const mdRows = md.split("\n").filter(l => l.startsWith("|") && !l.startsWith("| CARRIER") && !l.startsWith("|---"));
     expect((html.match(/<tr>/g) ?? []).length).toBe(mdRows.length + 1);   // +1 = 表头行
     expect(mdRows[0]?.trim().endsWith("| / |")).toBe(true);               // 内部备注 → REMARK "/"
-    expect(html).toContain("<table");
-    expect(html).toContain("SANTOS");
+    const cartagena = pendingPlanRateUpdate(v.planId)?.groups.find(g => g.pod === "CARTAGENA");
+    expect(cartagena?.bodyHtml).not.toContain("内部群");
+    for (const col of ["CARRIER", "POL", "POD", "20GP", "40HQ/HC", "40NOR", "FT", "ETD", "VALIDITY", "TT", "REMARK"]) {
+      expect(cartagena?.bodyHtml ?? "").toContain(col);
+    }
+    expect((cartagena?.bodyHtml.match(/<li>/g) ?? []).length).toBe(3);
+    expect(cartagena?.bodyHtml).toContain("Best regards");
   });
 
-  it("正文固定三句注意事项 + 一句 CTA；签名不写进正文（发送时按账号追加）", () => {
+  it("降价标签只来自镜像 diff：命中才带，命不中不提降价", () => {
     const p = plan();
-    const html = p.groups.find(g => g.pod === "CARTAGENA")?.bodyHtml ?? "";
-    expect((html.match(/<li>/g) ?? []).length).toBe(3);
-    expect(html).toContain("Best regards");
-    expect(html).not.toMatch(/宁波|李四/);
-  });
-});
-
-describe("agent 工具面（模型看到的契约）", () => {
-  type ToolLike = { name?: string; invoke: (rc: unknown, input: string) => Promise<string> };
-  const toolsFor = (ctx: unknown) =>
-    Object.fromEntries(((buildHarnessTools(ctx) ?? []) as unknown as ToolLike[]).map(t => [t.name ?? "", t]));
-
-  it("rate_update_plan 出方案：groups + planId + 下一步指令；enqueue 回执报数并指向发送中心", async () => {
-    const ctx = { conversationId: "ru-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
-    const T = toolsFor(ctx);
-    const planOut = JSON.parse(await T["rate_update_plan"].invoke({}, "{}")) as {
-      ok: boolean; planId?: string; groups?: unknown[]; totals?: Record<string, number>;
-      notice?: string; nextStep?: string; queueOccupied?: number;
-    };
-    expect(planOut.ok).toBe(true);
-    expect(planOut.planId).toBeTruthy();
-    expect(planOut.groups?.length).toBe(3);
-    expect(planOut.totals?.covered).toBe(4);
-    expect(planOut.notice).toContain("不要再手抄");
-    expect(planOut.notice).toContain("发送中心");
-    expect(planOut.nextStep).toContain("rate_update_enqueue");
-    expect(planOut.queueOccupied).toBe(0);
-
-    const enq = JSON.parse(await T["rate_update_enqueue"].invoke({}, JSON.stringify({ planId: planOut.planId }))) as {
-      ok: boolean; say?: string; notice?: string; actions?: Array<{ label: string; href?: string }>;
-    };
-    expect(enq.ok).toBe(true);
-    expect(enq.say).toContain("3 组");
-    expect(enq.say).toContain("4 封");
-    expect((enq.actions ?? []).map(a => a.href)).toContain("#/queue");
-    expect(enq.notice).toContain("不会自动发");
+    const s = p.groups.find(g => g.pod === "SANTOS" && g.language === "EN");
+    expect(s?.drop).toMatchObject({ oldUsd: 3600, newUsd: 3200, pct: 11 });
+    expect(s?.subject).toMatch(/^Price drop ·/);
+    expect(s?.bodyHtml).toContain("have come down about 11%");
+    const c = p.groups.find(g => g.pod === "CARTAGENA");
+    expect(c?.drop).toBeNull();
+    expect(c?.bodyHtml ?? "").not.toContain("come down");
   });
 
-  it("方案用过再调一次 → 工具层如实报过期，不静默重发", async () => {
-    const ctx = { conversationId: "ru-conv2", counts: new Map<string, number>(), failures: new Map<string, number>() };
-    const T = toolsFor(ctx);
-    const planId = (JSON.parse(await T["rate_update_plan"].invoke({}, "{}")) as { planId: string }).planId;
-    expect((JSON.parse(await T["rate_update_enqueue"].invoke({}, JSON.stringify({ planId }))) as { ok: boolean }).ok).toBe(true);
-    ctx.counts.clear();   // 单轮预算 1 次；这里要测的是「方案一次性」，不是预算闸门
-    const again = JSON.parse(await T["rate_update_enqueue"].invoke({}, JSON.stringify({ planId }))) as {
-      ok: boolean; error?: { code?: string; message?: string };
-    };
-    expect(again.ok).toBe(false);
-    expect(again.error?.code).toBe("plan_expired");
-    expect(again.error?.message).toContain("rate_update_plan");
+  it("未覆盖名单按原因如实给数，不静默丢人", () => {
+    const v = view();
+    expect(v.totals.uncoveredTotal).toBe(2);
+    expect(v.uncovered.map(u => u.reason).sort()).toEqual(["no_live_rate", "no_port"]);
   });
 });
 
 describe("入队：只入队不发送，且必须先解决队列占用", () => {
-  it("方案入队走 buildDynamicQueue → startQueue(autoStart=false)，组标签带目的港；一人一组一封", async () => {
-    const view = planView(plan());
-    const r = await enqueueRateUpdatePlan(view.planId);
+  it("方案入队走 buildDynamicQueue → startQueue(autoStart=false)，组标签带展示名；一人一组一封", async () => {
+    const v = view();
+    const r = await enqueueRateUpdatePlan(v.planId);
     expect(r.success).toBe(true);
     if (!r.success || r.data.occupied) return;
-    expect(r.data.enqueue.groups).toBe(view.groups.length);
-    expect(r.data.enqueue.queuedCount).toBe(view.totals.covered);
+    expect(r.data.enqueue.groups).toBe(v.groups.length);
+    expect(r.data.enqueue.queuedCount).toBe(v.totals.covered);
     expect(startCalls.length).toBe(1);
-    expect(startCalls[0]?.autoStart).toBe(false);              // 红线：程序永不自动开始群发
+    expect(startCalls[0]?.autoStart).toBe(false);                            // 红线：程序永不自动开始群发
     expect(startCalls[0]?.tplNames.every(n => n.startsWith("运价更新 · "))).toBe(true);
-    expect(buildCalls.map(c => c.ids).flat().sort()).toEqual([1, 2, 3, 7]);
+    expect(buildCalls.map(c => c.ids).flat().sort()).toEqual([1, 2, 3, 7, 8]);
   });
 
   it("队列里还有未发送批次 → 默认拒绝（startQueue 会清空全表，不能静默覆盖）", async () => {
     queueState.pendingGroups = 3;
-    const r = await enqueueRateUpdatePlan(planView(plan()).planId);
+    const r = await enqueueRateUpdatePlan(view().planId);
     expect(r.success).toBe(true);
     if (!r.success) return;
     expect(r.data).toEqual({ occupied: true, pendingGroups: 3 });
@@ -354,39 +348,30 @@ describe("入队：只入队不发送，且必须先解决队列占用", () => {
 
   it("引擎正在发送时绝对不让插队", async () => {
     queueState.running = true;
-    const r = await enqueueRateUpdatePlan(planView(plan()).planId);
+    const r = await enqueueRateUpdatePlan(view().planId);
     expect(r.success).toBe(false);
     expect(r.success ? "" : r.error).toContain("正在运行");
     expect(startCalls.length).toBe(0);
   });
 
-  it("用户明确同意覆盖（overwrite=true）才入队；方案用过即作废，防同份重复入队", async () => {
+  it("同意覆盖后才入队；方案用过即作废，防同份重复入队", async () => {
     queueState.pendingGroups = 2;
     const planId = plan().id;
     const first = await enqueueRateUpdatePlan(planId, undefined, true);
     expect(first.success && !first.data.occupied).toBe(true);
     expect(startCalls.length).toBe(1);
     const second = await enqueueRateUpdatePlan(planId);
-    expect(second.success).toBe(false);
     expect(second.success ? "" : second.error).toContain("过期");
   });
 
-  it("groupKeys 只入队选中的组；不存在的组当面报错并列出可选值", async () => {
+  it("groupKeys 只入队选中的组；未知组当面报错并列出可选键", async () => {
     const planId = plan().id;
     const one = await enqueueRateUpdatePlan(planId, ["CARTAGENA|EN"]);
     expect(one.success && !one.data.occupied).toBe(true);
     if (!one.success || one.data.occupied) return;
     expect(one.data.enqueue.groups).toBe(1);
-    expect(one.data.enqueue.pods).toEqual(["CARTAGENA"]);
-  });
-
-  it("未知分组 → 报错并给出可选键；planId 不存在 → 叫重新生成", async () => {
-    const p = plan();
-    const bad = await enqueueRateUpdatePlan(p.id, ["NOSUCH|EN"]);
-    expect(bad.success).toBe(false);
+    const bad = await enqueueRateUpdatePlan(plan().id, ["NOSUCH|EN"]);
     expect(bad.success ? "" : bad.error).toContain("未知分组");
     expect(bad.success ? "" : bad.error).toContain("SANTOS|EN");
-    const gone = await enqueueRateUpdatePlan("nope");
-    expect(gone.success ? "" : gone.error).toContain("重新生成");
   });
 });

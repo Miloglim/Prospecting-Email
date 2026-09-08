@@ -20,6 +20,24 @@
    方案结构与入队路径完全一致；预览即执行对象（所见即所发）。
 6. **不新增 schema、不给 send_queue 加列**：组内容标签复用既有 `tplName`（`运价更新 · SANTOS`）。
 
+### 0.6 实测后的修订（2026-09-08，用户丢来会话导出复盘）
+
+7. **范围两分，不再混说「客户」**：`scope=board`（默认）=跟进看板（`status IN (reached,replied)` + 按管线阶段筛）；
+   `scope=contacts`=联系人库全量（含冷客户，只剔 `bounced/autoreply` 与占位邮箱）。此前两者混在一起，
+   用户说「选出所有巴西客户」时工具一个人也圈不到，模型只好绕 `search_contacts` 自己拼名单（实锤翻车点）。
+   `country`（中英文都认）负责「按国家收窄」这个最高频诉求。
+8. **没偏好不再等于推不出去**：求港顺序=点名港 → 自己的港口偏好 → **所在国家当期代表港兜底**
+   （`portForCountry`：国家关键词 LIKE 镜像 → `cleanPod` 抽英文港名 → 形态闸门 → 条数/价优选）。
+   三条都落口才记 `no_port`。兜底组 `basis="country"`、展示名带方向（`SANTOS (Brazil)`），界面明标「按国家」。
+9. **港口必须先认证**：来信「标签独行、值在下一行」的形态会把整句/邮件标题/签名当成目的港
+   （实锤建过组的：`QUICK UPDATE ON SPACE AVAILABLE.`、`UMESH SHARMA INTEX GROUP <SALES6@…>`）——
+   假港既污染名单又挤掉真客户的组数名额。现在双闸：`plausiblePortToken`（形态）+ `knownPod`（台账真有该港）；
+   人工登记的港只过形态闸（当期有没有价交给方案层判 `no_live_rate`）。`maxGroups` 默认 10 → 24。
+10. **航线级价如实标注 + 可引用事实白名单**：命中「南美东/墨西哥」这类区域基本港价时 `laneLevel=true`，
+    界面出「航线级价」徽章、邮件正文写进 laneNote（中文航线名绝不进客户邮件），转述必须说清不是本港专属价。
+    每组另带 `facts`（与对外表同一批单元格文本），notice 钉死「只许引用 totals/facts/preview 里有过的字符串」——
+    实测模型曾凭空编出「HMM 延迟到 9/21、ZIM 走 feeder、CMA 有 EFS 附加费」这类工具根本没返回的细节，这是本功能最高优先级的禁令。
+
 ---
 
 ## 0. 现状与缺口（代码证据）
@@ -186,6 +204,11 @@ key，未知 key 当面报错并列有效值（对齐「参数钳制不硬拒、
 
 - 参数一律扁平 + 可选字段 `.nullable().optional()`（SDK 转换铁律）；`stages`/`contactIds`/`groupKeys` 用
   `z.preprocess`（`toWords`/`toIds`）容错成数组（弱模型会传逗号串）；`toWords` 刻意保留大小写——分组键 `SANTOS|EN` 要原样比对。
+- **参数面按实测收缩**：`scope`（board/contacts）与 `country` 是这次新增的主维度；`stages` 描述改成
+  「一般不用传，只有用户点名某一列时才传」——弱模型多传一个数组就多一次把 JSON 写坏的机会（实测两轮里 2/9 次调用废在解析上）。
+- 工具返回除 `groups/totals/uncovered/planId/queueOccupied` 外，还带 `laneLevelGroups`（哪些组是航线级价，转述必须说清）
+  和每组 `facts`（=对外表前几行的真实文本）。**模型只许引用 totals/facts/preview 里出现过的字符串**，
+  船期延迟、中转、附加费、免箱期这类没在里面就不许提。
 - `preview` = 人数最多那组邮件正文的纯文本形态（`htmlToText(bodyHtml)`，由 service 生成）：用户问「信长什么样」时模型原样贴，
   不自己重写。表格卡与正文都出自同一份方案对象，**预览即执行对象**。
 - `rate_update_plan` 返回 `notice`：表格卡已渲染、不许在正文手抄第二份表；数字照抄 `totals`；
@@ -243,7 +266,8 @@ key，未知 key 当面报错并列有效值（对齐「参数钳制不硬拒、
 1. `includeReplied` 默认真（已回复客户进运价更新）是否需要改成默认关。
 2. 一港多起运港时是否只推「与客户国家最匹配」的 POL（现按镜像 polAligned + 价升序，可能同表出现两个 POL）。
 3. 运价更新是否要带台账截图（`imageUrl` 是局域网地址，客户侧打不开 → 现阶段不带；若要做需公网图源）。
-4. **中文港名不在港口词表**（`rates-portmap.json` 只有英文别名 + LOCODE）：用户说「桑托斯」时 `port` 参数归一不到，
-   与 `quote_search` 同一口径。要支持得先补词表（属运价线，不在本规范内动）。
+4. **中文港名仍认不出**：`knownPod` 要求「台账 pod_raw 真含该词」，而港口词表只有英文别名 + LOCODE，
+   所以「桑托斯」这种中文译名当 `port` 参数会当面报错（不再静默建假组），与 `quote_search` 同口径。要支持得先补词表。
 5. **散文式提到港口不解析**：来信没写「POD: xxx」这类标签（例如 "our POD is Santos again"）时 `parseEmailInquiry`
-   抽不到港 → 该客户进 `no_port`。刻意不改这个共享解析器（回信链路也用它，影响面另案）；补录偏好在面板一处即可解决。
+   抽不到港 → 该客户没偏好。修法不是改这个共享解析器（回信链路也用它），而是 §0.6-8 的国家代表港兜底 +
+   详情面板「采用为偏好」一键补录，两条路都通。

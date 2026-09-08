@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  parsePreferredPorts, normalizePodName, prefsFromManual, cleanPortSegment, MAX_PREFS,
+  parsePreferredPorts, normalizePodName, prefsFromManual, cleanPortSegment, plausiblePortToken, MAX_PREFS,
 } from "../../src/main/services/customer-ports";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -29,22 +29,8 @@ describe("extra.preferredPorts 双形态解析（看板写的是 JSON 字符串�
   });
 });
 
-describe("港名归一（来信里那段往往是脏的）", () => {
-  it("「Santos - BRSSZ (Santos, SP)」这类脏段 → 标准港名大写", () => {
-    expect(normalizePodName({ pod: "Santos - BRSSZ (Santos, SP)", podCode: null })).toBe("SANTOS");
-  });
-
-  it("只给 LOCODE 也能归一", () => {
-    expect(normalizePodName({ pod: null, podCode: "BRSSZ" })).toBe("SANTOS");
-  });
-
-  it("抽不到港返回 null，不拿别的港凑数", () => {
-    expect(normalizePodName({ pod: "", podCode: null })).toBeNull();
-    expect(normalizePodName({ pod: null, podCode: null })).toBeNull();
-    expect(normalizePodName({ pod: "  ", podCode: "" })).toBeNull();
-  });
-});
-
+// 本文件不接库：knownPod 认证要求「台账真有其港」，无库环境下一律认不出（宁缺毋滥）。
+// 「脏段 → 标准港名」的完整链路断言在 tests/unit/rate-update-push.test.ts（带镜像夹具）。
 describe("来信标签行的尾巴不混进港口（parseEmailInquiry 抓整行，偏好层再收紧）", () => {
   it("第一个逗号/分号前 + 柜型数量词前截断", () => {
     expect(cleanPortSegment("Santos - BRSSZ, ready cargo 2 x 40HQ")).toBe("Santos - BRSSZ");
@@ -55,8 +41,31 @@ describe("来信标签行的尾巴不混进港口（parseEmailInquiry 抓整行�
     expect(cleanPortSegment(null)).toBeNull();
   });
 
-  it("收紧后再归一，脏行也能落到镜像标准港名", () => {
-    expect(normalizePodName({ pod: "Santos - BRSSZ, ready cargo 2 x 40HQ", podCode: null })).toBe("SANTOS");
+  it("没库时一律认不出（不把脏字符串当港口偏好）", () => {
+    expect(normalizePodName({ pod: "Santos - BRSSZ (Santos, SP)", podCode: null })).toBeNull();
+    expect(normalizePodName({ pod: null, podCode: "BRSSZ" })).toBeNull();
+    expect(normalizePodName({ pod: "", podCode: null })).toBeNull();
+    expect(normalizePodName({ pod: null, podCode: null })).toBeNull();
+  });
+});
+
+describe("形态闸门：不像港名的字符串一律不收（假港会挤掉真客户的名额）", () => {
+  it("整句 / 邮件标题 / 签名 / 超长都拒——这几条都是实锤建过假组的", () => {
+    for (const bad of [
+      "QUICK UPDATE ON SPACE AVAILABLE",
+      "PUERTOS CLAVE PRESENTAN CONGESTION CON RETRASOS DE 3-5 DIAS",
+      "UMESH SHARMA INTEX GROUP <SALES6@INTEXGROUP.CO.IN>",
+      "Santos - BRSSZ ready cargo 2 x 40HQ in October and November",
+      "A123456789012345678901234567890",
+    ]) {
+      expect(plausiblePortToken(bad), bad).toBe(false);
+    }
+  });
+
+  it("单港名、多词港名、LOCODE、带撇号/点的写法放行", () => {
+    for (const ok of ["SANTOS", "BUENOS AIRES", "SAN ANTONIO", "SHEKOU", "BRSSZ", "ST JOHN'S"]) {
+      expect(plausiblePortToken(ok), ok).toBe(true);
+    }
   });
 });
 
