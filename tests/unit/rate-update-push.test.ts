@@ -218,6 +218,14 @@ describe("范围两分：跟进看板 vs 联系人库（此前混为一谈导致
     const v = view({ statuses: ["reached"] });
     expect(groupOf(v, "SANTOS", "EN")?.customers).toBe(1);       // 只剩 Juan（Cleo 是 replied）
   });
+
+  it("stages 传歪了不整单失败：退回默认口径并如实记实际生效阶段", () => {
+    const r = buildRateUpdatePlan({ stages: ['["reaching"', "quotin", "拼错的值"] });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    expect(r.data.groups.length).toBeGreaterThan(0);
+    expect(r.data.scope.stages).toEqual(["reaching", "quoting", "trial", "cooperating", "other"]);
+  });
 });
 
 describe("参数误用的纠偏（模型会把国家名塞进 port）", () => {

@@ -436,11 +436,14 @@ export const MAX_QUOTES_PER_GROUP = 30;
  */
 export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdatePlan> {
   const scopeMode: "board" | "contacts" = opts.scope === "contacts" ? "contacts" : "board";
+  const pickedStages = opts.stages?.length
+    ? opts.stages.filter(s => ALL_STAGES.includes(s) && s !== "lost") : [];
   const o = {
     scope: scopeMode,
     country: opts.country?.trim() || null,
     includeReplied: opts.includeReplied ?? true,
-    stages: opts.stages?.length ? opts.stages.filter(s => ALL_STAGES.includes(s) && s !== "lost") : ALL_STAGES.filter(s => s !== "lost"),
+    // 传歪了（怪引号/拼错）不整单拒掉：退回默认口径=除已流失外全部，实际生效值记进 scope.stages
+    stages: pickedStages.length ? pickedStages : ALL_STAGES.filter(s => s !== "lost"),
     /** 显式状态圈人（用户说「status=已触达」）；未给则按 scope 的默认口径 */
     statuses: opts.statuses?.length ? [...new Set(opts.statuses.map(s => s.trim()))] : undefined,
     quotesPerGroup: clampInt(opts.quotesPerGroup, 1, MAX_QUOTES_PER_GROUP, 12),
@@ -448,9 +451,6 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
     days: clampInt(opts.days, 7, 365, 90),
     maxContacts: clampInt(opts.maxContacts, 1, 1000, 300),
   };
-  if (o.scope === "board" && o.stages.length === 0) {
-    return failResult("筛选阶段后没有可用阶段（已流失客户不参与运价更新推送）");
-  }
   const now = opts.now ?? new Date();
   const portFilter = opts.port?.trim() ? normalizePodName({ pod: opts.port, podCode: null }) : null;
   if (opts.port?.trim() && !portFilter) return failResult(`「${opts.port.trim()}」在台账里不是可识别的目的港，先确认港名或按航线查`);
