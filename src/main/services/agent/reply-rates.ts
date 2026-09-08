@@ -10,7 +10,7 @@
 
 import { listQuotes, countQuotes, normalizeContainer, type QuoteDto } from "../rate-sync.service";
 import { resolveQueryPod, podRawExpansion } from "../rates-standard";
-import { cleanQuoteRow, pivotQuotes, customerQuoteMarkdown, type QuoteRowRaw } from "../rates-clean";
+import { cleanQuoteRow, pivotQuotes, customerQuoteMarkdown, type CleanQuote, type QuoteRowRaw } from "../rates-clean";
 import type { EmailInquiry, RateRow, RatesPayload } from "./email-parse";
 
 /**
@@ -158,6 +158,17 @@ function toRowRaw(r: ReplyRateRow | RateRow | QuoteDto, pod: string | null): Quo
 }
 
 /**
+ * 客户表的清洗行（唯一中间出口）：行形状归一 → cleanQuoteRow → pivotQuotes。
+ * Markdown 表与运价更新邮件的 HTML 表都必须从这里拿，否则「界面上的表」和「邮件里的表」会长得不一样。
+ */
+export function customerCleanQuotes(
+  rows: Array<ReplyRateRow | RateRow | QuoteDto>,
+  pod: string | null,
+): CleanQuote[] {
+  return pivotQuotes(rows.map(r => cleanQuoteRow(toRowRaw(r, pod))));
+}
+
+/**
  * 客户报价表（英文十一列）。rows 可以是台账自查的 QuoteDto、也可以是工作台里的 RateRow。
  * 行序沿用调用方给的顺序（lookupReplyRates 已按起运港对齐 + 价升序排好），空行不出表。
  */
@@ -168,6 +179,5 @@ export function customerQuoteTable(
   max = 20,
 ): string {
   if (!rows.length) return "";
-  const cleaned = pivotQuotes(rows.map(r => cleanQuoteRow(toRowRaw(r, pod))));
-  return customerQuoteMarkdown(cleaned, max);
+  return customerQuoteMarkdown(customerCleanQuotes(rows, pod), max);
 }

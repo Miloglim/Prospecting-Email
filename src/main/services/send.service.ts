@@ -500,7 +500,8 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], con
   return okResult(items);
 }
 
-function normalizeLang(l: string | null | undefined): Lang {
+/** 联系人语言 → 邮件语言（只认 EN/ES/PT，其余一律 EN）。导出给运价更新等需要按语言分组的链路复用。 */
+export function normalizeLang(l: string | null | undefined): Lang {
   const v = (l || "EN").toUpperCase();
   return v === "ES" || v === "PT" ? v : "EN";
 }

@@ -153,8 +153,10 @@ describe("三桶候选生成", () => {
     const c = collectCandidates(inp);
     const drop = c.find(x => x.key.startsWith("intel-drop"))!;
     expect(drop.text).toBe("SANTOS MSC 40HQ 降到 $2800（原 $3200），可以给 Juan Garcia 同步");
-    expect(drop.href).toBe("#/customers?view=table&detail=9");
-    expect(drop.score).toBe(35);          // 30 + 降幅 12.5% → round(5) = 5
+    // 降价卡不再只是"看一眼"：深链指向跟进看板的运价更新面板（同一个方案引擎），关联到客户时分数上浮
+    expect(drop.href).toBe("#/customers?view=board&ratepush=1");
+    expect(drop.prefix).toBe("同步运价");
+    expect(drop.score).toBe(39);          // 30 + 降幅 12.5% → +5，再 +4（有客户关联）
 
     // 匹配不到客户 → 退化文案，不猜名字
     const bare = collectCandidates(emptyInputs({ diff: inp.diff }));
@@ -405,7 +407,8 @@ describe("feed 集成（真 SQL 口径）", () => {
     const f = feed();
     const drop = f.items.find(i => i.key.startsWith("intel-drop"))!;
     expect(drop.text).toContain("可以给 Juan Garcia 同步");
-    expect(drop.href).toBe("#/customers?view=table&detail=1");
+    expect(drop.href).toBe("#/customers?view=board&ratepush=1");
+    expect(drop.prompt).toContain("入队不等于发送");
   });
 
   it("dismiss：点过的 chip 当天不再出，隔天自动失效", () => {

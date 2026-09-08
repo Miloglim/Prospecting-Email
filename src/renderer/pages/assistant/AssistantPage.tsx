@@ -40,6 +40,7 @@ function asRows(detail?: string): Record<string, unknown>[] | null {
       : typeof o === "object" && o !== null
         ? (o as { quotes?: unknown[] }).quotes ?? (o as { messages?: unknown[] }).messages
           ?? (o as { due?: unknown[] }).due ?? (o as { results?: unknown[] }).results
+          ?? (o as { groups?: unknown[] }).groups
       : null;
     if (arr && Array.isArray(arr) && arr.length && typeof arr[0] === "object") return arr as Record<string, unknown>[];
   } catch { /* 非 JSON 结果不产表格卡 */ }
@@ -59,6 +60,9 @@ const COL_LABELS: Record<string, string> = {
   fromName: "发件人", fromEmail: "发件邮箱", from: "发件人", subject: "主题", classification: "分类",
   receivedAt: "时间", isRead: "已读", summary: "总结", nextStep: "下一步", rating: "评分",
   reminderAt: "提醒时间", problems: "问题", healthy: "健康数", enabled: "启用数", total: "总数",
+  // 运价更新方案卡（rate_update_plan）：一组=一封要发的邮件（validTo/subject 沿用上面的标签）
+  key: "分组", customers: "客户数", minUsd: "最低价USD", dropPct: "降幅%",
+  language: "语言", reason: "原因", detail: "说明",
   // 公开行情调研明细表（来源 | 数据 | 口径 | 发布/更新 | 可信度 | 链接）
   source: "来源", value: "数据", scope: "口径", published: "发布/更新", credibility: "可信度", url: "链接", info: "船期信息",
 };
@@ -96,6 +100,10 @@ function describeApproval(tool: string | undefined, argsRaw: unknown): string {
     case "send_queue_add": {
       const ids = Array.isArray(a.contactIds) ? (a.contactIds as unknown[]).map(String).join("、") : s(a.contactIds);
       return `把一封邮件加入发送队列（不会自动发出，之后需到「发送中心」手动启动）：收件人 #${ids}，主题「${s(a.subject)}」`;
+    }
+    case "rate_update_enqueue": {
+      const gs = Array.isArray(a.groupKeys) ? (a.groupKeys as unknown[]).map(String) : [];
+      return `把运价更新方案（${gs.length ? `仅 ${gs.join("、")}` : "方案里全部分组"}）加入发送队列——只入队，之后仍需你在「发送中心」手动点开始`;
     }
     default:
       return `${toolLabel(tool)}：${Object.entries(a).map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join(" ").slice(0, 200) || "（无参数）"}`;

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Card, Tag, Button, Tabs, Input, Select, message, Empty, Timeline, DatePicker, Modal, Popconfirm, Tooltip, Checkbox } from "antd";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { HtmlText } from "../../components/RichTextEditor";
+import { RateUpdatePanel } from "./RateUpdatePanel";
 import { COUNTRIES, STAGE_META } from "../../components/ContactDetail";
 import {
   ClockCircleOutlined, CloseOutlined, MailOutlined, SearchOutlined,
@@ -89,21 +90,28 @@ export function CrmPipeline() {
   });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  // 从联系人页跳转来 → 记录待打开 ID
+  // 从联系人页跳转来 → 记录待打开 ID；?ratepush=1 → 直接打开运价更新面板（agent 方案卡/建议卡深链入口）
+  const [ratePushOpen, setRatePushOpen] = useState(false);
   const pendingDetailRef = useRef<number | null>(null);
   useEffect(() => {
     const rawHash = window.location.hash;
     const qs = rawHash.includes("?") ? rawHash.split("?")[1] : "";
     if (!qs) return;
     const sp = new URLSearchParams(qs);
+    if (sp.get("ratepush")) setRatePushOpen(true);
     const detailStr = sp.get("detail");
-    if (!detailStr) return;
+    if (!detailStr) {
+      if (sp.get("ratepush")) {
+        window.location.hash = rawHash.split("?")[0]!;
+      }
+      return;
+    }
     const id = Number(detailStr);
-    if (isNaN(id)) return;
-    pendingDetailRef.current = id;
-    setDetailId(id);
-    const base = rawHash.split("?")[0]!;
-    window.location.hash = base;
+    if (!isNaN(id)) {
+      pendingDetailRef.current = id;
+      setDetailId(id);
+    }
+    window.location.hash = rawHash.split("?")[0]!;
   }, []);
   const [emailPopup, setEmailPopup] = useState<{
     id?: number; fromEmail: string; subject: string | null; receivedAt: string; bodyPreview: string | null;
@@ -139,6 +147,15 @@ export function CrmPipeline() {
       };
     }>,
     enabled: !!detailId,
+  });
+
+  // 来信推断的港口偏好（只在打开「偏好设置」时拉一次；方案引擎与运价更新推送同一口径）
+  const { data: derivedPorts } = useQuery({
+    queryKey: ["rate-update", "ports", detailId],
+    queryFn: () => window.api.invoke("rateUpdate:ports", detailId) as Promise<{
+      success: boolean; data?: Array<{ pod: string; pol: string | null; container: string | null; score: number; sources: string[]; lastSeenAt: string | null; hits: number }>;
+    }>,
+    enabled: !!detailId && currentTab === "prefs",
   });
 
   const setStageMut = useMutation({
@@ -411,11 +428,16 @@ export function CrmPipeline() {
             <Button size="small" type="text" className="!text-[10px] !px-1"
               onClick={() => { setFCountries([]); setFAssignees([]); }}>重置</Button>
           )}
+          <Tooltip title="按各客户的港口偏好，把当期运价分组推给他们（先出方案，入队后仍由你在发送中心点开始）">
+            <Button size="small" className="ml-auto" icon={<SendOutlined />}
+              onClick={() => setRatePushOpen(true)}>运价更新</Button>
+          </Tooltip>
         </div>
         {selectedIds.size > 0 && (
           <div className="sticky top-[34px] z-20 bg-white border-b border-gray-200 px-3 py-2 flex items-center gap-2">
             <span className="text-xs text-gray-600">已选 {selectedIds.size} 人</span>
             <Button size="small" type="primary" onClick={copyEmails}>复制邮箱</Button>
+            <Button size="small" onClick={() => setRatePushOpen(true)}>运价更新</Button>
             <Button size="small" onClick={() => setSelectedIds(new Set())}>清空</Button>
           </div>
         )}
@@ -710,6 +732,37 @@ export function CrmPipeline() {
                       )}
                     </div>
 
+                    {/* 来信推断的港口（只读展示 + 一键采用为偏好；让偏好能自己长出来，不用销售手打） */}
+                    {(() => {
+                      const derived = (derivedPorts?.success ? derivedPorts.data ?? [] : [])
+                        .filter(d => !portsRef.current.some(p => (p.pod || "").trim().toUpperCase() === d.pod.toUpperCase()));
+                      if (!derived.length) return null;
+                      const adopt = async () => {
+                        const next = [...portsRef.current, ...derived.map(d => ({ pol: d.pol ?? "", pod: d.pod }))];
+                        portsRef.current = next; setPortsDraft(next);
+                        await saveExtra({ preferredPorts: JSON.stringify(next) });
+                        qc.invalidateQueries({ queryKey: ["rate-update", "ports", detailId] });
+                      };
+                      return (
+                        <div className="pb-2 border-b border-gray-100">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-[10px] font-semibold text-gray-500 uppercase">近 90 天来信提到</span>
+                            <Button size="small" type="link" className="!text-[10px] !px-0" onClick={adopt}>采用为偏好</Button>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {derived.map(d => (
+                              <Tooltip key={d.pod}
+                                title={`${d.sources.includes("inbound") ? `${d.hits} 封来信提到` : "看板登记"}${d.pol ? ` · 起运 ${d.pol}` : ""}${d.container ? ` · ${d.container}` : ""}${d.lastSeenAt ? ` · 最近 ${d.lastSeenAt.slice(0, 10)}` : ""}`}>
+                                <Tag className="!mr-0 !text-[10px]" color="blue">
+                                  {d.pol ? `${d.pol} → ${d.pod}` : d.pod}
+                                </Tag>
+                              </Tooltip>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* 其他偏好 */}
                     {([
                       { label: "决策角色", field: "decisionRole", opts: ["", "决策者", "影响者", "信息提供者"] },
@@ -922,6 +975,13 @@ export function CrmPipeline() {
           />
         </div>
       </Modal>
+
+      {/* 运价更新：按客户港口偏好定向投递（与 agent 的 rate_update_plan 同一个方案引擎） */}
+      <RateUpdatePanel
+        open={ratePushOpen}
+        onClose={() => setRatePushOpen(false)}
+        contactIds={selectedIds.size > 0 ? [...selectedIds] : undefined}
+      />
     </div>
   );
 }

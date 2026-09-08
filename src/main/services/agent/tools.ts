@@ -10,7 +10,9 @@ import { tool } from "@openai/agents";
 import { getDb, getRawDb, saveDatabase } from "../../db";
 import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
-import { queryStandard, standardToMarkdown, resolveQueryPod, podRawExpansion } from "../rates-standard";
+import { resolveQueryPod, podRawExpansion } from "../rates-standard";
+// 两张表的唯一出口（规范 docs/rates-answer-chain-spec.md §3）：清洗器算列，模型只许原样贴
+import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, type CleanQuote } from "../rates-clean";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -24,6 +26,7 @@ import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
 import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
+import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups } from "../rate-update.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
@@ -37,7 +40,7 @@ import { extractFact, rememberToolFact } from "./memory";
 import { rememberWork, fingerprint, listWork } from "./working-memory";
 import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
 import { lookupReplyRates, podQueryWord, customerQuoteTable } from "./reply-rates";
-import { listQuotes, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
+import { listQuotes, listQuoteRaws, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
@@ -322,6 +325,12 @@ const toIds = (v: unknown): number[] => {
     : typeof v === "string" ? v.split(/[,;\s]+/) : [];
   return [...new Set(raw.map(toInt).filter((n): n is number => n !== undefined))].slice(0, 50);
 };
+/** 字符串数组宽容归一（模型常把数组发成 "a,b" 或 "a b"）：去重、去空、限量。
+ *  刻意保留大小写——分组键（如 "SANTOS|EN"）要原样比对，需要小写的调用方自己转。 */
+const toWords = (v: unknown, max = 8): string[] => {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,;]+/) : [];
+  return [...new Set(raw.map(s => String(s).trim()).filter(Boolean))].slice(0, max);
+};
 /** 可选字符串：空串/全空格/null 一律归一为「未填」，不留给下游判 */
 const optStr = (max: number) => z.preprocess(
   (v: unknown) => (v === null || (typeof v === "string" && v.trim() === "") ? undefined : v),
@@ -440,6 +449,28 @@ export const quoteSearchSchema = z.object({
   container: optStr(10).describe("柜型，如 20GP/40GP/40HQ/NOR（写 40HC 也会自动归一）；不限则省略或传空"),
   includeExpired: optBool().describe("是否包含已过有效期记录，默认 false"),
   limit: optInt().describe("返回条数，默认 20，按价格升序"),
+  forCustomer: optBool().describe("用户已明确点头「做成客户报价表 / 发给客户」时才传 true："
+    + "返回 customerTable（英文十一列对外交付表，列与占位已锁死）。没同意不要传，也不要自己翻译或另拼对外表"),
+});
+
+// ── 定向运价更新推送（规范 docs/rate-update-push-spec.md §5）─────────────
+export const rateUpdatePlanSchema = z.object({
+  stages: z.preprocess((v: unknown) => toWords(v), z.array(z.string().max(16)).max(8).nullable().optional())
+    .describe("只看这些跟进阶段（reaching 触达中 / quoting 报价中 / trial 试单 / cooperating 合作中 / other）；"
+      + "省略=除「已流失」外全部。已流失客户永远不参与运价更新"),
+  port: optStr(60).describe("只推某个目的港（中英文/别名都行，如 桑托斯/Santos/BRSSZ）；省略=按每位客户自己最关心的港分组"),
+  contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(50).nullable().optional())
+    .describe("只给指定的这几位客户推（来自 search_contacts 的 id）；省略=跟进看板全量客户"),
+  includeReplied: optBool().describe("已回复的客户是否一起推，默认真；传 false 只推「触达中」还没回的"),
+  quotesPerGroup: optInt().describe("每组邮件最多放几条报价，默认 12（最多 30）"),
+  days: optInt().describe("港口偏好回溯多少天的来信，默认 90"),
+});
+
+export const rateUpdateEnqueueSchema = z.object({
+  planId: z.string().min(1).max(40).describe("rate_update_plan 返回的方案 id（必填；方案 30 分钟内有效，过期就重新生成）"),
+  groupKeys: z.preprocess((v: unknown) => toWords(v, 40), z.array(z.string().max(40)).max(40).nullable().optional())
+    .describe("只入队其中几组时传它们的 key（照抄 rate_update_plan 返回的 groups[].key，如「SANTOS|EN」）；省略=方案里全部组"),
+  overwrite: optBool().describe("发送队列里已有未发送批次时默认拒绝入队（入队会清空它们）。用户明确同意覆盖才传 true"),
 });
 
 export const inboxSearchSchema = z.object({
@@ -1234,16 +1265,29 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 「地东」是航线还是港名不由机械层猜、也不由模型猜——猜错字段就是漏查（规范 rates-query-fallback-spec §1）
       const termWords = [...new Set([qQ, laneQ, podQ].filter((x): x is string => !!x)
         .flatMap(w => [w, resolveQueryPod(w)].map(t => t.trim()).filter(Boolean)))];
-      const filters = {
+      // 两段查（docs/rates-answer-chain-spec.md §2）：
+      //  L1 精准港＝字段里真出现这个词的行（具体港报价优先）；
+      //  L2 航线级＝L1 为空才把该港所属航线/区域码（南美东、WCSA…）并进来，捞航线级报价。
+      // 分两段的原因：一次 OR 混查会把区域价和具体港价搅在一起，比选时容易把区域价当本港价报给客户。
+      const filtersBase = {
         carrier: trimmed(args.carrier)?.toUpperCase(),
         pod: podQ,
-        podExtra: canon ? podRawExpansion(canon) : undefined,
         terms: termWords.length ? termWords : undefined,
         // 脏柜型归一（40HC→40HQ 等），识别不了则原样大写透传
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
         includeExpired: args.includeExpired ?? undefined,
       };
-      const r = listQuotes({ ...filters, limit: args.limit && args.limit > 0 ? args.limit : 20 });
+      const laneWords = canon ? podRawExpansion(canon) : [];
+      const limitN = args.limit && args.limit > 0 ? args.limit : 20;
+      const first = listQuotes({ ...filtersBase, limit: limitN });
+      const useLane = first.success && first.data.length === 0 && laneWords.length > 0;
+      // L2 只认「pod_raw 恰为该港所属航线/区域码」的等值行：
+      //  · 丢 terms（跨字段 AND）——航线级行的 pod_raw 只有「加勒比」，含查询词的 AND 条件会把它掐死；
+      //  · 丢 pod（LIKE %VERACRUZ%）——同航线里别的具体港（MANZANILLO）不该被当成本港价端给客户。
+      const filters = useLane
+        ? { ...filtersBase, pod: undefined, terms: undefined, podExtra: laneWords }
+        : filtersBase;
+      const r = useLane ? listQuotes({ ...filters, limit: limitN }) : first;
       if (!r.success) {
         audit(ctx, "quote_search", "read", args, undefined, "auto", r.error);
         return failOut("query_failed", `查询失败：${r.error}`);
@@ -1269,16 +1313,22 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 固定回答格式：结论与客户表格由工具预计算，模型只许复述——
       // 格式漂移（每次长得不一样）和双表格（正文重抄界面表格卡）都在这根治
       const fmtUsd = (n: number | null) => (n != null ? `$${n.toLocaleString("en-US")}` : "议价");
-      // 两表分离（用户定案）：
-      //  · userTable = 给操作者自己看的中文表（标准化透视优先，含报价单截图 = 信息来源）
-      //  · customerTable = 对外交付物，唯一出口走 rates-clean 英文十一列（REMARK 已英化/判丢）
-      // 与 total/quotes 同源（闭环规范 §5.1-A，治「共 0 条却显示有价」）：镜像未命中 → 两表一律为空，
-      // 标准化层无有效期/柜型过滤，冒充结果会把过期价当真，降级为 notice 里的参考提示。
-      const stdWord = podQ || qQ || laneQ;
-      const stdRows = stdWord ? queryStandard(stdWord, { carrier: filters.carrier }) : [];
+      // 两表分离（用户定案，规范 docs/rates-answer-chain-spec.md §3）：
+      //  · userTable = 给操作者看的 12 列中文工作表（船司…备注·来源·发送人·入库时间，出处三列必备）
+      //  · customerTable = 对外交付物，英文十一列（POL/POD 唯一全大写、缺项 "/"、TT 恒 "/"）
+      // 两张表都出自 rates-clean 同一批清洗行（三列柜型价按港定位、港口拆分、内部备注判丢全在那边锁死），
+      // 模型只许原样贴。与 total/quotes 同源：镜像未命中 → 两表一律为空（闭环规范 §5.1-A）。
+      const queryWord = podQ || qQ || laneQ || "";
+      const podCanon = (canon || resolveQueryPod(queryWord) || queryWord).toUpperCase() || null;
+      let cleanRows: CleanQuote[] = [];
+      try {
+        const rawR = listQuoteRaws({ ...filters, limit: 200 }, Math.max(limitN * 4, 60));
+        if (rawR.success) cleanRows = pivotQuotes(rawR.data.map(x => cleanQuoteRow(x, x.imageUrl)));
+      } catch { /* 清洗行取不到就退回镜像展示行，不炸整次查询 */ }
+      const laneLevelRows = cleanRows.filter(c => /[\u4e00-\u9fa5]/.test(c.pod));
       const userTable = total > 0
-        ? (stdRows.length
-          ? standardToMarkdown(stdRows)
+        ? (cleanRows.length
+          ? cleanTableMarkdown(cleanRows, 15)
           : (r.data.length
             ? [
               "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
@@ -1288,9 +1338,13 @@ export function buildHarnessTools(ctx: ToolCtx) {
             ].join("\n")
             : ""))
         : "";
-      // 客户表：与 userTable 同一批命中行，走 customerQuoteTable 唯一出口（港口归一/三列柜型价/
-      // 内部备注判丢全在那边锁死）；pod 传查询目标港，航线级中文 POD 由出口换成英文港名
-      const customerTable = total > 0 ? customerQuoteTable(r.data, resolveQueryPod(stdWord || "") || stdWord || null) : "";
+      // 客户表：航线级行的 POD 展开成查询目标港（对外必须是唯一英文港名，不能出现「南美东」）；
+      // 工作表保留原样 pod_raw，操作者要看得出这是航线级价
+      const customerTable = total > 0 && args.forCustomer
+        ? customerQuoteMarkdown(pivotQuotes(
+            cleanRows.map(c => (podCanon && /[\u4e00-\u9fa5]/.test(c.pod) ? { ...c, pod: podCanon } : c)),
+          ), 15)
+        : "";
       const cheapest = r.data[0] ?? null;
       const answer = cheapest
         ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
@@ -1339,22 +1393,26 @@ export function buildHarnessTools(ctx: ToolCtx) {
             : `两轮都没命中，且镜像刚同步过（${syncAt}）、台账可达——可以确定台账里没有这个航线/港口。`
               + "请如实告诉用户库里没有，并问一句要不要你联网查当前市场行情；用户明确同意前不要自行联网。");
         }
-        // 标准化参考层降级提示（闭环规范 §5.1-A）：镜像未命中时它不许冒充结果（customerTable 已强制为空），
-        // 但行数值得说一句——"镜像没跟上"最常见，指向运价页同步，而不是拿参考层当报价。
-        if (stdRows.length) {
-          noticeLines.push(
-            `标准化参考层另有 ${stdRows.length} 条「${stdWord}」相关行（该层不做有效期/柜型过滤，可能含过期价，不作为报价依据）：`
-              + "这通常说明镜像没跟上真源——请到「运价库」页点同步后重查，或按 candidates 换词重试；不要把参考层的行当作查询结果报给用户。",
-          );
-        }
+        // 两段都空才算「本地查不到」：L1 精准港 + L2 航线级（podExtra 展开）都为零才走到这里，
+        // 口径仍按 rates-query-fallback-spec §3/§4 分「镜像没跟上」与「确实没有」两种说法
       } else {
         if (r.data.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${r.data.length} 条，回答时必须注明。`);
         else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
+        if (useLane) {
+          noticeLines.push("本次命中的是**航线级/区域基本港**报价（具体港单独没有价）：userTable 里目的港显示为航线名，"
+            + "答复时必须说明「以下是该航线基本港的报价，适用 X」，不要当成 X 港的专属价。");
+        } else if (laneLevelRows.length) {
+          noticeLines.push(`命中里有 ${laneLevelRows.length} 条是航线级报价（目的港列显示为航线名），答复时逐条区分清楚。`);
+        }
         noticeLines.push(
-          "回答格式（固定，勿自由发挥）：正文第一句原样采用 answer 字段（可微调语气，数字与船司不改）；明细表已由界面渲染成表格卡，正文禁止再手写表格或逐行复述报价——否则用户会看到两张表。",
-          "两张表分工不同，别拿错：userTable 是给用户自己看的中文表（含报价单截图＝信息来源），用户要「看下价/整理价/导个表」时贴它；"
+          "回答格式（固定，勿自由发挥，规范 docs/rates-answer-chain-spec.md §3）：① 第一句原样采用 answer（数字与船司不改）；"
+          + "② 紧接着把 userTable **原样贴进正文**（Markdown 表格）——中间产物卡已静默，正文不贴用户就看不到表；"
+          + "禁止改列名/列序/数值、禁止把表改写成散文或要点、禁止自己另拼第二张表；③ 有舱位动态再按 spaceTable 跟在表后。",
+          "两张表分工不同，别拿错：userTable 是给操作者自己看的 12 列中文工作表"
+            + "（船司·起运港·目的港·20GP·40HQ/HC·40NOR·目免·有效期·备注·来源·发送人·入库时间——后三列是信息出处，必须一起贴，不许删列）；"
             + "customerTable 是全英文对外交付物（列 CARRIER/POL/POD/20GP/40HQ-HC/40NOR/FT/ETD/VALIDITY/TT/REMARK，内部备注已判丢），"
-            + "只有「发给客户/写报价信」场景才贴它，原样贴不要改列。两表都没中文混排问题，customerTable 里绝不允许出现中文。"
+            + "只有用户点头「做成客户报价表/发给客户」时才贴它，且只在本工具带 forCustomer 重新查一次后取，不要自己翻译列名。"
+            + "两表都没中文混排问题，customerTable 里绝不允许出现中文。"
             + "用户没明说「导出文件」就不要调 export_artifact。",
           "末尾固定提醒：镜像价为参考价，以船司实时报价为准。",
         );
@@ -1371,7 +1429,6 @@ export function buildHarnessTools(ctx: ToolCtx) {
         answer, userTable, customerTable,
         spaceCount: spaces.length,
         ...(spaces.length ? { spaces, spaceTable } : {}),
-        ...(stdRows.length ? { standardCount: stdRows.length } : {}),
         notice: noticeLines.join("\n"),
         ...(candidates ? { candidates } : {}),
         ...(mirror ? { mirror } : {}),
@@ -1385,6 +1442,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
         } : {}),
         ...(total > 0 ? {
           actions: [
+            // 规范 §3：先给工作表，再问一句要不要做成客户报价表——点它等于同意，工具会带 forCustomer 重查一次
+            ...(args.forCustomer ? [] : [promptAction("做成客户报价表",
+              "把刚才那批运价做成对外发给客户的报价表：重新调用 quote_search 并带上 forCustomer=true（其余筛选条件照抄），"
+              + "然后把返回的 customerTable 原样贴出——列已锁死（缺项是 /，TT 恒为 /），不要自己补值、翻译或改列名。")]),
             promptAction("按这批价写一封报价信", "根据刚才查到的运价，选最便宜的那条给客户写一封报价信，注明有效期和「以船司实时报价为准」的提醒；刚才那批相关舱位动态（船名航次/ETD/截关/舱位类型）也一并写进去，并注明舱位以订舱时确认为准"),
             navAction("在运价库筛选", "#/rates"),
           ],
@@ -2517,6 +2578,94 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  // ── 定向运价更新推送（规范 docs/rate-update-push-spec.md §5）────────────────
+  const rateUpdatePlan = tool({
+    name: "rate_update_plan",
+    description: "给跟进中的客户做定向运价更新：一次调用就算完「谁在跟进、各自关心哪个港、该港当期真价是多少、邮件长什么样」，"
+      + "返回按目的港+语言分好的方案（每组=一封将要发出去的邮件）。用户说「给跟进的客户更新运价」「把新价同步给客户」时用，"
+      + "不要自己一家家 quote_search + generate_draft 手搓（必漏人、且价格会拼错）。"
+      + "本工具只读不算账：不写库、不入队、更不发送；出方案后必须把数字讲给用户听，等他点头再调 rate_update_enqueue。"
+      + "价格全部来自本地运价镜像台账（无当期有效价的港口会自动不入选，绝不编价、不拿别的港凑数）。",
+    parameters: rateUpdatePlanSchema,
+    execute: async (args) => {
+      const cached = cachedRead(ctx, "rate_update_plan", args);
+      if (cached) return cached;
+      const r = buildRateUpdatePlan({
+        stages: args.stages?.map(s => s.toLowerCase()),
+        port: args.port ?? undefined,
+        contactIds: args.contactIds?.length ? args.contactIds : undefined,
+        includeReplied: args.includeReplied ?? undefined,
+        quotesPerGroup: args.quotesPerGroup ?? undefined,
+        days: args.days ?? undefined,
+      });
+      if (!r.success) {
+        audit(ctx, "rate_update_plan", "read", args, undefined, "auto", r.error);
+        return failOut("no_plan", r.error);
+      }
+      const plan = r.data;
+      const view = planView(plan);
+      const biggest = [...plan.groups].sort((a, b) => b.customers.length - a.customers.length)[0];
+      audit(ctx, "rate_update_plan", "read", args, { planId: plan.id, groups: plan.totals.groups, covered: plan.totals.covered }, "auto");
+      const out = finishRead(ctx, "rate_update_plan", args, okOut({
+        ...view,
+        // 邮件正文的纯文本形态（ service 生成，不是模型写的）：用户问「信长什么样」时原样贴出
+        preview: biggest
+          ? {
+            groupKey: biggest.key, subject: biggest.subject,
+            text: htmlToText(biggest.bodyHtml).replace(/\n{3,}/g, "\n\n").trim(),
+          }
+          : null,
+        queueOccupied: pendingQueueGroups(),
+        notice: "方案表已在界面渲染成表格卡，正文不要再手抄一遍表（抄了就会跟卡里的数字打架）。"
+          + "对用户要说人话：圈了多少人、分成几个港、各港多少人几条价、有没有降价；"
+          + "uncovered 里的人必须如实交代原因（没推出港口偏好→建议到跟进看板「偏好设置」补录；台账当期无有效价→按查价口径说明，不等于这条线没有报价）。"
+          + "队列里若已有未发送批次（queueOccupied>0），提前告诉用户入队会清空它们。"
+          + "然后问一句要不要入队；用户点头才调 rate_update_enqueue（这一步会弹确认框）。你永远不能自己开始发送——"
+          + "入队后真正发出去那一下，是用户自己在发送中心点的，这句话要提前讲清。",
+        nextStep: `用户认可后调 rate_update_enqueue，planId="${plan.id}"（只发其中几组就带 groupKeys，照抄 groups[].key）。`,
+      }));
+      return out;
+    },
+  });
+
+  const rateUpdateEnqueue = tool({
+    name: "rate_update_enqueue",
+    description: "把 rate_update_plan 生成的运价更新方案加入发送队列（写，需确认）。只入队、绝不发送："
+      + "队列建好处于未启动状态，用户仍要在「发送中心」手动点开始。"
+      + "必须先有方案（planId 来自 rate_update_plan，30 分钟内有效且一次性）；不要为了入队重新拼正文——"
+      + "预览即执行对象，方案里的邮件是什么就发什么。",
+    parameters: rateUpdateEnqueueSchema,
+    execute: async (args) => {
+      const gateNote = gate(ctx, "rate_update_enqueue");
+      if (gateNote) return gateNote;
+      const r = await enqueueRateUpdatePlan(
+        args.planId.trim(), args.groupKeys?.length ? args.groupKeys : undefined, args.overwrite ?? false,
+      );
+      if (!r.success) {
+        audit(ctx, "rate_update_enqueue", "write", args, undefined, "approved", r.error);
+        const expired = /过期|不存在/.test(r.error);
+        return failOut(expired ? "plan_expired" : "enqueue_failed", r.error
+          + (expired ? "（重新调一次 rate_update_plan 生成新方案再入队）" : ""));
+      }
+      if (r.data.occupied) {
+        return failOut("queue_occupied",
+          `发送队列里还压着 ${r.data.pendingGroups} 组未发送的邮件，直接入队会把它们清掉，所以先停下。`
+          + "请把这件事告诉用户：可以先到发送中心把这批发掉或清掉，或者明确同意覆盖后你再带 overwrite=true 调一次。"
+          + "不要自己替他决定覆盖。");
+      }
+      const e = r.data.enqueue;
+      audit(ctx, "rate_update_enqueue", "write", args, { batchId: e.batchId, groups: e.groups, queuedCount: e.queuedCount }, "approved");
+      invalidateCache("rate_update_plan");   // 方案已消费：下一次问「还有谁能推」必须重新算，不能吃缓存
+      return okOut({
+        say: `已把 ${e.groups} 组运价更新邮件（${e.queuedCount} 封，目的港 ${e.pods.join("、") || "—"}）加入发送队列，`
+          + `批次 ${e.batchId.slice(0, 8)}${e.dropped ? `，另有 ${e.dropped} 组因当日发信限额被裁掉` : ""}。`,
+        notice: "队列已建立但尚未启动：必须提醒用户到「发送中心」核对后手动点开始发送，程序不会自动发。"
+          + "被限额裁掉的组说明今天发不动了，如实讲。",
+        actions: [navAction("去发送中心", "#/queue")],
+      });
+    },
+  });
+
   // ── 审批闸门（唯一收口）────────────────────────────────────────────
   // needsApproval 一律由注册表派生：登记为 sideEffect:"write" 就必须人工确认。
   // 各工具不再自己写一份——漏写不再是「静默执行」的成因（export_artifact 曾把注册表
@@ -2531,7 +2680,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
     updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, listTemplatesTool, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
-    campaignCreate, campaignStatus, campaignControl,
+    campaignCreate, campaignStatus, campaignControl, rateUpdatePlan, rateUpdateEnqueue,
   ];
   for (const t of tools) {
     const name = (t as unknown as { name?: string }).name ?? "";

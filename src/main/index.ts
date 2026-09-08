@@ -18,6 +18,7 @@ import { registerBounceIPC } from "./transport/bounce.ipc";
 import { registerAiIPC } from "./transport/ai.ipc";
 import { registerAgentIPC } from "./transport/agent.ipc";
 import { registerRatesIPC } from "./transport/rates.ipc";
+import { registerRateUpdateIPC } from "./transport/rate-update.ipc";
 import { registerKbIPC } from "./transport/kb.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
 import { initUpdater, cleanupUpdater } from "./updater";
@@ -144,6 +145,7 @@ function registerAllIPC() {
   registerAiIPC();
   registerAgentIPC();
   registerRatesIPC();
+  registerRateUpdateIPC();
   registerKbIPC();
   registerSystemIPC();
 

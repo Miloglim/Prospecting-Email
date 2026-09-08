@@ -51,6 +51,8 @@ export interface SuggestionFeed {
 /** 方法论前缀（沿用旧机制的分区文案；chip 点击时拼在检索目标前面） */
 export const GROUP_PROMPT = {
   查运价: "在本地运价台账镜像中检索，按目的港、船司、柜型汇总报价并注明有效期；只报台账里真实存在的条目，查不到就明说，不要用市场价或记忆补数。",
+  同步运价: "用定向运价更新方案能力（rate_update_plan）：先按跟进客户的港口偏好分组、取台账当期真价出方案，把「谁收到哪个港的哪张价表」讲清楚给我确认；"
+    + "价格一律以本地镜像为准，查不到有效价的港口不许编；确认后才入队，入队不等于发送，开始发送必须我自己在发送中心点。",
   管邮件: "检索本地收件箱，逐封给出发件人、主题、一句话摘要和下一步建议；需要回复或导出时先给草稿或清单等我确认，不要编造邮件里没有的内容。",
   跟进客户: "在联系人库与跟进记录里检索，给出匹配对象、最近跟进时间与状态；要写入跟进记录时先把内容给我确认。查不到就明说，不要猜测或张冠李戴。",
   准备发信: "撰写开发信草稿或查看发送队列状态；草稿先给我过目，只能入队不能自动发送，开始发送必须我自己在发送中心确认。写内容前先查库里的联系人与公司信息。",
@@ -207,9 +209,10 @@ export function collectCandidates(inp: FeedInputs): Candidate[] {
         key: `intel-drop-${drop.podRaw}-${drop.carrier ?? ""}-${drop.container ?? ""}`,
         tone: "intel",
         text: `${pod} ${drop.carrier ?? ""} ${drop.container ?? ""} 降到 $${drop.newUsd}（原 $${drop.oldUsd}），${rel ? `可以给 ${rel.name} 同步` : "可以同步给客户"}`.replace(/\s+/g, " "),
-        score: 30 + Math.min(10, Math.round(((drop.oldUsd - drop.newUsd) / drop.oldUsd) * 40)),
-        prefix: "查运价", contactId: rel?.id,
-        ...(rel ? { href: `#/customers?view=table&detail=${rel.id}` } : {}),
+        score: 30 + Math.min(10, Math.round(((drop.oldUsd - drop.newUsd) / drop.oldUsd) * 40)) + (rel ? 4 : 0),
+        prefix: "同步运价", contactId: rel?.id,
+        // 深链到跟进看板的运价更新面板（同一个方案引擎，不打字也能一键看到方案）
+        href: "#/customers?view=board&ratepush=1",
       });
     }
     const add = d.addedPods[0];

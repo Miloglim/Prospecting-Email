@@ -141,6 +141,22 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
   },
   {
+    name: "rate_update_plan", label: "生成运价更新方案",
+    route: "定向运价更新方案（读，只出方案不发送）：跟进看板客户 ∪ 已回复客户 → 各自的港口偏好（看板登记的 + 近 90 天来信解析的）"
+      + "→ 按「目的港 + 语言」分组 → 每组取台账当期真价并生成一封可直接发的运价更新邮件。用户说「给跟进的客户更新运价」"
+      + "「把新价同步给客户」时必查它，不要逐家 quote_search + generate_draft 手搓；无当期价的港口会自动落选并如实列出；",
+    followUps: ["只看报价中的那批客户", "最大那组邮件正文长什么样", "没被覆盖的客户为什么没进去"],
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 2 },
+  },
+  {
+    name: "rate_update_enqueue", label: "运价更新入队",
+    route: "把 rate_update_plan 的方案加入发送队列（写，需确认；只入队不发送，发送仍须用户在发送中心手动点开始）。"
+      + "用户点头后调用，planId 照抄方案返回；队列里有未发送批次时默认拒绝，须用户明确同意覆盖才传 overwrite=true；",
+    followUps: ["发送队列现在什么状态", "去发送中心"],
+    // 入队 ≠ 发出：与 send_queue_add 同一条红线，外发的那一下永远留给人
+    spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 1 },
+  },
+  {
     name: "import_contacts", label: "导入联系人",
     route: "批量导入客户信息入库（写，需确认；用户粘贴任意格式名单/表格/签名时，你负责整理成 contacts 数组再调用，"
       + "绝不要反问「用 CSV 还是 JSON」这类格式问题——邮箱是唯一键，无效或已存在会跳过不覆盖）；",

@@ -576,20 +576,49 @@ export function customerRemarkEn(raw: string | null | undefined): string {
   return /[\u4e00-\u9fa5]/.test(out) ? "/" : (out || "/");
 }
 
-/** 客户报价表：列与占位锁死（POL/POD 唯一全大写、缺项 "/"、TT 恒 "/"），多起运港拆行 */
-export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
-  const head = ["| CARRIER | POL | POD | 20GP | 40HQ/HC | 40NOR | FT | ETD | VALIDITY | TT | REMARK |",
-    "|---|---|---|---|---|---|---|---|---|---|---|"];
-  const body: string[] = [];
+/** 客户报价表的行内容（11 列，顺序与占位唯一口径）：markdown 与 HTML 两种渲染共用，
+ *  避免「界面上的表」和「邮件里的表」长得不一样。多起运港拆行（最多 3 个 POL）。 */
+export const CUSTOMER_COLS = ["CARRIER", "POL", "POD", "20GP", "40HQ/HC", "40NOR", "FT", "ETD", "VALIDITY", "TT", "REMARK"] as const;
+
+export function customerQuoteRows(rows: CleanQuote[], max = 20): string[][] {
+  const body: string[][] = [];
   for (const r of rows) {
     const pols = r.pols.length ? r.pols : [r.polText];
     for (const pol of pols.slice(0, 3)) {
       if (body.length >= max) break;
       const polEn = POL_EN[pol] ?? (pol || "");
-      body.push(`| ${r.carrier || "/"} | ${polEn.toUpperCase() || "/"} | ${(r.pod || "").toUpperCase() || "/"} `
-        + `| ${r.p20 ?? "/"} | ${r.p40 ?? "/"} | ${r.pNor ?? "/"} | ${r.freeDays ?? "/"} `
-        + `| ${fmtEtdShort(r.etd)} | ${fmtValidity(r.validFrom, r.validTo)} | / | ${customerRemarkEn(r.note)} |`);
+      body.push([
+        r.carrier || "/", polEn.toUpperCase() || "/", ((r.pod || "").toUpperCase() || "/"),
+        String(r.p20 ?? "/"), String(r.p40 ?? "/"), String(r.pNor ?? "/"), String(r.freeDays ?? "/"),
+        fmtEtdShort(r.etd), fmtValidity(r.validFrom, r.validTo), "/", customerRemarkEn(r.note),
+      ]);
     }
   }
-  return [...head, ...body].join("\n");
+  return body;
+}
+
+/** 客户报价表（Markdown）：列与占位锁死（POL/POD 唯一全大写、缺项 "/"、TT 恒 "/"），多起运港拆行 */
+export function customerQuoteMarkdown(rows: CleanQuote[], max = 20): string {
+  const head = [`| ${CUSTOMER_COLS.join(" | ")} |`, CUSTOMER_COLS.map(() => "|---").join("") + "|"];
+  return [...head, ...customerQuoteRows(rows, max).map(cells => `| ${cells.join(" | ")} |`)].join("\n");
+}
+
+const escHtml = (s: string): string => s
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * 客户报价表的 HTML 形态（对外邮件正文用）：与 customerQuoteMarkdown 同一批 CleanQuote、
+ * 同一套列与占位（贴过来列一样），Markdown 表在邮件客户端里会成一坨竖线，所以对外投递必须用它。
+ * 邮件客户端不吃外部 CSS → 样式全部内联；内部溯源列（来源群/发送人/入库时间）根本不在这 11 列里。
+ * 规范 docs/rate-update-push-spec.md §4。
+ */
+export function customerQuoteHtml(rows: CleanQuote[], max = 20): string {
+  const cells = customerQuoteRows(rows, max);
+  if (!cells.length) return "";
+  const th = `style="border:1px solid #d9d9d9;padding:6px 8px;background:#f5f7fa;font-weight:600;text-align:left;white-space:nowrap"`;
+  const td = `style="border:1px solid #e8e8e8;padding:6px 8px;white-space:nowrap"`;
+  const headHtml = CUSTOMER_COLS.map(c => `<th ${th}>${escHtml(c)}</th>`).join("");
+  const bodyHtml = cells.map(row => `<tr>${row.map((v, i) => `<td ${td}${i >= 3 && i <= 5 ? ' style="border:1px solid #e8e8e8;padding:6px 8px;white-space:nowrap;text-align:right"' : ""}>${escHtml(v)}</td>`).join("")}</tr>`).join("\n");
+  return `<table style="border-collapse:collapse;font-size:12px;font-family:Arial,Helvetica,sans-serif;max-width:100%">`
+    + `<thead><tr>${headHtml}</tr></thead><tbody>\n${bodyHtml}\n</tbody></table>`;
 }

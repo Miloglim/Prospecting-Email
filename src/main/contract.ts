@@ -13,6 +13,7 @@ const PREFIX = {
   AI:        "ai",
   AGENT:     "agent",
   RATES:     "rates",
+  RATE_UPDATE: "rateUpdate",
   KB:        "kb",
   SYSTEM:    "system",
   UPDATE:    "update",
@@ -185,6 +186,16 @@ export const IPC = {
     STATUS: chan(PREFIX.RATES, "status"),
     /** 在系统浏览器打开公司电脑 board_server 的台账工作台 */
     OPEN_BOARD: chan(PREFIX.RATES, "openBoard"),
+  },
+  RATE_UPDATE: {
+    /** 定向运价更新方案（跟进看板客户 × 港口偏好 → 分组报价邮件）；规范 docs/rate-update-push-spec.md */
+    PLAN:       chan(PREFIX.RATE_UPDATE, "plan"),
+    /** 取某一分组的邮件正文与客户明细（预览用；方案列表刻意不带正文，防跨 IPC 大包打卡界面） */
+    GROUP_BODY: chan(PREFIX.RATE_UPDATE, "groupBody"),
+    /** 方案入队（autoStart 恒为 false：发送必须人在发送中心点开始） */
+    ENQUEUE:    chan(PREFIX.RATE_UPDATE, "enqueue"),
+    /** 单客户的港口偏好派生（详情面板「从来信推断」只读展示 + 一键采用为偏好） */
+    PORTS:      chan(PREFIX.RATE_UPDATE, "ports"),
   },
   KB: {
     /** 读取 KB 中转配置（baseUrl/令牌是否已配/生效端点，不含明文令牌） */
