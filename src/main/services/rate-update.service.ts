@@ -233,14 +233,26 @@ export function composeRateUpdateEmail(copy: Copy, ctx: EmailContext, quoteTable
 
 // ── 圈人（看板口径，与 crm.service.listPipeline 同源：status + tags 推阶段）──────
 
-/** 阶段清单来自 crm.service（唯一事实源），本文件不再维护第二份 */
-const ALL_STAGES: string[] = STAGES.map(s => s.key);
+/** 阶段清单字面量兜底：绝不因为跨模块初始化顺序拿不到 STAGES 就把所有客户筛空（实测踩过） */
+export const FALLBACK_STAGE_KEYS = ["reaching", "quoting", "trial", "cooperating", "lost", "other"];
 
-function stageOfTags(tagsRaw: string | null): string {
-  let arr: unknown = [];
-  try { arr = JSON.parse(tagsRaw || "[]"); } catch { arr = []; }
-  const tags = Array.isArray(arr) ? arr.map(String) : [];
-  return ALL_STAGES.find(k => tags.includes(k)) || "reaching";
+/** 运行时取阶段清单（不用模块顶层派生常量——打包/热重载下跨模块初值可能还没就绪） */
+export function stageKeys(source: ReadonlyArray<{ key: string }> = STAGES): string[] {
+  let keys: string[] = [];
+  try { keys = (source ?? []).map(s => s?.key).filter((k): k is string => typeof k === "string" && k.length > 0); } catch { keys = []; }
+  return keys.length ? keys : FALLBACK_STAGE_KEYS;
+}
+
+function parseTags(tagsRaw: string | null): string[] {
+  try {
+    const arr = JSON.parse(tagsRaw || "[]") as unknown;
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch { return []; }
+}
+
+export function stageOfTags(tagsRaw: string | null): string {
+  const tags = parseTags(tagsRaw);
+  return stageKeys().find(k => tags.includes(k)) || "reaching";
 }
 
 interface ScopeRow {
@@ -253,7 +265,7 @@ interface ScopeRow {
 const PLACEHOLDER_EMAIL = /no\.email|noreply|no-reply|example\.com|test@|@test|null@/i;
 
 function scopeContacts(o: {
-  scope: "board" | "contacts"; includeReplied: boolean; stages: string[];
+  scope: "board" | "contacts"; includeReplied: boolean; stages: string[]; stagesExplicit?: boolean;
   statuses?: string[]; country?: string | null; ids?: number[]; maxContacts: number;
 }): ScopeRow[] {
   const select = {
@@ -274,8 +286,12 @@ function scopeContacts(o: {
   return rows.filter(r => {
     if (want && !want.has(r.id)) return false;
     if (o.scope === "contacts" && PLACEHOLDER_EMAIL.test(r.email || "")) return false;
-    // 阶段筛选只对看板生效（看板就是按管线阶段分列的）；联系人库圈人不看阶段
-    if (o.scope === "board" && !o.stages.includes(stageOfTags(r.tags))) return false;
+    // 看板口径：已流失一律不参与（直接看 tags，不依赖阶段清单）；用户点名阶段时才按清单比对
+    if (o.scope === "board") {
+      const tags = parseTags(r.tags);
+      if (tags.includes("lost")) return false;
+      if (o.stagesExplicit && !o.stages.some(s => tags.includes(s))) return false;
+    }
     if (countryWords.length) {
       const hay = (r.country ?? "").trim().toLowerCase();
       if (!hay || !countryWords.some(w => hay.includes(w) || w.includes(hay))) return false;
@@ -436,14 +452,14 @@ export const MAX_QUOTES_PER_GROUP = 30;
  */
 export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdatePlan> {
   const scopeMode: "board" | "contacts" = opts.scope === "contacts" ? "contacts" : "board";
-  const pickedStages = opts.stages?.length
-    ? opts.stages.filter(s => ALL_STAGES.includes(s) && s !== "lost") : [];
+  // 排除「已流失」不依赖任何清单（直接看 tags）；用户显式点名阶段时才按清单比对
+  const explicitStages = (opts.stages ?? []).filter(s => stageKeys().includes(s) && s !== "lost");
   const o = {
     scope: scopeMode,
     country: opts.country?.trim() || null,
     includeReplied: opts.includeReplied ?? true,
-    // 传歪了（怪引号/拼错）不整单拒掉：退回默认口径=除已流失外全部，实际生效值记进 scope.stages
-    stages: pickedStages.length ? pickedStages : ALL_STAGES.filter(s => s !== "lost"),
+    stages: explicitStages,
+    stagesExplicit: !!opts.stages?.length && explicitStages.length > 0,
     /** 显式状态圈人（用户说「status=已触达」）；未给则按 scope 的默认口径 */
     statuses: opts.statuses?.length ? [...new Set(opts.statuses.map(s => s.trim()))] : undefined,
     quotesPerGroup: clampInt(opts.quotesPerGroup, 1, MAX_QUOTES_PER_GROUP, 12),
@@ -456,7 +472,8 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
   if (opts.port?.trim() && !portFilter) return failResult(`「${opts.port.trim()}」在台账里不是可识别的目的港，先确认港名或按航线查`);
 
   const rows = scopeContacts({
-    scope: o.scope, includeReplied: o.includeReplied, stages: o.stages, statuses: o.statuses,
+    scope: o.scope, includeReplied: o.includeReplied, stages: o.stages, stagesExplicit: o.stagesExplicit,
+    statuses: o.statuses,
     country: o.country, ids: opts.contactIds, maxContacts: o.maxContacts,
   });
   const scopeLabel = o.scope === "contacts"

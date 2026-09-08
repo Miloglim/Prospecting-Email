@@ -68,7 +68,7 @@ vi.mock("../../src/main/services/send.service", async (importOriginal) => {
 });
 
 const {
-  buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingPlanRateUpdate, clearPendingPlans, portForCountry,
+  buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingPlanRateUpdate, clearPendingPlans, portForCountry, stageKeys,
 } = await import("../../src/main/services/rate-update.service");
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { customerQuoteHtml, cleanQuoteRow, pivotQuotes, customerQuoteMarkdown } =
@@ -219,12 +219,26 @@ describe("范围两分：跟进看板 vs 联系人库（此前混为一谈导致
     expect(groupOf(v, "SANTOS", "EN")?.customers).toBe(1);       // 只剩 Juan（Cleo 是 replied）
   });
 
-  it("stages 传歪了不整单失败：退回默认口径并如实记实际生效阶段", () => {
+  it("stages 传歪了不整单失败：回落到默认圈人（只排已流失），并如实记没按阶段筛", () => {
     const r = buildRateUpdatePlan({ stages: ['["reaching"', "quotin", "拼错的值"] });
     expect(r.success).toBe(true);
     if (!r.success) return;
     expect(r.data.groups.length).toBeGreaterThan(0);
-    expect(r.data.scope.stages).toEqual(["reaching", "quoting", "trial", "cooperating", "other"]);
+    expect(r.data.scope.stages).toEqual([]);                      // 没有有效的阶段条件 = 不按阶段筛
+  });
+
+  it("显式点名阶段时按清单比对（只有 quoting 那列）", () => {
+    const v = view({ stages: ["quoting"] });
+    expect(v.totals.customers).toBe(2);                           // Juan + Pedro
+    expect(v.scope.stages).toEqual(["quoting"]);
+  });
+});
+
+describe("阶段清单的初始化兜底（app 里那次全员筛空的根因）", () => {
+  it("跨模块 STAGES 拿不到时必须退回字面量清单，绝不能变空表", () => {
+    expect(stageKeys([])).toEqual(["reaching", "quoting", "trial", "cooperating", "lost", "other"]);
+    expect(stageKeys([{ key: "" }, { key: "quoting" }])).toEqual(["quoting"]);
+    expect(stageKeys().length).toBeGreaterThanOrEqual(6);
   });
 });
 
