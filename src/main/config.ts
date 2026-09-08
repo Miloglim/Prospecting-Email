@@ -62,6 +62,10 @@ export interface RuntimeConfig {
   };
   /** 全局发信日限额（从首次真实发送起 24h 重置） */
   sendQuota?: { dailyLimit: number; firstSendAt: string | null; sentToday: number };
+  /** 发送批次运行中标志：批次真实启动时写入、结束/取消时清除。
+   *  退出/崩溃后残留 → 启动时 autoResumeInterruptedBatch 据此自动续跑中断批次。
+   *  两步式手动入队（autoStart=false）不写此标志，重启后不会被误自动启动。 */
+  runningBatch?: { batchId: string; startedAt: string } | null;
   /** 全局默认发件人名称（账号 displayName 优先；亦为助手自称与落款） */
   fromName: string;
   schedule: SendSchedule;

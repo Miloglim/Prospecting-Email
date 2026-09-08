@@ -23,7 +23,11 @@ const h = vi.hoisted(() => ({
 vi.mock("../../src/main/db", () => ({
   getDb: () => h.db,
   saveDatabase: () => { /* 内存库无需落盘 */ },
-  getRawDb: () => null,
+  // better-sqlite3 同形 shim：入队落库的 清旧队+写新队 事务（P3 后 startQueue 走 getRawDb().transaction）
+  getRawDb: () => ({
+    prepare: (_sql: string) => ({ all: () => [], get: () => null }),
+    transaction: (fn: () => void) => () => fn(),
+  }),
 }));
 
 vi.mock("../../src/main/config", async (orig) => {

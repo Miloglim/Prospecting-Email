@@ -1,4 +1,4 @@
-import { and, eq, like, gte, isNull, or, desc, sql, type Column } from "drizzle-orm";
+import { and, eq, like, gte, isNull, or, desc, sql, inArray, type Column } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
 import { APP_ROOT, loadConfig } from "../config";
@@ -67,6 +67,41 @@ const LANE_TAGS = [
   "南亚", "东南亚", "西非", "东非", "北非", "北欧", "大洋洲",
   "加勒比", "墨西哥", "南美东", "南美西", "中美洲", "美东", "美西",
 ];
+
+/**
+ * 国别/区域词 → 航线扩展。真源形态：巴西的港口行 podRaw 多为 SANTOS/Santos 这类
+ * 纯英文港名（不带「巴西」字样），q=巴西 的字面 LIKE 只能命中 podRaw 里恰有
+ * 「巴西」括注的行（MANAUS 玛瑙斯(巴西)）——4000 条拉美运价只捞出几条就是这里漏的。
+ * 查询词命中国别/区域时扩展到对应航线，走 lane 字段命中整条航线（行上 pod 可见，宁滥勿缺）。
+ */
+export const REGION_LANES: Record<string, string[]> = {
+  "巴西": ["南美东", "加勒比"], "BRAZIL": ["南美东", "加勒比"],
+  "阿根廷": ["南美东"], "ARGENTINA": ["南美东"],
+  "乌拉圭": ["南美东"], "URUGUAY": ["南美东"],
+  "智利": ["南美西"], "CHILE": ["南美西"],
+  "秘鲁": ["南美西", "加勒比"], "PERU": ["南美西", "加勒比"],
+  "厄瓜多尔": ["南美西", "加勒比"], "ECUADOR": ["南美西", "加勒比"],
+  "哥伦比亚": ["加勒比"], "COLOMBIA": ["加勒比"],
+  "委内瑞拉": ["加勒比"], "VENEZUELA": ["加勒比"],
+  "墨西哥": ["墨西哥"], "MEXICO": ["墨西哥"],
+  "巴拿马": ["中美洲", "加勒比"], "PANAMA": ["中美洲", "加勒比"],
+  "危地马拉": ["中美洲"], "GUATEMALA": ["中美洲"],
+  "洪都拉斯": ["中美洲"], "HONDURAS": ["中美洲"],
+  "尼加拉瓜": ["中美洲"], "NICARAGUA": ["中美洲"],
+  "哥斯达黎加": ["中美洲"], "COSTA RICA": ["中美洲"], "COSTARICA": ["中美洲"],
+  "萨尔瓦多": ["中美洲"], "ELSALVADOR": ["中美洲"],
+  "中美洲": ["中美洲"], "加勒比": ["加勒比"], "南美东": ["南美东"], "南美西": ["南美西"],
+  "拉美": ["拉美", "南美东", "南美西", "加勒比", "中美洲", "墨西哥"],
+  "LATAM": ["拉美", "南美东", "南美西", "加勒比", "中美洲", "墨西哥"],
+  "拉丁美洲": ["拉美", "南美东", "南美西", "加勒比", "中美洲", "墨西哥"],
+};
+/** 查询词是国别/区域词（需要航线扩展）时返回对应航线；普通词返回 [] */
+export function regionLanes(word: string): string[] {
+  return REGION_LANES[(word ?? "").trim()] ?? REGION_LANES[(word ?? "").trim().toUpperCase()] ?? [];
+}
+export function isRegionWord(word: string): boolean {
+  return regionLanes(word).length > 0;
+}
 export function stripLaneTag(podRaw: string, lane: string | null): { podRaw: string; lane: string | null } {
   const s = podRaw.trim();
   const i = s.lastIndexOf(" ");
@@ -529,7 +564,7 @@ export function startAutoSync(): void {
   }, 5_000);
 }
 
-export interface QuoteFilters { lane?: string; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[]; /** 跨字段并集词：每个词同时比对 lane/pod_raw/pol，词之间 AND（规范 rates-query-fallback-spec §1） */ terms?: string[] }
+export interface QuoteFilters { lane?: string; /** 国别/区域查询的航线集合（regionLanes 扩展，精确命中整条航线） */ lanes?: string[]; carrier?: string; pol?: string; pod?: string; container?: string; includeExpired?: boolean; limit?: number; /** podRaw 展开集（航线名/区域码），查具体港时 OR 进过滤 */ podExtra?: string[]; /** 跨字段并集词：每个词同时比对 lane/pod_raw/pol，词之间 AND（规范 rates-query-fallback-spec §1） */ terms?: string[] }
 
 export interface QuoteDto {
   podRaw: string; lane: string | null; carrier: string | null; container: string | null;
@@ -548,6 +583,8 @@ function quoteConds(f: QuoteFilters) {
   const conds = [];
   // 航线模糊匹配：库里是「加勒比/南美东…」受控枚举，like 兼容「加勒比线」这类口语后缀
   if (f.lane) conds.push(like(rateQuotes.lane, `%${f.lane}%`));
+  // 国别/区域查询：regionLanes 扩展出的航线集合，inArray 精确命中（宁滥勿缺，行上 pod 可见）
+  if (f.lanes?.length) conds.push(inArray(rateQuotes.lane, f.lanes));
   if (f.carrier) conds.push(like(rateQuotes.carrier, `%${f.carrier}%`));   // 模糊 + ASCII 大小写不敏感（zim→ZIM）
   // 起运港模糊匹配（界面筛选与列序对齐：船司→起运港→目的港→柜型）
   if (f.pol) conds.push(like(rateQuotes.pol, `%${f.pol}%`));

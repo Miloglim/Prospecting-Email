@@ -9,7 +9,7 @@ import { emailAccounts } from "../db/schema/accounts";
 import { eq, sql as dsql, desc, inArray } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
-import { saveDatabase } from "../db";
+import { saveDatabase, getRawDb } from "../db";
 import { sendQueue } from "../db/schema/send-queue";
 import { EVENTS } from "../events";
 import { nudge as nudgeSuggestions } from "./suggestion-bus";
@@ -81,6 +81,34 @@ let state: SendStatus = {
   isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null, accountStats: [],
 };
 
+// ── 重启水合 ──
+
+let stateHydrated = false;
+
+/** 重启后从 send_queue 水合批次状态（一次性）。
+ *  队列项本身有 getQueueItems 的 DB 兜底，但 进度/批次号/已发/失败 是纯内存 ——
+ *  不水合的话重启后头部显示 0/0、无批次号，用户看到的就是「发送状态缓存掉了」，
+ *  只能重新入队；而重新入队会整表清掉旧批次，数据才真的没了。 */
+function hydrateStateFromDb(): void {
+  if (stateHydrated || state.isRunning) return;
+  stateHydrated = true;
+  try {
+    const rows = getDb().select({ status: sendQueue.status, batchId: sendQueue.batchId })
+      .from(sendQueue).orderBy(dsql`${sendQueue.createdAt} ASC`).all();
+    if (!rows.length) return;
+    let sent = 0, failed = 0;
+    for (const r of rows) {
+      if (r.status === "sent") sent++;
+      else if (r.status === "failed") failed++;
+    }
+    const last = rows[rows.length - 1]!;
+    state = { ...state, batchId: last.batchId, totalItems: rows.length, sentCount: sent, failedCount: failed };
+    Log.info("send.hydrate", `重启水合批次 ${last.batchId.slice(0, 8)}：${sent} 已发 / ${failed} 失败 / ${rows.length - sent - failed} 待发`);
+  } catch (err) {
+    Log.warn("send.hydrate", `批次状态水合失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // ── 全局发信限额（持久化到 config，24h 计时不可丢失）──
 
 function getQuota() {
@@ -98,6 +126,29 @@ import type { RuntimeConfig } from "../config";
 let saveConfigFn: (c: RuntimeConfig) => void = () => {};
 export function setSaveConfigFn(fn: (c: RuntimeConfig) => void) { saveConfigFn = fn; }
 export function getQuotaStatus(): ReturnType<typeof checkQuota> { return checkQuota(); }
+
+// ── 批次运行中标志（持久化到 config）──
+// 批次真实启动时写入、结束/取消时清除；退出/崩溃后残留 → 下次启动 autoResumeInterruptedBatch
+// 自动续跑。没有这个标志，重启后引擎不知道批次在跑，用户得回队列页手动点「开始发送」。
+
+function saveRunningBatch(batchId: string | null): void {
+  try {
+    const cfg = loadConfig();
+    saveConfigFn({ ...cfg, runningBatch: batchId ? { batchId, startedAt: new Date().toISOString() } : null });
+  } catch { /* 标志写失败退化为现状：重启后队列页手动开始 */ }
+}
+
+/** 启动自动续跑：上次退出/崩溃时批次在跑（config.runningBatch 残留且队列还有 pending 行）→
+ *  从 DB 恢复续发，语义与队列页手动「开始发送」完全一致（配额守卫/时段等待都在链路里）。
+ *  在 registerAllIPC 之后调用（saveConfigFn 已注入）。 */
+export function autoResumeInterruptedBatch(): void {
+  const flag = loadConfig().runningBatch;
+  if (!flag?.batchId) return;
+  saveRunningBatch(null); // 无论续跑成败先清标志，不残留（resumeQueue 真启动会重新写入）
+  const r = resumeQueue();
+  if (r.success) Log.info("send.autoResume", `检测到中断批次，已自动续跑: ${r.data.queued} 组待发`);
+  else Log.warn("send.autoResume", `中断批次未自动续跑（${r.error}），可在发送队列手动开始`);
+}
 
 /** 检查全局日限额，24h 自动重置 */
 function checkQuota(): { ok: boolean; remaining: number; reason?: string } {
@@ -767,6 +818,7 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   }
 
   // ④ 写 state — 基于裁剪后的数据
+  stateHydrated = true;   // 新批次接管状态后，重启水合不得再回头覆盖
   state = {
     batchId, totalItems: kept.length, sentCount: 0, failedCount: 0,
     isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
@@ -777,7 +829,6 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   };
 
   try {
-    getDb().delete(sendQueue).run();
     const now = new Date().toISOString();
     const rows: any[] = [];
     for (const [aid, q] of queues) {
@@ -795,9 +846,14 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
         });
       }
     }
-    for (let i = 0; i < rows.length; i += 200) {
-      getDb().insert(sendQueue).values(rows.slice(i, i + 200)).run();
-    }
+    // 清旧队 + 写新队同生共死：不包事务时若插入中途失败，旧批次已被 DELETE、新批次残缺，
+    // 重启后既回不来也续不上（「队列丢失」的放大器）
+    getRawDb().transaction(() => {
+      getDb().delete(sendQueue).run();
+      for (let i = 0; i < rows.length; i += 200) {
+        getDb().insert(sendQueue).values(rows.slice(i, i + 200)).run();
+      }
+    })();
     saveDatabase();
   } catch (err) {
     Log.warn("send.queuePersist", `写入发送队列表失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -1137,7 +1193,7 @@ export function previewTemplate(template: SendTemplate): Result<{ subject: strin
   });
 }
 
-export function getSendStatus(): Result<SendStatus> { return okResult({ ...state }); }
+export function getSendStatus(): Result<SendStatus> { hydrateStateFromDb(); return okResult({ ...state }); }
 
 /** 返回所有队列项（展示用精简投影），内存优先 → DB 兜底（重启后恢复）。
  *  刻意剔除 tplBody/contactVars：正文模板每组数 KB，队列页不显示它 ——
@@ -1264,6 +1320,7 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
     const sentCount = getDb().select().from(sendQueue).where(eq(sendQueue.status, "sent")).all().length;
     const failedCount = getDb().select().from(sendQueue).where(eq(sendQueue.status, "failed")).all().length;
 
+    stateHydrated = true;   // 恢复的批次接管状态后，重启水合不得再回头覆盖
     state = {
       batchId, totalItems: totalItems + sentCount + failedCount,
       sentCount, failedCount,

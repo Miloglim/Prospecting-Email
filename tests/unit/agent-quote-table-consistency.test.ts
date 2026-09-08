@@ -98,6 +98,18 @@ describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-s
     expect(r.notice).not.toContain("标准化参考层");
   });
 
+  it("国别/区域词 q=巴西 → regionLanes 扩展命中纯英文港行（SANTOS 不含「巴西」字样也不漏）", async () => {
+    const r = await run({ q: "巴西" });
+    expect(r.total).toBeGreaterThan(0);
+    expect((r.quotes ?? []).some(q => q.podRaw === "SANTOS")).toBe(true);
+  });
+
+  it("pod=巴西 同样走区域扩展（不因 pod 字面收窄漏掉 SANTOS）", async () => {
+    const r = await run({ pod: "巴西" });
+    expect(r.total).toBeGreaterThan(0);
+    expect((r.quotes ?? []).some(q => q.podRaw === "SANTOS")).toBe(true);
+  });
+
   it("forCustomer=true（用户点头）→ 英文十一列对外表，且一个汉字都不许有", async () => {
     const r = await run({ pod: "SANTOS", forCustomer: true });
     expect((r.customerTable ?? "").split("\n")[0]).toBe(

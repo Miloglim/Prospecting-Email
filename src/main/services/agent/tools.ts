@@ -40,7 +40,7 @@ import { extractFact, rememberToolFact } from "./memory";
 import { rememberWork, fingerprint, listWork } from "./working-memory";
 import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
 import { lookupReplyRates, podQueryWord, customerQuoteTable } from "./reply-rates";
-import { listQuotes, listQuoteRaws, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, type SpaceDto } from "../rate-sync.service";
+import { listQuotes, listQuoteRaws, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, regionLanes, isRegionWord, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
 import { startTask, normalizeBatchItems, normalizeBatchKind, normalizeMessageIds } from "../bg-task.service";
@@ -1324,13 +1324,20 @@ export function buildHarnessTools(ctx: ToolCtx) {
       // 「地东」是航线还是港名不由机械层猜、也不由模型猜——猜错字段就是漏查（规范 rates-query-fallback-spec §1）
       const termWords = [...new Set([qQ, laneQ, podQ].filter((x): x is string => !!x)
         .flatMap(w => [w, resolveQueryPod(w)].map(t => t.trim()).filter(Boolean)))];
+      // 国别/区域词（巴西/拉美/墨西哥…）不是精准港：字面 LIKE 只能命中 podRaw 里恰带
+      // 「巴西」括注的少数行，SANTOS/Santos 这类纯英文港行的巴西货全漏（用户实测）。
+      // 区域词直接走航线级：regionLanes 扩展出的航线集合 inArray 精确命中，宁滥勿缺
+      //（行上 pod 可见，南美东里的阿根廷乌拉圭行一并带出，属「相关运价」口径）。
+      const regionLs = [...new Set([qQ, laneQ, podQ].filter((x): x is string => !!x)
+        .flatMap(w => regionLanes(w)))];
+      const isRegionQuery = regionLs.length > 0;
       // 两段查（docs/rates-answer-chain-spec.md §2）：
       //  L1 精准港＝字段里真出现这个词的行（具体港报价优先）；
       //  L2 航线级＝L1 为空才把该港所属航线/区域码（南美东、WCSA…）并进来，捞航线级报价。
       // 分两段的原因：一次 OR 混查会把区域价和具体港价搅在一起，比选时容易把区域价当本港价报给客户。
       const filtersBase = {
         carrier: trimmed(args.carrier)?.toUpperCase(),
-        pod: podQ,
+        pod: isRegionQuery ? undefined : podQ,
         terms: termWords.length ? termWords : undefined,
         // 脏柜型归一（40HC→40HQ 等），识别不了则原样大写透传
         container: normalizeContainer(trimmed(args.container) ?? null) ?? trimmed(args.container)?.toUpperCase() ?? undefined,
@@ -1340,12 +1347,12 @@ export function buildHarnessTools(ctx: ToolCtx) {
         .flatMap(w => podRawExpansion(resolveQueryPod(w))))];
       const limitN = args.limit && args.limit > 0 ? args.limit : 20;
       const first = listQuotes({ ...filtersBase, limit: limitN });
-      const useLane = first.success && first.data.length === 0 && laneWords.length > 0;
+      const useLane = isRegionQuery || (first.success && first.data.length === 0 && laneWords.length > 0);
       // L2 只认「pod_raw 恰为该港所属航线/区域码」的等值行：
       //  · 丢 terms（跨字段 AND）——航线级行的 pod_raw 只有「加勒比」，含查询词的 AND 条件会把它掐死；
       //  · 丢 pod（LIKE %VERACRUZ%）——同航线里别的具体港（MANZANILLO）不该被当成本港价端给客户。
       const filters = useLane
-        ? { ...filtersBase, pod: undefined, terms: undefined, podExtra: laneWords }
+        ? { ...filtersBase, pod: undefined, terms: undefined, lanes: isRegionQuery ? regionLs : undefined, podExtra: isRegionQuery ? undefined : laneWords }
         : filtersBase;
       const r = useLane ? listQuotes({ ...filters, limit: limitN }) : first;
       if (!r.success) {

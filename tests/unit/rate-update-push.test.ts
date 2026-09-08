@@ -25,7 +25,12 @@ type Driz = ReturnType<typeof drizzle<typeof schema>>;
 const h = { db: null as unknown as Driz };
 
 vi.mock("../../src/main/db", () => ({
-  getDb: () => h.db, saveDatabase: () => {}, getRawDb: () => null,
+  getDb: () => h.db, saveDatabase: () => {},
+  // better-sqlite3 同形 shim：入队落库事务（P3 后 startQueue 走 getRawDb().transaction）
+  getRawDb: () => ({
+    prepare: (_sql: string) => ({ all: () => [], get: () => null }),
+    transaction: (fn: () => void) => () => fn(),
+  }),
 }));
 vi.mock("../../src/main/logger", () => ({
   Log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
