@@ -610,7 +610,10 @@ export function buildRateUpdatePlan(opts: RateUpdateOpts = {}): Result<RateUpdat
       }
       continue;
     }
-    const limited = dtos.slice(0, o.quotesPerGroup);
+    // 分层：本港专属行在前、航线级行在后（各自保持价升序），与查价呈现同口径
+    const ordered = [...dtos].sort((a, b) =>
+      (/[\u4e00-\u9fa5]/.test(a.podRaw ?? "") ? 1 : 0) - (/[\u4e00-\u9fa5]/.test(b.podRaw ?? "") ? 1 : 0));
+    const limited = ordered.slice(0, o.quotesPerGroup);
     const quotes = customerCleanQuotes(limited, b.pod);
     if (!quotes.length) {
       for (const c of b.customers) {

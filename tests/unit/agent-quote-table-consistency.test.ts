@@ -65,6 +65,14 @@ function freshDb(): void {
     { recordId: "r-santos-south", pol: "华南基本港", podRaw: "SANTOS", lane: "南美东",
       carrier: "CMA", container: "40HQ", oceanUsd: 3350, validFrom: "2026-09-01", validTo: "2099-12-31",
       sourceGroup: "华南基本港群", syncedAt: new Date().toISOString() },
+    // 航线级行（南美东）：SANTOS 所属航线的当期区域基本港价 → 与本港价分层呈现
+    { recordId: "r-sae-lane", pol: "华南基本港", podRaw: "南美东", lane: "南美东",
+      carrier: "PIL", container: "40HQ", oceanUsd: 3100, validFrom: "2026-09-01", validTo: "2099-12-31",
+      syncedAt: new Date().toISOString() },
+    // 航线级行（墨西哥）：VERACRUZ 只剩过期本港行时，当期价从这里来（航线语义理解）
+    { recordId: "r-mex-lane", pol: "深圳", podRaw: "墨西哥", lane: "墨西哥",
+      carrier: "TSL", container: "40HQ", oceanUsd: 2800, validFrom: "2026-09-01", validTo: "2099-12-31",
+      syncedAt: new Date().toISOString() },
     // 航线级行：pod_raw 是航线名，只有 L2（航线展开）才捞得到
     { recordId: "r-caribbean", pol: "厦门", podRaw: "加勒比", lane: "加勒比",
       carrier: "HMM", container: "40HQ", oceanUsd: 2500, validTo: "2099-12-31",
@@ -122,6 +130,19 @@ describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-s
     expect(r.notice).toContain("蛇口");
   });
 
+  it("航线理解在先：pod=SANTOS → 返回所属航线（南美东），本港专属价与航线级适用价分层报数", async () => {
+    const r = await run({ pod: "SANTOS" });
+    expect(r.laneHit).toBe("南美东");
+    expect(r.portCount).toBeGreaterThan(0);
+    expect(r.laneCount).toBeGreaterThan(0);
+    expect(r.answer).toContain("本港专属价");
+    expect(r.answer).toContain("航线级");
+    expect(r.answer).toContain("基本港");
+    // 分层排序：本港行在前、航线级行在后
+    expect((r.userTable ?? "").indexOf("MSC")).toBeLessThan((r.userTable ?? "").indexOf("CMA"));
+    expect(r.notice).toContain("属于「南美东」航线");
+  });
+
   it("forCustomer=true（用户点头）→ 英文十一列对外表，且一个汉字都不许有", async () => {
     const r = await run({ pod: "SANTOS", forCustomer: true });
     expect((r.customerTable ?? "").split("\n")[0]).toBe(
@@ -136,7 +157,7 @@ describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-s
     const r = await run({ pod: "VERACRUZ" });        // 港级行里没有 VERACRUZ
     expect(r.total).toBeGreaterThan(0);              // 靠航线级（加勒比）捞回来
     expect(r.notice).toContain("航线级");
-    expect(r.userTable).toContain("加勒比");         // 工作表保留原样，让操作者看出是航线级
+    expect(r.userTable).toContain("墨西哥");         // 工作表保留原样，让操作者看出是航线级（VERACRUZ 属墨西哥线）
   });
 
   it("航线级命中做对外表时 POD 展开成查询目标港（客户表里不能出现中文航线名）", async () => {

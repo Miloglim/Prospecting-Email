@@ -10,7 +10,7 @@ import { tool } from "@openai/agents";
 import { getDb, getRawDb, saveDatabase } from "../../db";
 import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
-import { resolveQueryPod, podRawExpansion } from "../rates-standard";
+import { resolveQueryPod, podRawExpansion, laneOfPod } from "../rates-standard";
 // 两张表的唯一出口（规范 docs/rates-answer-chain-spec.md §3）：清洗器算列，模型只许原样贴
 import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, type CleanQuote } from "../rates-clean";
 import { contacts } from "../../db/schema/contacts";
@@ -1354,21 +1354,42 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const laneWords = [...new Set([podQ, qQ].filter((x): x is string => !!x)
         .flatMap(w => podRawExpansion(resolveQueryPod(w))))];
       const limitN = args.limit && args.limit > 0 ? args.limit : 20;
+      // 航线理解在先（用户口径）：目的港归一后先判所属航线（laneOfPod），该航线当期数据整批取回，
+      // 与 L1（精准港 LIKE + terms）按行键去重合并 —— terms 的 AND 会掐死航线级行，两者不能混在一条查询里。
+      const laneHit = isRegionQuery ? (regionLs[0] ?? null) : (canon ? laneOfPod(canon) : null);
+      const laneFilters = laneHit
+        ? { carrier: filtersBase.carrier, container: filtersBase.container, includeExpired: filtersBase.includeExpired, lanes: [laneHit] }
+        : null;
       const first = listQuotes({ ...filtersBase, limit: limitN });
-      const useLane = isRegionQuery || (first.success && first.data.length === 0 && laneWords.length > 0);
-      // L2 只认「pod_raw 恰为该港所属航线/区域码」的等值行：
-      //  · 丢 terms（跨字段 AND）——航线级行的 pod_raw 只有「加勒比」，含查询词的 AND 条件会把它掐死；
-      //  · 丢 pod（LIKE %VERACRUZ%）——同航线里别的具体港（MANZANILLO）不该被当成本港价端给客户。
+      const laneR = laneFilters ? listQuotes({ ...laneFilters, limit: 200 }) : null;
+      const dtoKey = (q: { podRaw?: string | null; carrier?: string | null; container?: string | null; oceanUsd?: number | null; validFrom?: string | null; validTo?: string | null; pol?: string | null; note?: string | null }) =>
+        [q.podRaw, q.carrier, q.container, q.oceanUsd, q.validFrom, q.validTo, q.pol, q.note].join("|");
+      const firstRows = first.success ? first.data : [];
+      const laneFetched = ((laneR?.success ? laneR.data : []) as typeof firstRows)
+        .filter(q => !firstRows.some(x => dtoKey(x) === dtoKey(q)));
+      const dtoRows = [...firstRows, ...laneFetched];
+      // 兜底 L2（区域词/非常规写法）：仅当 L1 与航线查询都空时走
+      const useLane = isRegionQuery || (!dtoRows.length && laneWords.length > 0);
       const filters = useLane
         ? { ...filtersBase, pod: undefined, terms: undefined, lanes: isRegionQuery ? regionLs : undefined, podExtra: isRegionQuery ? undefined : laneWords }
         : filtersBase;
-      const r = useLane ? listQuotes({ ...filters, limit: limitN }) : first;
+      const r = useLane ? listQuotes({ ...filters, limit: limitN }) : { success: true as const, data: dtoRows };
       if (!r.success) {
         audit(ctx, "quote_search", "read", args, undefined, "auto", r.error);
         return failOut("query_failed", `查询失败：${r.error}`);
       }
-      // total=满足条件的真总数（评测发现只给截断行数会让模型反复重试凑数直至 max turns）
-      const total = countQuotes(filters);
+      // 分层：本港专属行（pod_raw 无中文）在前，航线级行在后
+      const CJK_RE = /[\u4e00-\u9fa5]/;
+      const dtoRowsAll = useLane ? r.data : dtoRows;
+      const portRows = dtoRowsAll.filter(q => !CJK_RE.test(q.podRaw));
+      const laneRows = dtoRowsAll.filter(q => CJK_RE.test(q.podRaw));
+      // total 诚实口径：精准∪扩展 与 航线集合 两次计数相加减去重叠（同一条行落在两个查询里只算一次）
+      let total = 0;
+      if (useLane) total = countQuotes(filters);
+      else if (laneFilters) {
+        const overlap = countQuotes({ ...filtersBase, lanes: [laneHit!] });
+        total = countQuotes(filtersBase) + countQuotes(laneFilters) - overlap;
+      } else total = countQuotes(filtersBase);
       // 规则：查运价必带相关舱位——同一次调用里用同一批词并联查舱位镜像（本地查询，不多花模型调用）。
       // 附带查询不得打挂主查询：老库缺表/列变更等异常一律按「无近期舱位动态」处理
       let spaces: SpaceDto[] = [];
@@ -1398,17 +1419,29 @@ export function buildHarnessTools(ctx: ToolCtx) {
       let cleanRows: CleanQuote[] = [];
       try {
         const rawR = listQuoteRaws({ ...filters, limit: 200 }, Math.max(limitN * 4, 60));
-        if (rawR.success) cleanRows = pivotQuotes(rawR.data.map(x => cleanQuoteRow(x, x.imageUrl)));
+        let rawRows = rawR.success ? [...rawR.data] : [];
+        if (laneFilters && !useLane) {
+          // 航线查询的行也进两张表（L1 的 terms AND 会掐掉它们，这里补回来）
+          const laneRaw = listQuoteRaws({ ...laneFilters, limit: 200 }, 200);
+          if (laneRaw.success) {
+            const seen = new Set(rawRows.map(dtoKey));
+            rawRows = [...rawRows, ...laneRaw.data.filter(x => !seen.has(dtoKey(x)))];
+          }
+        }
+        cleanRows = pivotQuotes(rawRows.map(x => cleanQuoteRow(x, x.imageUrl)));
       } catch { /* 清洗行取不到就退回镜像展示行，不炸整次查询 */ }
       const laneLevelRows = cleanRows.filter(c => /[\u4e00-\u9fa5]/.test(c.pod));
+      // 分层排序：本港专属行在前，航线级行在后（组内保持价升序）——「先航线、再分层理解」的呈现口径
+      const orderedRows = [...cleanRows].sort((a, b) =>
+        (CJK_RE.test(a.pod) ? 1 : 0) - (CJK_RE.test(b.pod) ? 1 : 0));
       const userTable = total > 0
-        ? (cleanRows.length
-          ? cleanTableMarkdown(cleanRows, 15)
-          : (r.data.length
+        ? (orderedRows.length
+          ? cleanTableMarkdown(orderedRows, 15)
+          : (dtoRowsAll.length
             ? [
               "| 船司 | 起运港 | 目的港 | 柜型 | 价格(USD) | 有效期 |",
               "|---|---|---|---|---|---|",
-              ...r.data.slice(0, 15).map(q =>
+              ...dtoRowsAll.slice(0, 15).map(q =>
                 `| ${q.carrier ?? "—"} | ${q.pol ?? "—"} | ${q.podRaw} | ${q.container ?? "—"} | ${fmtUsd(q.oceanUsd)} | ${q.validFrom || q.validTo ? `${q.validFrom ?? "?"}~${q.validTo ?? "?"}` : "—"} |`),
             ].join("\n")
             : ""))
@@ -1420,10 +1453,22 @@ export function buildHarnessTools(ctx: ToolCtx) {
             cleanRows.map(c => (podCanon && /[\u4e00-\u9fa5]/.test(c.pod) ? { ...c, pod: podCanon } : c)),
           ), 15)
         : "";
-      const cheapest = r.data[0] ?? null;
-      const answer = cheapest
-        ? `最低 ${fmtUsd(cheapest.oceanUsd)}（${cheapest.carrier ?? "—"} · ${cheapest.container ?? "综合"} · ${cheapest.pol ?? "—"}→${cheapest.podRaw}），共 ${total} 条当前有效报价。`
-        : "";
+      const fmtRow = (q: { oceanUsd: number | null; carrier: string | null; container: string | null; pol: string | null; podRaw: string }) =>
+        `${fmtUsd(q.oceanUsd)}（${q.carrier ?? "—"} · ${q.container ?? "综合"} · ${q.pol ?? "—"}→${q.podRaw}）`;
+      let answer = "";
+      if (portRows.length && laneRows.length) {
+        const p = portRows[0]!;
+        const l = laneRows[0]!;
+        answer = `${podCanon ?? "该港"} 的本港专属价 ${portRows.length} 条（最低 ${fmtRow(p)}）；`
+          + `「${l.podRaw}」航线级另有 ${laneRows.length} 条（最低 ${fmtRow(l)}，适用 ${podCanon} 作为基本港）。`;
+      } else if (!portRows.length && laneRows.length) {
+        const l = laneRows[0]!;
+        answer = `${podCanon ?? "该港"} 暂无当期本港专属价；「${l.podRaw}」航线级 ${laneRows.length} 条`
+          + `（最低 ${fmtRow(l)}，适用 ${podCanon} 作为基本港）。`;
+      } else if (portRows.length) {
+        const p = portRows[0]!;
+        answer = `最低 ${fmtUsd(p.oceanUsd)}（${p.carrier ?? "—"} · ${p.container ?? "综合"} · ${p.pol ?? "—"}→${p.podRaw}），共 ${total} 条当前有效报价。`;
+      }
       // 逐条件拼 notice：收敛信号 + 固定格式指令（弱模型对工具返回里的指令最服帖）
       const noticeLines: string[] = [];
       let candidates: { lanes: { v: string; c: number }[]; pods: { v: string; c: number }[] } | undefined;
@@ -1483,7 +1528,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
         // 两段都空才算「本地查不到」：L1 精准港 + L2 航线级（podExtra 展开）都为零才走到这里，
         // 口径仍按 rates-query-fallback-spec §3/§4 分「镜像没跟上」与「确实没有」两种说法
       } else {
-        if (r.data.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${r.data.length} 条，回答时必须注明。`);
+        if (dtoRowsAll.length < total) noticeLines.push(`共命中 ${total} 条，本批返回 ${dtoRowsAll.length} 条，回答时必须注明。`);
         else noticeLines.push("命中数据已全部返回，无需再调用本工具，直接作答。");
         if (useLane) {
           noticeLines.push("本次命中的是**航线级/区域基本港**报价（具体港单独没有价）：userTable 里目的港显示为航线名，"
@@ -1494,6 +1539,10 @@ export function buildHarnessTools(ctx: ToolCtx) {
         if (polSet?.expanded && polQ) {
           noticeLines.push(`起运港「${polQ}」的货在台账记在群名下（如「华南基本港」覆盖蛇口/盐田/南沙）——`
             + `命中行里 POL 列是群名的就是这类，答复时说明是同群适用价，别说成「${polQ}专属价」。`);
+        }
+        if (laneRows.length || laneHit) {
+          noticeLines.push(`转述顺序：先一句「${podCanon ?? queryWord} 属于${laneHit ? `「${laneHit}」航线` : "相应航线"}」，`
+            + `再分层报数——本港专属价在前、航线级适用价在后，两类不许混成一种。`);
         }
         noticeLines.push(
           "回答格式（固定，勿自由发挥，规范 docs/rates-answer-chain-spec.md §3）：① 第一句原样采用 answer（数字与船司不改）；"
@@ -1516,19 +1565,21 @@ export function buildHarnessTools(ctx: ToolCtx) {
         : "本次没有该航线/港口最近 21 天的舱位动态。如实说「舱位这边没有近期动态，需要时我再查」，"
           + "不要拿更早的记录或外部印象当现状。");
       const out = {
-        total, count: r.data.length, quotes: r.data,
+        total, count: dtoRowsAll.length, quotes: dtoRowsAll,
+        ...(laneHit ? { laneHit } : {}),
+        portCount: portRows.length, laneCount: laneRows.length,
         answer, userTable, customerTable,
         spaceCount: spaces.length,
         ...(spaces.length ? { spaces, spaceTable } : {}),
         notice: noticeLines.join("\n"),
         ...(candidates ? { candidates } : {}),
         ...(mirror ? { mirror } : {}),
-        ...(total > 0 && r.data.length >= total ? { complete: true } : {}),
+        ...(total > 0 && dtoRowsAll.length >= total ? { complete: true } : {}),
         ...(total === 0 ? { empty: true } : {}),
         ...(total > 0 ? {
           say: `共 ${total} 条` + (args.q || args.lane || args.pod || args.carrier || args.container
             ? `（当前筛选条件下的命中数）` : `（镜像库全量）`)
-            + `，其中返回明细 ${r.data.length} 条${r.data.length ? `，最低 ${r.data[0]!.oceanUsd ?? "-"} USD` : ""}`
+            + `，其中返回明细 ${dtoRowsAll.length} 条${dtoRowsAll.length ? `，最低 ${dtoRowsAll[0]!.oceanUsd ?? "-"} USD` : ""}`
             + `；相关舱位动态 ${spaces.length} 条`,
         } : {}),
         ...(total > 0 ? {

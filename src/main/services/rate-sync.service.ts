@@ -592,11 +592,13 @@ function quoteConds(f: QuoteFilters) {
     for (const extra of f.polExtra ?? []) polConds.push(eq(rateQuotes.pol, extra));
     conds.push(or(...polConds));
   }
-  if (f.pod) {
-    // 港口归一展开：pod=SANTOS 也要命中 podRaw=「南美东」/区域码 的航线级行
-    const podConds = [like(rateQuotes.podRaw, `%${f.pod}%`)];
+  // 目的港：原词模糊 + 展开集（航线名/区域码）等值 —— pod 与 podExtra 任一存在即生效
+  // （此前 podExtra 挂在 if(f.pod) 里，L2 把 pod 置空时展开集被整体忽略，等于全表返回）
+  if (f.pod || f.podExtra?.length) {
+    const podConds: ReturnType<typeof like>[] = [];
+    if (f.pod) podConds.push(like(rateQuotes.podRaw, `%${f.pod}%`));
     for (const extra of f.podExtra ?? []) podConds.push(eq(rateQuotes.podRaw, extra));
-    conds.push(or(...podConds));
+    if (podConds.length) conds.push(or(...podConds));
   }
   if (f.container) conds.push(or(eq(rateQuotes.container, f.container), like(rateQuotes.container, `%${f.container}%`)));
   // 跨字段并集：一个词到底是航线名还是港口名，机械层不猜（模型也不该猜）
