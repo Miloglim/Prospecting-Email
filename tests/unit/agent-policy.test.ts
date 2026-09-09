@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { TOOL_SPECS, classifyTool, checkBudget, requiresApprovalOf, ToolBudgetError } from "../../src/main/services/agent/policy";
+import { TOOL_SPECS, classifyTool, checkBudget, requiresApprovalOf, ToolBudgetError, TURN_CALL_CEILING } from "../../src/main/services/agent/policy";
 import { searchContactsSchema, recordFollowupSchema, normalizePlan } from "../../src/main/services/agent/tools";
 
 describe("agent harness policy", () => {
@@ -22,12 +22,15 @@ describe("agent harness policy", () => {
     expect(classifyTool("send_campaign")).toBeUndefined();
   });
 
-  it("预算守卫：超限抛 ToolBudgetError，未超限计数递增", () => {
+  it("预算守卫：产能不受限只计数；销毁类单轮一次、总量兜底才抛", () => {
+    // 单工具预算已解除（2026-09-09 用户定）：阈值只防失控不防产能。
     const counts = new Map<string, number>();
-    const budget = TOOL_SPECS.search_contacts.budgetPerTurn!;
-    for (let i = 0; i < budget; i++) checkBudget(counts, "search_contacts");
-    expect(counts.get("search_contacts")).toBe(budget);
-    expect(() => checkBudget(counts, "search_contacts")).toThrow(ToolBudgetError);
+    for (let i = 0; i < 10; i++) checkBudget(counts, "search_contacts");
+    expect(counts.get("search_contacts")).toBe(10);
+    checkBudget(counts, "delete_contacts");
+    expect(() => checkBudget(counts, "delete_contacts")).toThrow(ToolBudgetError);   // 不可逆操作单轮一次
+    counts.set("__warmup__", TURN_CALL_CEILING);
+    expect(() => checkBudget(counts, "search_contacts")).toThrow(ToolBudgetError);  // 死循环总量兜底
   });
 });
 

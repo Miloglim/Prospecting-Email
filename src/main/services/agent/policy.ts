@@ -38,18 +38,34 @@ export function requiresApprovalOf(name: string): boolean {
 }
 
 export class ToolBudgetError extends Error {
-  constructor(toolName: string, budget: number) {
-    super(`工具 ${toolName} 本轮调用已达上限（${budget} 次），请基于已有数据回答`);
+  constructor(message: string) {
+    super(message);
     this.name = "ToolBudgetError";
   }
 }
 
-/** 预算守卫：超限抛错（错误会作为 tool error 回给模型，逼其收敛）；否则计数 +1 */
+/**
+ * 每工具单轮次数预算已解除（2026-09-09 用户定）：正常任务不该感知"次数限制"，
+ * 阈值只该防失控、不该防产能（实测：delete_contacts 撞预算后模型谎报"已删除 13 人"，
+ * 用户看到的就是既卡住又是假结果）。counts 继续累计，只用于观测与成本回执。
+ */
+export const TURN_CALL_CEILING = Math.max(50, Number(process.env.AGENT_TURN_CALL_CEILING || 240) || 240);
+
+/** 不可逆的批量销毁类工具：单轮只许走一次，靠这一条防失控（不防产能） */
+export const ONE_PER_TURN_TOOLS = new Set(["delete_contacts"]);
+
+/** 预算守卫：只拦真失控（本轮总量兜底 + 销毁类单轮一次）；否则计数 +1 */
 export function checkBudget(counts: Map<string, number>, toolName: string): void {
-  const spec = classifyTool(toolName);
+  const total = [...counts.values()].reduce((s, n) => s + n, 0);
+  if (total >= TURN_CALL_CEILING) {
+    throw new ToolBudgetError(
+      `本轮工具调用总量已到兜底阈值（${TURN_CALL_CEILING} 次），疑似死循环——请立刻停止调用，基于已有数据给出结论并向用户说明卡在哪。`);
+  }
   const used = counts.get(toolName) ?? 0;
-  if (spec?.budgetPerTurn && used >= spec.budgetPerTurn) {
-    throw new ToolBudgetError(toolName, spec.budgetPerTurn);
+  if (ONE_PER_TURN_TOOLS.has(toolName) && used >= 1) {
+    throw new ToolBudgetError(
+      `「${toolName}」本轮已执行过一次：不可逆的批量删除不在一句话里连环执行。`
+      + "请把已删/未删的确切数字如实告诉用户，需要继续删除由用户再发起一次。");
   }
   counts.set(toolName, used + 1);
 }

@@ -135,7 +135,7 @@ const call = (t: ToolLike, args: unknown): Promise<string> => t.invoke({}, JSON.
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { summarizeEmail } = await import("../../src/main/services/ai.service");
 // 预算次数以配置为准，测试不写死（改预算值时不必回来改断言）
-const { TOOL_SPECS } = await import("../../src/main/services/agent/policy");
+const { TOOL_SPECS, TURN_CALL_CEILING } = await import("../../src/main/services/agent/policy");
 
 const ctx = { conversationId: "test-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
 /** 按工具名取（注册顺序会变，按名索引更稳） */
@@ -265,17 +265,22 @@ describe("agent 工具层（读工具集 + 收敛信号）", () => {
     expect(ctx.failures.get("email_summarize") ?? 0).toBe(0);   // 有效转交不喂熔断计数
   });
 
-  it("预算守卫：超过 budgetPerTurn 后返回 budget_exhausted 引导语", async () => {
-    const budget = TOOL_SPECS.inbox_search!.budgetPerTurn ?? 0;
-    expect(budget).toBeGreaterThan(0);
-    // 参数逐次不同：相同参数的重复问法会命中短时缓存、不占配额（这是设计行为，见另一条测试）
-    for (let i = 1; i <= budget; i++) {
+  it("单轮次数预算已解除：读工具连查 20 次不同条件也不被拦（阈值只防失控不防产能）", async () => {
+    for (let i = 1; i <= 20; i++) {
       const ok = await call(T("inbox_search"), { limit: i });
+      expect(ok).not.toContain("turn_ceiling");
       expect(ok).not.toContain("budget_exhausted");
     }
-    const out = await call(T("inbox_search"), { limit: budget + 1 });
-    expect(out).toContain("budget_exhausted");
-    expect(out).toContain("交付已有结果");
+    expect((ctx.counts.get("inbox_search") ?? 0)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("不可逆的批量删除单轮只许一次，且失败后禁止谎报已完成", async () => {
+    const first = JSON.parse(await call(T("delete_contacts"), { emailSuffix: "no.email" })) as { ok?: boolean };
+    expect(first.ok).toBe(true);
+    const second = await call(T("delete_contacts"), { emailSuffix: "no.email" });
+    expect(second).toContain("destructive_once");
+    expect(second).toContain("没有执行");
+    expect(second).toContain("严禁把失败说成已完成");
   });
 
   it("缓存命中不占配额：同一条件的重复查询不会耗尽预算", async () => {

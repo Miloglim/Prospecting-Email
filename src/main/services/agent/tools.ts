@@ -25,7 +25,7 @@ import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
 import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
-import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
+import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns, type CampaignTouch, type CampaignSchedule } from "../campaign.service";
 import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry, countryMatchWords } from "../rate-update.service";
 import { todayMailBrief, resolveBeijingStart } from "../mail-brief.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
@@ -293,9 +293,12 @@ function budgetNote(counts: Map<string, number>, toolName: string): string | nul
   try { checkBudget(counts, toolName); return null; }
   catch (e) {
     if (e instanceof ToolBudgetError) {
-      return failOut("budget_exhausted",
-        "本工具的回合内配额已用满——这是程序内部机制，对用户只字不提「次数/上限/限制」这类词。",
-        { notice: "请立即交付已有结果：把已经取到的数据完整列给用户；还有没取到的部分，用一句自然的话说清楚（如「其余的下一条接着查」），不要说「请你自己打开客户端查看」，也不要编造。" });
+      const destructive = e.message.includes("不可逆");
+      return failOut(destructive ? "destructive_once" : "turn_ceiling", e.message, {
+        notice: "这一次调用没有执行——必须如实说「这一步没做」，并交付已完成的其它部分。"
+          + "严禁把失败说成已完成（实测谎报「已删除另一批 13 人」即是事故），也不许规划「下次自动继续」："
+          + "要不要继续由用户下一句决定。不要重复调用本工具。",
+      });
     }
     throw e;
   }
@@ -559,8 +562,16 @@ export const campaignCreateSchema = z.object({
   touches: z.array(z.object({
     stage: z.string().max(20).describe("该轮用的模板阶段：initial(首信)/followup1/followup2/closing/reactivate"),
     delayDays: z.number().int().min(0).max(60).describe("距上一封发出的天数；首轮（首信）填 0"),
+    mode: optStr(10).describe("内容来源：system=系统句库（内置多语言，免配置）/ userTpl=用户模板（缺省；模板缺时句库兜底）/ fixed=定死内容（须传 subject+body）"),
+    subject: z.string().max(150).nullable().optional().describe("mode=fixed 时该轮主题（可含 {{firstName}}/{{company}} 变量）"),
+    body: z.string().max(8000).nullable().optional().describe("mode=fixed 时该轮正文"),
   })).min(1).max(6).describe("触点计划按顺序执行；建议 3-5 轮、间隔 4-7 天"),
   autoSend: optBool().describe("后续触点是否无人值守自动发送（默认 true；内容为用户模板机械替换）。传 false=每轮入队待发送中心手动开始"),
+  schedule: z.object({
+    windowStartHour: z.number().int().min(0).max(23).nullable().optional().describe("发送时段起始整点（本机时区），如 9=09:00 起"),
+    windowEndHour: z.number().int().min(0).max(23).nullable().optional().describe("发送时段结束整点，如 18=18:00 止"),
+    dailyGroupCap: z.number().int().min(0).max(2000).nullable().optional().describe("单日放行上限（组/天）：超出顺延次日——用户说「每天只发 50 封」「分几天慢慢发」时设；0/缺省=不限"),
+  }).nullable().optional().describe("任务级定时器（发送时段+单日上限），不传=跟随全局设置"),
 });
 
 export const campaignControlSchema = z.object({
@@ -1102,6 +1113,9 @@ export function buildHarnessTools(ctx: ToolCtx) {
       + "确认卡上会列命中名单样例；建议用户先在客户页导出备份。单次上限 500 人，超出拒绝并提示分批。"
       + "查命中多少但暂不删 → 用 search_contacts；本工具只在用户明确说「删除」时调用。",
     parameters: z.object({
+      contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).max(500).nullable().optional())
+        .describe("首选：按上一步筛选出的确切 id 列表删除（照抄 search_contacts 返回的 id）。"
+          + "模糊条件会误伤——实测按公司名 query 删，把不相干公司的联系人一起删了"),
       emailSuffix: optStr(60).describe("按邮箱后缀过滤（如 no.email）；与 query 二选一或并用"),
       query: optStr(80).nullable().describe("姓名/邮箱/公司名关键词（与 search_contacts 同词法）；只按后缀删时可传 null"),
     }),
@@ -1110,8 +1124,36 @@ export function buildHarnessTools(ctx: ToolCtx) {
       if (gateNote) return gateNote;
       const suffix = (args.emailSuffix ?? "").trim().replace(/^@/, "");
       const tokens = String(args.query ?? "").split(/\s+/).filter(Boolean).slice(0, 4);
-      if (!suffix && !tokens.length) {
-        return failOut("invalid_args", "至少要给 emailSuffix 或 query 之一的过滤条件，拒绝无条件全库删除。");
+      const exactIds = (args.contactIds ?? []).filter(n => Number.isInteger(n) && n > 0);
+      if (!suffix && !tokens.length && !exactIds.length) {
+        return failOut("invalid_args", "要给 contactIds（首选，按上一步筛选的确切名单）、emailSuffix 或 query 之一，拒绝无条件全库删除。");
+      }
+      // 精确 id 路径：只删用户/上一步确认过的那批，不做任何模糊匹配
+      if (exactIds.length) {
+        const hits = getDb().select({
+          id: contacts.id, email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName,
+        }).from(contacts).where(inArray(contacts.id, exactIds)).all();
+        if (!hits.length) {
+          audit(ctx, "delete_contacts", "write", args, { matched: 0 }, "approved");
+          return okOut({ matched: 0, notice: "这些 id 在库里已不存在（可能刚删过）。如实告知用户，不要重复调用。" });
+        }
+        if (hits.length > 500) {
+          return failOut("over_limit", `给了 ${hits.length} 个 id，超过单次上限 500，请分批。`);
+        }
+        const dr = deleteContactsBatch(hits.map(h => h.id));
+        if (!dr.success) {
+          audit(ctx, "delete_contacts", "write", args, undefined, "approved", dr.error);
+          return failOut("delete_failed", `删除失败：${dr.error}`);
+        }
+        invalidateCache("search_contacts");
+        invalidateCache("reminders_due");
+        const dSample = hits.slice(0, 5).map(h => `#${h.id} ${[h.firstName, h.lastName].filter(Boolean).join(" ") || h.email}`).join("、");
+        audit(ctx, "delete_contacts", "write", { ids: hits.length }, { deleted: dr.data.deleted }, "approved");
+        return okOut({
+          deleted: dr.data.deleted, companiesRemoved: dr.data.companiesRemoved, matched: hits.length,
+          say: `已删除 ${dr.data.deleted} 个联系人${dr.data.companiesRemoved ? `（含 ${dr.data.companiesRemoved} 个空壳公司自动清理）` : ""}：${dSample}${hits.length > 5 ? ` 等 ${hits.length} 人` : ""}。`,
+          notice: `只删了给定的 ${hits.length} 个 id（无模糊匹配）。不可恢复。还有没删的部分要如实说明条数，别声称全删完。`,
+        });
       }
       // 后缀条件是 AND（no.email）；query 的多词是 OR 组——语义：后缀命中且（含任一关键词）
       const suffixConds = suffix ? [like(contacts.email, `%${suffix}`)] : [];
@@ -2696,11 +2738,33 @@ ${priceDigest}`;
     name: "campaign_create",
     description: "创建发信任务：对一批联系人按触点计划自动跟进——首信发出后隔 N 天自动发下一轮，客户回复/退订/bounce 自动止损，计划走完自动收尾。"
       + "流程：先 search_contacts 按结构化筛选圈人 → 把命中 id 传给 contactIds → 本工具出预览与确认卡，用户点确认才建档。"
-      + "内容=用户模板库对应阶段模板（机械变量替换），支持无人值守。单封/临时批量发信不要用本工具（那是 send_queue_add）。",
+      + "内容来源：默认用户模板库（机械变量替换），也可 mode=system 用内置句库、mode=fixed 传定死内容。"
+      + "schedule 可设发送时段与单日上限（定时器式周期发送，超出顺延次日）。单封/临时批量发信不要用本工具（那是 send_queue_add）。",
     parameters: campaignCreateSchema,
     execute: async (args) => {
       const gateNote = gate(ctx, "campaign_create");
       if (gateNote) return gateNote;
+      // 触点入参 → service 形态（mode/fixed 内容快照透传；与向导同一判据提前校验，别等确认卡点下去才报错）
+      const touches: CampaignTouch[] = args.touches.map(t => ({
+        stage: t.stage,
+        delayDays: t.delayDays,
+        ...(t.mode ? { mode: t.mode as CampaignTouch["mode"] } : {}),
+        ...(t.mode === "fixed" ? { content: { subject: t.subject ?? "", body: t.body ?? "" } } : {}),
+      }));
+      for (let i = 0; i < touches.length; i++) {
+        const t = touches[i]!;
+        if (t.mode === "fixed" && (!(t.content?.subject ?? "").trim() || !(t.content?.body ?? "").trim())) {
+          return failOut("bad_touch", `第 ${i + 1} 轮选了「固定内容」但主题或正文为空`);
+        }
+      }
+      const s = args.schedule;
+      const ws = s?.windowStartHour ?? undefined;
+      const we = s?.windowEndHour ?? undefined;
+      const cap = s?.dailyGroupCap ?? undefined;
+      const schedule: CampaignSchedule | undefined = !s ? undefined : {
+        ...(ws !== undefined && we !== undefined ? { windowStartHour: ws, windowEndHour: we } : {}),
+        ...(cap && cap > 0 ? { dailyGroupCap: cap } : {}),
+      };
       const pv = previewCampaign(args.contactIds);
       if (!pv.success) return failOut("bad_list", pv.error);
       const { eligible, excluded, total, sample } = pv.data;
@@ -2711,6 +2775,11 @@ ${priceDigest}`;
       const autoSend = args.autoSend !== false;
       const planSummary = args.touches.map((t, i) =>
         i === 0 ? `首信(${t.stage})立即` : `${t.stage} 间隔${t.delayDays}天`).join(" → ");
+      const MODE_SRC: Record<string, string> = { system: "系统句库", userTpl: "用户模板", fixed: "固定内容" };
+      const contentSrc = MODE_SRC[touches[0]?.mode ?? ""] ?? "用户模板";
+      const winNote = schedule?.windowStartHour !== undefined && schedule?.windowEndHour !== undefined
+        ? `，时段 ${schedule.windowStartHour}:00-${schedule.windowEndHour}:00` : "";
+      const capNote = schedule?.dailyGroupCap ? `，单日上限 ${schedule.dailyGroupCap} 组/天` : "";
       audit(ctx, "campaign_create", "write", args, { eligible, excluded, rounds: args.touches.length }, "auto");
       return okOut({
         eligible, excluded, total, planSummary, autoSend,
@@ -2718,16 +2787,21 @@ ${priceDigest}`;
         actions: [registerAction({
           conversationId: ctx.conversationId, toolName: "campaign_create",
           label: `创建发信任务（${eligible} 人 × ${args.touches.length} 轮）`,
-          confirm: `为 ${eligible} 位联系人创建发信任务「${name}」：${planSummary}。后续触点${autoSend ? "自动发送（无人值守，内容=你的模板库）" : "入队待你在发送中心手动开始"}。`,
+          confirm: `为 ${eligible} 位联系人创建发信任务「${name}」：${planSummary}，内容=${contentSrc}${winNote}${capNote}。后续触点${autoSend ? "自动发送（无人值守）" : "入队待你在发送中心手动开始"}。`,
           detail: "已回复/已触达自动排除；客户回复后自动止损；入队走既有队列（账号轮换/时窗/限额照常）",
           diff: [
             { field: "targets", label: "收件人", from: "—", to: sample.map(s => `#${s.id} ${s.name}`).join("、") + (eligible > sample.length ? ` 等 ${eligible} 人` : "") },
             { field: "plan", label: "触点计划", from: "—", to: planSummary },
+            { field: "content", label: "内容来源", from: "—", to: contentSrc },
+            ...(schedule?.windowStartHour !== undefined && schedule?.windowEndHour !== undefined
+              ? [{ field: "window", label: "发送时段", from: "—", to: `${schedule.windowStartHour}:00-${schedule.windowEndHour}:00` }] : []),
+            ...(schedule?.dailyGroupCap
+              ? [{ field: "cap", label: "单日上限", from: "—", to: `${schedule.dailyGroupCap} 组/天（超出顺延次日）` }] : []),
             { field: "auto", label: "执行方式", from: "—", to: autoSend ? "无人值守" : "每轮手动开始" },
           ],
           target: { label: "去发送中心", href: "#/campaigns" },
           run: async () => {
-            const r = createCampaign({ name, contactIds: args.contactIds, touches: args.touches, autoSend });
+            const r = createCampaign({ name, contactIds: args.contactIds, touches, autoSend, ...(schedule ? { schedule } : {}) });
             if (!r.success) return failResult(r.error);
             await scanDueCampaigns();   // 首触点立即入队（不等下个扫描周期）
             return okResult(`任务 ${r.data.id} 已创建：${r.data.eligible} 人入列（排除 ${r.data.excluded}），首信已入队列${autoSend ? "并自动开始" : "，等你在发送中心点开始"}。后续触点按计划自动跟进，客户回复即止损。`);
