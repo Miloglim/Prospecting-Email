@@ -64,7 +64,6 @@ describe("今日邮箱概览：让助手逐封看的提示词", () => {
     expect(p).toContain("email_read_full");
     expect(p).toContain("别拿预览当全文");
     expect(p).toContain("不得自动发送");
-    expect(p.split("
-").length).toBeGreaterThanOrEqual(4);
+    expect(p.split("\n").length).toBeGreaterThanOrEqual(4);
   });
 });

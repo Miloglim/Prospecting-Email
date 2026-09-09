@@ -160,16 +160,17 @@ describe("L2/L3：查不到 ≠ 没有", () => {
   it("命中时口径不变：条数、固定格式指令，并同批附带相关舱位", async () => {
     const out = JSON.parse(await call(T("quote_search"), { q: "地东" })) as {
       total: number; empty?: boolean; candidates?: unknown; notice: string;
-      spaceCount: number; spaces: Array<{ spaceType: string | null; vessel: string | null }>; spaceTable: string;
+      spaceCount: number; spaceTable: string;
     };
     expect(out.total).toBe(2);
     expect(out.empty).toBeUndefined();
     expect(out.candidates).toBeUndefined();
     expect(out.notice).toContain("以船司实时报价为准");
     // 查价必带舱位：同一次调用里把该航线近期动态一并带回，并硬指令"价在前、舱位在后"
+    // （spaces 明细数组已随 2026-09 瘦身移除——明细烧 token，表格已够操作者看）
     expect(out.spaceCount).toBe(1);
-    expect(out.spaces[0]?.spaceType).toBe("现舱");
     expect(out.spaceTable).toContain("CMA CGM JADE");
+    expect(out.spaceTable).toContain("现舱");
     expect(out.notice).toContain("舱位");
   });
 });

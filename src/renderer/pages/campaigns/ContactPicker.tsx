@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useLayoutEffect } from "react";
-import { Table, Tag, Input, Button, Select, Space, Popover, Empty, Tooltip } from "antd";
-import { SearchOutlined, RightOutlined, ClearOutlined } from "@ant-design/icons";
+import { Table, Tag, Input, Button, Select, Space, Empty, Tooltip } from "antd";
+import { SearchOutlined, RightOutlined } from "@ant-design/icons";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 
 /**
@@ -104,28 +104,30 @@ export function ContactPicker({ value, onChange, onNext }: {
   const selectedSet = useMemo(() => new Set(value), [value]);
   const selectedRows = useMemo(() => rows.filter(r => selectedSet.has(r.id)), [rows, selectedSet]);
   const companyCount = useMemo(() => new Set(selectedRows.map(r => r.companyId ?? `c_${r.id}`)).size, [selectedRows]);
-  const reachedSelected = useMemo(() => selectedRows.filter(r => r.status === "reached").length, [selectedRows]);
+  // 已触达/已回复的已选客户：开发信任务通常不该再给他们，汇总条上给一键移除
+  const reachedIds = useMemo(() => new Set(selectedRows.filter(r => r.status === "reached" || r.status === "replied").map(r => r.id)), [selectedRows]);
+  const reachedSelected = reachedIds.size;
 
   const columns = useMemo(() => [
-    { title: "姓名", dataIndex: "firstName", width: 130, ellipsis: true,
+    { title: "姓名", dataIndex: "firstName", width: 104, ellipsis: true,
       render: (_: unknown, r: PickRow) => <span className="text-[11px] font-medium text-gray-800">{nameOf(r)}</span> },
-    { title: "邮箱", dataIndex: "email", width: 210, ellipsis: true,
+    { title: "邮箱", dataIndex: "email", width: 178, ellipsis: true,
       render: (v: string) => <span className="text-[10px] font-mono text-gray-500">{v}</span> },
-    { title: "公司", dataIndex: "companyName", width: 190, ellipsis: true,
+    { title: "公司", dataIndex: "companyName", width: 148, ellipsis: true,
       render: (v: string | null) => <span className="text-[11px] text-gray-600">{v || "—"}</span> },
-    { title: "国家", dataIndex: "country", width: 56,
+    { title: "国家", dataIndex: "country", width: 48,
       render: (v: string | null) => v ? <span className="text-[10px] text-gray-500">{v.toUpperCase()}</span> : <span className="text-[10px] text-gray-300">—</span> },
-    { title: "语言", dataIndex: "language", width: 56,
+    { title: "语言", dataIndex: "language", width: 46,
       render: (v: string | null) => v ? <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color="cyan">{v.toUpperCase()}</Tag> : <span className="text-[10px] text-gray-300">—</span> },
-    { title: "类型", dataIndex: "clientType", width: 60,
+    { title: "类型", dataIndex: "clientType", width: 50,
       render: (v: string | null) => <span className="text-[10px] text-gray-600">{TYPE_LABELS[v || "general"] || "通用"}</span> },
-    { title: "状态", key: "status", width: 78,
+    { title: "状态", key: "status", width: 62,
       render: (_: unknown, r: PickRow) => { const m = statusLabel(r); return <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color={m.color}>{m.label}</Tag>; } },
-    { title: "阶段", dataIndex: "stage", width: 56,
+    { title: "阶段", dataIndex: "stage", width: 46,
       render: (v: string | null) => <span className="text-[10px] text-gray-600">{STAGE_LABELS[v || "cold"]}</span> },
-    { title: "最近发送", key: "lastSent", width: 78,
+    { title: "最近发送", key: "lastSent", width: 62,
       render: (_: unknown, r: PickRow) => { const t = lastSentMap.get(r.id); return t ? <span className="text-[10px] text-gray-500">{t}</span> : <span className="text-[10px] text-gray-300">—</span>; } },
-    { title: "负责人", dataIndex: "assignee", width: 82, ellipsis: true,
+    { title: "负责人", dataIndex: "assignee", width: 64, ellipsis: true,
       render: (v: string | null) => v ? <Tag color="geekblue" className="text-[9px] leading-none px-1 py-0.5 m-0">{v}</Tag> : <span className="text-[10px] text-gray-300">—</span> },
   ], [lastSentMap, neverIds]);
 
@@ -133,16 +135,7 @@ export function ContactPicker({ value, onChange, onNext }: {
   const applyPreset = (key: "never" | "replied" | "autoreply" | "bounced") => {
     setFStatus(key); setFStage(undefined); setSearch("");
   };
-  const clearFilters = () => { setSearch(""); setFStatus(undefined); setFStage(undefined); setFCountry(undefined); setFLang(undefined); setFType(undefined); };
-  const selectAllFiltered = () => {
-    const merged = new Set(value);
-    for (const r of filtered) merged.add(r.id);
-    onChange([...merged]);
-  };
-  const deselectAllFiltered = () => {
-    const drop = new Set(filtered.map(r => r.id));
-    onChange(value.filter(id => !drop.has(id)));
-  };
+  const removeReachedSelected = () => onChange(value.filter(id => !reachedIds.has(id)));
 
   // 虚拟滚动要求 scroll.y 为数字 → 实测容器高度（antd 表头约占 39px 已扣）
   const boxRef = useRef<HTMLDivElement>(null);
@@ -186,7 +179,6 @@ export function ContactPicker({ value, onChange, onNext }: {
           options={[{ value: "EN", label: "EN" }, { value: "ES", label: "ES" }, { value: "PT", label: "PT" }]} />
         <Select allowClear size="small" style={{ width: 92 }} placeholder="类型" value={fType} onChange={setFType}
           options={Object.entries(TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} />
-        <Button size="small" icon={<ClearOutlined />} onClick={clearFilters}>清筛选</Button>
         <span className="flex-1" />
         <Space size={4}>
           <span className="text-[10px] text-gray-400 mr-1">快捷:</span>
@@ -201,7 +193,7 @@ export function ContactPicker({ value, onChange, onNext }: {
       <div ref={boxRef} className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden bg-white">
         {tableReady ? (
           <Table<PickRow>
-            className="row-select-table"
+            className="row-select-table picker-compact"
             size="small"
             virtual
             dataSource={filtered}
@@ -209,7 +201,7 @@ export function ContactPicker({ value, onChange, onNext }: {
             rowKey="id"
             loading={isLoading}
             pagination={false}
-            scroll={{ x: 1060, y: boxH }}
+            scroll={{ x: 880, y: boxH }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的联系人" /> }}
             rowSelection={{
               selectedRowKeys: value,
@@ -240,36 +232,22 @@ export function ContactPicker({ value, onChange, onNext }: {
           <span className="text-gray-300">·</span>
           <span>覆盖 <strong className="text-gray-900">{companyCount}</strong> 家公司</span>
           {reachedSelected > 0 && (
-            <Tooltip title="已触达客户走「动态更新」模式跟进；开发信模式（我的模板/即时/句库）会自动排除这些人">
-              <span className="text-amber-600">含 {reachedSelected} 位已触达</span>
+            <Tooltip title="这些客户会照常入队发送（资格闸已解除），发不发由你圈名单决定">
+              <span className="text-amber-600">含 {reachedSelected} 位已触达/已回复</span>
             </Tooltip>
           )}
-          {filtered.length > 0 && value.length > 0 && (
-            <Popover trigger="click" title="已选联系人（最多显示 100 个）"
-              content={
-                <div style={{ maxWidth: 520, maxHeight: 260, overflowY: "auto" }} className="flex flex-wrap gap-1">
-                  {selectedRows.slice(0, 100).map(r => (
-                    <Tag key={r.id} closable onClose={() => onChange(value.filter(id => id !== r.id))} className="text-[10px] m-0">
-                      {nameOf(r)}
-                    </Tag>
-                  ))}
-                  {selectedRows.length > 100 && <span className="text-[10px] text-gray-400">…共 {selectedRows.length} 人</span>}
-                </div>
-              }
-            >
-              <Button size="small" type="link" style={{ padding: 0, height: "auto" }}>查看/移除</Button>
-            </Popover>
+          {reachedSelected > 0 && (
+            <Button size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={removeReachedSelected}>
+              移除这些客户（{reachedSelected}）
+            </Button>
           )}
         </div>
         <span className="flex-1" />
         <Space>
-          <Button size="small" onClick={selectAllFiltered} disabled={!filtered.length}>选中筛选结果({filtered.length})</Button>
-          <Button size="small" onClick={deselectAllFiltered} disabled={!filtered.length}>取消筛选结果</Button>
           <Button size="small" onClick={() => onChange([])} disabled={!value.length}>清空</Button>
         </Space>
-        <Button type="primary" icon={<RightOutlined />} onClick={onNext}>
-          下一步：选择发送模式
-        </Button>
+        {/* 必填项没配齐（一个人都没选）就不给下一步，与向导步骤条同一口径 */}
+        <Button type="primary" icon={<RightOutlined />} disabled={!value.length} onClick={onNext}>下一步</Button>
       </div>
     </div>
   );

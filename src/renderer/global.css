@@ -455,3 +455,16 @@ body {
   50%      { opacity: 0.55; }
 }
 .breathe { animation: bar-breathe 2s ease-in-out infinite; }
+
+/* ── 创建任务向导（docs/smart-send-spec.md §6）：步骤条即导航，hover 有反馈，替代「上一步」按钮 ── */
+.wizard-steps .ant-steps-item { cursor: pointer; }
+.wizard-steps .ant-steps-item-title { transition: color 0.15s ease; }
+.wizard-steps .ant-steps-item:hover .ant-steps-item-title { color: #0f766e; }
+.wizard-steps .ant-steps-item:not(.ant-steps-item-active) .ant-steps-item-icon { transition: box-shadow 0.15s ease; }
+.wizard-steps .ant-steps-item:hover .ant-steps-item-icon { box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12); }
+
+/* 选人表信息密度：表头变矮变窄、行高收紧（万行虚拟表里"看得多"比"看得舒"重要） */
+.picker-compact .ant-table-thead > tr > th {
+  padding: 4px 6px !important; font-size: 10px; line-height: 14px; white-space: nowrap;
+}
+.picker-compact .ant-table-tbody > tr > td { padding: 3px 6px !important; }

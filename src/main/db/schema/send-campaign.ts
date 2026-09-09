@@ -9,13 +9,23 @@ import { sql } from "drizzle-orm";
 export const sendCampaigns = sqliteTable("send_campaigns", {
   id:             text("id").primaryKey(),                     // nanoid
   name:           text("name").notNull(),                      // 「巴西冷客户·4 触点」
-  status:         text("status").notNull().default("running"), // running|paused|done|stopped
+  status:         text("status").notNull().default("running"), // draft|running|paused|done|stopped
   /** 计划内 touch 自动开始发送；0=每轮入队待发送中心手动开始 */
   autoSend:       integer("auto_send").notNull().default(1),
   /** 创建时的筛选条件快照（回显/审计：这个任务当初圈的是谁） */
   targetFilterJson: text("target_filter_json").notNull().default("{}"),
-  /** 触点计划 [{round, stage:"initial|followup1|…", templateId?:number, delayDays}] */
+  /** 触点计划 [{round, stage:"initial|followup1|…", templateId?:number, mode?:"fixed|userTpl|system", content?, delayDays}] */
   touchPlanJson:  text("touch_plan_json").notNull(),
+  /** 创建入口：ui=发送中心向导 / agent=AI 对话编排（默认，旧数据兼容） */
+  createdBy:      text("created_by").notNull().default("agent"),
+  /** 发信账号策略：rotate=健康账号智能轮换（默认） / fixed=仅用指定账号 */
+  accountPolicy:  text("account_policy").notNull().default("rotate"),
+  /** accountPolicy=fixed 时的账号 id 列表（JSON 数组） */
+  accountIdsJson: text("account_ids_json"),
+  /** 任务级调度覆盖（JSON：windowStartHour/windowEndHour/dailyGroupCap）；空=继承全局 */
+  scheduleJson:   text("schedule_json"),
+  /** 发送方式：individual=每个联系人单独一封（收件人走 To，像人工手发，默认）/ bcc=同公司合并一封（BCC 互不可见） */
+  sendMode:       text("send_mode").notNull().default("individual"),
   createdAt:      text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt:      text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

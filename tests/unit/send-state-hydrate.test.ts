@@ -51,10 +51,11 @@ CREATE TABLE email_accounts (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE TABLE send_queue (
-  id text PRIMARY KEY NOT NULL, batch_id text NOT NULL,
+  id text PRIMARY KEY NOT NULL, batch_id text NOT NULL, campaign_id text,
   company_name text, company_id integer, recipients text NOT NULL,
   account_id integer NOT NULL, account_email text,
   subject text, tpl_body text, contact_vars text,
+  send_mode text DEFAULT 'bcc' NOT NULL,
   status text DEFAULT 'pending' NOT NULL, error text, sent_at text,
   tpl_name text, country text, language text, cc text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL

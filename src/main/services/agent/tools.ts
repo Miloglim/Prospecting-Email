@@ -25,7 +25,7 @@ import { checkBudget, requiresApprovalOf, ToolBudgetError } from "./policy";
 import { getBody, htmlToText, markRead } from "../inbox.service";
 import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
-import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns, type CampaignTouch, type CampaignSchedule } from "../campaign.service";
+import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, restartCampaign, scanDueCampaigns, type CampaignTouch, type CampaignSchedule } from "../campaign.service";
 import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry, countryMatchWords } from "../rate-update.service";
 import { todayMailBrief, resolveBeijingStart } from "../mail-brief.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
@@ -552,13 +552,13 @@ export const sendQueueAddSchema = z.object({
   contact: optStr(80).describe("单个收件人的邮箱/姓名/公司名（本工具会自己定位人，无需先调 search_contacts）"),
   subject: z.string().max(150).nullable().optional().describe("邮件主题（可含 {{company}}/{{firstName}} 变量；用素材库模板时原样传模板主题）。usePreset=true 时省略"),
   body: z.string().max(8000).nullable().optional().describe("邮件正文（纯文本/简单 HTML，可含联系人变量；用素材库模板时原样传模板正文）。usePreset=true 时省略"),
-  usePreset: optBool().describe("用程序内置句库组装（无需模板，按每个联系人的阶段/语言/客户类型自动拼装；已回复/已触达自动排除）。素材库没有启用模板、用户说「用系统内置/程序自带的内容」时传 true，此时 subject/body 省略"),
+  usePreset: optBool().describe("用程序内置句库组装（无需模板，按每个联系人的阶段/语言/客户类型自动拼装；已回复/已触达照常入队，由用户圈名单决定发不发）。素材库没有启用模板、用户说「用系统内置/程序自带的内容」时传 true，此时 subject/body 省略"),
 });
 
 export const campaignCreateSchema = z.object({
   name: optStr(60).describe("任务名，如「巴西冷客户·4 触点」；不传按「筛选条件·N 触点」自动生成"),
   contactIds: z.preprocess((v: unknown) => toIds(v), z.array(z.number().int().positive()).min(1).max(2000))
-    .describe("收件联系人 id 列表（来自 search_contacts 的结构化筛选结果）。已回复/已触达的会被自动排除并如实报数"),
+    .describe("收件联系人 id 列表（来自 search_contacts 的结构化筛选结果）。已回复/已触达不再被拦截——发不发由用户圈定名单决定，确认卡会如实报数"),
   touches: z.array(z.object({
     stage: z.string().max(20).describe("该轮用的模板阶段：initial(首信)/followup1/followup2/closing/reactivate"),
     delayDays: z.number().int().min(0).max(60).describe("距上一封发出的天数；首轮（首信）填 0"),
@@ -576,7 +576,7 @@ export const campaignCreateSchema = z.object({
 
 export const campaignControlSchema = z.object({
   campaignId: z.string().min(1).max(24).describe("任务 id（来自 campaign_create 或 campaign_status）"),
-  action: z.string().max(10).describe("pause=暂停（不再排新触点）｜resume=恢复｜stop=终止（终态，不可恢复）"),
+  action: z.string().max(10).describe("pause=暂停（不再排新触点）｜resume=恢复｜stop=终止（终态，不可恢复）｜restart=完结任务再启动新周期（fixed 轮内容上周期完结时已清空，需先编辑补新内容）"),
 });
 
 function audit(ctx: ToolCtx, toolName: string, sideEffect: string, args: unknown,
@@ -2536,7 +2536,7 @@ ${priceDigest}`;
         return failOut("missing_recipient", "缺少收件人。请给 contactIds（或单个 contact：邮箱/姓名）。");
       }
       // 程序预设路径（用户拍板：素材库为空也该能用系统内置句库）：按每个联系人的
-      // 阶段/语言/客户类型组装，已回复/已触达在 builder 内被硬排除
+      // 阶段/语言/客户类型组装；已回复/已触达照常入队（资格闸已解除，名单由用户圈定）
       if (args.usePreset) {
         const qr = buildAdaptiveQueue([], ids);
         if (!qr.success) {
@@ -2767,9 +2767,9 @@ ${priceDigest}`;
       };
       const pv = previewCampaign(args.contactIds);
       if (!pv.success) return failOut("bad_list", pv.error);
-      const { eligible, excluded, total, sample } = pv.data;
+      const { eligible, excluded, total, sample, reachedReplied } = pv.data;
       if (eligible === 0) {
-        return failOut("no_eligible", `名单里 ${excluded} 人全部不符合资格（已回复/已触达/已不在库）。这些客户的后续由用户引导，不进批量队列。`);
+        return failOut("no_eligible", `名单里 ${excluded} 人全部已不在库（无有效收件人）。请重新圈定名单。`);
       }
       const name = args.name?.trim() || `${eligible} 人·${args.touches.length} 触点`;
       const autoSend = args.autoSend !== false;
@@ -2780,15 +2780,16 @@ ${priceDigest}`;
       const winNote = schedule?.windowStartHour !== undefined && schedule?.windowEndHour !== undefined
         ? `，时段 ${schedule.windowStartHour}:00-${schedule.windowEndHour}:00` : "";
       const capNote = schedule?.dailyGroupCap ? `，单日上限 ${schedule.dailyGroupCap} 组/天` : "";
+      const rrNote = reachedReplied > 0 ? `（其中 ${reachedReplied} 位已触达/已回复，将照常入队）` : "";
       audit(ctx, "campaign_create", "write", args, { eligible, excluded, rounds: args.touches.length }, "auto");
       return okOut({
-        eligible, excluded, total, planSummary, autoSend,
+        eligible, excluded, total, reachedReplied, planSummary, autoSend,
         sample,
         actions: [registerAction({
           conversationId: ctx.conversationId, toolName: "campaign_create",
           label: `创建发信任务（${eligible} 人 × ${args.touches.length} 轮）`,
-          confirm: `为 ${eligible} 位联系人创建发信任务「${name}」：${planSummary}，内容=${contentSrc}${winNote}${capNote}。后续触点${autoSend ? "自动发送（无人值守）" : "入队待你在发送中心手动开始"}。`,
-          detail: "已回复/已触达自动排除；客户回复后自动止损；入队走既有队列（账号轮换/时窗/限额照常）",
+          confirm: `为 ${eligible} 位联系人创建发信任务「${name}」${rrNote}：${planSummary}，内容=${contentSrc}${winNote}${capNote}。后续触点${autoSend ? "自动发送（无人值守）" : "入队待你在发送中心手动开始"}。`,
+          detail: "客户回复后自动止损；发信账号智能轮换遵循「谁发过的客户还由谁发」（不换人发），新客户才轮换",
           diff: [
             { field: "targets", label: "收件人", from: "—", to: sample.map(s => `#${s.id} ${s.name}`).join("、") + (eligible > sample.length ? ` 等 ${eligible} 人` : "") },
             { field: "plan", label: "触点计划", from: "—", to: planSummary },
@@ -2846,14 +2847,24 @@ ${priceDigest}`;
 
   const campaignControl = tool({
     name: "campaign_control",
-    description: "控制发信任务：pause=暂停（不再排新触点，在途批次照常）；resume=恢复；stop=终止（终态，待发触点全部清空，不可恢复）。用户说「先停一下那个任务」「恢复跑」时用。",
+    description: "控制发信任务：pause=暂停（不再排新触点，在途批次照常）；resume=恢复；stop=终止（终态，待发触点全部清空，不可恢复）；restart=已完结任务再启动新周期（退信/退订保持终态，其余触点重置重发；固定内容轮需先编辑补新内容）。用户说「先停一下那个任务」「恢复跑」「这个任务再来一轮」时用。",
     parameters: campaignControlSchema,
     execute: async (args) => {
       const gateNote = gate(ctx, "campaign_control");
       if (gateNote) return gateNote;
       const action = (args.action ?? "").trim().toLowerCase();
-      if (!["pause", "resume", "stop"].includes(action)) {
-        return failOut("bad_action", `action 值「${args.action}」不存在。有效值：pause / resume / stop。`);
+      if (!["pause", "resume", "stop", "restart"].includes(action)) {
+        return failOut("bad_action", `action 值「${args.action}」不存在。有效值：pause / resume / stop / restart。`);
+      }
+      if (action === "restart") {
+        const r = restartCampaign(args.campaignId.trim());
+        audit(ctx, "campaign_control", "write", args, r.success ? { campaignId: args.campaignId, action } : undefined, "auto", r.success ? undefined : r.error);
+        if (!r.success) return failOut("control_failed", r.error);
+        void scanDueCampaigns();
+        return okOut({
+          campaignId: args.campaignId, action, status: "running",
+          notice: `任务已再启动新周期：重置 ${r.data.reset} 个触点（退信/退订保持终态）。到期触点由调度器自动排入队列。`,
+        });
       }
       const status = action === "pause" ? "paused" : action === "resume" ? "running" : "stopped";
       const r = setCampaignStatus(args.campaignId.trim(), status as "paused" | "running" | "stopped");

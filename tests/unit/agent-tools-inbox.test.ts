@@ -135,7 +135,7 @@ const call = (t: ToolLike, args: unknown): Promise<string> => t.invoke({}, JSON.
 const { buildHarnessTools } = await import("../../src/main/services/agent/tools");
 const { summarizeEmail } = await import("../../src/main/services/ai.service");
 // 预算次数以配置为准，测试不写死（改预算值时不必回来改断言）
-const { TOOL_SPECS, TURN_CALL_CEILING } = await import("../../src/main/services/agent/policy");
+const { TOOL_SPECS } = await import("../../src/main/services/agent/policy");
 
 const ctx = { conversationId: "test-conv", counts: new Map<string, number>(), failures: new Map<string, number>() };
 /** 按工具名取（注册顺序会变，按名索引更稳） */

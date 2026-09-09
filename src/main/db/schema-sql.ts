@@ -116,11 +116,13 @@ CREATE TABLE IF NOT EXISTS templates (
 CREATE TABLE IF NOT EXISTS send_queue (
   id text PRIMARY KEY NOT NULL,
   batch_id text NOT NULL,
+  campaign_id text,
   company_name text, company_id integer,
   recipients text NOT NULL,
   account_id integer NOT NULL, account_email text,
   subject text, tpl_body text, contact_vars text,
   cc text, tpl_name text, country text, language text,
+  send_mode text DEFAULT 'bcc' NOT NULL,
   status text DEFAULT 'pending' NOT NULL,
   error text, sent_at text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -181,6 +183,11 @@ CREATE TABLE IF NOT EXISTS send_campaigns (
   auto_send integer DEFAULT 1 NOT NULL,
   target_filter_json text DEFAULT '{}' NOT NULL,
   touch_plan_json text NOT NULL,
+  created_by text DEFAULT 'agent' NOT NULL,
+  account_policy text DEFAULT 'rotate' NOT NULL,
+  account_ids_json text,
+  schedule_json text,
+  send_mode text DEFAULT 'individual' NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );

@@ -65,6 +65,12 @@ export const IPC = {
     CAMPAIGNS:        chan(PREFIX.SEND, "campaigns"),
     CAMPAIGN_DETAIL:  chan(PREFIX.SEND, "campaignDetail"),
     CAMPAIGN_CONTROL: chan(PREFIX.SEND, "campaignControl"),
+    /** 任务创建向导：创建前资格预览（命中/排除/样本名单） */
+    CAMPAIGN_PREVIEW: chan(PREFIX.SEND, "campaignPreview"),
+    /** 任务创建向导提交（createdBy=ui；startNow=false 存草稿） */
+    CAMPAIGN_CREATE:  chan(PREFIX.SEND, "campaignCreate"),
+    /** 草稿编辑（仅 draft 态可改，名单与计划全量替换） */
+    CAMPAIGN_UPDATE_DRAFT: chan(PREFIX.SEND, "campaignUpdateDraft"),
   },
   INBOX: {
     LIST:          chan(PREFIX.INBOX, "list"),

@@ -1,52 +1,76 @@
 import { describe, it, expect } from "vitest";
-import { pickAccountId, rotateAccountId, interleaveCompanies, nextStage } from "../../src/main/services/send.service";
+import { pickAffinityAccount, partitionByAffinity, rotateAccountId, interleaveCompanies, nextStage } from "../../src/main/services/send.service";
 
-/** 模拟整批分配，返回每个账号最终拿到多少组 */
-function allocate(total: number, accountIds: number[], preferredOf: (i: number) => number | undefined) {
-  const load = new Map<number, number>(accountIds.map(id => [id, 0]));
-  const cap = Math.ceil(total / accountIds.length);
-  for (let i = 0; i < total; i++) {
-    const aid = pickAccountId(preferredOf(i), load, cap);
-    load.set(aid, (load.get(aid) ?? 0) + 1);
-  }
-  return load;
-}
+// ═══════════════════════════════════════════════════════════════
+// 亲和判定/分桶（不换人发，用户拍板 v6.0）：智能轮换建立在「对应联系人的
+// 历史发信账号」之上——谁发过的客户还由谁发，只有从未发过的新联系人才进
+// 轮换池。旧 pickAccountId 的「亲和超载让位」语义已被该需求否决（超载也
+// 不换人；熔断整组缓发而非改派）。
+// ═══════════════════════════════════════════════════════════════
 
-describe("pickAccountId — 发信账号负载均衡", () => {
-  it("亲和账号未超载时优先使用（同一客户由同一账号跟进）", () => {
-    const load = new Map([[1, 0], [2, 5]]);
-    expect(pickAccountId(2, load, 10)).toBe(2);
+describe("pickAffinityAccount — 联系人亲和判定（不换人发）", () => {
+  const recipients = (ids: number[]) => ids.map(contactId => ({ contactId }));
+  const active = new Set([1, 2, 3]);
+  const noCircuit = new Set<number>();
+
+  it("组内唯一历史账号且在可用池 → 沿用该账号（谁发过还谁发）", () => {
+    const affinity = new Map([[11, 2], [12, 2]]);
+    expect(pickAffinityAccount(recipients([11, 12]), affinity, active, noCircuit, false))
+      .toEqual({ accountId: 2, deferred: false });
   });
 
-  it("亲和账号已达上限时让位给最闲的", () => {
-    const load = new Map([[1, 0], [2, 10]]);
-    expect(pickAccountId(2, load, 10)).toBe(1);
+  it("历史账号熔断中（启用但被摘出可选池）→ 整组缓发，绝不静默换号", () => {
+    const affinity = new Map([[11, 2]]);
+    expect(pickAffinityAccount(recipients([11]), affinity, new Set([1, 3]), new Set([2]), false))
+      .toEqual({ deferred: true });
   });
 
-  it("没有亲和记录时选最闲的账号", () => {
-    const load = new Map([[1, 7], [2, 3], [3, 5]]);
-    expect(pickAccountId(undefined, load, 10)).toBe(2);
+  it("指定账号池（fixed 策略）内不缓发：池外亲和账号视同无历史交由轮换", () => {
+    const affinity = new Map([[11, 2]]);
+    expect(pickAffinityAccount(recipients([11]), affinity, new Set([1]), new Set([2]), true))
+      .toEqual({ deferred: false });
   });
 
-  // 这条是用户报的 bug 的回归测试：历史上全部发信都用账号 1，
-  // 旧逻辑会把 800 组全压给账号 1 导致限流
-  it("全部联系人都亲和同一账号时，仍然均分而不是压垮它", () => {
-    const load = allocate(800, [1, 2, 3, 4], () => 1);
-    expect(load.get(1)).toBe(200);
-    expect(load.get(2)).toBe(200);
-    expect(load.get(3)).toBe(200);
-    expect(load.get(4)).toBe(200);
+  it("历史账号已停用（不在池也不在熔断）→ 视同无历史交由轮换", () => {
+    const affinity = new Map([[11, 9]]);
+    expect(pickAffinityAccount(recipients([11]), affinity, active, noCircuit, false))
+      .toEqual({ deferred: false });
   });
 
-  it("无法整除时最大最小差不超过 1 组", () => {
-    const load = allocate(101, [1, 2, 3], () => undefined);
-    const counts = [...load.values()];
-    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+  it("组内历史账号不一致（BCC 一组只能一个发件人）→ 不硬凑，交由轮换", () => {
+    const affinity = new Map([[11, 1], [12, 2]]);
+    expect(pickAffinityAccount(recipients([11, 12]), affinity, active, noCircuit, false))
+      .toEqual({ deferred: false });
   });
 
-  it("单账号时全部归它（不崩）", () => {
-    const load = allocate(50, [9], () => 9);
-    expect(load.get(9)).toBe(50);
+  it("全组无历史 → 轮换池", () => {
+    expect(pickAffinityAccount(recipients([11, 12]), new Map(), active, noCircuit, false))
+      .toEqual({ deferred: false });
+  });
+});
+
+describe("partitionByAffinity — 亲和分桶（BCC 组内历史账号必须一致）", () => {
+  it("同公司不同历史账号的联系人拆到不同桶", () => {
+    const rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    const affinity = new Map([[1, 7], [2, 8], [3, 7]]);
+    const buckets = partitionByAffinity(rows, affinity);
+    expect(buckets.length).toBe(2);
+    const byAffinity = new Map(buckets.map(b => [b.affinity, b.rows.length]));
+    expect(byAffinity.get(7)).toBe(2);
+    expect(byAffinity.get(8)).toBe(1);
+  });
+
+  it("无历史联系人归 0 号桶（轮换池）", () => {
+    const buckets = partitionByAffinity([{ id: 1 }, { id: 2 }], new Map());
+    expect(buckets).toEqual([{ affinity: 0, rows: [{ id: 1 }, { id: 2 }] }]);
+  });
+
+  it("桶内保持原有顺序（桶序按首次出现）", () => {
+    const rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    const affinity = new Map([[2, 5], [3, 5]]);
+    const buckets = partitionByAffinity(rows, affinity);
+    expect(buckets.map(b => b.rows.map(r => r.id))).toEqual([[1], [2, 3]]);
+    expect(buckets.map(b => b.affinity)).toEqual([0, 5]);
   });
 });
 

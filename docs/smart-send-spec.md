@@ -5,8 +5,14 @@
 ## 0.5 已拍板决策（2026-09-07，用户定）
 
 1. **入口不是自由对话**：新对话首页的**建议气泡卡**是触发器——用户点某张建议卡，agent 才据此编排任务（复用既有「点击发 GROUP_PROMPT 前缀+检索目标」机制）。没有气泡就没有任务，agent 不主动揽活。
-2. **已回复 / 已触达（reached）的客户不得进入分批队列**：圈人时排除 + 扫描入队时引擎侧硬闸，双重生效。这些客户的后续由用户引导决策——**AI 不做计划外发送**。
+2. **已回复 / 已触达（reached）的客户不得进入分批队列**：~~圈人时排除 + 扫描入队时引擎侧硬闸，双重生效~~（**已被 §0.6-1 取代：资格闸解除，照常入队+计数提示**）。这些客户的后续由用户引导决策——**AI 不做计划外发送**。
 3. **无人值守保留，但内容只来自用户模板或程序预设**（机械变量替换，零不确定性）。任何 AI 生成内容必须整批预览确认，且该轮强制 autoSend=关（入队待人点开始）。
+
+## 0.6 已拍板决策（2026-09-09，发信逻辑改版，用户定）
+
+1. **资格闸解除**：已回复/已触达（reached）客户**照常入队**——选人、创建预览、扫描入队三处都不再拦截；界面只在人数计数处括号提示「含 N 位已触达/已回复」（选中提醒，发不发由用户圈名单决定，不替用户做主）。止损不变：回复/退信/退订信号照旧触发 target 终态（§3.3 原样生效）。
+2. **固定内容轮任务完结即清空**：campaign 转 done 时清掉 touch_plan 里 fixed 轮的内容快照；done 任务可再启动新周期（restart），但 fixed 轮快照缺失时**拒绝启动并自动转回草稿**，必须补好新内容——杜绝「下一周期还发同样的内容」。
+3. **发信账号智能轮换 = 联系人亲和优先（不换人发）**：谁发过的客户还由谁发（interactions 里该联系人最近一封 type='sent' 的账号）。历史账号熔断中 → 整组缓发顺延次日，**绝不静默换号**；已停用账号视同无历史交由轮换；只有从未发过的新联系人才进轮换池。同公司联系人历史账号不同 → 亲和分桶拆组（一组 BCC 只能一个发件人）。指定账号池（fixed 策略）内不缓发：池外亲和账号视同无历史。
 
 ---
 
@@ -63,7 +69,7 @@ export const sendCampaignTargets = sqliteTable("send_campaign_targets", {
 ## 3. 触点引擎（复用队列的策源）
 
 ### 3.1 推进
-SMTP 确认发送成功（现有钩子，stage 推进处）→ 若该封属于某 campaign target：`round++`、`lastSentAt=now`、`nextTouchAt = now + plan[round+1].delayDays`。计划走完（round=计划轮数）→ target.status=sent（终态）；全部 target 终态 → campaign.status=done。
+SMTP 确认发送成功（现有钩子，stage 推进处）→ 若该封属于某 campaign target：`round++`、`lastSentAt=now`、`nextTouchAt = now + plan[round+1].delayDays`。计划走完（round=计划轮数）→ target.status=sent（终态）；全部 target 终态 → campaign.status=done，**同时清空 fixed 轮内容快照**（§0.6-2）。done 任务可再启动新周期（restart）：sent/replied/skipped 触点重置为 pending 立即到期，退信/退订保持终态；fixed 轮快照已清空 → 拒绝启动并转回草稿。
 
 ### 3.2 调度扫描
 主进程常驻低频扫描（对齐 inbox.auto 的既有模式，每 10 分钟）：
@@ -99,9 +105,9 @@ inbox 邮件分类完成处（reply/bounce/unsubscribe 已能识别且有关联�
 
 | 工具 | sideEffect | 说明 |
 |---|---|---|
-| campaign_create | write（确认卡） | 入参=筛选条件（复用 §4.1 search_contacts 同款）+ touch 计划（轮数/间隔/内容来源）+ autoSend + 首信策略。execute 先算**预览**（命中数、前 N 名单、每轮内容来源、预计完成时间），确认后建档。名单定格落库。 |
+| campaign_create | write（确认卡） | 入参=筛选条件（复用 §4.1 search_contacts 同款）+ touch 计划（轮数/间隔/内容来源）+ autoSend + 首信策略。execute 先算**预览**（命中数、含已触达/已回复计数、前 N 名单、每轮内容来源、预计完成时间），确认后建档。名单定格落库。 |
 | campaign_status | read | 无参=全部任务概览（运行/暂停/各状态计数）；带 id=单任务明细（各轮已发数、回复数、样本名单）。回答"任务怎么样了"。 |
-| campaign_pause / resume / stop | write（确认卡） | 暂停=扫描器不再排新 touch（在途批次照常）；resume=恢复；stop=终态，清空全部 nextTouchAt。 |
+| campaign_control | write（确认卡） | pause=扫描器不再排新 touch（在途批次照常）；resume=恢复；stop=终态，清空全部 nextTouchAt；restart=done 任务再启动新周期（§0.6-2）。 |
 
 manifest 登记与审批闸门自动继承（write→确认卡）；预算：create/stop 各 2/轮，status 4/轮。
 
@@ -120,7 +126,7 @@ manifest 登记与审批闸门自动继承（write→确认卡）；预算：cre
 
 ## 8. 红线与边界
 
-- 发送引擎、账号轮换、熔断、串行语义**零改动**；任务层只会"往 startQueue 喂料 + 订阅结果回调"。
+- 发送引擎、熔断、串行语义**零改动**；账号分配升级为「联系人亲和优先（不换人发）+ 新客户轮换」（§0.6-3），任务层只往 startQueue 喂料 + 订阅结果回调。
 - **AI 不做计划外发送**：所有自动行为都在创建时批准的计划内；计划外诉求一律出确认卡。
 - 退订是绝对止损，任何任务不可覆盖。
 - 不做打开率追踪（合规风险，默认排除）。

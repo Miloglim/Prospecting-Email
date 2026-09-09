@@ -139,7 +139,7 @@ function DevLetterModal({ open, onClose }: { open: boolean; onClose: () => void 
     if (!rec?.contacts.length) return;
     stashDevLetterPreset(rec.contacts.map(c => c.id),
       `首页「自动开发信」推荐 ${rec.groupSize} 位冷客户（每公司 1 位，限额内）`);
-    window.location.hash = "#/campaigns?tab=new";
+    window.location.hash = "#/campaigns?create=1";
     onClose();
   };
   return (
@@ -185,7 +185,7 @@ function DevLetterModal({ open, onClose }: { open: boolean; onClose: () => void 
             ]}
           />
           <div className="text-[11px] text-gray-400">
-            确定后带名单进入「发送中心 · 新建任务」，发送模式/模板/是否开始都由你在那里确认——这里不会直接入队或发送。
+            确定后带名单进入「发送中心 · 开发任务」，在创建任务子窗口里确认名单与发送模式——这里不会直接入队或发送。
           </div>
         </div>
       )}

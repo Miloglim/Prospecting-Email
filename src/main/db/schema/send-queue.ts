@@ -3,6 +3,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 export const sendQueue = sqliteTable("send_queue", {
   id: text("id").primaryKey(),
   batchId: text("batch_id").notNull(),
+  campaignId: text("campaign_id"),  // 归属开发任务（队列运行情况挂在任务卡片背后）；null=旧模式遗留
   companyName: text("company_name"),
   companyId: integer("company_id"),
   recipients: text("recipients").notNull(), // JSON array
@@ -15,6 +16,7 @@ export const sendQueue = sqliteTable("send_queue", {
   country: text("country"),           // 公司国家（卡片标签；公司缺失时回落首联系人）
   language: text("language"),         // 语言（卡片标签；取首联系人，与开发信语言一致）
   cc: text("cc"),                    // 抄送地址，逗号分隔（同事存档用；收件人仍走 BCC）
+  sendMode: text("send_mode").notNull().default("bcc"), // individual=单独一封（收件人走 To）/ bcc=合并一封（BCC）；旧队列行保持 bcc 语义
   status: text("status").default("pending").notNull(), // pending | sending | sent | failed
   error: text("error"),
   sentAt: text("sent_at"),

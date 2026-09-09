@@ -170,6 +170,46 @@ export function runMigrations(): void {
     if (radded) Log.info("db.migrate", "rate_quotes 表已补列（etd/status/message_text）");
   } catch { /* 表不存在 → 忽略 */ }
 
+  // v5.8 开发任务（UI 向导创建）：send_campaigns 补 created_by/account_policy/account_ids_json/schedule_json
+  try {
+    const scols = tableCols("send_campaigns");
+    let sadd = false;
+    if (!scols.includes("created_by")) { raw.exec("ALTER TABLE send_campaigns ADD COLUMN created_by text DEFAULT 'agent' NOT NULL;"); sadd = true; }
+    if (!scols.includes("account_policy")) { raw.exec("ALTER TABLE send_campaigns ADD COLUMN account_policy text DEFAULT 'rotate' NOT NULL;"); sadd = true; }
+    if (!scols.includes("account_ids_json")) { raw.exec("ALTER TABLE send_campaigns ADD COLUMN account_ids_json text;"); sadd = true; }
+    if (!scols.includes("schedule_json")) { raw.exec("ALTER TABLE send_campaigns ADD COLUMN schedule_json text;"); sadd = true; }
+    if (sadd) Log.info("db.migrate", "send_campaigns 表已补列（created_by/account_policy/account_ids_json/schedule_json）");
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v5.9 任务驱动队列：send_queue 补 campaign_id（队列运行情况挂到任务卡片背后）。
+  // 仅老库升级时清一次无归属 pending 组 —— 旧「独立队列页/快速发信」模式的遗留
+  // （用户定案"把后台清掉"），留着反而会在下次开始发送时把旧内容发出去。
+  try {
+    if (!tableCols("send_queue").includes("campaign_id")) {
+      raw.exec("ALTER TABLE send_queue ADD COLUMN campaign_id text;");
+      const cleared = raw.prepare("DELETE FROM send_queue WHERE campaign_id IS NULL AND status = 'pending'").run().changes;
+      if (cleared > 0) Log.info("db.migrate", `任务驱动模式升级：清掉 ${cleared} 组无归属遗留待发组`);
+      Log.info("db.migrate", "send_queue 表已添加 campaign_id 列");
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+
+  // v6.1 发送方式可切换（用户拍板）：send_campaigns 补 send_mode（默认 individual 单发）；
+  // send_queue 补 send_mode 默认 bcc —— 存量待发组是合并语义，不能悄悄变成 To 群发
+  try {
+    const scols = tableCols("send_campaigns");
+    if (!scols.includes("send_mode")) {
+      raw.exec("ALTER TABLE send_campaigns ADD COLUMN send_mode text DEFAULT 'individual' NOT NULL;");
+      Log.info("db.migrate", "send_campaigns 表已补 send_mode 列（默认 individual 单发）");
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+  try {
+    const qcols = tableCols("send_queue");
+    if (!qcols.includes("send_mode")) {
+      raw.exec("ALTER TABLE send_queue ADD COLUMN send_mode text DEFAULT 'bcc' NOT NULL;");
+      Log.info("db.migrate", "send_queue 表已补 send_mode 列（默认 bcc，存量组合并语义不变）");
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+
   // v4.x: stage 大小写归一化
   try {
     let n = 0;

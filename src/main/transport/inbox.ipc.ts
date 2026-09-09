@@ -840,7 +840,7 @@ export function registerInboxIPC() {
   _pushToRenderer = createPushFn();
   InboxService.startAutoFetch();
   // 智能发信任务（docs/smart-send-spec.md）：注入队列入口 + 启动到期触点调度器
-  CampaignService.setCampaignQueueFn((items, autoStart) => SendService.startQueue(items, autoStart));
+  CampaignService.setCampaignQueueFn((items, autoStart, opts) => SendService.startQueue(items, autoStart, opts));
   CampaignService.startCampaignScheduler();
 
   ipcMain.handle(IPC.INBOX.LIST, async () => {

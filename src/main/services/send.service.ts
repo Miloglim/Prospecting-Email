@@ -6,7 +6,7 @@ import { companies } from "../db/schema/companies";
 import { interactions } from "../db/schema/interactions";
 import { inboxMessages } from "../db/schema/inbox";
 import { emailAccounts } from "../db/schema/accounts";
-import { eq, sql as dsql, desc, inArray } from "drizzle-orm";
+import { eq, sql as dsql, desc, inArray, and, isNotNull } from "drizzle-orm";
 import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase, getRawDb } from "../db";
@@ -23,6 +23,7 @@ import { assembleEmail, type Lang, type ClientType, type Stage } from "./sentenc
 
 export interface SendItem {
   id: string; companyName: string; companyId: number;
+  campaignId?: string;    // 归属开发任务（队列运行情况挂在任务卡片背后；旧模式入队不带）
   recipients: Array<{ contactId: number; email: string; name: string }>;
   accountId: number;
   subject: string;   // 渲染后的主题（小，提前渲染）
@@ -35,6 +36,7 @@ export interface SendItem {
   error?: string; sentAt?: string;
   seq?: number;  // 原始队列顺序（跨账号排序用）
   cc?: string;   // 抄送地址，逗号分隔。收件人仍走 BCC 互不可见，抄送方在 CC 里对客户可见
+  sendMode?: "individual" | "bcc";  // individual=单独一封（收件人走 To，像人工手发）；缺省 bcc（互不可见）
 }
 
 export interface SendTemplate {
@@ -470,8 +472,81 @@ const STAGE_MAP: Record<string, string> = {
   cold: "initial", f1: "followup1", f2: "followup2", f3: "closing", f4: "reactivate",
 };
 
-// 已触达的人不能进开发信发送桶（跟进走客户跟进界面，避免给已触达客户发开发信）
-const EXCLUDED_STATUSES = ["reached"];
+// ── 联系人亲和发信账号（不换人发，用户拍板 v6.0）──
+// 智能轮换建立在「对应联系人的历史发信账号」之上：谁发过的客户还由谁发；
+// 只有从未发过的新联系人才进轮换池。已触达/已回复客户可入队（界面只做计数提示）。
+
+/** 联系人 → 历史发信账号（interactions 里最近一封 type='sent' 的 account_id）。
+ *  一条 GROUP BY 聚合拿全：SQLite 的 MAX() 裸列语义保证 account_id 取自 MAX(created_at) 所在行。 */
+export function lastSentAccountMap(contactIds: number[]): Map<number, number> {
+  const ids = [...new Set((contactIds ?? []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
+  const m = new Map<number, number>();
+  if (!ids.length) return m;
+  try {
+    const rows = getDb().select({
+      contactId: interactions.contactId,
+      accountId: interactions.accountId,
+      lastAt: dsql<string | null>`MAX(${interactions.createdAt})`,
+    }).from(interactions)
+      .where(and(
+        eq(interactions.type, "sent"),
+        isNotNull(interactions.accountId),
+        inArray(interactions.contactId, ids),
+      ))
+      .groupBy(interactions.contactId)
+      .all();
+    for (const r of rows) if (r.accountId != null) m.set(r.contactId, r.accountId);
+  } catch (err) {
+    Log.warn("send.affinity", `历史发信账号查询失败（按无历史处理）: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return m;
+}
+
+/** 启用但熔断中的账号 id 集合：亲和账号落在这里 = 临时不可用（24h 自动过期），缓发而非换人。 */
+function circuitAccountIds(): Set<number> {
+  const rows = getDb().select({
+    id: emailAccounts.id,
+    circuitOpenAt: emailAccounts.circuitOpenAt,
+    circuitResetAfter: emailAccounts.circuitResetAfter,
+  }).from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+  return new Set(rows.filter(r => isCircuitOpen(r)).map(r => r.id));
+}
+
+/** 亲和判定（纯函数，可单测）：组内收件人同享唯一历史账号时保持该账号（不换人发）。
+ *  - 历史账号在可选池 → 用它；
+ *  - 历史账号启用但熔断中（且未限定账号池）→ 整组缓发（deferred，绝不静默换号）；
+ *  - 历史账号已停用/不在任务限定的账号池 → 视为无历史，交由调用方轮换；
+ *  - 收件人历史账号不一致或都无历史 → 轮换（BCC 一组只能一个发件人，混历史不硬凑）。 */
+export function pickAffinityAccount(
+  recipients: Array<{ contactId: number }>,
+  affinity: Map<number, number>,
+  activeIds: Set<number>,
+  circuitIds: Set<number>,
+  fixedPool: boolean,
+): { accountId?: number; deferred: boolean } {
+  const accs = new Set<number>();
+  for (const r of recipients) {
+    const a = affinity.get(r.contactId);
+    if (a != null) accs.add(a);
+  }
+  if (accs.size !== 1) return { deferred: false };
+  const a = [...accs][0]!;
+  if (activeIds.has(a)) return { accountId: a, deferred: false };
+  if (!fixedPool && circuitIds.has(a)) return { deferred: true };
+  return { deferred: false };
+}
+
+/** 按亲和账号把同公司联系人分桶（构建 BCC 组前的切分）：历史账号不同的客户不能塞进同一组——
+ *  一组 BCC 只有一个发件人，不换人发的唯一保证就是组内历史账号一致；无历史归 0 号桶（轮换）。 */
+export function partitionByAffinity<T extends { id: number }>(sorted: T[], affinity: Map<number, number>): Array<{ affinity: number; rows: T[] }> {
+  const buckets = new Map<number, T[]>();
+  for (const c of sorted) {
+    const a = affinity.get(c.id) ?? 0;
+    if (!buckets.has(a)) buckets.set(a, []);
+    buckets.get(a)!.push(c);
+  }
+  return [...buckets.entries()].map(([affinity, rows]) => ({ affinity, rows }));
+}
 
 /** 入队前过滤无效邮箱联系人：一个坏地址会让整组 BCC 被 SMTP 整批拒收（凑 3 组就熔断）。
  *  返回过滤后的联系人 + 剔除数（调用方记日志）。 */
@@ -537,14 +612,10 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], con
   const selectedIds = resolveSelectedIds(bucketKeys, contactIds);
   if (selectedIds.size === 0) return failResult("没有选中的联系人");
 
-  // 用 id 一次查完整联系人（供模板渲染）
-  const selected = new Map<number, ContactRow>();
+  // 用 id 一次查完整联系人（供模板渲染）。已触达/已回复照常入队（界面计数提示，不在此拦截）
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
-  for (const c of selectedRows) {
-    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达不进开发信
-    selected.set(c.id, c);
-  }
-  const { kept: validRows, removed: badEmails } = filterValidEmails([...selected.values()]);
+  const affinity = lastSentAccountMap([...selectedIds]);
+  const { kept: validRows, removed: badEmails } = filterValidEmails(selectedRows);
   if (badEmails > 0) Log.warn("send.filter", `buildQueue 剔除 ${badEmails} 个无效邮箱联系人`);
   const valid = new Map(validRows.map(c => [c.id, c]));
 
@@ -569,9 +640,10 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], con
   const userTpls = (templates?.filter(t => t?.subject && t?.body) || []);
   if (userTpls.length === 0) return failResult("请先选择至少一个邮件模板");
 
-  // 预分配账号（供预览展示，与正式发送同一套轮换规则）；正式发送时 startQueue 会重新精确分配
-  const activeAccounts = selectableAccounts();
-  const activeIds = activeAccounts.map(a => a.id);
+  // 预分配账号（供预览展示）：亲和组=历史发信账号（须在可用池内），新客户组=轮换；
+  // 正式发送时 startQueue 同一套判据复核（熔断亲和组届时缓发）
+  const activeIds = selectableAccounts().map(a => a.id);
+  const activeSet = new Set(activeIds);
 
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
@@ -591,30 +663,35 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], con
       return nameA.localeCompare(nameB);
     });
 
-    const first = sorted[0]!;
-    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
-    const t = pickTemplate(userTpls, first);
-    const contactVars: TemplateVars = {
-      firstName: first.firstName, lastName: first.lastName,
-      company: companyName, email: first.email,
-      title: first.title, phone: first.phone,
-    };
-    const subj = renderTemplate(t.subject, contactVars);
+    // 亲和分桶（不换人发）：历史账号不同的联系人各自成组；同一亲和桶内再按 groupSize 拆组
+    for (const bucket of partitionByAffinity(sorted, affinity)) {
+      const first = bucket.rows[0]!;
+      const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+      const t = pickTemplate(userTpls, first);
+      const contactVars: TemplateVars = {
+        firstName: first.firstName, lastName: first.lastName,
+        company: companyName, email: first.email,
+        title: first.title, phone: first.phone,
+      };
+      const subj = renderTemplate(t.subject, contactVars);
 
-    // 同公司超 groupSize 拆多组（BCC 每组上限 N 人）
-    for (let s = 0; s < sorted.length; s += groupSize) {
-      const chunk = sorted.slice(s, s + groupSize);
-      const aid = activeIds.length > 0 ? rotateAccountId(items.length, activeIds) : 0; // 逐组轮换，预览=真实分配
+      // 同亲和桶超 groupSize 拆多组（BCC 每组上限 N 人）
+      for (let s = 0; s < bucket.rows.length; s += groupSize) {
+        const chunk = bucket.rows.slice(s, s + groupSize);
+        const aid = bucket.affinity > 0 && activeSet.has(bucket.affinity)
+          ? bucket.affinity
+          : (activeIds.length > 0 ? rotateAccountId(items.length, activeIds) : 0); // 新客户逐组轮换；亲和账号不可用同走轮换（startQueue 复核）
 
-      items.push({
-        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
-        companyId: first.companyId || 0,
-        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-        subject: subj, tplBody: t.body, contactVars, tplName: t.name,
-        country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
-        language: first.language || undefined,
-        accountId: aid, status: "pending",
-      });
+        items.push({
+          id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+          companyId: first.companyId || 0,
+          recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+          subject: subj, tplBody: t.body, contactVars, tplName: t.name,
+          country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
+          language: first.language || undefined,
+          accountId: aid, status: "pending",
+        });
+      }
     }
   }
   return okResult(items);
@@ -649,13 +726,10 @@ export function buildAdaptiveQueue(bucketKeys: string[], contactIds?: number[]):
   const selectedIds = resolveSelectedIds(bucketKeys, contactIds);
   if (selectedIds.size === 0) return failResult("没有选中的联系人");
 
-  const selected = new Map<number, ContactRow>();
+  // 已触达/已回复照常入队（资格闸已解除，界面只做计数提示）
   const selectedRows = getDb().select().from(contacts).where(inArray(contacts.id, [...selectedIds])).all();
-  for (const c of selectedRows) {
-    if (EXCLUDED_STATUSES.includes(c.status || "")) continue; // 已触达不进开发信
-    selected.set(c.id, c);
-  }
-  const { kept: validRows, removed: badEmails } = filterValidEmails([...selected.values()]);
+  const affinity = lastSentAccountMap([...selectedIds]);
+  const { kept: validRows, removed: badEmails } = filterValidEmails(selectedRows);
   if (badEmails > 0) Log.warn("send.filter", `buildAdaptiveQueue 剔除 ${badEmails} 个无效邮箱联系人`);
 
   const companyGroups = new Map<string, ContactRow[]>();
@@ -673,6 +747,7 @@ export function buildAdaptiveQueue(bucketKeys: string[], contactIds?: number[]):
   }
 
   const activeIds = selectableAccounts().map(a => a.id);
+  const activeSet = new Set(activeIds);
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
 
@@ -691,44 +766,43 @@ export function buildAdaptiveQueue(bucketKeys: string[], contactIds?: number[]):
       return nameA.localeCompare(nameB);
     });
 
-    const first = sorted[0]!;
-    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
-    const l = normalizeLang(first.language);
-    const ct = mapClientType(first.clientType || "") as ClientType;
-    const assembled = assembleEmail({
-      lang: l,
-      clientType: ct,
-      stage: (STAGE_MAP[first.stage || ""] || "initial") as Stage,
-      includeCompany: !!companyName,
-      subjectOverride: loadConfig().sentenceSubjects?.[`${ct}.${l}`] || undefined,
-    });
-
-    for (let s = 0; s < sorted.length; s += groupSize) {
-      const chunk = sorted.slice(s, s + groupSize);
-      items.push({
-        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
-        companyId: first.companyId || 0,
-        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-        subject: assembled.subject, tplBody: assembled.body,
-        contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
-        tplName: `预设句库·${l}·${ct}`,
-        country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
-        language: l,
-        accountId: activeIds.length > 0 ? rotateAccountId(items.length, activeIds) : 0, status: "pending",
+    // 亲和分桶（不换人发）：历史账号不同的联系人各自成组，桶内按语言/类型/阶段组装
+    for (const bucket of partitionByAffinity(sorted, affinity)) {
+      const first = bucket.rows[0]!;
+      const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+      const l = normalizeLang(first.language);
+      const ct = mapClientType(first.clientType || "") as ClientType;
+      const assembled = assembleEmail({
+        lang: l,
+        clientType: ct,
+        stage: (STAGE_MAP[first.stage || ""] || "initial") as Stage,
+        includeCompany: !!companyName,
+        subjectOverride: loadConfig().sentenceSubjects?.[`${ct}.${l}`] || undefined,
       });
+
+      for (let s = 0; s < bucket.rows.length; s += groupSize) {
+        const chunk = bucket.rows.slice(s, s + groupSize);
+        items.push({
+          id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+          companyId: first.companyId || 0,
+          recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+          subject: assembled.subject, tplBody: assembled.body,
+          contactVars: { firstName: first.firstName, lastName: first.lastName, company: companyName, email: first.email, title: first.title, phone: first.phone },
+          tplName: `预设句库·${l}·${ct}`,
+          country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
+          language: l,
+          accountId: bucket.affinity > 0 && activeSet.has(bucket.affinity)
+            ? bucket.affinity
+            : (activeIds.length > 0 ? rotateAccountId(items.length, activeIds) : 0),
+          status: "pending",
+        });
+      }
     }
   }
   return okResult(items);
 }
 
 // ── 多账号并行发送 ──
-
-/** 为一组邮件挑发信账号：亲和账号（该客户上次用的）未超载就用它，超了改投当前最闲的。
- *  纯函数，无副作用 —— 防的是"历史集中在某账号的联系人把整批压给它 → 连续猛发被限流"。 */
-export function pickAccountId(preferredAid: number | undefined, load: Map<number, number>, cap: number): number {
-  if (preferredAid != null && (load.get(preferredAid) ?? 0) < cap) return preferredAid;
-  return [...load.entries()].reduce((min, e) => (e[1] < min[1] ? e : min))[0]!;
-}
 
 /** 按剩余额度（封=收件人数）裁剪队列：整组保留或整组丢弃，不拆 BCC 组。
  *  budget=-1 表示不限。返回保留的组、保留的收件人数、丢弃组数。纯函数，可单测。 */
@@ -753,9 +827,8 @@ export function isValidEmail(e: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
-/** 账号轮换：第 i 组取 accountIds[i % n] — 串行调度按 seq 逐组发，相邻两组必落到不同账号
- *  （≥2 账号时），替代旧"联系人亲和"：亲和会让历史客户永远固定在同一账号发信。
- *  纯函数，可单测。 */
+/** 新客户账号轮换：第 i 组取 accountIds[i % n] — 只作用于「无历史发信账号」的新联系人组，
+ *  历史客户走亲和（pickAffinityAccount），不换人发。纯函数，可单测。 */
 export function rotateAccountId(index: number, accountIds: number[]): number {
   return accountIds[((index % accountIds.length) + accountIds.length) % accountIds.length]!;
 }
@@ -804,15 +877,23 @@ let abortFlag = false; // 串行模型：单一批次中断标志（旧 per-acco
 
 /** 公共发送入口：配额守卫 → 账号分配 → 限额裁剪 → 持久化 → 启动发送循环。
  *  autoStart=false 时只入队落库、不发一封（对齐旧 PE 两步式：加入队列 → 队列页手动开始）。
- *  返回 { batchId, queued(组), queuedCount(封), dropped(组) } — 前端据此提示裁剪。 */
-export async function startQueue(items: SendItem[], autoStart = true): Promise<Result<{ batchId: string; queued: number; queuedCount: number; dropped: number }>> {
+ *  opts.accountIds：限定轮换池只在这批账号内（发信任务的「指定账号」策略）——只缩小，不越过熔断闸。
+ *  账号分配（不换人发，用户拍板 v6.0）：历史发信账号可用的组沿用原账号；熔断中的组缓发
+ *  （不入本批、deferredContactIds 回传调用方顺延）；只有无历史的新组才进轮换池。
+ *  返回 { batchId, queued(组), queuedCount(封), dropped(组), deferredContactIds(缓发联系人) }。 */
+export async function startQueue(items: SendItem[], autoStart = true, opts?: { accountIds?: number[] }): Promise<Result<{ batchId: string; queued: number; queuedCount: number; dropped: number; deferredContactIds: number[] }>> {
   if (state.isRunning) return failResult("已有发送任务运行中");
   if (items.length === 0) return failResult("没有待发送项");
 
-  const accounts = selectableAccounts();
-  if (accounts.length === 0) return failResult(activeAccountCount() > 0
-    ? "所有启用账号都在发信熔断中（服务商反垃圾/限流拦截或连续失败）——到设置页账号卡点「解除熔断」，或等 24 小时自动过期"
-    : "没有可用的发件账号");
+  const accounts = opts?.accountIds?.length
+    ? selectableAccounts().filter(a => opts.accountIds!.includes(a.id))
+    : selectableAccounts();
+  if (accounts.length === 0) {
+    if (opts?.accountIds?.length) return failResult("任务指定的发信账号当前都不可用（未启用或熔断中）——暂停任务或到设置页处理账号");
+    return failResult(activeAccountCount() > 0
+      ? "所有启用账号都在发信熔断中（服务商反垃圾/限流拦截或连续失败）——到设置页账号卡点「解除熔断」，或等 24 小时自动过期"
+      : "没有可用的发件账号");
+  }
 
   // ① 配额守卫放最前 — 失败时什么都不动（后置会把 state 污染成永远 isRunning 的幽灵批次）
   const qCheck = checkQuota();
@@ -820,23 +901,51 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
 
   const batchId = nanoid();
 
-  // ② 账号轮换 + 公司交错：先按公司交错打乱（同公司相邻组被拉开，避免连续长时间对同一公司发信），
-  //    再按新顺序 i%N 轮换账号 — 轮换不变量（相邻组不同账号）与打乱无关，天然保持。
-  //    旧"联系人亲和"（历史谁发就一直谁发）已按用户要求废弃。
+  // ② 亲和分配（不换人发）：历史账号熔断中的组缓发——不入本批、不占配额，
+  //    deferredContactIds 回传（任务扫描器据此顺延次日）。指定账号池（fixed 策略）内不缓发：
+  //    池外亲和账号视同无历史，交由轮换。
+  const affinity = lastSentAccountMap(items.flatMap(it => it.recipients.map(r => r.contactId)));
+  const activeIds = new Set(accounts.map(a => a.id));
+  const circuitIds = circuitAccountIds();
+  const fixedPool = (opts?.accountIds?.length ?? 0) > 0;
+  const deferredContactIds = new Set<number>();
+  const runItems: SendItem[] = [];
+  for (const it of items) {
+    const p = pickAffinityAccount(it.recipients, affinity, activeIds, circuitIds, fixedPool);
+    if (p.deferred) {
+      for (const r of it.recipients) deferredContactIds.add(r.contactId);
+      continue;
+    }
+    // 亲和组沿用历史账号；非亲和组清零 → 交错后按新顺序轮换（丢弃预分配，保相邻新组不同号）
+    runItems.push(p.accountId ? { ...it, accountId: p.accountId } : { ...it, accountId: 0 });
+  }
+  if (deferredContactIds.size > 0) {
+    Log.info("send.affinity", `亲和缓发: ${deferredContactIds.size} 位联系人的历史发信账号熔断中，本批不入队（不换人发）`);
+  }
+  if (runItems.length === 0) {
+    return okResult({ batchId, queued: 0, queuedCount: 0, dropped: 0, deferredContactIds: [...deferredContactIds] });
+  }
+
+  // ③ 公司交错 + 新组轮换：交错只管发送顺序（同公司相邻组被拉开）；
+  //    亲和组已带历史账号（同上判据），无历史的新组按序轮换 — 相邻新组不同号不变量保持。
   queues = new Map();
   abortFlag = false;
   saveRunningBatch(null);   // 清旧批次标志（autoStart=true 时下面重新写入）；两步式入队不写标志 → 重启不会误自动启动
-  const activeIds = accounts.map(a => a.id);
-  const shuffled = interleaveCompanies(items);
+  const rotIds = [...activeIds];
+  const shuffled = interleaveCompanies(runItems);
   const ordered: Array<SendItem & { seq: number }> = [];
-  for (let i = 0; i < shuffled.length; i++) {
-    ordered.push({ ...shuffled[i]!, accountId: rotateAccountId(i, activeIds), seq: i });
+  let rot = 0;
+  for (const it of shuffled) {
+    const aid = it.accountId > 0
+      ? it.accountId
+      : (rotIds.length > 0 ? rotateAccountId(rot++, rotIds) : 0); // 新客户逐组轮换（亲和组已被上方沿用）
+    ordered.push({ ...it, accountId: aid, seq: ordered.length });
   }
   const rotLoad = new Map<number, number>();
   for (const it of ordered) rotLoad.set(it.accountId, (rotLoad.get(it.accountId) ?? 0) + 1);
-  Log.info("send.alloc", `轮换+公司交错: ${activeIds.length} 账号 → ` + [...rotLoad.entries()].map(([id, n]) => `#${id}:${n}组`).join(" "));
+  Log.info("send.alloc", `亲和优先+新组轮换: ${rotIds.length} 账号 → ` + [...rotLoad.entries()].map(([id, n]) => `#${id}:${n}组`).join(" ") + (deferredContactIds.size ? `，缓发 ${deferredContactIds.size} 人` : ""));
 
-  // ③ 限额裁剪（按封数，整组保留）— 在写 state 之前，totalItems 才与实际发送数一致，进度条才能到 100%
+  // ④ 限额裁剪（按封数，整组保留）— 在写 state 之前，totalItems 才与实际发送数一致，进度条才能到 100%
   const { kept, keptCount, dropped } = trimByBudget(ordered, qCheck.remaining);
   if (dropped > 0) Log.warn("send.quota", `限额裁剪: ${items.length} 组/${items.reduce((s, it) => s + it.recipients.length, 0)} 封 → ${kept.length} 组/${keptCount} 封`);
   for (const it of kept) {
@@ -844,7 +953,7 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
     queues.get(it.accountId)!.push(it);
   }
 
-  // ④ 写 state — 基于裁剪后的数据
+  // ⑤ 写 state — 基于裁剪后的数据
   stateHydrated = true;   // 新批次接管状态后，重启水合不得再回头覆盖
   state = {
     batchId, totalItems: kept.length, sentCount: 0, failedCount: 0,
@@ -863,13 +972,15 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
       const acctEmail = accounts.find(a => a.id === aid)?.email || "";
       for (const item of q) {
         rows.push({
-          id: item.id, batchId, companyName: item.companyName, companyId: item.companyId,
+          id: item.id, batchId, campaignId: item.campaignId ?? null,
+          companyName: item.companyName, companyId: item.companyId,
           recipients: JSON.stringify(item.recipients),
           accountId: aid, accountEmail: acctEmail,
           subject: item.subject, tplBody: item.tplBody, contactVars: JSON.stringify(item.contactVars),
           tplName: item.tplName || null,
           country: item.country || null, language: item.language || null,
           cc: item.cc || null,
+          sendMode: item.sendMode || "bcc",
           status: "pending", createdAt: now,
         });
       }
@@ -889,13 +1000,13 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
 
   if (!autoStart) {
     Log.info("send.enqueue", `批次 ${batchId}: ${kept.length} 组已入队，等待用户在队列页手动开始`);
-    return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped });
+    return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped, deferredContactIds: [...deferredContactIds] });
   }
 
   Log.info("send.start", `批次 ${batchId}: ${kept.length} 组, ${accounts.length} 账号（全局串行）`);
   saveRunningBatch(batchId);   // 运行中标志落盘：退出/崩溃后启动可自动续跑
   void runBatchLoop();
-  return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped });
+  return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped, deferredContactIds: [...deferredContactIds] });
 }
 
 /** 入队结果：batchId + 入队规模 + 配额裁剪掉的组数（前端据此提示） */
@@ -904,6 +1015,7 @@ export interface EnqueueResult {
   queued: number;      // 实际入队组数
   queuedCount: number; // 实际入队封数（收件人数）
   dropped: number;     // 因限额被整组丢弃的组数
+  deferredContactIds: number[]; // 亲和缓发（历史发信账号熔断中，本批未入队）的联系人
 }
 
 export async function startSend(bucketKeys: string[], templates?: SendTemplate[], autoStart = true, contactIds?: number[]): Promise<Result<EnqueueResult>> {
@@ -913,8 +1025,10 @@ export async function startSend(bucketKeys: string[], templates?: SendTemplate[]
   return startQueue(qr.data, autoStart);
 }
 
-/** 动态更新：按选中的客户跟进联系人 + 手动内容组装队列 */
-export function buildDynamicQueue(contactIds: number[], subject: string, body: string, cc?: string): Result<SendItem[]> {
+/** 动态更新：按选中的客户跟进联系人 + 手动内容组装队列。
+ *  sendMode="individual"（v6.1 用户拍板）：每个联系人单独一封，收件人走 To —— 像人工手发；
+ *  缺省 bcc：同公司亲和桶合并一封，收件人走 BCC 互不可见。 */
+export function buildDynamicQueue(contactIds: number[], subject: string, body: string, cc?: string, sendMode?: "individual" | "bcc"): Result<SendItem[]> {
   const rows = getDb().select().from(contacts).where(inArray(contacts.id, contactIds)).all();
   if (rows.length === 0) return failResult("没有选中的联系人");
 
@@ -937,7 +1051,8 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
     if (comp.country) companyCountryMap.set(comp.id, comp.country);
   }
 
-  const activeIds = selectableAccounts().map(a => a.id);
+  const affinity = lastSentAccountMap(validRows.map(c => c.id));
+  const activeSet = new Set(selectableAccounts().map(a => a.id));
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
 
@@ -955,37 +1070,67 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
       return nameA.localeCompare(nameB);
     });
 
-    const first = sorted[0]!;
-    const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
-    // 动态发信 subject 也要按联系人变量渲染（模板模式在 buildQueue 已渲染；
-    // 此处曾漏渲染 → 生产会把「跟进 {{company}}」原样发出去，沙箱演练 S5 捕获）
-    const dynVars: TemplateVars = {
-      firstName: first.firstName, lastName: first.lastName, company: companyName,
-      email: first.email, title: first.title, phone: first.phone,
-    };
-    const subj = renderTemplate(subject, dynVars);
+    // 单发模式（v6.1）：每个联系人单独一封，各自渲染变量；账号亲和复核在 startQueue 同一套判据
+    if (sendMode === "individual") {
+      for (const c of sorted) {
+        const companyName = c.companyId ? (companyMap.get(c.companyId) || "") : "";
+        const vars: TemplateVars = {
+          firstName: c.firstName, lastName: c.lastName, company: companyName,
+          email: c.email, title: c.title, phone: c.phone,
+        };
+        items.push({
+          id: nanoid(), companyName: companyName || `#${c.companyId || "N/A"}`,
+          companyId: c.companyId || 0,
+          recipients: [{ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email }],
+          subject: renderTemplate(subject, vars), tplBody: body,
+          contactVars: vars, tplName: "动态更新",
+          country: companyCountryMap.get(c.companyId || 0) || c.country || undefined,
+          language: c.language || undefined,
+          accountId: affinity.get(c.id) ?? 0, status: "pending", // 0 = 无亲和/不可用，startQueue 复核（熔断缓发）
+          ...(cc ? { cc } : {}), sendMode: "individual",
+        });
+      }
+      continue;
+    }
 
-    for (let s = 0; s < sorted.length; s += groupSize) {
-      const chunk = sorted.slice(s, s + groupSize);
-      items.push({
-        id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
-        companyId: first.companyId || 0,
-        recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
-        subject: subj, tplBody: body,
-        contactVars: dynVars,
-        tplName: "动态更新",
-        country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
-        language: first.language || undefined,
-        accountId: activeIds.length > 0 ? rotateAccountId(items.length, activeIds) : 0, status: "pending",
-        ...(cc ? { cc } : {}),
-      });
+    // 亲和分桶（不换人发）：历史账号不同的联系人各自成组，BCC 组内历史账号必须一致；
+    // 桶账号不可用（停用/熔断）时不硬标 — startQueue 同套判据复核（熔断的组会被缓发）
+    for (const bucket of partitionByAffinity(sorted, affinity)) {
+      const first = bucket.rows[0]!;
+      const companyName = first.companyId ? (companyMap.get(first.companyId) || "") : "";
+      // 动态发信 subject 也要按联系人变量渲染（模板模式在 buildQueue 已渲染；
+      // 此处曾漏渲染 → 生产会把「跟进 {{company}}」原样发出去，沙箱演练 S5 捕获）
+      const dynVars: TemplateVars = {
+        firstName: first.firstName, lastName: first.lastName, company: companyName,
+        email: first.email, title: first.title, phone: first.phone,
+      };
+      const subj = renderTemplate(subject, dynVars);
+      // 桶内历史账号一致（partitionByAffinity 保证）；账号不可用（停用/熔断）时置 0，
+      // startQueue 同套判据复核 — 熔断亲和组会被缓发，停用组进新客轮换
+      const aid = bucket.affinity > 0 && activeSet.has(bucket.affinity) ? bucket.affinity : 0;
+
+      for (let s = 0; s < bucket.rows.length; s += groupSize) {
+        const chunk = bucket.rows.slice(s, s + groupSize);
+        items.push({
+          id: nanoid(), companyName: companyName || `#${first.companyId || "N/A"}`,
+          companyId: first.companyId || 0,
+          recipients: chunk.map(c => ({ contactId: c.id, email: c.email, name: [c.firstName, c.lastName].filter(Boolean).join(" ") || c.email })),
+          subject: subj, tplBody: body,
+          contactVars: dynVars,
+          tplName: "动态更新",
+          country: companyCountryMap.get(first.companyId || 0) || first.country || undefined,
+          language: first.language || undefined,
+          accountId: aid, status: "pending", // 0 = 无亲和，startQueue 会进新客轮换池
+          ...(cc ? { cc } : {}),
+        });
+      }
     }
   }
   return okResult(items);
 }
 
-export async function startDynamicSend(contactIds: number[], subject: string, body: string, autoStart = true, cc?: string): Promise<Result<EnqueueResult>> {
-  const qr = buildDynamicQueue(contactIds, subject, body, cc);
+export async function startDynamicSend(contactIds: number[], subject: string, body: string, autoStart = true, cc?: string, sendMode?: "individual" | "bcc"): Promise<Result<EnqueueResult>> {
+  const qr = buildDynamicQueue(contactIds, subject, body, cc, sendMode);
   if (!qr.success) return failResult(qr.error);
   return startQueue(qr.data, autoStart);
 }
@@ -1277,7 +1422,7 @@ export function getQueueItems(): Result<Array<Omit<SendItem, "tplBody" | "contac
         subject: item.subject, tplName: item.tplName,
         country: item.country, language: item.language,
         status: item.status, error: item.error, sentAt: item.sentAt,
-        seq: item.seq, cc: item.cc,
+        seq: item.seq, cc: item.cc, sendMode: item.sendMode,
         accountEmail: emailMap.get(aid) || `#${aid}`,
       });
     }
@@ -1308,6 +1453,7 @@ export function getQueueItems(): Result<Array<Omit<SendItem, "tplBody" | "contac
       status: r.status === "sending" ? "pending" : (r.status as SendItem["status"]),
       error: r.error || undefined, sentAt: r.sentAt || undefined,
       cc: r.cc || undefined,
+      sendMode: (r.sendMode as "individual" | "bcc") || "bcc",
     }));
     return okResult(items);
   } catch (err) {
@@ -1352,16 +1498,29 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
         status: "pending",
         error: r.error || undefined, sentAt: r.sentAt || undefined,
         cc: r.cc || undefined,   // 恢复队列时必须带回，否则用户点「开始发送」抄送就没了
+        sendMode: (r.sendMode as "individual" | "bcc") || "bcc",  // 同上：单发/合并语义随行恢复，不能丢
       });
     }
 
-    // 排序重建：落库是按账号分桶写入的，直接按落库顺序恢复会退化成"账号1连发完→账号2"。
-    // 与 startQueue 同一套纪律：公司交错打乱 + 按新顺序轮换账号（停用账号的组在轮换中自然改派）。
+    // 排序重建（不换人发）：落库行已带入队时定下的账号 — 账号仍在可用池的组原样恢复
+    // （亲和关系随行保留）；账号熔断中的组跳过本轮回（保持 pending，解除后可再恢复）；
+    // 只有账号已停用/删除的组才改派轮换池。公司交错仍管发送顺序（防"账号1连发完→账号2"）。
     const shuffled = interleaveCompanies(items);
     const rotIds = accounts.map(a => a.id);
-    const rebuilt: Array<SendItem & { seq: number }> = shuffled.map((it, i) => ({
-      ...it, accountId: rotIds.length > 0 ? rotateAccountId(i, rotIds) : it.accountId, seq: i,
-    }));
+    const poolIds = new Set(rotIds);
+    const fusedIds = circuitAccountIds();
+    const rebuilt: Array<SendItem & { seq: number }> = [];
+    let rot = 0;
+    let fusedSkipped = 0;
+    for (const it of shuffled) {
+      if (poolIds.has(it.accountId)) { rebuilt.push({ ...it, seq: rebuilt.length }); continue; }
+      if (fusedIds.has(it.accountId)) { fusedSkipped++; continue; } // 不换人发：熔断组挂起待下轮
+      rebuilt.push({ ...it, accountId: rotIds.length > 0 ? rotateAccountId(rot++, rotIds) : it.accountId, seq: rebuilt.length });
+    }
+    if (fusedSkipped > 0) Log.info("send.affinity", `恢复批次: ${fusedSkipped} 组的历史发信账号熔断中，本轮挂起（不换人发）`);
+    if (rebuilt.length === 0) {
+      return failResult("待恢复的组都在熔断账号上（不换人发，不改派）——到设置页解除熔断后再恢复");
+    }
 
     // 限额裁剪（按封数，整组保留，createdAt 顺序）
     const { kept, keptCount, dropped } = trimByBudget(rebuilt, qCheck.remaining);

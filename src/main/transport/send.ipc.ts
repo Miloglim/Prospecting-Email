@@ -140,7 +140,8 @@ function idleConnectionError(msg: string): boolean {
   return /idle|connection|socket|ECONNRESET|EPIPE|timed?\s?out/i.test(msg);
 }
 
-/** 发送一封 BCC 邮件。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
+/** 发送一封邮件（v6.1 发送方式可切换）：individual=单独一封，收件人走 To（像人工手发）；
+ *  缺省 bcc=收件人全走 BCC 互不可见。账号从 DB email_accounts 表读取（唯一数据源），密码解密后传给 nodemailer。 */
 async function sendBcc(item: SendService.SendItem & { body: string }): Promise<Result<{ messageId: string | null }>> {
   const account = getDb().select().from(emailAccounts).where(eq(emailAccounts.id, item.accountId)).get();
   if (!account) return failResult("账号未找到");
@@ -158,9 +159,11 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
     const from = displayName ? `"${displayName}" <${account.email}>` : account.email;
     const subject = item.subject || "Regarding our logistics partnership";
 
-    // 抄送：收件人仍走 BCC 互不可见，抄送方放 CC（对客户可见，用于同事存档）
+    // 抄送：抄送方放 CC（对客户可见，用于同事存档）
     const ccList = (item.cc || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
     const ccField = ccList.length > 0 ? { cc: ccList } : {};
+    // 单发收件人走 To；合并收件人走 BCC（互不可见）
+    const rcptField = item.sendMode === "individual" ? { to: emails } : { bcc: emails };
 
     let mailOptions: Record<string, unknown>;
     if (isHtml(body) || isHtml(signature)) {
@@ -173,14 +176,14 @@ async function sendBcc(item: SendService.SendItem & { body: string }): Promise<R
           + `收件人可能看到裂图——请把这些图片直接粘贴进签名（会自动转内嵌）：${embedded.unresolved.slice(0, 3).join(" | ")}`);
       }
       mailOptions = {
-        from, bcc: emails, ...ccField, subject,
+        from, ...rcptField, ...ccField, subject,
         text: stripHtml(body + (signature ? `\n\n${signature}` : "")),
         html,
         attachments,
       };
     } else {
       mailOptions = {
-        from, bcc: emails, ...ccField, subject,
+        from, ...rcptField, ...ccField, subject,
         text: body + (signature ? `\n\n${signature}` : ""),
       };
     }
@@ -265,17 +268,44 @@ export function registerSendIPC() {
   });
 
   // ── 发信任务（Campaign，docs/smart-send-spec.md）────────────────
-  ipcMain.handle(IPC.SEND.CAMPAIGNS, () => CampaignService.getCampaignOverview());
+  ipcMain.handle(IPC.SEND.CAMPAIGNS, () => okResult(CampaignService.getCampaignOverview()));
   ipcMain.handle(IPC.SEND.CAMPAIGN_DETAIL, (_e, id: string) => {
     if (!id?.trim()) return failResult("缺少任务 id");
     return CampaignService.getCampaignDetail(id.trim());
   });
   ipcMain.handle(IPC.SEND.CAMPAIGN_CONTROL, (_e, input: { campaignId?: string; action?: string }) => {
     const action = (input?.action ?? "").trim().toLowerCase();
-    if (!["pause", "resume", "stop"].includes(action)) return failResult("action 仅支持 pause/resume/stop");
+    if (!["pause", "resume", "stop", "restart"].includes(action)) return failResult("action 仅支持 pause/resume/stop/restart");
     if (!input?.campaignId?.trim()) return failResult("缺少任务 id");
+    // restart：done → 新周期（fixed 轮内容已清空时转回草稿待补，service 内有完整判定）
+    if (action === "restart") {
+      const r = CampaignService.restartCampaign(input.campaignId.trim());
+      if (r.success) void CampaignService.scanDueCampaigns();
+      return r;
+    }
     const status = action === "pause" ? "paused" : action === "resume" ? "running" : "stopped";
-    return CampaignService.setCampaignStatus(input.campaignId.trim(), status);
+    const r = CampaignService.setCampaignStatus(input.campaignId.trim(), status);
+    // 启动（草稿/暂停 → 运行）后立刻扫一轮到期触点：用户点了启动就该马上有动静，不等 10 分钟调度周期
+    if (r.success && action === "resume") void CampaignService.scanDueCampaigns();
+    return r;
+  });
+  // 任务创建向导（UI 入口）：预览 / 创建 / 草稿编辑。入参结构由 service 层校验，transport 只做存在性检查
+  type CampaignInput = Parameters<typeof CampaignService.createCampaign>[0];
+  ipcMain.handle(IPC.SEND.CAMPAIGN_PREVIEW, (_e, contactIds: number[]) => {
+    if (!Array.isArray(contactIds)) return failResult("缺少名单");
+    return CampaignService.previewCampaign(contactIds);
+  });
+  ipcMain.handle(IPC.SEND.CAMPAIGN_CREATE, (_e, input: CampaignInput) => {
+    if (!input || typeof input !== "object") return failResult("缺少任务参数");
+    const r = CampaignService.createCampaign({ ...input, createdBy: "ui" });
+    // 创建即运行 → 立刻扫一轮到期触点，用户不用干等 10 分钟调度周期
+    if (r.success && input.startNow !== false) void CampaignService.scanDueCampaigns();
+    return r;
+  });
+  ipcMain.handle(IPC.SEND.CAMPAIGN_UPDATE_DRAFT, (_e, input: { campaignId?: string } & CampaignInput) => {
+    if (!input?.campaignId?.trim()) return failResult("缺少任务 id");
+    const { campaignId, ...rest } = input;
+    return CampaignService.updateCampaignDraft(campaignId!.trim(), { ...rest, createdBy: "ui" });
   });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {

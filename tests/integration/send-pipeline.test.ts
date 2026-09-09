@@ -10,7 +10,7 @@ import { eq } from "drizzle-orm";
 // ═══════════════════════════════════════════════════════════════════
 // 发信管线·生产前沙箱演练
 // 真实 send.service 管线 + 内存 SQLite + 假 SMTP 传输（绝无网络/不碰真实库）。
-// 覆盖：分组/拆组/BCC、变量渲染、坏邮箱过滤、reached 排除、账号轮换、
+// 覆盖：分组/拆组/BCC、变量渲染、坏邮箱过滤、已触达照常入队、账号轮换（亲和优先）、
 //       落库回执（interactions/inbox_messages/queue）、阶段推进、配额记录，
 //       以及 熔断 / 瞬态重试 / 限额裁剪 / 二次拦截 / 动态发信+CC。
 // ═══════════════════════════════════════════════════════════════════
@@ -86,10 +86,11 @@ CREATE TABLE templates (
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 CREATE TABLE send_queue (
-  id text PRIMARY KEY NOT NULL, batch_id text NOT NULL,
+  id text PRIMARY KEY NOT NULL, batch_id text NOT NULL, campaign_id text,
   company_name text, company_id integer, recipients text NOT NULL,
   account_id integer NOT NULL, account_email text,
   subject text, tpl_body text, contact_vars text,
+  send_mode text DEFAULT 'bcc' NOT NULL,
   status text DEFAULT 'pending' NOT NULL, error text, sent_at text,
   tpl_name text, country text, language text, cc text,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -215,36 +216,36 @@ describe("发信管线沙箱演练（生产前逐环节验证）", () => {
     addContact(db, "bob@@broken", "Bob", cx);              // 无效邮箱 → 应剔除
     addContact(db, "sam@z.com", "Sam", cz);
     addContact(db, "mia@w.com", "Mia", cw, { stage: "f4" }); // 封顶阶段不再推进
-    addContact(db, "lena@y.com", "Lena", cy, { status: "reached" }); // 已触达 → 排除
+    addContact(db, "lena@y.com", "Lena", cy, { status: "reached" }); // 已触达 → 照常入队（资格闸已解除）
 
     const r = await SendService.startSend([], [TPL], true,
       db.select().from(schema.contacts).all().map(c => c.id)); // 全部 6 个联系人
     if (!r.success) console.log("S1 startSend failed:", r.error);
     expect(r.success).toBe(true);
-    // 3 组：X 拆 1 组(2人, groupSize20)、Z、W；Lena/Bob 不在
-    expect(r.data!.queued).toBe(3);
-    expect(r.data!.queuedCount).toBe(4);
+    // 4 组：X(2 人, Bob 坏邮箱剔除)、Z、W、Y（Lena 已触达照常入队）
+    expect(r.data!.queued).toBe(4);
+    expect(r.data!.queuedCount).toBe(5);
 
     await waitForDone();
 
     // 假传输收到的渲染：无 {{残留、含真实姓名与公司
-    expect(sendCalls.length).toBe(3);
+    expect(sendCalls.length).toBe(4);
     for (const c of sendCalls) {
       expect(c.body).not.toContain("{{");
       expect(c.subject).toMatch(/^Hi \w+ — .+$/);
     }
     const byCompany = Object.fromEntries(sendCalls.map(c => [c.companyName, c.recipients.length]));
-    expect(byCompany).toEqual({ "X Ltda": 2, "Z SA": 1, "W GmbH": 1 });
+    expect(byCompany).toEqual({ "X Ltda": 2, "Z SA": 1, "W GmbH": 1, "Y Inc": 1 });
 
     const st = SendService.getSendStatus().data!;
-    expect(st.sentCount).toBe(3);
+    expect(st.sentCount).toBe(4);
     expect(st.failedCount).toBe(0);
 
-    // 回执落库：interactions 4 条 sent、inbox_messages 4 条 sent 可查
+    // 回执落库：interactions 5 条 sent、inbox_messages 5 条 sent 可查
     const ints = db.select().from(schema.interactions).all();
-    expect(ints.filter(i => i.type === "sent").length).toBe(4);
+    expect(ints.filter(i => i.type === "sent").length).toBe(5);
     const sents = db.select().from(schema.inboxMessages).all().filter(m => m.classification === "sent");
-    expect(sents.length).toBe(4);
+    expect(sents.length).toBe(5);
 
     // 队列终态全 sent
     const rows = db.select().from(schema.sendQueue).all();
@@ -257,7 +258,7 @@ describe("发信管线沙箱演练（生产前逐环节验证）", () => {
     expect(john.stage).toBe("f1");
     expect(mia.stage).toBe("f4");
 
-    // 配额按封数计（4 封，不是 3 组）
+    // 配额按封数计（5 封，不是 4 组）
     const quota = (h.cfg as { sendQuota?: { sentToday: number; firstSendAt: string | null } }).sendQuota;
     expect(quota!.sentToday).toBe(0); // dailyLimit=0 不限额时不记录
   });
