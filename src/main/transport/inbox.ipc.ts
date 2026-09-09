@@ -3,6 +3,7 @@ import * as tls from "tls";
 import * as net from "net";
 import { IPC } from "../contract";
 import * as InboxService from "../services/inbox.service";
+import { todayMailBrief } from "../services/mail-brief.service";
 import * as SendService from "../services/send.service";
 import * as CampaignService from "../services/campaign.service";
 import { nudge as nudgeSuggestions } from "../services/suggestion-bus";
@@ -904,6 +905,9 @@ export function registerInboxIPC() {
     if (!Number.isInteger(id) || id <= 0) return failResult("参数错误");
     return await InboxService.getBody(id);
   });
+
+  // 首页「今日邮箱概览」：只读快照，不抓取、不改已读状态（docs/home-cards-spec.md §5）
+  ipcMain.handle(IPC.INBOX.TODAY_BRIEF, () => todayMailBrief());
 }
 
 export function cleanupInboxIPC() {

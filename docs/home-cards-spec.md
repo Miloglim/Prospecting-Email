@@ -60,8 +60,28 @@ IPC：`devLetter:recommend`（contract 加组，preload 白名单自动生成）
 - 保留：`agent:suggestions`/`agent:dismissSuggestion` IPC 与 suggestion.service（P2 连根清理）。
 - SendCenter 初始 tab 支持 hash 参数 `?tab=new|tasks|queue|history`。
 
-## 5. 红线
+## 5. 卡片三：今日邮箱概览（2026-09-08 追加）
+
+点击卡片即出弹窗，**确定性统计、无模型调用**，主进程 `mail-brief.service.ts` 一次算完：
+
+| 指标 | 口径（与既有页面同源，不养第二份） |
+|---|---|
+| 今日收信 | `inbox_messages.receivedAt` 落在**北京时间今日**（复用 `suggestion.service.beijingDay` 的日界）且 `classification != 'sent'`（NULL 算来信） |
+| 其中未读 | 同上且 `isRead = 0`——未读真源就是 DB `isRead`（与收件箱列表同源），不引入本地名单 |
+| 客户回复 / 自动回复 / 退信 / 其他来信 | `classification` 分类计数 |
+| 询价 | `intent = 'price_inquiry'` |
+| 今日我方发出 | `classification = 'sent'` 的当日条数 |
+| 待你回复 | 今日 `replied` 中，该邮件之后**没有**再发往同一邮箱（`to`/`cc` 含其地址）的，最多 5 条并给出已等小时数 |
+| 今日最新 | 最多 8 封（发件人/主题/分类/时间/未读点） |
+
+- 弹窗顶部一句人话结论（例：今天来信 12 封，3 封客户回复里 2 封还没回，最久的已经等了 6 小时）+ 统计块 + 待回复清单 + 最新邮件。
+- 两个出口：**让助手逐封看**（往会话发一条规范化总结提示词，走 `inbox_search`/`email_summarize`）；**去收件箱**（`#/inbox`）。
+- IPC 挂既有 `IPC.INBOX.TODAY_BRIEF`（注册在 `inbox.ipc.ts`，不新增域、不动 `index.ts`），preload 白名单自动生成。
+- 不做订阅/轮询：只在弹窗打开时算一次（react-query `enabled: open`）。
+
+## 6. 红线
 
 1. 自动开发信只做"推荐 + 预选 + 跳转"，入队/发送决策全部在发送界面由人完成。
 2. 运价查询卡片只是规范化提问的入口，查价口径（两段查、分层、诚实定论）全部复用既有服务端，不新写一条查询链路。
 3. 推荐规则确定性、可解释：不引入模型、不引入随机。
+4. 今日邮箱概览是只读快照：不改已读状态、不触发抓取、不代发任何邮件。

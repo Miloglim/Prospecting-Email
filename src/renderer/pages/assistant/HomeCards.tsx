@@ -4,9 +4,9 @@
 // 红线：自动开发信只做"推荐 + 预选 + 跳转"，入队/发送决策全部在发送界面由人完成。
 import { useState } from "react";
 import { Modal, Input, Select, Button, Table, Spin, Alert, Tag } from "antd";
-import { SearchOutlined, MailOutlined } from "@ant-design/icons";
+import { SearchOutlined, MailOutlined, InboxOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { buildQuotePrompt, stashDevLetterPreset, type QuoteCardInput } from "../../lib/homeCards";
+import { buildQuotePrompt, buildMailBriefPrompt, stashDevLetterPreset, type QuoteCardInput } from "../../lib/homeCards";
 
 const CONTAINERS = ["40HQ", "40GP", "20GP", "40NOR"];
 
@@ -14,9 +14,10 @@ const CONTAINERS = ["40HQ", "40GP", "20GP", "40NOR"];
 export function HomeCards({ onSend }: { onSend: (text: string) => void }) {
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
+  const [briefOpen, setBriefOpen] = useState(false);
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-[640px] mx-auto">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-[860px] mx-auto">
         <button type="button" onClick={() => setQuoteOpen(true)}
           className="group text-left rounded-xl border border-gray-200 bg-white px-4 py-3.5 cursor-pointer transition-all hover:border-teal-300 hover:shadow-[0_2px_8px_rgba(20,184,166,0.10)]">
           <span className="inline-flex items-center gap-2.5">
@@ -41,10 +42,24 @@ export function HomeCards({ onSend }: { onSend: (text: string) => void }) {
             </span>
           </span>
         </button>
+        <button type="button" onClick={() => setBriefOpen(true)}
+          className="group text-left rounded-xl border border-gray-200 bg-white px-4 py-3.5 cursor-pointer transition-all hover:border-teal-300 hover:shadow-[0_2px_8px_rgba(20,184,166,0.10)]">
+          <span className="inline-flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center group-hover:bg-teal-100 transition-colors">
+              <InboxOutlined />
+            </span>
+            <span>
+              <span className="block text-[14px] font-medium text-gray-800">今日邮箱概览</span>
+              <span className="block text-[11px] text-gray-400 mt-0.5">今天收了多少、谁在等你回，一眼看清</span>
+            </span>
+          </span>
+        </button>
       </div>
       <QuoteModal open={quoteOpen} onClose={() => setQuoteOpen(false)}
         onSend={(text) => { setQuoteOpen(false); onSend(text); }} />
       <DevLetterModal open={devOpen} onClose={() => setDevOpen(false)} />
+      <MailBriefModal open={briefOpen} onClose={() => setBriefOpen(false)}
+        onSend={(text) => { setBriefOpen(false); onSend(text); }} />
     </>
   );
 }
@@ -172,6 +187,99 @@ function DevLetterModal({ open, onClose }: { open: boolean; onClose: () => void 
           <div className="text-[11px] text-gray-400">
             确定后带名单进入「发送中心 · 新建任务」，发送模式/模板/是否开始都由你在那里确认——这里不会直接入队或发送。
           </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+interface BriefMail {
+  id: number; fromEmail: string; fromName: string | null; subject: string | null;
+  classification: string | null; intent: string | null; receivedAt: string; isRead: boolean;
+  matchedContactId: number | null;
+}
+interface MailBrief {
+  day: string; inbound: number; unread: number; byClass: Record<string, number>;
+  priceInquiry: number; sentToday: number;
+  awaiting: Array<BriefMail & { waitedHours: number }>;
+  latest: BriefMail[]; summary: string;
+}
+
+/** 卡片三：今日邮箱概览（主进程确定性统计，只读快照；深挖交给助手逐封看）。 */
+function MailBriefModal({ open, onClose, onSend }: {
+  open: boolean; onClose: () => void; onSend: (text: string) => void;
+}) {
+  const { data, isFetching } = useQuery({
+    queryKey: ["mail-brief", "today"],
+    queryFn: () => window.api.invoke("inbox:todayBrief") as Promise<{ success: boolean; data?: MailBrief; error?: string }>,
+    enabled: open,
+  });
+  const b = data?.success ? data.data ?? null : null;
+  const stat = (label: string, n: number, tone = "") => (
+    <div key={label} className="flex items-baseline gap-1.5">
+      <span className={`text-[18px] font-semibold ${tone || "text-gray-800"}`}>{n}</span>
+      <span className="text-[11px] text-gray-400">{label}</span>
+    </div>
+  );
+  return (
+    <Modal open={open} onCancel={onClose} width={640} title="今日邮箱概览" destroyOnHidden
+      footer={[
+        <Button key="inbox" onClick={() => { window.location.hash = "#/inbox"; onClose(); }}>去收件箱</Button>,
+        <Button key="ai" type="primary" disabled={!b} onClick={() => onSend(buildMailBriefPrompt())}>让助手逐封看</Button>,
+      ]}>
+      {isFetching ? (
+        <div className="flex items-center justify-center py-10"><Spin tip="正在汇总今天的邮件…" /></div>
+      ) : !b ? (
+        <Alert type="warning" showIcon message="概览取不到" description={data?.error ?? "服务异常，稍后再试"} />
+      ) : (
+        <div className="space-y-3 py-1">
+          <div className="text-[12px] text-gray-600">{b.summary}</div>
+          <div className="grid grid-cols-4 gap-2 rounded-lg border border-gray-100 px-3 py-2.5">
+            {stat("今日来信", b.inbound)}
+            {stat("未读", b.unread, b.unread ? "text-teal-600" : "")}
+            {stat("客户回复", b.byClass.replied ?? 0)}
+            {stat("询价", b.priceInquiry)}
+            {stat("退信", b.byClass.bounce ?? 0, (b.byClass.bounce ?? 0) ? "text-red-500" : "")}
+            {stat("自动回复", b.byClass.autoreply ?? 0)}
+            {stat("其他来信", b.byClass.other ?? 0)}
+            {stat("我方发出", b.sentToday)}
+          </div>
+          {b.awaiting.length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-400 mb-1">等你回复（{b.awaiting.length}）</div>
+              <div className="space-y-1">
+                {b.awaiting.map(m => (
+                  <div key={m.id} className="flex items-center gap-2 text-[12px]">
+                    <span className="w-14 flex-shrink-0 text-red-500">已等 {m.waitedHours}h</span>
+                    <span className="truncate text-gray-700">{m.fromName || m.fromEmail}</span>
+                    <span className="truncate text-gray-400">{m.subject ?? "（无主题）"}</span>
+                    {m.matchedContactId && (
+                      <a className="ml-auto flex-shrink-0 text-[11px] text-gray-400 hover:text-teal-600"
+                        onClick={() => { window.location.hash = `#/customers?view=table&detail=${m.matchedContactId}`; }}>
+                        看客户
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {b.latest.length > 0 && (
+            <div>
+              <div className="text-[11px] text-gray-400 mb-1">今天最新（{b.latest.length}）</div>
+              <div className="space-y-1">
+                {b.latest.map(m => (
+                  <div key={m.id} className="flex items-center gap-2 text-[12px]">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${m.isRead ? "bg-gray-200" : "bg-teal-400"}`} />
+                    <span className="truncate w-40 flex-shrink-0 text-gray-700">{m.fromName || m.fromEmail}</span>
+                    <span className="truncate flex-1 text-gray-500">{m.subject ?? "（无主题）"}</span>
+                    <span className="flex-shrink-0 text-[11px] text-gray-300">{(m.receivedAt || "").slice(11, 16)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="text-[11px] text-gray-400">概览是只读快照：不改已读、不触发抓取，也不会替你发任何邮件。</div>
         </div>
       )}
     </Modal>

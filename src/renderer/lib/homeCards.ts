@@ -26,6 +26,17 @@ export function buildQuotePrompt(input: QuoteCardInput): string {
   return lines.join("\n");
 }
 
+/** 卡片三「让助手逐封看」的固定流程提示词（概览数字由程序算，深挖交给 agent，口径写死防跑偏）。 */
+export function buildMailBriefPrompt(): string {
+  return [
+    "总结今天的邮箱情况，按这个流程来，不要反问我：",
+    "1) 调 inbox_search 取今天的邮件（未读优先，limit 给足）；要看正文再逐封 email_read_full，别拿预览当全文；",
+    "2) 逐封给「发件人 / 主题 / 一句话摘要 / 下一步建议」，客户回复与询价排前面并标出已等多久；",
+    "3) 退信与自动回复单独归类说明（自动回复不用回）；",
+    "4) 需要回复或写入跟进的，先给草稿或清单让我确认——不得自动发送、不得替我入队。",
+  ].join("\n");
+}
+
 // ── 自动开发信名单交接：首页推荐 → 发送中心「新建任务」预选 ─────────────
 // localStorage 一次性交接（读走即删）：跨页面传几十个 id，比 hash 传参干净。
 export const DEV_LETTER_PRESET_KEY = "dev-letter-preset";

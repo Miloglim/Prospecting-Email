@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { buildQuotePrompt, stashDevLetterPreset, takeDevLetterPreset } from "../../src/renderer/lib/homeCards";
+import { buildQuotePrompt, buildMailBriefPrompt, stashDevLetterPreset, takeDevLetterPreset } from "../../src/renderer/lib/homeCards";
 
 // ═══════════════════════════════════════════════════════════════════
 // 首页功能卡片（docs/home-cards-spec.md）：
@@ -54,5 +54,17 @@ describe("自动开发信名单交接（localStorage 一次性）", () => {
     localStorage.setItem("dev-letter-preset", "{broken");
     expect(takeDevLetterPreset()).toBeNull();
     localStorage.removeItem("dev-letter-preset");
+  });
+});
+
+describe("今日邮箱概览：让助手逐封看的提示词", () => {
+  it("写死流程与红线：先 inbox_search、要正文再读全文、不得自动发送", () => {
+    const p = buildMailBriefPrompt();
+    expect(p).toContain("inbox_search");
+    expect(p).toContain("email_read_full");
+    expect(p).toContain("别拿预览当全文");
+    expect(p).toContain("不得自动发送");
+    expect(p.split("
+").length).toBeGreaterThanOrEqual(4);
   });
 });

@@ -78,6 +78,8 @@ export const IPC = {
     /** 单封退信的被退联系人列表（详情栏同源展示） */
     BOUNCE_MATCHES: chan(PREFIX.INBOX, "bounceMatches"),
     GET_BODY:      chan(PREFIX.INBOX, "getBody"),
+    /** 首页「今日邮箱概览」卡：北京时间今日收信/未读/分类/待回复（只读快照，无模型） */
+    TODAY_BRIEF:   chan(PREFIX.INBOX, "todayBrief"),
   },
   CRM: {
     LIST_PIPELINE: chan(PREFIX.CRM, "listPipeline"),
