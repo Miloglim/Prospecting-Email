@@ -786,7 +786,8 @@ export function AssistantPage() {
   const sendRef = useRef<((text: string) => void) | null>(null);
 
   // ── 上翻时给「回到底部」按钮（流式回答期间不打断阅读）──
-  /** 真正的滚动元素（Bubble.List 内部列表，也可能是外层容器），谁先报 scroll 就用谁 */
+  /** 真正的滚动元素：由 bindScroller（外层容器的 ref 回调）登记，trackScroll 不再抢写 ——
+   *  旧版谁报 scroll 用谁，Bubble.List 内部表格横滚时会把 scrollerRef 劫持到不可滚元素上，跟随从此失灵 */
   const scrollerRef = useRef<HTMLElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   /** 停在上方期间又有新内容长出来 → 按钮加个「新内容」提醒点 */
@@ -795,20 +796,83 @@ export function AssistantPage() {
 
   /** 用户最近一次手动滚动的时间戳；2 秒内发消息不抢滚动条（正在阅读） */
   const lastUserScrollAtRef = useRef(0);
-  /** 程序化滚动豁免窗口：窗口内的 scroll 事件不记为用户手动滚动 */
+  /** 程序化滚动豁免窗口：窗口内的 scroll 事件不视为用户手动滚动 */
   const programmaticUntilRef = useRef(0);
+
+  /** 跟随开关（源真相，同步读）：true=贴底跟随，false=用户上翻已解除。
+   *  必须是 ref 不是 state —— wheel 在 React 18 走 Transition lane（低优先级），
+   *  流式 chunk 渲染走默认 lane 每帧抢先，state 版开关永远慢一拍：用户刚上翻、
+   *  下一帧跟随 effect 读到旧值 true 就 stickBottom 把人踹回底部，观感即「锁死在底部」。
+   *  ref 在事件处理器里同步置位，任何后续渲染读到的都是最新值。 */
+  const followRef = useRef(true);
+
+  const releaseFollow = () => {
+    followRef.current = false;
+    lastUserScrollAtRef.current = Date.now();
+    setAtBottom(false);
+  };
+
+  const engageFollow = () => {
+    followRef.current = true;
+    setAtBottom(true);
+    setPendingBelow(false);
+  };
 
   const trackScroll = (el: HTMLElement | null) => {
     if (!el) return;
-    scrollerRef.current = el;
-    // 程序化滚动（发送跳底/底部跟随/点按钮回底）触发的 scroll 事件不算用户手动滚动，
-    // 否则流式跟随的每一帧都会被误记成「用户在滚动」，2 秒免打扰窗口就永远清不掉
-    if (Date.now() >= programmaticUntilRef.current) lastUserScrollAtRef.current = Date.now();
+    // 豁免窗口内的 scroll 事件来自我们自己的 stickBottom/jump，不代表用户意图，不改跟随开关
+    if (Date.now() < programmaticUntilRef.current) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const bottom = distance <= 24;
-    setAtBottom(bottom);
-    if (bottom) setPendingBelow(false);
+    if (distance <= 24) engageFollow();
+    else {
+      // 滚离底部（滚轮/拖滚动条/拖选区带动滚动都算）→ 解除跟随
+      followRef.current = false;
+      lastUserScrollAtRef.current = Date.now();
+      setAtBottom(false);
+    }
   };
+
+  /** 用户滚动意图监听：wheel/touch/键盘只有真人能触发（程序改 scrollTop 永不发这些事件），
+   *  天然区分「用户主动滚动」与程序化跟随 —— 用户一上翻，跟随同步解除，不等 React 调度。 */
+  const touchStartYRef = useRef<number | null>(null);
+  const onUserWheel = (e: WheelEvent) => {
+    if (e.deltaY < 0) {
+      // 上翻：立即解除锁定（同步，越过 React 渲染时序）
+      releaseFollow();
+    } else if (e.deltaY > 0) {
+      // 下滚且这一下就够到底：立即恢复跟随（不等 scroll 事件兜底，避开豁免窗口）
+      const el = scrollerRef.current;
+      if (el && el.scrollHeight - el.scrollTop - el.clientHeight - e.deltaY <= 24) engageFollow();
+    }
+  };
+  const onTouchStart = (e: TouchEvent) => { touchStartYRef.current = e.touches[0]?.clientY ?? null; };
+  const onTouchMove = (e: TouchEvent) => {
+    const y0 = touchStartYRef.current;
+    const y = e.touches[0]?.clientY;
+    if (y0 == null || y == null) return;
+    if (y - y0 > 12) releaseFollow();   // 手指下拉 = 内容上移 = 上翻
+    touchStartYRef.current = y;
+  };
+
+  /** 已绑过意图监听的元素。ref 回调随渲染换代时 React 会先 null 再回传同一元素，按元素去重防反复绑定 */
+  const boundIntentElRef = useRef<HTMLElement | null>(null);
+  const bindScroller = (el: HTMLElement | null) => {
+    if (!el || boundIntentElRef.current === el) return;
+    boundIntentElRef.current = el;
+    scrollerRef.current = el;
+    el.addEventListener("wheel", onUserWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+  };
+
+  /** PageUp/Home（焦点在页内任意处时的上翻键盘滚动）也解除跟随 */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "PageUp" || e.key === "Home") releaseFollow();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   /** 贴底滚动（instant）：先登记程序化窗口再动 scrollTop */
   const stickBottom = () => {
@@ -825,9 +889,9 @@ export function AssistantPage() {
     contentLenRef.current = len;
   }, [messages, atBottom]);
 
-  /** 底部跟随：人贴着底时内容怎么长都贴着底走；人上翻了就完全不碰滚动条 */
+  /** 底部跟随：跟随开着时内容怎么长都贴着底走；用户上翻过（followRef=false）就完全不碰滚动条 */
   useEffect(() => {
-    if (atBottom) stickBottom();
+    if (followRef.current) stickBottom();
   }, [messages]);
 
   /** 切换/回到会话：载入完成后默认落到页面底部（上一屏停在哪不重要，每个会话都从最新消息看起） */
@@ -836,7 +900,7 @@ export function AssistantPage() {
     if (jumpedConvRef.current === key) return;
     if (convLoading || messages.length === 0) return;   // 等载入完成、有内容可滚
     jumpedConvRef.current = key;
-    setAtBottom(true);
+    engageFollow();
     stickBottom();
     requestAnimationFrame(stickBottom);                 // 气泡渲染完后再兜一次
     const t = setTimeout(stickBottom, 150);             // 表格/异步气泡撑高后最终归位
@@ -860,21 +924,21 @@ export function AssistantPage() {
     // instant：流式输出时内容每帧都在长，smooth 动画追不上增长 → 永远到不了底、跟随接不回来
     programmaticUntilRef.current = Date.now() + 120;
     el.scrollTop = el.scrollHeight;
-    setAtBottom(true);
-    setPendingBelow(false);
+    engageFollow();
   };
 
-  /** 回合结束自动回底：输出期间用户上翻即解除跟随（尊重阅读）；回答收尾后把视图带回最新。
-   *  最近 3 秒还在手动滚动 = 正在读别处，不抢（复用免打扰窗口语义）。 */
+  /** 回合收尾归底：仅当用户没主动上翻过（跟随仍开着）。
+   *  用户滚动过 → 尊重阅读位置，绝不拽回（「新内容」红点 + 回底按钮提示）；
+   *  旧版 3 秒免打扰规则在流式期间会被程序化豁免窗口误伤（用户上翻被记成程序滚动），
+   *  时间戳不可靠，followRef 才是可靠的用户意图。 */
   useEffect(() => {
     if (sending) return;
     const el = scrollerRef.current;
     if (!el) return;
-    if (Date.now() - lastUserScrollAtRef.current < 3000) return;
+    if (!followRef.current) return;
     programmaticUntilRef.current = Date.now() + 120;
     el.scrollTop = el.scrollHeight;
-    setAtBottom(true);
-    setPendingBelow(false);
+    engageFollow();
   }, [sending]);
 
   /** 发送时回底：不在底部且最近 2 秒没手动滚过 → 跳到底部等结果（instant，smooth 追不上）；
@@ -883,9 +947,8 @@ export function AssistantPage() {
    *  下一帧内容上屏后再滚一次兜底；atBottom 复位后跟随 effect 继续贴底。 */
   const jumpToBottomNow = () => {
     if (Date.now() - lastUserScrollAtRef.current < 2000) return;
+    engageFollow();
     stickBottom();
-    setAtBottom(true);
-    setPendingBelow(false);
     requestAnimationFrame(stickBottom);
   };
 
@@ -1207,9 +1270,11 @@ export function AssistantPage() {
 
       {/* 消息流 — selectable 豁免全局 user-select:none，允许复制 AI 回复。
           overflow-x-hidden：会话页禁横向滚动条，宽内容一律在表格卡内横滚（见 global.css 的收缩规则）。
-          ref 常驻：此前 scrollerRef 只在首次滚动事件才有值，进会话落底时是 null → 落底空转停在顶头。 */}
+          ref 常驻：bindScroller 登记 scrollerRef + 用户滚动意图监听（wheel/touch 只有真人能触发）；
+          onScrollCapture 在捕获相兜住所有滚动（scroll 不冒泡但走捕获），
+          程序化滚动由 programmaticUntil 豁免窗口区分。 */}
       <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1 selectable"
-           ref={(el) => { if (el) scrollerRef.current = el; }}
+           ref={bindScroller}
            onScrollCapture={(e) => trackScroll(e.currentTarget)}>
         {convLoading ? (
           /* 会话切换骨架屏：模拟气泡布局 */
@@ -1250,8 +1315,9 @@ export function AssistantPage() {
         ) : (
           <Bubble.List
             // autoScroll 不用 antd-x 的：它不认「用户是否在底部」，会跟人抢滚动条；
-            // 跟随/跳转统一走上面的 stickBottom + 跟随 effect
-            onScroll={(e) => trackScroll(e.currentTarget)}
+            // 也不挂 onScroll：React 合成滚动会冒泡，内部表格横滚时会把 e.currentTarget
+            // 报成 Bubble.List 根（不可滚），旧版 trackScroll 会据此劫持 scrollerRef → 跟随失灵。
+            // 跟随/跳转统一走外层容器的 onScrollCapture + stickBottom
             items={segs.map(toBubbleItem)}
             roles={{
               user: {
