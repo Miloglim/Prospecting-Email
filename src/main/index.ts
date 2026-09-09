@@ -7,6 +7,7 @@ import { Log } from "./logger";
 import { registerContactIPC } from "./transport/contact.ipc";
 import { registerCompanyIPC } from "./transport/company.ipc";
 import { registerSendIPC } from "./transport/send.ipc";
+import { autoResumeInterruptedBatch } from "./services/send.service";
 import { registerInboxIPC } from "./transport/inbox.ipc";
 import { registerCrmIPC } from "./transport/crm.ipc";
 import { registerTemplateIPC } from "./transport/template.ipc";
@@ -19,6 +20,7 @@ import { registerAiIPC } from "./transport/ai.ipc";
 import { registerAgentIPC } from "./transport/agent.ipc";
 import { registerRatesIPC } from "./transport/rates.ipc";
 import { registerRateUpdateIPC } from "./transport/rate-update.ipc";
+import { registerDevLetterIPC } from "./transport/dev-letter.ipc";
 import { registerKbIPC } from "./transport/kb.ipc";
 import { registerSystemIPC } from "./transport/system.ipc";
 import { initUpdater, cleanupUpdater } from "./updater";
@@ -146,6 +148,7 @@ function registerAllIPC() {
   registerAgentIPC();
   registerRatesIPC();
   registerRateUpdateIPC();
+  registerDevLetterIPC();
   registerKbIPC();
   registerSystemIPC();
 
@@ -182,6 +185,9 @@ app.whenReady().then(async () => {
   await migrateBodiesOut(); // 存量正文出库迁移（幂等，首次启动把库从正文撑大的状态缩回几 MB）
   migrateAccountPasswords(); // P0-1: 旧密钥密文一次性重封装为 safeStorage 主密钥（幂等）
   registerAllIPC();
+  // 上次退出/崩溃时批次在跑（config.runningBatch 残留）→ 自动续跑中断批次。
+  // 必须在 registerAllIPC 之后：saveConfigFn/sendBccFn 等引擎注入在此之前完成。
+  autoResumeInterruptedBatch();
   createWindow();
   createTray();
   initUpdater(mainWindow!);
