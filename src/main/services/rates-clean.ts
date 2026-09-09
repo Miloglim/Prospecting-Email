@@ -64,6 +64,35 @@ export function polExpansion(word: string | null | undefined): { values: PolStan
   polClusterCache.set(key, values);
   return { values, expanded: base.some(b => (POL_GROUPS[b]?.length ?? 1) > 1) };
 }
+
+/** 从自由文本里认出提到的起运港。查价工具兜底用：模型漏传 pol 时，
+ *  用户原话里的起运港从这里确定性找回，不能静默丢。
+ *  · 按语义群去重：用户说「深圳」（=蛇口/盐田/南沙 的港区统称）只算一次意图，word 保留用户原词；
+ *  · ASCII 别名按词边界匹配（防 SHA 撞进 SHANGHAI 这类子串误报）；
+ *  · 「新港」是天津别名但会撞上「更新港口」等日常词，排除——「天津新港」仍经「天津」命中，损失极小。 */
+const POL_DETECT_DENY = new Set<string>(["新港"]);
+
+export interface PolMention { word: string; group: string[] }
+
+export function detectPolMentions(text: string | null | undefined): PolMention[] {
+  const s = text ?? "";
+  if (!s) return [];
+  const out: PolMention[] = [];
+  const seenGroups = new Set<string>();
+  for (const [alias, targets] of Object.entries(POL_ALIASES)) {
+    if (POL_DETECT_DENY.has(alias)) continue;
+    const found = /^[A-Za-z]+$/.test(alias)
+      ? new RegExp(`(?<![A-Za-z])${alias}(?![A-Za-z])`, "i").test(s)
+      : s.includes(alias);
+    if (!found) continue;
+    const group = polExpansion(targets[0])?.values ?? [...targets];
+    const key = [...group].sort().join("|");
+    if (seenGroups.has(key)) continue;
+    seenGroups.add(key);
+    out.push({ word: alias, group });
+  }
+  return out;
+}
 /** 实测存在但不在十值白名单里的口岸：保留原文、标 unverified，不硬塞进十值 */
 const POL_SPLIT_RE = /[/、,，;；&|+()\s（）]+/;
 

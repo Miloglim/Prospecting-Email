@@ -5,6 +5,9 @@ export type CtxPushFn = (channel: string, data: unknown) => void;
 
 export interface ToolCtx {
   conversationId: string;
+  /** 本回合用户原话（最后一条 user 消息）。工具层兜底用：模型漏传约束参数时，
+   *  用户明确说过的条件（如起运港）可以从原话确定性找回，不能静默丢。 */
+  userText?: string;
   /** 事件推送器：后台任务等需要在工具执行层直接推进度的场景用 */
   push: CtxPushFn;
   /** 本回合各工具已调用次数（预算守卫） */

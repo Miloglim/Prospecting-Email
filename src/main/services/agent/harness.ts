@@ -340,7 +340,11 @@ export function hasPending(approvalId: string): boolean {
 export async function runHarnessTurn(profile: AgentProfile, o: HarnessOptions): Promise<TurnOutcome> {
   disableTracingOnce();
   const model = new OpenAIChatCompletionsModel(makeClient(o.baseUrl, o.apiKey), o.model);
-  const ctx: ToolCtx = { conversationId: o.conversationId, push: o.push, counts: new Map(), failures: new Map() };
+  const ctx: ToolCtx = {
+    conversationId: o.conversationId, push: o.push, counts: new Map(), failures: new Map(),
+    // 用户原话取历史里最后一条 user 消息：工具层做参数兜底用（如查价漏传起运港）
+    userText: [...o.history].reverse().find(m => m.role === "user")?.content,
+  };
   // 工具子集：按角色配置从全量里挑；未配置 = 全量
   const tools = pickTools(buildHarnessTools(ctx), profile.toolNames);
   // 身份档案每次现读：在设置里改完「助手身份」立刻生效，不用重启应用
