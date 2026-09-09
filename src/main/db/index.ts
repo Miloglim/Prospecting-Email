@@ -103,6 +103,15 @@ export function runMigrations(): void {
     if (added) Log.info("db.migrate", "email_accounts 表已添加收信健康度列");
   } catch { /* 表不存在 → 忽略 */ }
 
+  // v5.7 发信受阻熔断（docs/sender-block-circuit-spec.md）：email_accounts 补 circuit_reason 列
+  // （send_block_events 表本身由 BASE_SCHEMA_SQL 的 CREATE TABLE IF NOT EXISTS 幂等建出）
+  try {
+    if (!tableCols("email_accounts").includes("circuit_reason")) {
+      raw.exec("ALTER TABLE email_accounts ADD COLUMN circuit_reason text;");
+      Log.info("db.migrate", "email_accounts 表已添加 circuit_reason 列");
+    }
+  } catch { /* 表不存在 → 忽略 */ }
+
   // v4.2/v4.4: send_queue 补列
   try {
     const qcols = tableCols("send_queue");

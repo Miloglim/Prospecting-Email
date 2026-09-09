@@ -35,7 +35,7 @@ function seed(accounts: string[]) {
   provider text DEFAULT 'smtp' NOT NULL, smtp_host text, smtp_port integer,
   imap_host text, imap_port integer, encrypted_pass text NOT NULL,
   display_name text, signature text,
-  consecutive_fails integer DEFAULT 0 NOT NULL, circuit_open_at text, circuit_reset_after text,
+  consecutive_fails integer DEFAULT 0 NOT NULL, circuit_open_at text, circuit_reset_after text, circuit_reason text,
   last_fetch_error text, last_fetch_at text, fetch_fail_count integer DEFAULT 0 NOT NULL,
   is_active integer DEFAULT 1 NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);`);
   const db = drizzle(raw, { schema });

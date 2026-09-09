@@ -6,6 +6,7 @@ export { emailAccounts, type EmailAccountRow, type InsertEmailAccountRow } from 
 export { inboxMessages, inboxBounceMatches, type InboxMessageRow, type InsertInboxMessageRow } from "./inbox";
 export { templates, type TemplateRow, type InsertTemplateRow } from "./templates";
 export { sendQueue, type SendQueueRow, type InsertSendQueueRow } from "./send-queue";
+export { sendBlockEvents, type SendBlockEventRow, type InsertSendBlockEventRow } from "./send-block";
 export { agentConversations, agentMessages, agentToolCalls, agentFacts, agentWorkingMemory, agentGaps, agentSuggestions, type AgentConversationRow, type AgentMessageRow, type AgentToolCallRow, type AgentFactRow, type AgentWorkingMemoryRow, type AgentGapRow, type AgentSuggestionRow } from "./agent";
 export { rateQuotes, spaceQuotes, type RateQuoteRow, type InsertRateQuoteRow, type SpaceQuoteRow, type InsertSpaceQuoteRow } from "./rates";
 export { sendCampaigns, sendCampaignTargets, type SendCampaignRow, type SendCampaignTargetRow } from "./send-campaign";

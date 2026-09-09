@@ -4,7 +4,7 @@ import {
   Card, Input, InputNumber, Button, message, notification, Table, Modal, Form, Tag, Space,
   Switch, TimePicker, Tooltip, Badge, Popconfirm, Segmented,
 } from "antd";
-import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, DownloadOutlined, SyncOutlined, FolderOpenOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { RichTextEditor } from "../../components/RichTextEditor";
 import { toolLabelText, useToolMetaVersion } from "../../lib/tool-meta";
 import { CONVS_CHANGED } from "../../lib/agent-route";
@@ -15,7 +15,18 @@ interface EmailAccount {
   imapHost: string | null; imapPort: number | null;
   displayName: string | null; signature: string | null;
   consecutiveFails: number; isActive: number;
+  /** 发信熔断：开启时刻 / 自动过期时刻 / 原因（sender_block=服务商拦截退信驱动，smtp_fail=连续发送失败） */
+  circuitOpenAt: string | null; circuitResetAfter: string | null; circuitReason: string | null;
   lastFetchError: string | null; lastFetchAt: string | null; fetchFailCount: number;
+}
+
+/** 熔断是否仍在生效期（与主进程 isCircuitOpen 同口径：circuit_reset_after 优先，兜底 24h） */
+function circuitOpenOf(a: EmailAccount, now = Date.now()): boolean {
+  if (!a.circuitOpenAt) return false;
+  const opened = Date.parse(a.circuitOpenAt);
+  if (!Number.isFinite(opened)) return false;
+  const until = a.circuitResetAfter ? Date.parse(a.circuitResetAfter) : opened + 24 * 60 * 60 * 1000;
+  return Number.isFinite(until) && now < until;
 }
 
 interface SendSchedule {
@@ -1141,14 +1152,25 @@ export function SettingsPage() {
   const accountColumns = [
     { title: "邮箱", dataIndex: "email", key: "email", render: (v: string) => <span className="font-mono text-xs">{v}</span> },
     { title: "SMTP", key: "smtp", render: (_: unknown, r: EmailAccount) => <span className="text-[11px] text-gray-500">{r.smtpHost}:{r.smtpPort}</span> },
-    { title: "状态", key: "status", width: 120, render: (_: unknown, r: EmailAccount) => {
-      // 发信熔断（consecutiveFails）与收信失败（fetchFailCount）分开呈现
-      const sendBad = r.consecutiveFails > 0;
+    { title: "状态", key: "status", width: 160, render: (_: unknown, r: EmailAccount) => {
+      // 发信熔断（服务商拦截 / 连续发送失败）与收信失败分开呈现
+      const open = circuitOpenOf(r);
+      const blocked = open && r.circuitReason === "sender_block";
       const recvBad = r.fetchFailCount > 0;
-      if (!sendBad && !recvBad) return <Tag color="green">正常</Tag>;
+      if (!open && !r.consecutiveFails && !recvBad) return <Tag color="green">正常</Tag>;
       return (
         <Space size={2}>
-          {sendBad && <Tooltip title={`发信连续失败 ${r.consecutiveFails} 次（已熔断）`}><Tag color="orange">发信异常</Tag></Tooltip>}
+          {blocked && (
+            <Tooltip title={`服务商把我们的内容/发信频率拦下了（反垃圾/限流）——该账号已摘出发信轮换，${
+              r.circuitResetAfter ? new Date(r.circuitResetAfter).toLocaleString("zh-CN") : "24 小时"
+            }后自动恢复，或点右侧「解除熔断」提前放行`}>
+              <Tag color="red">发信受阻</Tag>
+            </Tooltip>
+          )}
+          {open && !blocked && <Tooltip title={`发信连续失败 ${r.consecutiveFails || 3} 次，已熔断`}><Tag color="orange">发信异常</Tag></Tooltip>}
+          {!open && r.consecutiveFails > 0 && (
+            <Tooltip title={`发信已连续失败 ${r.consecutiveFails} 次（满 3 次熔断）`}><Tag color="orange">发信欠佳</Tag></Tooltip>
+          )}
           {recvBad && (
             <Tooltip title={`连续失败 ${r.fetchFailCount} 次${r.lastFetchAt ? ` · ${new Date(r.lastFetchAt).toLocaleString("zh-CN")}` : ""}：${r.lastFetchError || "收信失败"}`}>
               <Tag color="red">收信异常</Tag>
@@ -1201,6 +1223,23 @@ export function SettingsPage() {
               setTestingId(null);
             }
           }}>测试</Button>
+          {/* 熔断生效中才出现：解除后账号立刻回到发信轮换（规范 docs/sender-block-circuit-spec.md §6） */}
+          {circuitOpenOf(r) && (
+            <Popconfirm
+              title={r.circuitReason === "sender_block"
+                ? "确认解除该账号的发信受阻熔断？"
+                : "确认解除该账号的发信熔断？"}
+              description="解除后它会立刻回到发信轮换。建议先改掉被拦的内容或把组间暂停调长，否则会再次触发。"
+              okText="解除" cancelText="先不动"
+              onConfirm={async () => {
+                const res = await window.api.invoke("accounts:resetCircuit", r.id) as { success: boolean; error?: string };
+                res?.success ? message.success(`${r.email} 已解除熔断`) : message.error(res?.error || "解除失败");
+                qc.invalidateQueries({ queryKey: ["accounts"] });
+              }}
+            >
+              <Button size="small" danger type="primary" ghost icon={<PlayCircleOutlined />}>解除熔断</Button>
+            </Popconfirm>
+          )}
           <Button danger size="small" icon={<DeleteOutlined />} onClick={async () => {
             const res = await deleteMut.mutateAsync(r.id);
             res?.success ? message.success("已删除") : message.error(res?.error || "失败");

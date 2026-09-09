@@ -11,6 +11,9 @@ import { Log } from "../logger";
 import { EVENTS } from "../events";
 import { saveDatabase, getRawDb } from "../db";
 import { updateContactStatus, markAsBounced, deleteContactCascade, removeCompanyIfOrphan } from "./contact.service";
+// 发信受阻熔断（规范 docs/sender-block-circuit-spec.md）：本模块只做「改道」，窗口计数与熔断落在服务里
+// （sender-block.service 不静态引本模块，无环）
+import { detectSenderBlockSignal, recordSenderBlock } from "./sender-block.service";
 import * as path from "path";
 import * as fs from "fs";
 import { DB_PATH } from "../config";
@@ -259,6 +262,30 @@ export function extractBouncedContact(text: string): number | null {
   return extractBouncedContacts(text)[0] ?? null;
 }
 
+/** ── 发信受阻通知改道（规范 docs/sender-block-circuit-spec.md §2/§4）──
+ *  服务商把我们的内容/发信频率拦下（反垃圾/限流/信誉黑名单）时，SMTP 那一步是成功的，
+ *  发送引擎的失败计数永远不沾（实测两账号 consecutive_fails=0、circuit_open_at=null，而 30 分钟内 8 封同族通知）。
+ *  这里把这类通知从「收件人硬退信」链路里摘出来：记到发信账号头上（累计到阈值熔断 + 暂停整批），
+ *  联系人状态、退信事件、发信任务止损一概不动。命中判据返回 true。
+ *  幂等：同一封通知（messageId）被抓取到、被点开正文多次只记一次。 */
+function routeSenderBlockNotice(
+  accountId: number, messageId: string | null, receivedAt: string | null | undefined, text: string | null | undefined,
+): boolean {
+  const signal = detectSenderBlockSignal(text);
+  if (!signal) return false;
+  try {
+    const r = recordSenderBlock({ accountId, messageId, occurredAt: receivedAt ?? null, signal });
+    if (r.tripped) {
+      Log.warn("inbox.senderBlock", `${r.email}: 30 分钟内 ${r.windowCount} 封服务商拦截通知 → 已熔断该账号并暂停整批发信`);
+    } else if (r.counted) {
+      Log.info("inbox.senderBlock", `${r.email}: 记 1 封发信受阻通知（${signal.code}），30 分钟累计 ${r.windowCount} 封`);
+    }
+  } catch (err) {
+    Log.error("inbox.senderBlock", `记录发信受阻通知失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return true;
+}
+
 /** ── 退信匹配写链（规范 §3）：一次调用干齐"这封退信 ↔ 这些被退人"的全部副作用 ──
  *  幂等写关联表 → 单列空则补第一个（兼容旧读取）→ 每个新加入者标记退信 + 补一条 bounced 事件。
  *  返回本次新增的联系人 id（旧链只处理一个人，全员在这一步一次覆盖）。不 saveDatabase，由调用方统一落盘。 */
@@ -369,6 +396,9 @@ export async function fetchInbox(accountId?: number, excludeIds?: number[]): Pro
     if (newItems.length > 0) {
       Log.info("inbox.fetch", `${account.email}: ${newItems.length} 封新邮件`);
       for (const m of newItems) {
+        // 服务商反垃圾/限流拦截通知（如阿里云 ESO_LOCAL_SPAM）：这笔账记在发信账号头上，
+        // 不是收件人邮箱坏了 —— 跳过标联系人、写退信事件、任务止损（规范 docs/sender-block-circuit-spec.md）
+        if (m.classification === "bounce" && routeSenderBlockNotice(m.accountId, m.messageId, m.receivedAt, m.bodyPreview)) continue;
         if (m.classification === "bounce" || m.classification === "replied" || m.classification === "autoreply") {
           const cid = m.matchedContactId ?? (matchContact(m.fromEmail)?.id || null);
           if (cid) {
@@ -607,6 +637,12 @@ export async function writeBodyForLastInsert(html: string): Promise<void> {
 function backfillMatchFromBody(id: number, current: number | null, classification: string | null, text: string): void {
   let touched = false;
   if (classification === "bounce") {
+    // 全文到手再判一次：预览被截断时抓取那轮没认出来的拦截通知，在这里补记（幂等按 messageId）。
+    // 命中即整条改道 —— 绝不进 recordBounceMatches，否则通知里「无法发送到」的整串地址会被标成邮箱失效。
+    const msg = getDb().select({
+      accountId: inboxMessages.accountId, messageId: inboxMessages.messageId, receivedAt: inboxMessages.receivedAt,
+    }).from(inboxMessages).where(eq(inboxMessages.id, id)).get();
+    if (msg && routeSenderBlockNotice(msg.accountId, msg.messageId, msg.receivedAt, text)) return;
     const linked = getDb().select({ id: inboxBounceMatches.id }).from(inboxBounceMatches)
       .where(eq(inboxBounceMatches.messageId, id)).limit(1).get();
     if (!linked) touched = recordBounceMatches(id, extractBouncedContacts(text)).length > 0;

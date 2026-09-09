@@ -25,6 +25,8 @@ interface SendStatus {
   isPaused: boolean; isRunning: boolean;
   currentItem: QueueItem | null; delaySeconds: number; delayUntil: string | null;
   delayReason?: "group" | "window" | null; // window=未到发送时段（显示提示而非倒计时）
+  /** 暂停原因：user=手动暂停；sender_block=服务商反垃圾/限流拦截触发（走红色横幅） */
+  pausedReason?: "user" | "sender_block" | null;
   accountStats: Array<{ accountId: number; email: string; sent: number; failed: number; total: number; isCircuitOpen: boolean }>;
 }
 
@@ -138,7 +140,11 @@ export function QueuePage() {
           {isRunning && status && (
             <span className="text-[11px] text-gray-500">
               {isPaused ? (
-                <><PauseCircleOutlined className="text-amber-500" /> 已暂停 — 等待恢复</>
+                status.pausedReason === "sender_block" ? (
+                  <><StopOutlined className="text-red-500" /> 发信受阻 — 已暂停整批</>
+                ) : (
+                  <><PauseCircleOutlined className="text-amber-500" /> 已暂停 — 等待恢复</>
+                )
               ) : status.delayReason === "window" ? (
                 <><ClockCircleOutlined className="text-teal-500" /> 未到发送时段 — 到点后自动开始</>
               ) : delayLeft > 0 ? (
@@ -176,6 +182,27 @@ export function QueuePage() {
           </Button>
         </Space>
       </div>
+
+      {/* 发信受阻：服务商把内容/频率拦下（反垃圾、限流）→ 整批已暂停、被拦账号已摘出轮换。
+          不写清「为什么停」和「点了恢复会怎样」，用户只会当成程序发疯（规范 docs/sender-block-circuit-spec.md §7） */}
+      {isRunning && isPaused && status?.pausedReason === "sender_block" && (
+        <Card size="small" className="!bg-red-50 !border-red-200">
+          <div className="flex items-start justify-between gap-4">
+            <div className="text-xs text-red-700 leading-5">
+              <div className="font-medium">发信被服务商反垃圾/限流拦截，整批已暂停（未发送的组都还在队列里）。</div>
+              <div className="text-red-600/80 mt-0.5">
+                被拦的账号已摘出发信轮换，24 小时后自动放回；也可到「设置 → 邮箱账号」点「解除熔断」提前放行。
+                建议先改掉被拦的内容、把组间暂停调长（降低发信频率）再恢复，否则会再次触发。
+              </div>
+            </div>
+            <Button size="small" danger type="primary" ghost icon={<PlayCircleOutlined />}
+              onClick={() => {
+                window.api.invoke("send:resume");
+                qc.invalidateQueries({ queryKey: ["send"] });
+              }}>仍要恢复发送</Button>
+          </div>
+        </Card>
+      )}
 
       {/* 开始发送按钮 — 队列已就绪但未运行（新入队 or 重启后中断恢复，两种情况共用） */}
       {canResume && (

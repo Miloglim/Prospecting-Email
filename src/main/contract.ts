@@ -101,6 +101,8 @@ export const IPC = {
     VALIDATE: chan(PREFIX.ACCOUNTS, "validate"),
     UPSERT:   chan(PREFIX.ACCOUNTS, "upsert"),
     DELETE:   chan(PREFIX.ACCOUNTS, "delete"),
+    /** 一键解除发信熔断（服务商拦截/连续失败留下的熔断态，规范 docs/sender-block-circuit-spec.md §6） */
+    RESET_CIRCUIT: chan(PREFIX.ACCOUNTS, "resetCircuit"),
   },
   EXPORT: {
     CONTACTS_TO_EXCEL: chan(PREFIX.EXPORT, "contactsToExcel"),

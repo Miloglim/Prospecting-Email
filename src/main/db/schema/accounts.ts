@@ -15,6 +15,8 @@ export const emailAccounts = sqliteTable("email_accounts", {
   consecutiveFails:  integer("consecutive_fails").notNull().default(0),
   circuitOpenAt:     text("circuit_open_at"),
   circuitResetAfter: text("circuit_reset_after"),
+  /** 熔断原因：sender_block=服务商反垃圾/限流拦截退信驱动（docs/sender-block-circuit-spec.md）；smtp_fail=发送连续失败 */
+  circuitReason:     text("circuit_reason"),
   /** 收信健康度（与发信熔断分开计数）：最近一次抓取失败原因 / 尝试时间 / 连续失败次数 */
   lastFetchError:    text("last_fetch_error"),
   lastFetchAt:       text("last_fetch_at"),

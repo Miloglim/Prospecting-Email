@@ -13,6 +13,7 @@ import { saveDatabase, getRawDb } from "../db";
 import { sendQueue } from "../db/schema/send-queue";
 import { EVENTS } from "../events";
 import { nudge as nudgeSuggestions } from "./suggestion-bus";
+import { isCircuitOpen, CIRCUIT_TTL_MS } from "./sender-block.service";
 import { loadConfig, DEFAULT_SCHEDULE } from "../config";
 import { writeBodyForLastInsert } from "./inbox.service";
 import { assembleEmail, type Lang, type ClientType, type Stage } from "./sentence-library";
@@ -59,6 +60,8 @@ export interface SendStatus {
   delayUntil: string | null;
   /** 等待原因：group=组间暂停（正常倒计时）；window=未到发送时段（前端应显示"未到发送时段"而非倒计时） */
   delayReason: "group" | "window" | null;
+  /** 暂停原因：user=用户手动暂停；sender_block=服务商反垃圾/限流拦截退信触发（队列页据此出横幅而非"等待恢复"） */
+  pausedReason?: "user" | "sender_block" | null;
   accountStats: Array<{
     accountId: number; email: string; sent: number; failed: number; total: number;
     remaining?: { hourly: number; daily: number };
@@ -78,8 +81,29 @@ const BUCKET_DEFS = [
 
 let state: SendStatus = {
   batchId: null, totalItems: 0, sentCount: 0, failedCount: 0,
-  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null, accountStats: [],
+  isPaused: false, isRunning: false, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
+  pausedReason: null, accountStats: [],
 };
+
+/** 可参与发信的账号：启用 + 熔断不在生效期（24h 自动过期）。
+ *  旧口径只看 is_active=1 —— 熔断过的账号下一批照样被排进轮换，等于白熔断（规范 §5）。 */
+function selectableAccounts(): Array<{ id: number; email: string }> {
+  const rows = getDb().select({
+    id: emailAccounts.id, email: emailAccounts.email,
+    circuitOpenAt: emailAccounts.circuitOpenAt, circuitResetAfter: emailAccounts.circuitResetAfter,
+  }).from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+  return rows.filter(r => !isCircuitOpen(r));
+}
+
+/** 启用账号总数（用来区分「没配账号」与「账号全在熔断中」两种失败） */
+function activeAccountCount(): number {
+  return getDb().select({ id: emailAccounts.id }).from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all().length;
+}
+
+/** 熔断态变化对外播报（账号卡/队列页据此刷新；sender-block 服务触发时借用） */
+export function pushCircuitChanged(payload: Record<string, unknown>): void {
+  push(EVENTS.CIRCUIT_CHANGED, payload);
+}
 
 // ── 重启水合 ──
 
@@ -546,7 +570,7 @@ export function buildQueue(bucketKeys: string[], templates?: SendTemplate[], con
   if (userTpls.length === 0) return failResult("请先选择至少一个邮件模板");
 
   // 预分配账号（供预览展示，与正式发送同一套轮换规则）；正式发送时 startQueue 会重新精确分配
-  const activeAccounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
+  const activeAccounts = selectableAccounts();
   const activeIds = activeAccounts.map(a => a.id);
 
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
@@ -648,7 +672,7 @@ export function buildAdaptiveQueue(bucketKeys: string[], contactIds?: number[]):
     if (comp.country) companyCountryMap.set(comp.id, comp.country);
   }
 
-  const activeIds = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all().map(a => a.id);
+  const activeIds = selectableAccounts().map(a => a.id);
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
 
@@ -785,8 +809,10 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   if (state.isRunning) return failResult("已有发送任务运行中");
   if (items.length === 0) return failResult("没有待发送项");
 
-  const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
-  if (accounts.length === 0) return failResult("没有可用的发件账号");
+  const accounts = selectableAccounts();
+  if (accounts.length === 0) return failResult(activeAccountCount() > 0
+    ? "所有启用账号都在发信熔断中（服务商反垃圾/限流拦截或连续失败）——到设置页账号卡点「解除熔断」，或等 24 小时自动过期"
+    : "没有可用的发件账号");
 
   // ① 配额守卫放最前 — 失败时什么都不动（后置会把 state 污染成永远 isRunning 的幽灵批次）
   const qCheck = checkQuota();
@@ -799,6 +825,7 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   //    旧"联系人亲和"（历史谁发就一直谁发）已按用户要求废弃。
   queues = new Map();
   abortFlag = false;
+  saveRunningBatch(null);   // 清旧批次标志（autoStart=true 时下面重新写入）；两步式入队不写标志 → 重启不会误自动启动
   const activeIds = accounts.map(a => a.id);
   const shuffled = interleaveCompanies(items);
   const ordered: Array<SendItem & { seq: number }> = [];
@@ -822,6 +849,7 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   state = {
     batchId, totalItems: kept.length, sentCount: 0, failedCount: 0,
     isPaused: false, isRunning: autoStart, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
+    pausedReason: null,
     accountStats: accounts.map(a => {
       const total = queues.get(a.id)?.length || 0;
       return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
@@ -865,6 +893,7 @@ export async function startQueue(items: SendItem[], autoStart = true): Promise<R
   }
 
   Log.info("send.start", `批次 ${batchId}: ${kept.length} 组, ${accounts.length} 账号（全局串行）`);
+  saveRunningBatch(batchId);   // 运行中标志落盘：退出/崩溃后启动可自动续跑
   void runBatchLoop();
   return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped });
 }
@@ -908,7 +937,7 @@ export function buildDynamicQueue(contactIds: number[], subject: string, body: s
     if (comp.country) companyCountryMap.set(comp.id, comp.country);
   }
 
-  const activeIds = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all().map(a => a.id);
+  const activeIds = selectableAccounts().map(a => a.id);
   const groupSize = Math.max(1, loadConfig().schedule?.groupSize || 20);
   const items: SendItem[] = [];
 
@@ -1051,8 +1080,19 @@ async function runBatchLoop(): Promise<void> {
       if (r.success) {
         const messageId = r.data?.messageId || null;
         item.status = "sent"; item.sentAt = new Date().toISOString(); state.sentCount++; failsByAccount.set(accountId, 0);
-        // P1-2: 成功即清零持久化熔断计数
-        try { getDb().update(emailAccounts).set({ consecutiveFails: 0, circuitOpenAt: null }).where(eq(emailAccounts.id, accountId)).run(); } catch { /* */ }
+        // P1-2: 成功即清零持久化熔断计数。sender_block 熔断不由 SMTP 成功解（只有一键解除/24h 过期），
+        // 连原因与过期时刻一起清的是 smtp_fail 那条账
+        try {
+          const cur = getDb().select({ circuitReason: emailAccounts.circuitReason })
+            .from(emailAccounts).where(eq(emailAccounts.id, accountId)).get();
+          getDb().update(emailAccounts)
+            .set({
+              consecutiveFails: 0,
+              ...(cur?.circuitReason === "sender_block"
+                ? {} : { circuitOpenAt: null, circuitResetAfter: null, circuitReason: null }),
+            })
+            .where(eq(emailAccounts.id, accountId)).run();
+        } catch { /* */ }
         recordQuotaSend(item.recipients.length);
         let stageAdvanced = 0; // 本组阶段推进人数（日志可观测）
         try { getDb().update(sendQueue).set({ status: "sent", sentAt: item.sentAt }).where(eq(sendQueue.id, item.id)).run(); } catch { /* */ }
@@ -1120,11 +1160,20 @@ async function runBatchLoop(): Promise<void> {
         if (s) s.failed++;
         const n = (failsByAccount.get(accountId) ?? 0) + 1;
         failsByAccount.set(accountId, n);
-        // P1-2: 熔断计数持久化（激活 accounts 表既有死字段，重启后熔断状态可见）
+        // P1-2: 熔断计数持久化（重启后熔断状态可见）。
+        // 单次 SMTP 失败不许顺手清掉 sender_block 熔断——那是服务商拦截驱动的另一条账，
+        // 只有「一键解除」或 24h 过期能解（规范 §4/§6）。
         try {
-          getDb().update(emailAccounts)
-            .set({ consecutiveFails: n, circuitOpenAt: n >= 3 ? new Date().toISOString() : null })
-            .where(eq(emailAccounts.id, accountId)).run();
+          const cur = getDb().select({ circuitReason: emailAccounts.circuitReason })
+            .from(emailAccounts).where(eq(emailAccounts.id, accountId)).get();
+          const opened = new Date();
+          const patch = n >= 3
+            ? {
+              consecutiveFails: n, circuitOpenAt: opened.toISOString(),
+              circuitResetAfter: new Date(opened.getTime() + CIRCUIT_TTL_MS).toISOString(), circuitReason: "smtp_fail",
+            }
+            : { consecutiveFails: n, ...(cur?.circuitReason === "sender_block" ? {} : { circuitOpenAt: null, circuitResetAfter: null, circuitReason: null }) };
+          getDb().update(emailAccounts).set(patch).where(eq(emailAccounts.id, accountId)).run();
         } catch { /* 统计失败不影响发送 */ }
         if (n >= 3) tripAccount(accountId, i + 1); // 连续失败阈值：只摘除该账号剩余组，批次继续
       }
@@ -1155,6 +1204,7 @@ async function runBatchLoop(): Promise<void> {
   const allDone = plan.every(x => x.status !== "pending");
   if (allDone) {
     state.isRunning = false;
+    saveRunningBatch(null);   // 批次跑完：清运行中标志，重启不再触发自动续跑
     Log.info("send.done", `${state.sentCount}/${state.totalItems}`);
     push(EVENTS.SEND_PROGRESS, state);
   }
@@ -1169,14 +1219,30 @@ async function runBatchLoop(): Promise<void> {
   }
 }
 
-export function pauseSend(): Result<void> { state.isPaused = true; pauseDelay(); return okResult(undefined); }
-export function resumeSend(): Result<void> { state.isPaused = false; resumeDelay(); return okResult(undefined); }
+/** 暂停发送。reason=user（默认，用户手动点暂停）| sender_block（服务商拦截退信触发，队列页据此出横幅）。 */
+export function pauseSend(reason: "user" | "sender_block" = "user"): Result<void> {
+  state.isPaused = true;
+  state.pausedReason = reason;
+  pauseDelay();
+  if (reason === "sender_block") push(EVENTS.SEND_PROGRESS, state);
+  return okResult(undefined);
+}
+export function resumeSend(): Result<void> { state.isPaused = false; state.pausedReason = null; resumeDelay(); return okResult(undefined); }
+
+/** 账号熔断态在批次内的真实上报（sender_block 触发时把该账号的卡标红，不让它继续显示"绿着"） */
+export function markAccountCircuitOpen(accountId: number): void {
+  const s = state.accountStats.find(x => x.accountId === accountId);
+  if (s) s.isCircuitOpen = true;
+  push(EVENTS.SEND_PROGRESS, state);
+}
 
 /** 取消当前批次：中断串行调度循环，队列丢弃（已发送的仍保留 interactions 记录） */
 export function cancelSend(): Result<void> {
   if (!state.isRunning) return okResult(undefined);
   state.isRunning = false;
+  state.pausedReason = null;
   abortFlag = true;
+  saveRunningBatch(null);   // 用户主动取消：清运行中标志，重启不得自动续跑被取消的批次
   if (delayTimer) { clearTimeout(delayTimer); delayTimer = null; }
   if (delayResolve) { const r = delayResolve; delayResolve = null; delayRemaining = 0; r(false); }
   Log.info("send.cancel", `批次 ${state.batchId || "?"} 已取消`);
@@ -1262,8 +1328,10 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
 
     if (rows.length === 0) return failResult("没有待恢复的发送项");
 
-    const accounts = getDb().select().from(emailAccounts).where(eq(emailAccounts.isActive, 1)).all();
-    if (accounts.length === 0) return failResult("没有可用的发件账号");
+    const accounts = selectableAccounts();
+    if (accounts.length === 0) return failResult(activeAccountCount() > 0
+      ? "所有启用账号都在发信熔断中（服务商反垃圾/限流拦截或连续失败）——到设置页账号卡点「解除熔断」，或等 24 小时自动过期"
+      : "没有可用的发件账号");
 
     // 配额守卫 — 与 startQueue 同一条门（否则中断批次次日恢复会直接突破当日限额）
     const qCheck = checkQuota();
@@ -1325,6 +1393,7 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
       batchId, totalItems: totalItems + sentCount + failedCount,
       sentCount, failedCount,
       isPaused: false, isRunning: true, currentItem: null, delaySeconds: 0, delayUntil: null, delayReason: null,
+      pausedReason: null,
       accountStats: accounts.map(a => {
         const total = queues.get(a.id)?.length || 0;
         return { accountId: a.id, email: a.email, sent: 0, failed: 0, total, isCircuitOpen: false };
@@ -1332,6 +1401,7 @@ export function resumeQueue(): Result<{ batchId: string; queued: number; queuedC
     };
 
     Log.info("send.resume", `恢复批次 ${batchId}: ${kept.length} 待发送, ${sentCount} 已完成`);
+    saveRunningBatch(batchId);   // 恢复续跑同样视为"运行中"：再次退出/崩溃后仍可自动续跑
     void runBatchLoop();
     return okResult({ batchId, queued: kept.length, queuedCount: keptCount, dropped });
   } catch (err) {

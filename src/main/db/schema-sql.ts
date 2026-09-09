@@ -11,11 +11,20 @@ CREATE TABLE IF NOT EXISTS email_accounts (
   imap_host text, imap_port integer,
   encrypted_pass text NOT NULL, display_name text, signature text,
   consecutive_fails integer DEFAULT 0 NOT NULL,
-  circuit_open_at text, circuit_reset_after text,
+  circuit_open_at text, circuit_reset_after text, circuit_reason text,
   last_fetch_error text, last_fetch_at text,
   fetch_fail_count integer DEFAULT 0 NOT NULL,
   is_active integer DEFAULT 1 NOT NULL,
   created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+-- 发信受阻事件（规范 docs/sender-block-circuit-spec.md）：服务商反垃圾/限流拦截通知记在发信账号头上，
+-- 不记成收件人退信。message_id 唯一 = 幂等键（同一封通知被反复点开只记一次）。
+CREATE TABLE IF NOT EXISTS send_block_events (
+  id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  account_id integer NOT NULL,
+  message_id text NOT NULL UNIQUE,
+  code text NOT NULL, excerpt text,
+  occurred_at text NOT NULL, created_at text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS companies (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL,

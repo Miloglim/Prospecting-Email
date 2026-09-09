@@ -12,7 +12,7 @@ import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
 import { resolveQueryPod, podRawExpansion, laneOfPod } from "../rates-standard";
 // 两张表的唯一出口（规范 docs/rates-answer-chain-spec.md §3）：清洗器算列，模型只许原样贴
-import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, type CleanQuote } from "../rates-clean";
+import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, detectPolMentions, type CleanQuote } from "../rates-clean";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -40,6 +40,8 @@ import { extractFact, rememberToolFact } from "./memory";
 import { rememberWork, fingerprint, listWork } from "./working-memory";
 import { parseEmailInquiry, pickRatesForEmail } from "./email-parse";
 import { lookupReplyRates, podQueryWord, customerQuoteTable } from "./reply-rates";
+// 发信受阻熔断：账号健康口径与发送引擎保持一致（生效期判据 + 30 分钟窗口封数）
+import { isCircuitOpen, countRecentBlocks } from "../sender-block.service";
 import { listQuotes, listQuoteRaws, countQuotes, listSpaces, normalizeContainer, quoteOptions, probeBoardCached, remoteBase, regionLanes, isRegionWord, type SpaceDto } from "../rate-sync.service";
 import { writeArtifact, toCsv, type ArtifactFormat } from "../artifact.service";
 import { runResearchScene, CRED_LABEL } from "../research.service";
@@ -1301,6 +1303,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
     description: "查询本地海运运价镜像库（真源 = 局域网台账 board_server；启动 5 秒后与每 4 小时全量刷新镜像）。"
       + "绝对不要用它回答客户、联系人、邮件内容或公司背景问题（那是 search_contacts / inbox_search / company_backcheck 的事）。"
       + "用户给了一个词就原样传 q（不必判断它是航线名还是港口名，工具会跨字段比对）；所有参数均可省略，省略的条件视为不限。"
+      + "用户问题里提到起运港时必须传 pol（如「蛇口到santos」→ q=santos、pod=SANTOS、pol=蛇口）——漏传会把其他起运港的价混进结果；"
+      + "工具检测到漏传会指令你带 pol 重查，照做，但不要依赖这个兜底。"
       + "没命中时按返回的 notice 指引走：第一轮先照 candidates 换词重试一次，两轮都没命中才按 notice 给的口径回答——"
       + "「本地镜像查不到」与「该航线没有报价」是两件事，不得混说，更不得编造价格。"
       + "每次查价都会同批附带该航线/港口最近 21 天的舱位动态（spaces / spaceTable）：回答必须价在前、舱位在后，"
@@ -1471,6 +1475,26 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }
       // 逐条件拼 notice：收敛信号 + 固定格式指令（弱模型对工具返回里的指令最服帖）
       const noticeLines: string[] = [];
+      // 起运港兜底（弱模型实测会把「蛇口到santos」的蛇口弄丢 → pol 不传 → 全网到该港的价混进来）：
+      // 用户原话里认得出起运港而调用没传 pol 时，不静默过滤（原话可能只是旁及提及，如"顺便看看蛇口"），
+      // 改为在返回里下指令让模型带 pol 重查——判读交给拿着完整句子的模型，机制只负责不让约束丢掉。
+      if (!polQ && ctx.userText) {
+        const mentions = detectPolMentions(ctx.userText);
+        const resultPols = [...new Set(dtoRowsAll.map(x => (x.pol || "").trim()).filter(Boolean))];
+        if (mentions.length === 1) {
+          const m = mentions[0]!;
+          const group = new Set<string>(m.group);
+          const foreign = resultPols.filter(p => !group.has(p));
+          if (foreign.length > 0) {
+            noticeLines.push(`用户原话明确提到起运港「${m.word}」，但本次调用没传 pol——上面结果混入了其他起运港（${foreign.join("、")}）的价。`
+              + `立即带 pol="${m.word}"（q/pod 等其余条件照旧）重查一次，只按重查结果作答，不许把其他起运港的价混进答复；`
+              + `以后用户提到起运港必须显式传 pol。`);
+          }
+        } else if (mentions.length > 1 && resultPols.length > 1) {
+          noticeLines.push(`用户原话提到多个起运港（${mentions.map(m => m.word).join("、")}）而本次没传 pol，结果未按起运港过滤。`
+            + `若用户意图是其中某一港或分港对比，带 pol 分开重查后再答。`);
+        }
+      }
       let candidates: { lanes: { v: string; c: number }[]; pods: { v: string; c: number }[] } | undefined;
       let mirror: { rows: number; latestSyncAt: string | null; remoteHost: string; reachable: boolean } | undefined;
       let concluded = false;                       // 是否已进入 L3 定论口径
@@ -2327,19 +2351,25 @@ export function buildHarnessTools(ctx: ToolCtx) {
       const rows = getDb().select({
         id: emailAccounts.id, email: emailAccounts.email, isActive: emailAccounts.isActive,
         consecutiveFails: emailAccounts.consecutiveFails, circuitOpenAt: emailAccounts.circuitOpenAt,
+        circuitResetAfter: emailAccounts.circuitResetAfter, circuitReason: emailAccounts.circuitReason,
         lastFetchError: emailAccounts.lastFetchError, fetchFailCount: emailAccounts.fetchFailCount,
       }).from(emailAccounts).all();
+      // 熔断按「是否仍在生效期」判（circuit_reset_after 到期自动放行）——按老口径非空即熔断会把过期账号误报成熔断中
       const issues = rows.map(r => {
         const probs: string[] = [];
+        const open = isCircuitOpen(r);
+        const blockCount = countRecentBlocks(r.id);
         if (r.isActive !== 1) probs.push("已停用");
-        if (r.circuitOpenAt) probs.push("发信熔断中");
+        if (open && r.circuitReason === "sender_block") probs.push(`发信受阻熔断中（服务商反垃圾/限流拦截，30 分钟内 ${blockCount} 封）— 已从发信轮换摘除，24h 自动过期或设置页手动解除`);
+        else if (open) probs.push("发信熔断中（连续发送失败）");
+        else if (blockCount > 0) probs.push(`近期有 ${blockCount} 封服务商拦截退信（未满熔断阈值，注意调整内容/频率）`);
         if (r.consecutiveFails > 0) probs.push(`发信连续失败 ${r.consecutiveFails} 次`);
         if (r.fetchFailCount > 0) probs.push(`收信连续失败 ${r.fetchFailCount} 次${r.lastFetchError ? `：${r.lastFetchError}` : ""}`);
         else if (r.lastFetchError) probs.push(`最近收信异常：${r.lastFetchError}`);
         return probs.length ? { id: r.id, email: r.email, problems: probs.join("、") } : null;
       }).filter((x): x is { id: number; email: string; problems: string } => x !== null);
       const healthyCount = rows.filter(r =>
-        r.isActive === 1 && !r.circuitOpenAt && r.consecutiveFails === 0 && r.fetchFailCount === 0).length;
+        r.isActive === 1 && !isCircuitOpen(r) && r.consecutiveFails === 0 && r.fetchFailCount === 0).length;
       // P1-7：有异常 → 直接给「去修」入口（跳设置页账号区）与复测动作
       const actions: AnyAction[] = [];
       if (issues.length > 0) {
