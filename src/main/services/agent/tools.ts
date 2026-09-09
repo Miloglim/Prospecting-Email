@@ -5,14 +5,14 @@
 // 按注册表派生（见本文件末尾闸门），execute 只在人工批准后才可能运行。
 import * as crypto from "crypto";
 import { z } from "zod";
-import { eq, like, or, and, desc, ne, sql, count, inArray } from "drizzle-orm";
+import { eq, like, or, and, desc, ne, sql, count, inArray, gte, isNull } from "drizzle-orm";
 import { tool } from "@openai/agents";
 import { getDb, getRawDb, saveDatabase } from "../../db";
 import { loadConfig, saveConfig } from "../../config";
 import { readActiveEndpoint, endpointFamily } from "../endpoint.service";
 import { resolveQueryPod, podRawExpansion, laneOfPod } from "../rates-standard";
 // 两张表的唯一出口（规范 docs/rates-answer-chain-spec.md §3）：清洗器算列，模型只许原样贴
-import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, detectPolMentions, type CleanQuote } from "../rates-clean";
+import { cleanQuoteRow, pivotQuotes, cleanTableMarkdown, customerQuoteMarkdown, polExpansion, detectPolMentions, fmtValidity, customerRemarkEn, type CleanQuote } from "../rates-clean";
 import { contacts } from "../../db/schema/contacts";
 import { companies } from "../../db/schema/companies";
 import { interactions } from "../../db/schema/interactions";
@@ -27,6 +27,7 @@ import { checkReminders, setStage } from "../crm.service";
 import { getSendStatus, getQueueItems, startDynamicSend, buildAdaptiveQueue, startQueue } from "../send.service";
 import { previewCampaign, createCampaign, getCampaignOverview, getCampaignDetail, setCampaignStatus, scanDueCampaigns } from "../campaign.service";
 import { buildRateUpdatePlan, planView, enqueueRateUpdatePlan, pendingQueueGroups, looksLikeCountry, countryMatchWords } from "../rate-update.service";
+import { todayMailBrief, resolveBeijingStart } from "../mail-brief.service";
 import { summarizeEmail, generateBackcheckReport, generateEmailDraft, generateEmailReply, searchCompany, type BackcheckReport } from "../ai.service";
 import { upsertCompany } from "../company.service";
 import { upsertContact, importContacts, deleteContactsBatch } from "../contact.service";
@@ -502,6 +503,10 @@ export const inboxSearchSchema = z.object({
   intentFilter: optStr(20).describe("按意图过滤（可单用）：price_inquiry=询价 schedule_request=船期 cooperation=合作 follow_up=跟进 other=其他；"
     + "多数邮件意图未被识别（为空），按意图过滤容易漏——确认「有没有某人来信」优先用 query，别叠加 intent"),
   unreadOnly: optBool().describe("只看未读，默认 false"),
+  since: optStr(24).describe("时间范围（北京时间）：可传「今天」「昨天」「本周」「最近3天」或 2026-09-09。"
+    + "用户话里带时间（今天/这几天/上周…）必须传它，由服务端算日界——不要拉一页再自己按时间戳筛（慢且常筛错）"),
+  includeSent: optBool().describe("是否包含我方发出的副本。默认 false（问「有没有来信/询盘/回复」时发出副本不算来信，会把开发信当成待处理）；"
+    + "只有用户明确问「我发出去的邮件」时才传 true，或直接传 classification=\"sent\""),
   limit: optInt().describe("返回条数，默认 10，按时间倒序"),
 });
 
@@ -1357,7 +1362,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
       };
       const laneWords = [...new Set([podQ, qQ].filter((x): x is string => !!x)
         .flatMap(w => podRawExpansion(resolveQueryPod(w))))];
-      const limitN = args.limit && args.limit > 0 ? args.limit : 20;
+      // limit 钳制 1..50：曾实测模型传 200 → 200 条 JSON 加表格一起进上下文，单轮 21 万 token
+      const limitN = Math.min(Math.max(args.limit && args.limit > 0 ? args.limit : 20, 1), 50);
       // 航线理解在先（用户口径）：目的港归一后先判所属航线（laneOfPod），该航线当期数据整批取回，
       // 与 L1（精准港 LIKE + terms）按行键去重合并 —— terms 的 AND 会掐死航线级行，两者不能混在一条查询里。
       const laneHit = isRegionQuery ? (regionLs[0] ?? null) : (canon ? laneOfPod(canon) : null);
@@ -1473,6 +1479,8 @@ export function buildHarnessTools(ctx: ToolCtx) {
         const p = portRows[0]!;
         answer = `最低 ${fmtUsd(p.oceanUsd)}（${p.carrier ?? "—"} · ${p.container ?? "综合"} · ${p.pol ?? "—"}→${p.podRaw}），共 ${total} 条当前有效报价。`;
       }
+      const wantCustomerTable = !!args.forCustomer || !!(ctx.userText && /给客户|发给客户|客户价格表|报价表|正式报价|整理成表/.test(ctx.userText));
+
       // 逐条件拼 notice：收敛信号 + 固定格式指令（弱模型对工具返回里的指令最服帖）
       const noticeLines: string[] = [];
       // 起运港兜底（弱模型实测会把「蛇口到santos」的蛇口弄丢 → pol 不传 → 全网到该港的价混进来）：
@@ -1568,6 +1576,11 @@ export function buildHarnessTools(ctx: ToolCtx) {
           noticeLines.push(`转述顺序：先一句「${podCanon ?? queryWord} 属于${laneHit ? `「${laneHit}」航线` : "相应航线"}」，`
             + `再分层报数——本港专属价在前、航线级适用价在后，两类不许混成一种。`);
         }
+        if (!args.forCustomer && wantCustomerTable) {
+          noticeLines.push("用户要的是**给客户看的报价表**：本工具必须带 forCustomer=true 重查一次，用返回的 customerTable（英文十一列、内部备注已判丢）。"
+            + "绝对不许把 userTable 的中文备注（航管侧成本/批价/可减多少 这类内部话）改列后当客户表贴出去——那是事故级泄漏。");
+        }
+        noticeLines.push("只想给操作者看精简版时贴 priceDigest（6 列、备注已按对外口径判丢），仍不许自己另拼表或改数字。");
         noticeLines.push(
           "回答格式（固定，勿自由发挥，规范 docs/rates-answer-chain-spec.md §3）：① 第一句原样采用 answer（数字与船司不改）；"
           + "② 紧接着把 userTable **原样贴进正文**（Markdown 表格）——中间产物卡已静默，正文不贴用户就看不到表；"
@@ -1588,13 +1601,29 @@ export function buildHarnessTools(ctx: ToolCtx) {
           + "并补一句「舱位为群内动态，以订舱时确认为准」。用户要报价信时，把舱位一并写进去。"
         : "本次没有该航线/港口最近 21 天的舱位动态。如实说「舱位这边没有近期动态，需要时我再查」，"
           + "不要拿更早的记录或外部印象当现状。");
+      // 明细只留决策要用的字段：出处/截图类信息已在 userTable 的 12 列里，重复给纯烧 token
+      const slimQuotes = dtoRowsAll.slice(0, 20).map(q => ({
+        podRaw: q.podRaw, lane: q.lane, carrier: q.carrier, container: q.container,
+        oceanUsd: q.oceanUsd, pol: q.pol, validTo: q.validTo, note: q.note,
+      }));
+      // 精简视图（可直接贴的 6 行摘要）：备注走对外同一套判丢，内部黑话不进来
+      let priceDigest = "";
+      try {
+        priceDigest = orderedRows.slice(0, 8).map(c => {
+          const price = c.p40 ?? c.p20 ?? c.pNor;
+          return `| ${c.carrier || "/"} | ${c.pols.join("/") || c.polText || "/"} | ${(c.pod || "/").toUpperCase()} | ${price != null ? `$${price.toLocaleString("en-US")}` : "议价"} | ${fmtValidity(c.validFrom, c.validTo)} | ${customerRemarkEn(c.note)} |`;
+        }).join("\n");
+        priceDigest = `| 船司 | 起运港 | 目的港 | 价格 | 有效期 | 备注 |
+|---|---|---|---|---|---|
+${priceDigest}`;
+      } catch { priceDigest = ""; }
       const out = {
-        total, count: dtoRowsAll.length, quotes: dtoRowsAll,
+        total, count: dtoRowsAll.length, quotes: slimQuotes,
         ...(laneHit ? { laneHit } : {}),
         portCount: portRows.length, laneCount: laneRows.length,
-        answer, userTable, customerTable,
+        answer, userTable, priceDigest, customerTable,
         spaceCount: spaces.length,
-        ...(spaces.length ? { spaces, spaceTable } : {}),
+        ...(spaces.length ? { spaceTable } : {}),
         notice: noticeLines.join("\n"),
         ...(candidates ? { candidates } : {}),
         ...(mirror ? { mirror } : {}),
@@ -1764,6 +1793,18 @@ export function buildHarnessTools(ctx: ToolCtx) {
       }
       if (cls) conds.push(eq(inboxMessages.classification, cls));
       if (intentF) conds.push(eq(inboxMessages.intent, intentF));
+      // 默认只看「进来的信」：我方发出副本也是 is_read=0 的未读，混进来会把开发信算成询盘
+      // （实测：用户问「今天的邮件有询盘吗」，第一轮被 sent 挤满 → 答「没有」，第二轮才翻出两封询价）
+      const wantSent = cls === "sent" || args.includeSent === true;
+      if (!wantSent) conds.push(or(isNull(inboxMessages.classification), ne(inboxMessages.classification, "sent")));
+      // 时间范围服务端算：解析不出当面纠错，不静默降级成"查全部"（静默会让模型继续自己瞎筛）
+      const sinceRaw = (args.since ?? "").trim();
+      const win = sinceRaw ? resolveBeijingStart(sinceRaw) : null;
+      if (sinceRaw && !win) {
+        return finishRead(ctx, "inbox_search", args, failOut("bad_filter",
+          `since「${sinceRaw}」看不懂。可传：今天 / 昨天 / 本周 / 最近3天 / 2026-09-09（按北京时间算日界）。`));
+      }
+      if (win) conds.push(gte(inboxMessages.receivedAt, new Date(win.start).toISOString()));
       // 「未读」指待我处理的来信：我方自己发出的副本（classification=sent）也是 is_read=0，
       // 不排除会把"我发出去的邮件"算成未读，计数与清单一起失真（用户实测抓到过）
       if (args.unreadOnly) conds.push(eq(inboxMessages.isRead, 0), ne(inboxMessages.classification, "sent"));
@@ -1846,8 +1887,13 @@ export function buildHarnessTools(ctx: ToolCtx) {
         }));
         break;   // 一张卡最多给一个创建动作，避免按钮噪音
       }
+      const dateHint = !win && ctx.userText && /今天|今日|昨天|前天|本周|上周|这几天|最近/.test(ctx.userText)
+        ? "用户问的是带时间的邮件：下次直接传 since=\"今天\"（或原话里的日期），由服务端按北京时间算日界——拉一页再自己数时间，既慢又容易把今天说成昨天。"
+        : "";
       return finishRead(ctx, "inbox_search", args, okOut({
         total: matchedTotal,
+        ...(win ? { 时间窗口: win.label } : {}),
+        ...(dateHint ? { 用法提醒: dateHint } : {}),
         returned: raw.length,
         // 让模型照抄结论，别自己数条数、别自己换算时间
         say: `共 ${matchedTotal} 封匹配，本条列出 ${raw.length} 封（时间为北京时间）`,
@@ -2842,6 +2888,44 @@ export function buildHarnessTools(ctx: ToolCtx) {
     },
   });
 
+  const mailBrief = tool({
+    name: "mail_brief",
+    description: "今日邮箱概览（主进程确定性统计，只读快照，不调模型也不改任何状态）：北京时间今天的来信数、未读、"
+      + "客户回复/询价/退信/自动回复分类计数、我方今日发出数，以及「等你回复」清单"
+      + "（今日客户回复且其后再无发往该邮箱的，按已等小时排序）。"
+      + "用户问「今天邮件怎么样」「有没有询盘」「谁还没回」必查它——不要拿 inbox_search 拉一页再自己数分类和时区。",
+    parameters: z.object({}),
+    execute: async (args) => {
+      const cached = cachedRead(ctx, "mail_brief", args);
+      if (cached) return cached;
+      const r = todayMailBrief();
+      if (!r.success) {
+        audit(ctx, "mail_brief", "read", args, undefined, "auto", r.error);
+        return failOut("brief_failed", r.error);
+      }
+      const b = r.data;
+      audit(ctx, "mail_brief", "read", args, { day: b.day, inbound: b.inbound, awaiting: b.awaiting.length }, "auto");
+      return finishRead(ctx, "mail_brief", args, okOut({
+        day: b.day, inbound: b.inbound, unread: b.unread, byClass: b.byClass,
+        priceInquiry: b.priceInquiry, sentToday: b.sentToday,
+        awaiting: b.awaiting.map(m => ({
+          id: m.id, from: m.fromName || m.fromEmail, fromEmail: m.fromEmail, subject: m.subject ?? null,
+          收到时间: beijingTime(m.receivedAt), 已等小时: m.waitedHours, contactId: m.matchedContactId ?? undefined,
+        })),
+        latest: b.latest.map(m => ({
+          id: m.id, from: m.fromName || m.fromEmail, subject: m.subject ?? null,
+          classification: m.classification ?? "other", 收到时间: beijingTime(m.receivedAt), isRead: m.isRead,
+        })),
+        summary: b.summary,
+        notice: "数字与时间以本工具为准（服务端按北京时间算好），不许自己换算时区或数条数。"
+          + "要逐封看内容或起草回复：先 inbox_search 传 since=\"今天\"（需要含我方发出副本时再加 includeSent=true）拿 id，再 email_read_full。",
+        nextStep: b.awaiting.length
+          ? `有 ${b.awaiting.length} 封等你回复，最久 ${b.awaiting[0]!.waitedHours} 小时——要不要读 #${b.awaiting[0]!.id} 并起草回复？`
+          : "今天没有待你回复的客户邮件。",
+      }));
+    },
+  });
+
   const rateUpdateEnqueue = tool({
     name: "rate_update_enqueue",
     description: "把 rate_update_plan 生成的运价更新方案加入发送队列（写，需确认）。只入队、绝不发送："
@@ -2894,7 +2978,7 @@ export function buildHarnessTools(ctx: ToolCtx) {
     updateContact, emailReadFull, quoteSearch, marketResearch, inboxSearch, emailSummarize,
     companyBackcheck, generateDraft, queueStatus, remindersDue, accountsStatus, listTemplatesTool, sendQueueAdd,
     updatePlan, exportArtifact, startBatchTask, importContactsTool, reportGap,
-    campaignCreate, campaignStatus, campaignControl, rateUpdatePlan, rateUpdateEnqueue,
+    campaignCreate, campaignStatus, campaignControl, rateUpdatePlan, rateUpdateEnqueue, mailBrief,
   ];
   for (const t of tools) {
     const name = (t as unknown as { name?: string }).name ?? "";

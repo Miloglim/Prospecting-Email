@@ -130,3 +130,36 @@ export function todayMailBrief(now: Date = new Date()): Result<MailBrief> {
 export function mailClassLabel(cls: string | null | undefined): string {
   return CLASS_LABEL[cls ?? ""] ?? cls ?? "其他来信";
 }
+
+/**
+ * 把「今天/昨天/本周/最近 N 天/YYYY-MM-DD」解析成北京时间起点 epoch（UTC 毫秒）。
+ * 给 agent 的日期参数用：模型不必自己换算时区，也防止它拿返回的时间戳自己筛（实测两轮都筛错）。
+ * 解析不出返回 null（上层如实报错，不静默变成"查全部"）。
+ */
+export function resolveBeijingStart(input: string | null | undefined, now: Date = new Date()): { start: number; label: string } | null {
+  const raw = (input ?? "").trim();
+  if (!raw) return null;
+  const t = now.getTime();
+  if (/^(今天|今日|today)$/i.test(raw)) return { start: dayRangeUtc(now).start, label: beijingDay(t) };
+  if (/^(昨天|昨日|yesterday)$/i.test(raw)) {
+    const y = new Date(t - 86400_000 + 8 * 3600_000).toISOString().slice(0, 10);
+    return { start: Date.parse(`${y}T00:00:00Z`) - 8 * 3600_000, label: y };
+  }
+  if (/^(本周|这周|this week)$/i.test(raw)) {
+    const bj = new Date(t + 8 * 3600_000);
+    const dow = (bj.getUTCDay() + 6) % 7;                      // 周一为一周之始
+    return { start: Date.parse(`${bj.toISOString().slice(0, 10)}T00:00:00Z`) - dow * 86400_000 - 8 * 3600_000, label: `本周（${beijingDay(t)} 往前 ${dow} 天）` };
+  }
+  const m = /^最近\s*(\d{1,3})\s*天$/i.exec(raw) || /^last\s*(\d{1,3})\s*days?$/i.exec(raw);
+  if (m?.[1]) {
+    const n = Math.max(1, Math.min(365, Number(m[1])));
+    return { start: dayRangeUtc(new Date(t - (n - 1) * 86400_000)).start, label: `最近 ${n} 天` };
+  }
+  const d = /^(20\d{2}-\d{2}-\d{2})$/.exec(raw);
+  const day = d?.[1];
+  if (day) {
+    const ms = Date.parse(`${day}T00:00:00Z`) - 8 * 3600_000;
+    return Number.isFinite(ms) ? { start: ms, label: day } : null;
+  }
+  return null;
+}

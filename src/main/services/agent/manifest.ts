@@ -141,6 +141,13 @@ export const TOOL_MANIFEST: ToolMeta[] = [
     spec: { sideEffect: "write", requiresApproval: true, budgetPerTurn: 2 },
   },
   {
+    name: "mail_brief", label: "今日邮箱概览",
+    route: "今日邮箱概览（只读快照，服务端按北京时间算好）：来信/未读/客户回复/询价/退信/自动回复计数 + 「等你回复」清单；"
+      + "用户问「今天邮件怎么样」「有没有询盘」「谁还没回」必查它，不要拿 inbox_search 自己数；",
+    followUps: ["把等我回复的那封读一下并起草回复", "今天退信是哪几个地址，账号要不要停一停"],
+    spec: { sideEffect: "read", requiresApproval: false, budgetPerTurn: 2 },
+  },
+  {
     name: "rate_update_plan", label: "生成运价更新方案",
     route: "定向运价更新方案（读，只出方案不发送）：跟进看板客户 ∪ 已回复客户 → 各自的港口偏好（看板登记的 + 近 90 天来信解析的）"
       + "→ 按「目的港 + 语言」分组 → 每组取台账当期真价并生成一封可直接发的运价更新邮件。用户说「给跟进的客户更新运价」"

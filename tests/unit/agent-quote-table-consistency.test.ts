@@ -81,8 +81,8 @@ function freshDb(): void {
 }
 
 const run = async (args: unknown) => JSON.parse(await call(T("quote_search"), args)) as {
-  total?: number; count?: number; userTable?: string; customerTable?: string;
-  standardCount?: number; notice?: string; actions?: Array<{ label: string }>;
+  total?: number; count?: number; userTable?: string; customerTable?: string; priceDigest?: string;
+  quotes?: unknown[]; standardCount?: number; notice?: string; actions?: Array<{ label: string }>;
 };
 
 describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-spec §2/§3）", () => {
@@ -175,4 +175,20 @@ describe("quote_search 两表同源与两段查询（规范 rates-answer-chain-s
     expect(r.notice).not.toContain("标准化参考层");
     expect(r.notice).toMatch(/查不到|没有/);
   });
+  it("要「给客户的价格表」却没带 forCustomer → 下指令重查；priceDigest 内部黑话已判丢", async () => {
+    const ctx2 = { conversationId: "qtc-cust", counts: new Map<string, number>(), failures: new Map<string, number>(), userText: "挑出最低价，整理为客户价格表" };
+    const t2 = Object.fromEntries((buildHarnessTools(ctx2) as unknown as ToolLike[]).map(t => [t.name ?? "", t]));
+    const r = JSON.parse(await call(t2["quote_search"], { pod: "SANTOS", carrier: "MSC" })) as { notice?: string; priceDigest?: string };   // 换条件绕开读缓存：notice 里的 forCustomer 指令取决于本回合用户原话
+    expect(r.notice).toContain("forCustomer=true");
+    expect(String(r.priceDigest ?? "")).toContain("船司");   // 2026-09 起精简摘要表头中文化（6 列）
+    expect(String(r.priceDigest ?? "")).not.toContain("成本价");
+    expect(String(r.priceDigest ?? "")).not.toContain("航管侧");
+  });
+
+  it("limit 钳制：传 200 也最多回 50 条，明细数组只留 20 条决策要用的字段", async () => {
+    const r = await run({ limit: 200, includeExpired: true });
+    expect(r.count).toBeLessThanOrEqual(50);
+    expect(((r.quotes ?? []) as unknown[]).length).toBeLessThanOrEqual(20);
+  });
 });
+
