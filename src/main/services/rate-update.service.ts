@@ -23,6 +23,8 @@ import { listQuotes } from "./rate-sync.service";
 import { STAGES } from "./crm.service";
 import { ratesDiff, parseFlexDate, type RatesDiff } from "./rate-sync.service";
 import { podToken } from "./suggestion.service";
+// 国家别名表已下沉 country-alias.ts（本文件内部仍用；对外经下方 `export ... from` 原样转出口）
+import { COUNTRY_ALIAS, countryMatchWords } from "./country-alias";
 
 // ── 类型 ──────────────────────────────────────────────────────
 
@@ -300,41 +302,9 @@ function scopeContacts(o: {
   }).slice(0, o.maxContacts);
 }
 
-/** 常见目的国中英对照（只用于查库时的 LIKE 加宽，认不出就原样用，不猜） */
-const COUNTRY_ALIAS: Record<string, string[]> = {
-  巴西: ["brazil"], 墨西哥: ["mexico"], 哥伦比亚: ["colombia"], 智利: ["chile"], 秘鲁: ["peru"],
-  阿根廷: ["argentina"], 委内瑞拉: ["venezuela"], 厄瓜多尔: ["ecuador"], 巴拿马: ["panama"],
-  哥斯达黎加: ["costa rica"], 多米尼加: ["dominican"], 古巴: ["cuba"], 乌拉圭: ["uruguay"],
-  土耳其: ["turkey", "türkiye"], 埃及: ["egypt"], 阿尔及利亚: ["algeria"], 摩洛哥: ["morocco"],
-  尼日利亚: ["nigeria"], 加纳: ["ghana"], 南非: ["south africa"], 肯尼亚: ["kenya"],
-  美国: ["united states", "usa", "u.s.a", "美国"], 德国: ["germany"], 荷兰: ["netherlands"],
-  西班牙: ["spain"], 意大利: ["italy"], 葡萄牙: ["portugal"], 英国: ["united kingdom", "uk", "england"],
-  波兰: ["poland"], 希腊: ["greece"], 俄罗斯: ["russia"], 乌克兰: ["ukraine"], 罗马尼亚: ["romania"],
-  阿联酋: ["united arab emirates", "uae"], 沙特: ["saudi"], 卡塔尔: ["qatar"], 科威特: ["kuwait"],
-  伊拉克: ["iraq"], 约旦: ["jordan"], 以色列: ["israel"], 印度: ["india"], 巴基斯坦: ["pakistan"],
-  孟加拉: ["bangladesh"], 斯里兰卡: ["sri lanka"], 越南: ["vietnam"], 泰国: ["thailand"],
-  马来西亚: ["malaysia"], 新加坡: ["singapore"], 印尼: ["indonesia"], 菲律宾: ["philippines"],
-  韩国: ["korea"], 日本: ["japan"], 澳大利亚: ["australia"], 新西兰: ["new zealand"],
-};
-/** 这个词是不是我们认识的国家名（中英双向）；是就返回规范中文名。用于纠正误塞进 port 的国家名 */
-export function looksLikeCountry(word: string | null | undefined): string | null {
-  const w = (word ?? "").trim().toLowerCase();
-  if (!w) return null;
-  if (COUNTRY_ALIAS[w]) return w;
-  const byEn = Object.entries(COUNTRY_ALIAS).find(([, ens]) => ens.some(e => e === w));
-  if (byEn) return byEn[0];
-  return Object.keys(COUNTRY_ALIAS).find(cn => cn.toLowerCase() === w) ?? null;
-}
-
-/** 查询词 → 该国的比对词集合（中文原词 + 英文别名；给的是英文就反查中文，两边都能匹配 country 字段） */
-export function countryMatchWords(word: string): string[] {
-  const w = word.trim().toLowerCase();
-  if (!w) return [];
-  const cn = Object.entries(COUNTRY_ALIAS).find(([, ens]) => ens.some(e => e === w || e.includes(w) || w.includes(e)))?.[0];
-  if (cn) return [w, cn];
-  const ens = COUNTRY_ALIAS[w];
-  return ens ? [w, ...ens] : [w];
-}
+/** 国家中英别名与解析函数已下沉到 country-alias.ts（首页开发信的意图解析也要用）；
+ *  这里原样转出口，老调用点（agent/tools.ts 等）继续从本模块引。 */
+export { looksLikeCountry, countryMatchWords, matchCountryInText } from "./country-alias";
 
 /**
  * 国家 → 当期有价的代表港（没有港口偏好的客户用它兜底，解决「没登记偏好就一个都推不了」的死路）。

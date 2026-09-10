@@ -38,7 +38,7 @@ export function HomeCards({ onSend }: { onSend: (text: string) => void }) {
             </span>
             <span>
               <span className="block text-[14px] font-medium text-gray-800">自动开发信</span>
-              <span className="block text-[11px] text-gray-400 mt-0.5">按联系人库与限额推荐开发群组，确认后进发送中心</span>
+              <span className="block text-[11px] text-gray-400 mt-0.5">按联系人库与限额推荐开发群组，还能说一句要求，确认后进发送中心</span>
             </span>
           </span>
         </button>
@@ -119,26 +119,44 @@ interface DevLetterContact {
   id: number; email: string; name: string;
   company: string | null; country: string | null; language: string | null;
 }
+/** 这次实际生效的筛选条件与解析来源（主进程算好带回，界面只负责照实说） */
+interface DevLetterApplied {
+  country?: string; language?: string; clientType?: string; limit?: number; note?: string;
+  parsedBy: "model" | "keyword" | "none";
+}
 interface DevLetterRec {
   contacts: DevLetterContact[];
   groupSize: number; totalCandidates: number; companyCount: number;
+  excludedInCampaign: number;
+  applied: DevLetterApplied;
   quota: { dailyLimit: number; sentToday: number; remaining: number | null; accountCount: number };
   languages: Array<{ lang: string; n: number }>;
   reasons: string[];
 }
 
-/** 卡片二：自动开发信弹窗。打开即算推荐（确定性规则，零模型调用）；确认 = 带名单跳发送中心。 */
+const PARSED_BY_LABEL: Record<DevLetterApplied["parsedBy"], string> = {
+  model: "AI 理解", keyword: "关键词理解", none: "默认规则",
+};
+
+/** 卡片二：自动开发信弹窗。默认走确定性推荐；输入要求后由主进程解析成筛选条件实时重算（规范 §4）。
+ *  红线不变：只出"推荐 + 预选 + 跳转"，入队与发送全部在发送界面由人确认。 */
 function DevLetterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [ask, setAsk] = useState("");
+  const [submitted, setSubmitted] = useState("");          // 已提交的要求（queryKey 用它，边打字不乱刷）
   const { data, isFetching } = useQuery({
-    queryKey: ["dev-letter", "recommend"],
-    queryFn: () => window.api.invoke("devLetter:recommend") as Promise<{ success: boolean; data?: DevLetterRec; error?: string }>,
+    queryKey: ["dev-letter", "recommend", submitted],
+    queryFn: () => window.api.invoke("devLetter:recommend",
+      { criteriaText: submitted || undefined }) as Promise<{ success: boolean; data?: DevLetterRec; error?: string }>,
     enabled: open,
   });
   const rec = data?.success ? data.data ?? null : null;
+  const run = () => setSubmitted(ask.trim());
+  const backToDefault = () => { setAsk(""); setSubmitted(""); };
   const confirm = () => {
     if (!rec?.contacts.length) return;
+    const how = submitted ? `按要求「${submitted}」` : "按默认规则";
     stashDevLetterPreset(rec.contacts.map(c => c.id),
-      `首页「自动开发信」推荐 ${rec.groupSize} 位冷客户（每公司 1 位，限额内）`);
+      `首页「自动开发信」${how}推荐 ${rec.groupSize} 位冷客户（每公司 1 位，限额内）`);
     window.location.hash = "#/campaigns?create=1";
     onClose();
   };
@@ -150,23 +168,38 @@ function DevLetterModal({ open, onClose }: { open: boolean; onClose: () => void 
           确定，去发送界面确认任务
         </Button>,
       ]}>
+      {/* 要求输入框常驻：没筛到人时也要能当场放宽一条，不必关掉重开 */}
+      <div className="flex items-center gap-2 pb-3">
+        <Input allowClear value={ask} onChange={e => setAsk(e.target.value)} onPressEnter={run}
+          placeholder="说要求，如：只要巴西的英语客户，先来 20 位" />
+        <Button type="primary" ghost loading={isFetching} onClick={run}>按我的要求重算</Button>
+        {submitted && <Button size="small" onClick={backToDefault}>回默认推荐</Button>}
+      </div>
       {isFetching ? (
         <div className="flex items-center justify-center py-10"><Spin tip="正在按联系人库与发送限额计算推荐群组…" /></div>
       ) : !rec ? (
-        <Alert type="warning" showIcon message="推荐算不出来" description="联系人库不可读或服务异常，请重试" />
+        <Alert type="warning" showIcon message="推荐算不出来" description={data?.error ?? "联系人库不可读或服务异常，请重试"} />
       ) : rec.contacts.length === 0 ? (
-        <Alert type="info" showIcon message="没有可推荐的开发对象" description={rec.reasons[0] ?? "联系人库里没有从未触达的有效邮箱客户"} />
+        <Alert type="info" showIcon message="没有可推荐的开发对象"
+          description={<div className="space-y-1">
+            <div>{rec.reasons[0] ?? "联系人库里没有从未触达的有效邮箱客户"}</div>
+            {rec.excludedInCampaign > 0 && <div className="text-gray-400">已在任务里 {rec.excludedInCampaign} 位（不重复推荐）</div>}
+          </div>} />
       ) : (
         <div className="space-y-3 py-1">
           <div className="flex items-center gap-2 flex-wrap text-[12px] text-gray-500">
             <Tag color="teal" className="!mr-0">推荐 {rec.groupSize} 位</Tag>
             <span>来自 {rec.totalCandidates} 位未触达冷客户（{rec.companyCount} 家公司，每家 1 位）</span>
+            <Tag className="!mr-0" color={rec.applied?.parsedBy === "model" ? "blue" : "default"}>
+              {PARSED_BY_LABEL[rec.applied?.parsedBy ?? "none"]}
+            </Tag>
           </div>
           <div className="flex items-center gap-2 flex-wrap text-[12px]">
             {rec.languages.map(l => <Tag key={l.lang} className="!mr-0">{l.lang} × {l.n}</Tag>)}
             <span className="text-gray-400">
               限额：今日已发 {rec.quota.sentToday}{rec.quota.dailyLimit > 0 ? `/${rec.quota.dailyLimit}` : "（未设上限）"}
               · 可用账号 {rec.quota.accountCount} 个
+              {rec.excludedInCampaign > 0 && ` · 已在任务里 ${rec.excludedInCampaign} 位不再推荐`}
             </span>
           </div>
           <ul className="text-[11px] text-gray-400 list-disc pl-4 space-y-0.5">
