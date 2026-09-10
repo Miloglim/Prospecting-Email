@@ -71,6 +71,8 @@ export const IPC = {
     CAMPAIGN_CREATE:  chan(PREFIX.SEND, "campaignCreate"),
     /** 草稿编辑（仅 draft 态可改，名单与计划全量替换） */
     CAMPAIGN_UPDATE_DRAFT: chan(PREFIX.SEND, "campaignUpdateDraft"),
+    /** 删除任务（连同触点账本；发送队列与历史保留）：running/paused 拒删，先终止再删 */
+    CAMPAIGN_DELETE:  chan(PREFIX.SEND, "campaignDelete"),
   },
   INBOX: {
     LIST:          chan(PREFIX.INBOX, "list"),

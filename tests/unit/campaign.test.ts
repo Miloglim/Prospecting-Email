@@ -656,3 +656,52 @@ describe("自适应内容模式 adaptive", () => {
     expect(enqueued[0]!.items[0]!.subject.length).toBeGreaterThan(0);
   });
 });
+
+// ── 规范 §1：任务卡删除（草稿/完结/终止后的清理动作）───────────────────────
+describe("deleteCampaign", () => {
+  beforeAll(async () => { await initSql(); });
+  beforeEach(() => { freshDb(); injectQueue(); });
+
+  it("运行中的任务拒删：得先终止（在途批次的回调要靠 campaignId 找任务）", () => {
+    const cid = seedCampaign([1]);                              // running
+    const r = campaign.deleteCampaign(cid);
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("终止");
+    expect(h.db!.select().from(schema.sendCampaigns).where(eq(schema.sendCampaigns.id, cid)).get()).toBeTruthy();
+  });
+
+  it("草稿可删：任务行与触点账本一起清掉", () => {
+    const cid = campaign.createCampaign({
+      name: "草稿任务", contactIds: [1, 2], autoSend: true, startNow: false,
+      touches: [{ stage: "initial", delayDays: 0 }, { stage: "followup1", delayDays: 5 }],
+    }).data!.id;
+    expect(campaign.getCampaignOverview().find(x => x.id === cid)?.total).toBe(2);
+    const r = campaign.deleteCampaign(cid);
+    expect(r.success).toBe(true);
+    expect(r.success && r.data.deletedTargets).toBe(2);         // 一人一行（轮次靠 round 推进）
+    expect(h.db!.select().from(schema.sendCampaigns).where(eq(schema.sendCampaigns.id, cid)).get()).toBeUndefined();
+    expect(h.db!.select().from(schema.sendCampaignTargets).where(eq(schema.sendCampaignTargets.campaignId, cid)).all()).toHaveLength(0);
+  });
+
+  it("完结任务可删，但发送队列与历史记录保留（只断归属，不删用户数据）", async () => {
+    const cid = campaign.createCampaign({
+      name: "单轮", contactIds: [1], autoSend: true,
+      touches: [{ stage: "initial", delayDays: 0 }],
+    }).data!.id;
+    await campaign.scanDueCampaigns();
+    campaign.onCampaignSendSent(1);                             // 计划走完 → sent + done
+    h.db!.insert(schema.sendQueue).values({
+      id: "q-keep", batchId: "b-keep", campaignId: cid, recipients: "[]", accountId: 1, status: "sent",
+    } as never).run();
+
+    expect(campaign.deleteCampaign(cid).success).toBe(true);
+    expect(h.db!.select().from(schema.sendCampaigns).where(eq(schema.sendCampaigns.id, cid)).get()).toBeUndefined();
+    expect(h.db!.select().from(schema.sendQueue).where(eq(schema.sendQueue.id, "q-keep")).get()?.batchId).toBe("b-keep");
+  });
+
+  it("任务不存在时如实报错，不动任何行", () => {
+    const r = campaign.deleteCampaign("nope");
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("任务不存在");
+  });
+});

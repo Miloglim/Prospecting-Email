@@ -307,6 +307,11 @@ export function registerSendIPC() {
     const { campaignId, ...rest } = input;
     return CampaignService.updateCampaignDraft(campaignId!.trim(), { ...rest, createdBy: "ui" });
   });
+  // 删除任务（触点账本一起删，发送历史保留）；running/paused 由 service 拒删
+  ipcMain.handle(IPC.SEND.CAMPAIGN_DELETE, (_e, id: string) => {
+    if (!id?.trim()) return failResult("缺少任务 id");
+    return CampaignService.deleteCampaign(id.trim());
+  });
 
   ipcMain.handle(IPC.SEND.TEST, async (_e, input: {
     to: string; accountId: number; subject?: string; body?: string; contactId?: number;

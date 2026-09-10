@@ -108,10 +108,22 @@ describe("campaign IPC 端到端（向导 payload → transport → 落库）", 
   });
   beforeEach(() => { freshDb(); });
 
-  it("通道已注册：campaignCreate / campaignUpdateDraft / campaignControl / campaigns 全在白名单", () => {
-    for (const ch of [IPC.SEND.CAMPAIGN_CREATE, IPC.SEND.CAMPAIGN_UPDATE_DRAFT, IPC.SEND.CAMPAIGN_CONTROL, IPC.SEND.CAMPAIGNS]) {
+  it("通道已注册：campaignCreate / campaignUpdateDraft / campaignControl / campaigns / campaignDelete 全在白名单", () => {
+    for (const ch of [IPC.SEND.CAMPAIGN_CREATE, IPC.SEND.CAMPAIGN_UPDATE_DRAFT, IPC.SEND.CAMPAIGN_CONTROL,
+      IPC.SEND.CAMPAIGNS, IPC.SEND.CAMPAIGN_DELETE]) {
       expect(handlers.has(ch), ch).toBe(true);
     }
+  });
+
+  it("卡片「删除」(campaignDelete)：草稿经通道删净；空 id 走 Result 包络报错", () => {
+    const created = invoke<{ id: string }>(IPC.SEND.CAMPAIGN_CREATE, { ...wizardPayload, startNow: false });
+    const id = created.data!.id;
+    expect(invoke(IPC.SEND.CAMPAIGN_DELETE, "").success).toBe(false);
+    const r = invoke<{ deletedTargets: number }>(IPC.SEND.CAMPAIGN_DELETE, id);
+    expect(r.success).toBe(true);
+    expect(r.data!.deletedTargets).toBe(2);
+    expect(h.db.select().from(sendCampaigns).where(eq(sendCampaigns.id, id)).get()).toBeUndefined();
+    expect(h.db.select().from(sendCampaignTargets).all()).toHaveLength(0);
   });
 
   it("「添加任务」(startNow=false)：落库为草稿、触点不计时、已回复者照常入队", () => {

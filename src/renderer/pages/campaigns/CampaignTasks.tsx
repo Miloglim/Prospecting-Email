@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Drawer, Empty, Progress, Table, Tag, Tooltip, message } from "antd";
+import { Button, Card, Drawer, Empty, Popconfirm, Progress, Table, Tag, Tooltip, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   PlusOutlined, RocketOutlined, EditOutlined, PauseCircleOutlined,
-  PlayCircleOutlined, StopOutlined, ClockCircleOutlined, LoadingOutlined,
+  PlayCircleOutlined, StopOutlined, ClockCircleOutlined, LoadingOutlined, DeleteOutlined,
 } from "@ant-design/icons";
 
 /**
@@ -101,6 +101,8 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
     const refresh = () => {
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       qc.invalidateQueries({ queryKey: ["campaign", "detail"] });
+      // 发出信会推进 stage/interactions → 首页推荐口径与选人器灰显口径都跟着变
+      qc.invalidateQueries({ queryKey: ["send", "pickerStats"] });
     };
     let again: ReturnType<typeof setTimeout> | null = null;
     const off = window.api.on("send:progress", () => {
@@ -159,12 +161,39 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
     try {
       const r = await window.api.invoke("send:campaignControl", { campaignId: id, action }) as { success: boolean; error?: string };
       qc.invalidateQueries({ queryKey: ["campaigns"] }); // 失败也可能改了状态（restart 缺内容 → 转草稿），两边都要刷新
+      qc.invalidateQueries({ queryKey: ["dev-letter"] });   // 任务归属变了 → 首页可推荐名单要重算（规范 §5）
+      qc.invalidateQueries({ queryKey: ["send", "pickerStats"] });
       if (!r?.success) { message.warning(r?.error || `${verb}失败`); return; }
       message.success(`已${verb}「${name}」`);
     } catch (err) {
       message.error(`操作失败：${err instanceof Error ? err.message : String(err)}`);
     }
   };
+
+  /** 删除任务（触点账本一起删，发送历史保留）；running/paused 主进程会拒删并说明 */
+  const remove = async (id: string, name: string) => {
+    try {
+      const r = await window.api.invoke("send:campaignDelete", id) as { success: boolean; error?: string };
+      qc.invalidateQueries({ queryKey: ["campaigns"] });
+      qc.invalidateQueries({ queryKey: ["dev-letter"] });
+      qc.invalidateQueries({ queryKey: ["send", "pickerStats"] });
+      if (!r?.success) { message.warning(r?.error || "删除失败"); return; }
+      if (drawerId === id) setDrawerId(null);
+      message.success(`已删除任务「${name}」，发送历史保留`);
+    } catch (err) {
+      message.error(`删除失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  /** 删除入口只在 draft/done/stopped 出现：运行中的任务要先终止（在途批次回调要靠 campaignId 找任务） */
+  const deleteOp = (r: CampaignRow) => (
+    <Popconfirm title={`删除任务「${r.name}」？`} description="名单与触点一并删除，发送历史保留"
+      okText="删除" okType="danger" cancelText="取消"
+      onConfirm={() => { void remove(r.id, r.name); }}>
+      <Button size="small" danger style={{ fontSize: 12 }} icon={<DeleteOutlined />}
+        onClick={e => { e.stopPropagation(); }}>删除</Button>
+    </Popconfirm>
+  );
 
   const cardOps = (r: CampaignRow) => {
     if (r.status === "draft") {
@@ -178,6 +207,7 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
             <Button size="small" danger style={{ fontSize: 12 }}
               onClick={e => { e.stopPropagation(); void control(r.id, "stop", r.name); }}>终止</Button>
           </Tooltip>
+          {deleteOp(r)}
         </>
       );
     }
@@ -200,13 +230,17 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
     }
     if (r.status === "done") {
       return (
-        <Tooltip title="开启新周期：退信/退订阅户保持终态，其余触点重置重发；上周期的固定内容已清空，需先编辑补好新内容">
-          <Button size="small" style={{ fontSize: 12 }} icon={<RocketOutlined />}
-            onClick={e => { e.stopPropagation(); void control(r.id, "restart", r.name); }}>再启动新周期</Button>
-        </Tooltip>
+        <>
+          <Tooltip title="开启新周期：退信/退订阅户保持终态，其余触点重置重发；上周期的固定内容已清空，需先编辑补好新内容">
+            <Button size="small" style={{ fontSize: 12 }} icon={<RocketOutlined />}
+              onClick={e => { e.stopPropagation(); void control(r.id, "restart", r.name); }}>再启动新周期</Button>
+          </Tooltip>
+          {deleteOp(r)}
+        </>
       );
     }
-    return null;
+    // stopped（及任何未知终态）：只剩删除——不留删除入口这任务就永远删不掉
+    return deleteOp(r);
   };
 
   const targetColumns: ColumnsType<TargetRow> = [

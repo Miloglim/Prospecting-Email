@@ -691,6 +691,22 @@ export function restartCampaign(id: string): Result<{ reset: number }> {
   Log.info("campaign.restart", `任务 ${id}「${c.name}」再启动新周期：重置 ${resetN} 触点（退信/退订保持终态）`);
   return okResult({ reset: resetN });
 }
+
+/** 删除任务：任务行 + 触点账本一起删；发送队列与历史记录保留（send_queue.campaign_id 变悬挂，历史页照旧可查，
+ *  不跟着删用户数据）。running/paused 拒删——在途批次的回调要靠 campaignId 找任务，边发边删会让账本对不上。 */
+export function deleteCampaign(id: string): Result<{ deletedTargets: number }> {
+  const db = getDb();
+  const c = db.select().from(sendCampaigns).where(eq(sendCampaigns.id, id)).get();
+  if (!c) return failResult(`任务不存在: ${id}`);
+  if (c.status === "running" || c.status === "paused") return failResult("任务还在跑，先点「终止」再删除");
+  // 计数用 select count(*)：sql.js 与 better-sqlite3 的 delete().run() 返回形状不一致，拿 changes 会在两边读出两个数
+  const n = db.select({ n: sql<number>`count(*)` }).from(sendCampaignTargets)
+    .where(eq(sendCampaignTargets.campaignId, id)).get()?.n ?? 0;
+  db.delete(sendCampaignTargets).where(eq(sendCampaignTargets.campaignId, id)).run();
+  db.delete(sendCampaigns).where(eq(sendCampaigns.id, id)).run();
+  Log.info("campaign.delete", `任务 ${id}「${c.name}」已删除（触点 ${n} 条；队列与发送历史保留）`);
+  return okResult({ deletedTargets: n });
+}
 /** 挑任务触点模板：指定 id 优先；否则 stage 匹配里挑联系人语言，再回落任意启用模板。
  *  adaptive=同一匹配范围内随机取一条（内容轮换防模板疲劳，规范 §0.7-3），此时不认指定 id */
 function pickCampaignTemplate(
