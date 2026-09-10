@@ -19,9 +19,10 @@ export interface CampaignTouch {
   stage: string;
   delayDays: number;
   templateId?: number;
-  /** 内容模式：fixed=创建时粘贴的内容快照 / userTpl=用户模板（每轮入队取最新）/ system=内置句库。
+  /** 内容模式：fixed=创建时粘贴的内容快照 / userTpl=用户模板（每轮入队取最新）/
+   *  adaptive=匹配范围内随机取一条用户模板（同阶段→同语言优先，内容轮换防疲劳，规范 §0.7-3）/ system=内置句库。
    *  缺省=旧行为（用户模板优先、句库兜底），agent 创建的老任务不受影响。 */
-  mode?: "fixed" | "userTpl" | "system";
+  mode?: "fixed" | "userTpl" | "adaptive" | "system";
   /** mode=fixed 时的内容快照（subject/body 可含 {{firstName}} 等变量，入队时渲染；cc=抄送地址逗号分隔，v6.1） */
   content?: { subject: string; body: string; cc?: string };
 }
@@ -393,7 +394,7 @@ export async function scanDueCampaigns(): Promise<void> {
           .where(and(eq(sendCampaignTargets.contactId, t.contactId), eq(sendCampaignTargets.status, "queued")))
           .get()?.n ?? 0;
         if (inflight > 0) { markTarget(t.id, "pending", plusDays(1), t.round, t.lastSentAt); continue; }
-        // 内容按轮次模式解析：fixed=快照 / userTpl=用户模板(缺了句库兜底) / system=句库 / 缺省=旧混合行为
+        // 内容按轮次模式解析：fixed=快照 / userTpl=用户模板(缺了句库兜底) / adaptive=匹配范围内随机一条 / system=句库 / 缺省=旧混合行为
         const content = resolveTouchContent(step, row.cLanguage, row.cClientType);
         if (!content) {
           Log.warn("campaign.scan", `任务 ${campaignId} 内容缺失 contact=${t.contactId}（round=${t.round} mode=${step.mode ?? "auto"}），顺延 1 天`);
@@ -457,10 +458,16 @@ export interface CampaignOverviewItem {
   total: number; pending: number; queued: number; sent: number;
   replied: number; bounced: number; unsubscribed: number; skipped: number;
   planRounds: number;
+  /** 触点（封数）口径进度（规范 §0.7-1）：分子=Σ已发轮次，分母=终态触点已完成轮数 + 未终态触点×计划轮数 */
+  touchesSent: number; touchesPlanned: number;
   /** 发送队列里仍归属本任务的组数（pending+sending）——运行情况挂在卡片背后 */
   queuedGroups: number;
   createdAt: string;
 }
+/** 触点终态：不再排新触点。进度分母对它们只计「已发出的轮数」——止损一个，分母收缩一个 */
+const TERMINAL_TARGET_SQL = sql`${sendCampaignTargets.status} IN ('sent','replied','bounced','unsubscribed','skipped')`;
+const asNum = (v: unknown): number => (typeof v === "number" ? v : Number(v) || 0);
+
 export function getCampaignOverview(): CampaignOverviewItem[] {
   const db = getDb();
   const campaigns = db.select().from(sendCampaigns).all();
@@ -473,6 +480,15 @@ export function getCampaignOverview(): CampaignOverviewItem[] {
     m[c.status] = c.n;
     byCampaign.set(c.campaignId, m);
   }
+  // 封数进度（多轮任务发送途中 sent 恒为 0，用它才有"正在往前走"的读数）
+  const touchRows = db.select({
+    campaignId: sendCampaignTargets.campaignId,
+    sent: sql<number>`coalesce(sum(${sendCampaignTargets.round}), 0)`,
+    stopped: sql<number>`coalesce(sum(case when ${TERMINAL_TARGET_SQL} then ${sendCampaignTargets.round} else 0 end), 0)`,
+    open: sql<number>`coalesce(sum(case when ${TERMINAL_TARGET_SQL} then 0 else 1 end), 0)`,
+  }).from(sendCampaignTargets).groupBy(sendCampaignTargets.campaignId).all();
+  const tMap = new Map<string, { sent: number; stopped: number; open: number }>();
+  for (const t of touchRows) tMap.set(t.campaignId, { sent: asNum(t.sent), stopped: asNum(t.stopped), open: asNum(t.open) });
   // 队列组归属（v5.9 任务驱动）：pending+sending 各分组计数，卡片进度与抽屉运行情况共用
   const qMap = new Map<string, number>();
   const qGroups = db.select({ campaignId: sendQueue.campaignId, status: sendQueue.status, n: sql<number>`count(*)` })
@@ -484,11 +500,13 @@ export function getCampaignOverview(): CampaignOverviewItem[] {
     const g = (k: string) => m[k] ?? 0;
     let planRounds = 0;
     try { planRounds = (JSON.parse(c.touchPlanJson) as CampaignTouch[]).length; } catch { /* 坏计划按 0 */ }
+    const t = tMap.get(c.id) ?? { sent: 0, stopped: 0, open: 0 };
     return {
       id: c.id, name: c.name, status: c.status, autoSend: c.autoSend === 1, planRounds,
       total: Object.values(m).reduce((a, b) => a + b, 0),
       pending: g("pending"), queued: g("queued"), sent: g("sent"),
       replied: g("replied"), bounced: g("bounced"), unsubscribed: g("unsubscribed"), skipped: g("skipped"),
+      touchesSent: t.sent, touchesPlanned: t.stopped + t.open * Math.max(1, planRounds),
       queuedGroups: qMap.get(c.id) ?? 0,
       createdAt: c.createdAt,
     };
@@ -591,7 +609,8 @@ function healthyAccountIds(ids: number[]): number[] {
   const ok = new Set(rows.filter(r => r.isActive === 1 && !isCircuitOpen(r)).map(r => r.id));
   return ids.filter(id => ok.has(id));
 }
-/** 轮次内容解析：fixed=创建时快照 / userTpl=用户模板（缺了句库兜底）/ system=句库 / 缺省=旧混合行为（模板优先句库兜底） */
+/** 轮次内容解析：fixed=创建时快照 / userTpl=用户模板（缺了句库兜底）/ adaptive=匹配范围内随机一条 /
+ *  system=句库 / 缺省=旧混合行为（模板优先句库兜底） */
 function resolveTouchContent(
   step: CampaignTouch, language: string | null, clientType: string | null,
 ): { subject: string; body: string; cc?: string } | null {
@@ -603,7 +622,7 @@ function resolveTouchContent(
     return cc ? { subject: s, body: b, cc } : { subject: s, body: b };
   }
   if (step.mode !== "system") {
-    const tpl = pickCampaignTemplate(step.stage, language, step.templateId);
+    const tpl = pickCampaignTemplate(step.stage, language, step.templateId, step.mode === "adaptive");
     if (tpl) return tpl;
   }
   const ct = clientType === "direct" || clientType === "peer" ? clientType : "general";
@@ -672,10 +691,13 @@ export function restartCampaign(id: string): Result<{ reset: number }> {
   Log.info("campaign.restart", `任务 ${id}「${c.name}」再启动新周期：重置 ${resetN} 触点（退信/退订保持终态）`);
   return okResult({ reset: resetN });
 }
-/** 挑任务触点模板：指定 id 优先；否则 stage 匹配里挑联系人语言，再回落任意启用模板 */
-function pickCampaignTemplate(stage: string, language: string | null, templateId?: number): { subject: string; body: string } | null {
+/** 挑任务触点模板：指定 id 优先；否则 stage 匹配里挑联系人语言，再回落任意启用模板。
+ *  adaptive=同一匹配范围内随机取一条（内容轮换防模板疲劳，规范 §0.7-3），此时不认指定 id */
+function pickCampaignTemplate(
+  stage: string, language: string | null, templateId?: number, adaptive = false,
+): { subject: string; body: string } | null {
   const db = getDb();
-  if (templateId) {
+  if (!adaptive && templateId) {
     const t = db.select().from(templates).where(eq(templates.id, templateId)).get();
     if (t && t.isActive) return { subject: t.subject, body: t.body };
   }
@@ -683,5 +705,8 @@ function pickCampaignTemplate(stage: string, language: string | null, templateId
     .where(and(eq(templates.stage, stage), eq(templates.isActive, 1))).all();
   if (!rows.length) return null;
   const lang = (language ?? "").toUpperCase();
-  return rows.find(t => t.language.toUpperCase() === lang) ?? rows[0]!;
+  const sameLang = rows.filter(t => t.language.toUpperCase() === lang);
+  const pool = sameLang.length ? sameLang : rows;
+  if (adaptive && pool.length > 1) return pool[Math.floor(Math.random() * pool.length)]!;
+  return pool[0]!;
 }

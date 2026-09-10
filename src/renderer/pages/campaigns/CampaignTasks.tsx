@@ -18,6 +18,8 @@ interface CampaignRow {
   id: string; name: string; status: string; autoSend: boolean; planRounds: number;
   total: number; pending: number; queued: number; sent: number;
   replied: number; bounced: number; unsubscribed: number; skipped: number;
+  /** 封数口径进度：Σ已发轮次 / 计划封数（终态触点只计已发轮数，止损即收缩分母） */
+  touchesSent: number; touchesPlanned: number;
   queuedGroups: number;
   createdAt: string;
 }
@@ -88,18 +90,26 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
   const { data, isLoading } = useQuery({
     queryKey: ["campaigns"],
     queryFn: () => window.api.invoke("send:campaigns") as Promise<{ success: boolean; data?: CampaignRow[] }>,
-    refetchInterval: 15_000,
+    // 轮询只是兜底：有任务在跑时收紧到 4s，空闲回落 15s（实时性靠 send:progress，见下）
+    refetchInterval: q => ((q.state.data?.data ?? []).some(r => r.status === "running") ? 4_000 : 15_000),
   });
   const rows = data?.success ? (data.data ?? []) : [];
   const runningCount = rows.filter(r => r.status === "running").length;
   const totalQueuedGroups = rows.reduce((a, r) => a + r.queuedGroups, 0);
 
   useEffect(() => {
-    const off = window.api.on("send:progress", () => {
+    const refresh = () => {
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       qc.invalidateQueries({ queryKey: ["campaign", "detail"] });
+    };
+    let again: ReturnType<typeof setTimeout> | null = null;
+    const off = window.api.on("send:progress", () => {
+      refresh();
+      // 轮次推进是在发送回调里异步落库的：只对一次会读到旧数字，1.2s 后二次对账
+      if (again) clearTimeout(again);
+      again = setTimeout(refresh, 1200);
     });
-    return off;
+    return () => { off?.(); if (again) clearTimeout(again); };
   }, [qc]);
 
   // 详情抽屉数据（打开时才拉；queue = 挂在卡片背后的运行情况）
@@ -255,7 +265,10 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {rows.map(r => {
             const st = STATUS_TAG[r.status] ?? { color: "default", label: r.status };
-            const waiting = r.pending + r.queued;
+            const planned = r.touchesPlanned;
+            const remain = Math.max(0, planned - r.touchesSent);
+            const pct = planned > 0 ? Math.min(100, Math.round((r.touchesSent / planned) * 100)) : 0;
+            const drained = planned > 0 && remain === 0;
             return (
               <div key={r.id}
                 onClick={() => setDrawerId(r.id)}
@@ -270,18 +283,18 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
                   <Tag color={st.color} className="!my-0 flex-shrink-0">{st.label}</Tag>
                 </div>
 
-                {/* 进度 */}
+                {/* 进度（封数口径：多轮任务发送途中就会往前走，不再等整条计划走完才动） */}
                 <div className="mb-2">
                   <div className="flex justify-between text-[11px] text-gray-500 mb-1">
-                    <span>已发 {r.sent}/{r.total}</span>
+                    <span>已发 {r.touchesSent}/{planned} 封</span>
                     <span>
                       {r.queuedGroups > 0
                         ? <span className="text-blue-600 font-medium">队列 {r.queuedGroups} 组</span>
-                        : waiting > 0 ? `待发 ${waiting}` : r.total > 0 ? "全部处理完" : "—"}
+                        : remain > 0 ? `还剩 ${remain} 封` : planned > 0 ? "全部处理完" : "—"}
                     </span>
                   </div>
-                  <Progress percent={r.total > 0 ? Math.round((r.sent / r.total) * 100) : 0} size="small" showInfo={false}
-                    status={r.status === "stopped" ? "normal" : r.sent < r.total ? "active" : "success"} />
+                  <Progress percent={pct} size="small" showInfo={false}
+                    status={r.status === "stopped" ? "normal" : drained ? "success" : r.status === "running" ? "active" : "normal"} />
                 </div>
 
                 {/* 止损计数 */}
@@ -297,7 +310,7 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
 
                 {/* 计划摘要 + 创建时间 */}
                 <div className="text-[11px] text-gray-400 flex items-center justify-between mb-3">
-                  <span>{r.planRounds} 轮计划 · {r.autoSend ? "无人值守" : "每轮手动开始"}</span>
+                  <span>{r.total} 人 · {r.planRounds} 轮计划 · {r.autoSend ? "无人值守" : "每轮手动开始"}</span>
                   <span className="font-mono">{fmtTime(r.createdAt)}</span>
                 </div>
 
@@ -328,7 +341,7 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
             </Tag>
             <span>{detail.campaign.planRounds} 轮计划</span>
             <span className="text-gray-300">·</span>
-            <span>已发 {detail.campaign.sent}/{detail.campaign.total}</span>
+            <span>已发 {detail.campaign.touchesSent}/{detail.campaign.touchesPlanned} 封</span>
             <span className="text-gray-300">·</span>
             <span>{detail.campaign.autoSend ? "无人值守" : "每轮手动开始"}</span>
             {detail.raw?.accountPolicy === "fixed" && <Tag className="!my-0">指定账号</Tag>}

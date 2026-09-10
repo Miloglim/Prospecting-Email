@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 import { drizzle } from "drizzle-orm/sql-js";
 import * as path from "path";
@@ -82,6 +82,16 @@ CREATE TABLE send_campaign_targets (
   id integer PRIMARY KEY AUTOINCREMENT NOT NULL, campaign_id text NOT NULL, contact_id integer NOT NULL,
   status text DEFAULT 'pending' NOT NULL, round integer DEFAULT 0 NOT NULL, next_touch_at text,
   last_sent_at text, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL);
+CREATE TABLE send_queue (
+  id text PRIMARY KEY NOT NULL, batch_id text NOT NULL, campaign_id text,
+  company_name text, company_id integer, recipients text NOT NULL,
+  account_id integer NOT NULL, account_email text,
+  subject text, tpl_body text, contact_vars text,
+  send_mode text DEFAULT 'bcc' NOT NULL,
+  status text DEFAULT 'pending' NOT NULL, error text, sent_at text,
+  tpl_name text, country text, language text, cc text,
+  created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 `;
 
 let SQLLIB: Awaited<ReturnType<typeof initSqlJs>>;
@@ -524,5 +534,125 @@ describe("再启动新周期（restartCampaign + 完结清空固定内容）", (
     expect(r.success).toBe(false);
     expect(r.error).toContain("固定内容");
     expect(h.db!.select().from(schema.sendCampaigns).where(eq(schema.sendCampaigns.id, cid)).get()!.status).toBe("draft");
+  });
+});
+
+// ── 规范 §0.7-1：任务进度改封数口径（发送途中就在走，止损收缩分母）──────────
+describe("封数进度 touchesSent / touchesPlanned", () => {
+  beforeAll(async () => { await initSql(); });
+  beforeEach(() => { freshDb(); injectQueue(); });
+  const ov = (cid: string) => campaign.getCampaignOverview().find(x => x.id === cid)!;
+
+  it("一轮真发出去就 +1 封；旧人数口径 sent 仍是 0（这正是卡片看起来不动的原因）", async () => {
+    const cid = seedCampaign([1, 2, 4]);                 // 3 人 × 2 轮 = 6 封
+    expect(ov(cid).touchesPlanned).toBe(6);
+    expect(ov(cid).touchesSent).toBe(0);
+    await campaign.scanDueCampaigns();                   // 首信入队
+    campaign.onCampaignSendSent(1);                      // 首信发出 → round=1，计划未完 → 回 pending
+    const o = ov(cid);
+    expect(o.touchesSent).toBe(1);
+    expect(o.status).toBe("running");
+    expect(o.sent).toBe(0);                              // 人数口径：整条计划走完才计
+    expect(o.touchesPlanned).toBe(6);
+  });
+
+  it("回复止损收缩分母；剩下的发完即走到头（进度条能到 100%）", async () => {
+    const cid = seedCampaign([1, 2, 4]);
+    await campaign.scanDueCampaigns();
+    campaign.onCampaignSendSent(1);                      // 1 号已发 1 封
+    campaign.onContactSignal(2, "replied");              // 2 号回复止损（一封没发）
+    let o = ov(cid);
+    expect(o.touchesSent).toBe(1);
+    expect(o.touchesPlanned).toBe(4);                    // 1、4 号各 2 封 + 2 号已发 0 封
+    for (let i = 0; i < 2; i++) {                        // 把 1、4 号剩余轮次跑完
+      h.db!.update(schema.sendCampaignTargets).set({ nextTouchAt: daysAgoIso(0) })
+        .where(eq(schema.sendCampaignTargets.campaignId, cid)).run();
+      await campaign.scanDueCampaigns();
+      campaign.onCampaignSendSent(1);
+      campaign.onCampaignSendSent(4);
+    }
+    o = ov(cid);
+    expect(o.touchesSent).toBe(4);
+    expect(o.touchesPlanned).toBe(4);
+  });
+
+  it("单轮任务：人数与封数两种口径此刻一致", async () => {
+    const cid = campaign.createCampaign({
+      name: "单轮", contactIds: [1], autoSend: true,
+      touches: [{ stage: "initial", delayDays: 0 }],
+    }).data!.id;
+    expect(ov(cid).touchesPlanned).toBe(1);
+    await campaign.scanDueCampaigns();
+    campaign.onCampaignSendSent(1);
+    const o = ov(cid);
+    expect(o.touchesSent).toBe(1);
+    expect(o.sent).toBe(1);
+  });
+});
+
+// ── 规范 §0.7-3：adaptive = 同一匹配范围内随机取一条用户模板 ──────────────
+describe("自适应内容模式 adaptive", () => {
+  beforeAll(async () => { await initSql(); });
+  beforeEach(() => { freshDb(); injectQueue(); });
+  // 打桩过 Math.random 必须在本用例结束时交还：sql.js 拿它生成内存库文件名，
+  // 常值会撞上同名的上一份库 → freshDb 报 "table contacts already exists"
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  /** 往 initial/EN 池里再加两条（freshDb 已带一条 initial/EN「Hello {{firstName}}」），外加一条 ES */
+  function seedPool(): void {
+    h.db!.insert(schema.templates).values([
+      { name: "首信 A", language: "EN", subject: "A subject", body: "A body", stage: "initial" },
+      { name: "首信 B", language: "EN", subject: "B subject", body: "B body", stage: "initial" },
+      { name: "首信西语", language: "ES", subject: "Asunto ES", body: "Cuerpo ES", stage: "initial" },
+    ] as never).run();
+  }
+  const runAdaptive = async (contactId: number, templateId?: number): Promise<string> => {
+    const r = campaign.createCampaign({
+      name: "轮换", contactIds: [contactId], autoSend: true,
+      touches: [{ stage: "initial", delayDays: 0, mode: "adaptive", ...(templateId ? { templateId } : {}) }],
+    });
+    if (!r.success) throw new Error(r.error);
+    await campaign.scanDueCampaigns();
+    return enqueued[0]?.items[0]?.subject ?? "";
+  };
+
+  it("随机数决定选池里哪一条（0 → 首条，接近 1 → 末条）", async () => {
+    seedPool();
+    const rnd = vi.spyOn(Math, "random").mockReturnValue(0);
+    expect(await runAdaptive(1)).toBe("Hello {{firstName}}");
+    injectQueue();                                        // 清掉上一轮的入队记录
+    rnd.mockReturnValue(0.999);
+    expect(await runAdaptive(4)).toBe("B subject");
+  });
+
+  it("按联系人语言收窄：西语联系人只可能在西语模板里随机", async () => {
+    seedPool();
+    h.db!.update(schema.contacts).set({ language: "ES" }).run();     // 全员西语
+    const rnd = vi.spyOn(Math, "random");
+    for (const [roll, cid] of [[0, 1], [0.5, 2], [0.999, 4]] as const) {
+      injectQueue();
+      rnd.mockReturnValue(roll);
+      expect(await runAdaptive(cid)).toBe("Asunto ES");    // ES 池里就这一条，不会漏英文模板进去
+    }
+  });
+
+  it("adaptive 不锁定具体模板：指定 templateId 也照样在匹配范围里随机", async () => {
+    seedPool();
+    const followup = h.db!.select().from(schema.templates).where(eq(schema.templates.stage, "followup1")).get()!;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const subject = await runAdaptive(1, followup.id);
+    expect(subject).not.toBe(followup.subject);            // 忽略指定 id，按该轮 stage 圈池
+    expect(subject).toBe("Hello {{firstName}}");
+  });
+
+  it("该阶段一条模板都没有 → 回落系统句库（不空手）", async () => {
+    const r = campaign.createCampaign({
+      name: "无模板阶段", contactIds: [1], autoSend: true,
+      touches: [{ stage: "closing", delayDays: 0, mode: "adaptive" }],
+    });
+    expect(r.success).toBe(true);
+    await campaign.scanDueCampaigns();
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]!.items[0]!.subject.length).toBeGreaterThan(0);
   });
 });

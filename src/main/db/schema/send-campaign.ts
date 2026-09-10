@@ -14,7 +14,7 @@ export const sendCampaigns = sqliteTable("send_campaigns", {
   autoSend:       integer("auto_send").notNull().default(1),
   /** 创建时的筛选条件快照（回显/审计：这个任务当初圈的是谁） */
   targetFilterJson: text("target_filter_json").notNull().default("{}"),
-  /** 触点计划 [{round, stage:"initial|followup1|…", templateId?:number, mode?:"fixed|userTpl|system", content?, delayDays}] */
+  /** 触点计划 [{round, stage:"initial|followup1|…", templateId?:number, mode?:"fixed|userTpl|adaptive|system", content?, delayDays}] */
   touchPlanJson:  text("touch_plan_json").notNull(),
   /** 创建入口：ui=发送中心向导 / agent=AI 对话编排（默认，旧数据兼容） */
   createdBy:      text("created_by").notNull().default("agent"),

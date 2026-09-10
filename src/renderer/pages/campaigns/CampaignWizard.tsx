@@ -21,10 +21,11 @@ const STAGE_OPTIONS = [
 const STAGE_LABELS: Record<string, string> = Object.fromEntries(STAGE_OPTIONS.map(o => [o.value, o.label]));
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, "0")}:00` }));
 
-type TouchMode = "fixed" | "userTpl" | "system";
+type TouchMode = "fixed" | "userTpl" | "adaptive" | "system";
 const MODE_CARDS: Array<{ key: TouchMode; title: string; desc: string }> = [
   { key: "fixed", title: "固定内容", desc: "自己粘贴主题与正文，支持 {{firstName}} {{company}} 变量，所见即所发" },
   { key: "userTpl", title: "用户模板", desc: "用素材库模板，按阶段/语言自动匹配（模板可随时改，每轮入队取最新）" },
+  { key: "adaptive", title: "自适应", desc: "同一匹配范围内随机取一条用户模板发信——多轮触达内容轮换，模板增删即时生效" },
   { key: "system", title: "系统句库", desc: "程序内置多语言句库（EN/ES/PT），按联系人类型+阶段自动组装" },
 ];
 
@@ -228,6 +229,8 @@ export function CampaignWizard({ open, draftId, onClose, onDone }: {
   };
 
   const modeLabel = MODE_CARDS.find(m => m.key === mode)?.title ?? mode;
+  /** 该阶段可用模板条数（templates:list 只回启用中的模板）——自适应模式的每轮提示 */
+  const stageTplCount = (stage: string) => templates.filter(t => (t.stage ?? "") === stage).length;
 
   return (
     <Modal
@@ -290,6 +293,11 @@ export function CampaignWizard({ open, draftId, onClose, onDone }: {
                 系统句库自动按联系人语言/类型/阶段组装，无需逐轮配置内容。轮次只决定「什么时候发、发哪种阶段」。
               </div>
             )}
+            {mode === "adaptive" && (
+              <div className="text-[11px] text-gray-400 bg-gray-50 rounded px-3 py-2">
+                自适应不锁定具体模板：每轮在该阶段的启用模板里，按联系人语言随机取一条发送——同一批人多轮收信内容会轮换。该阶段没有模板时自动回落系统句库。
+              </div>
+            )}
             {rounds.map((r, i) => (
               <div key={i} className="border border-gray-200 rounded-lg p-3 bg-white"
                 style={{ boxShadow: "0 1px 4px rgba(15, 23, 42, 0.07)" }}>
@@ -313,6 +321,13 @@ export function CampaignWizard({ open, draftId, onClose, onDone }: {
                       onClick={() => setRounds(prev => prev.filter((_, idx) => idx !== i))} />
                   )}
                 </div>
+                {mode === "adaptive" && (
+                  <div className="text-[10px] text-gray-400 mt-1.5 pl-14">
+                    {stageTplCount(r.stage) > 0
+                      ? `该阶段可用模板 ${stageTplCount(r.stage)} 条 · 每次随机取一条`
+                      : "该阶段还没有启用模板 — 这一轮回落系统句库"}
+                  </div>
+                )}
                 {mode === "fixed" && (
                   <div className="mt-2 space-y-2">
                     <Input size="small" placeholder="邮件主题（支持 {{firstName}} {{company}} 变量）"

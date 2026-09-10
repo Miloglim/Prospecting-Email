@@ -562,7 +562,7 @@ export const campaignCreateSchema = z.object({
   touches: z.array(z.object({
     stage: z.string().max(20).describe("该轮用的模板阶段：initial(首信)/followup1/followup2/closing/reactivate"),
     delayDays: z.number().int().min(0).max(60).describe("距上一封发出的天数；首轮（首信）填 0"),
-    mode: optStr(10).describe("内容来源：system=系统句库（内置多语言，免配置）/ userTpl=用户模板（缺省；模板缺时句库兜底）/ fixed=定死内容（须传 subject+body）"),
+    mode: optStr(10).describe("内容来源：system=系统句库（内置多语言，免配置）/ userTpl=用户模板（缺省；模板缺时句库兜底）/ adaptive=自适应，同阶段同语言的启用模板里随机取一条（多轮触达内容轮换，防模板疲劳；用户说「模板轮换着发」选它）/ fixed=定死内容（须传 subject+body）"),
     subject: z.string().max(150).nullable().optional().describe("mode=fixed 时该轮主题（可含 {{firstName}}/{{company}} 变量）"),
     body: z.string().max(8000).nullable().optional().describe("mode=fixed 时该轮正文"),
   })).min(1).max(6).describe("触点计划按顺序执行；建议 3-5 轮、间隔 4-7 天"),
@@ -2738,7 +2738,7 @@ ${priceDigest}`;
     name: "campaign_create",
     description: "创建发信任务：对一批联系人按触点计划自动跟进——首信发出后隔 N 天自动发下一轮，客户回复/退订/bounce 自动止损，计划走完自动收尾。"
       + "流程：先 search_contacts 按结构化筛选圈人 → 把命中 id 传给 contactIds → 本工具出预览与确认卡，用户点确认才建档。"
-      + "内容来源：默认用户模板库（机械变量替换），也可 mode=system 用内置句库、mode=fixed 传定死内容。"
+      + "内容来源：默认用户模板库（机械变量替换），也可 mode=adaptive 同阶段模板随机轮换、mode=system 用内置句库、mode=fixed 传定死内容。"
       + "schedule 可设发送时段与单日上限（定时器式周期发送，超出顺延次日）。单封/临时批量发信不要用本工具（那是 send_queue_add）。",
     parameters: campaignCreateSchema,
     execute: async (args) => {
@@ -2775,7 +2775,7 @@ ${priceDigest}`;
       const autoSend = args.autoSend !== false;
       const planSummary = args.touches.map((t, i) =>
         i === 0 ? `首信(${t.stage})立即` : `${t.stage} 间隔${t.delayDays}天`).join(" → ");
-      const MODE_SRC: Record<string, string> = { system: "系统句库", userTpl: "用户模板", fixed: "固定内容" };
+      const MODE_SRC: Record<string, string> = { system: "系统句库", userTpl: "用户模板", adaptive: "自适应模板", fixed: "固定内容" };
       const contentSrc = MODE_SRC[touches[0]?.mode ?? ""] ?? "用户模板";
       const winNote = schedule?.windowStartHour !== undefined && schedule?.windowEndHour !== undefined
         ? `，时段 ${schedule.windowStartHour}:00-${schedule.windowEndHour}:00` : "";
@@ -2830,7 +2830,7 @@ ${priceDigest}`;
         return okOut({
           campaign: data.campaign,
           targets: data.targets.slice(0, 20),
-          notice: `名单共 ${data.campaign?.total ?? 0} 人，本表展示前 20。status 口径：pending=待发，queued=已入队，sent=计划走完，replied/bounced/unsubscribed=止损，skipped=排除。`,
+          notice: `名单共 ${data.campaign?.total ?? 0} 人，本表展示前 20。进度看 touchesSent/touchesPlanned（封数，多轮已计入），人数总量看 total。status 口径：pending=待发，queued=已入队，sent=计划走完，replied/bounced/unsubscribed=止损，skipped=排除。`,
         });
       }
       const campaigns = getCampaignOverview();
@@ -2840,7 +2840,7 @@ ${priceDigest}`;
       }
       return okOut({
         campaigns,
-        notice: "回答格式：逐任务一句「名称 · 状态 · 已发 X/名单 Y · 回复 Z · 待发 W」；用户要细看某任务再带 campaignId 查一次。",
+        notice: "回答格式：逐任务一句「名称 · 状态 · 已发 X/Y 封 · 回复 Z · 还剩 W 封」——X/Y 直接用 touchesSent/touchesPlanned（封数口径，止损后分母随之收缩），别拿 total 人数当进度；用户要细看某任务再带 campaignId 查一次。",
       });
     },
   });
