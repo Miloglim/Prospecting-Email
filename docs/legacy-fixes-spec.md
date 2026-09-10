@@ -64,3 +64,16 @@
 - config.json 死字段（companyDelay/batchSize/batchPause/templateRotateGroups/singleRecipDelay）
   经全库核验已不存在，无需清理。
 - 行为说明：本机时区在 UTC+8 时行为与旧版完全一致，无迁移问题。
+
+## 6. 自动更新「下载新版本」要点几次才动（updater.ts / SettingsPage，2026-09-10 用户报）
+
+问题：点「下载新版本」只冒出一行灰色英文提示（`Please check update first`），要反复点几下才开始下载。以前没这毛病。
+
+根因：`downloadUpdate()` 只能下载 `checkForUpdates()` **已经缓存住**的那一份更新（electron-updater 内部 `updateInfoAndProvider` 为空就抛 `Please check update first` 并派生一个 error 事件）。而「检查更新」通道里那次 `checkForUpdates()` 是 fire-and-forget（`void …`），跟 GitHub API 轮询各走各的——检测能出「发现新版本」，缓存却常常还没落位，于是首点下载必然空手而归；用户再点一次，恰好赶上上一轮的异步检查落定，看起来就是"要点几次"。
+
+修法：
+- **下载通道自己补齐前置条件**：`IPC.UPDATE.DOWNLOAD` 内先 `await autoUpdater.checkForUpdates()` 再 `downloadUpdate()`，结果讲人话——检查失败=「更新源连接失败，请检查网络后重试」，`isUpdateAvailable=false`=「已是最新版本」。首点即下。
+- **重复点击幂等**：下载中再点复用同一个 Promise（electron-updater 自身也去重），不叠第二次网络请求。
+- **状态口径交给主进程**：下载 IPC awaited 到整包下完才返回，按钮全程「下载中…」＋进度事件驱动进度条；`update:downloaded` 到达即切「立即重启安装」。
+- **前端不再拿字符串猜颜色**：更新状态改带 kind（info / found / ok / error）渲染，提示文案一律中文（英文原文只进日志），杜绝"灰色英文糊在界面上"这类看不懂的提示。
+- 不动的东西：轮询检测仍走 GitHub API（代理感知、dev/内网可用），`autoDownload=false`、通道切换、版本列表原样保留。

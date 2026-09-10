@@ -100,6 +100,27 @@ function bindAutoUpdaterEvents() {
   });
 }
 
+// ── 下载一次更新（重复点击复用同一个 Promise）──
+let _download: Promise<void> | null = null;
+
+/**
+ * downloadUpdate() 只能下载 checkForUpdates() 已经缓存住的那一份（缓存为空时 electron-updater
+ * 直接抛英文 "Please check update first" 并派生 error 事件）——旧实现把检查挂在「检查更新」按钮里
+ * fire-and-forget，缓存常常还没落位，于是首点没反应、要点几次。下载自己把前置条件补齐。
+ */
+async function runDownload(): Promise<void> {
+  autoUpdater.allowPrerelease = _channel === "prerelease";
+  autoUpdater.autoDownload = false;
+  const res = await autoUpdater.checkForUpdates().catch((e: Error) => {
+    Log.warn("updater", `下载前检查失败: ${e.message}`);
+    return null;
+  });
+  if (!res) throw new Error("更新源连接失败，请检查网络后重试");
+  if (!res.isUpdateAvailable) throw new Error("已是最新版本");
+  Log.info("updater", `开始下载 v${res.updateInfo?.version ?? ""}`);
+  await autoUpdater.downloadUpdate();
+}
+
 // ── 注册 IPC 通道 ──
 function registerIPC() {
   // 获取版本列表（前10个，区分正式版/预览版）
@@ -148,7 +169,9 @@ function registerIPC() {
 
   ipcMain.handle(IPC.UPDATE.DOWNLOAD, async () => {
     try {
-      await autoUpdater.downloadUpdate();
+      // 下载中再点 = 等同一次下载（electron-updater 内部也去重），不叠第二次网络请求
+      _download ??= runDownload().finally(() => { _download = null; });
+      await _download;
       return { success: true as const };
     } catch (e) {
       return { success: false as const, error: (e as Error).message };

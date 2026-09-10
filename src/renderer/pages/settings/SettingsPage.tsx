@@ -396,14 +396,35 @@ interface VersionListData {
   releases: ReleaseInfo[];
 }
 
+/** electron-updater 的英文报错翻成人话——界面上不再出现 "Please check update first" 这类看不懂的灰字 */
+const UPDATE_ERR_CN: Array<[RegExp, string]> = [
+  [/please check update first/i, "更新信息未就绪，请稍后再点一次下载"],
+  [/already.*download|up.to.date|no update/i, "已是最新版本"],
+  [/404|Not Found/i, "更新仓库未找到，请联系维护者"],
+  [/certificate|SSL|TLS|self[- ]signed|unable to verify/i, "网络证书校验失败（企业代理常见），请换网络后重试"],
+  [/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|network|net::|Failed|download/i, "网络不通或超时，稍后重试"],
+];
+function friendlyUpdateError(msg?: string): string {
+  const m = (msg || "").trim();
+  if (!m) return "更新失败，请重试";
+  for (const [re, cn] of UPDATE_ERR_CN) if (re.test(m)) return cn;
+  return "更新失败，详情见日志";
+}
+
 function UpdateChecker() {
   const [checking, setChecking] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [statusMsg, setStatusMsg] = useState("");
+  const [statusKind, setStatusKind] = useState<"info" | "found" | "ok" | "error">("info");
   const [pendingVersion, setPendingVersion] = useState("");
   const [progress, setProgress] = useState(0);
   const [speedInfo, setSpeedInfo] = useState("");
   const [downloaded, setDownloaded] = useState(false);
+
+  const say = (msg: string, kind: "info" | "found" | "ok" | "error" = "info") => {
+    setStatusMsg(msg);
+    setStatusKind(kind);
+  };
 
   // 版本数据（仅用于当前版本号与通道展示）
   const [versionData, setVersionData] = useState<VersionListData | null>(null);
@@ -436,7 +457,7 @@ function UpdateChecker() {
     // 监听主进程推送的自动更新事件
     const unsub1 = window.api.on("update:available", (data: any) => {
       setPendingVersion(data?.version || "");
-      setStatusMsg(`发现新版本 v${data?.version}`);
+      say(`发现新版本 v${data?.version}`, "found");
       loadVersions(); // 刷新列表
     });
     const unsub2 = window.api.on("update:download-progress", (data: any) => {
@@ -446,32 +467,33 @@ function UpdateChecker() {
     });
     const unsub3 = window.api.on("update:downloaded", (data: any) => {
       setDownloaded(true);
-      setStatusMsg(`v${data?.version} 已下载，重启后生效`);
+      setDownloading(false);
+      say(`v${data?.version} 已下载，重启后生效`, "ok");
     });
     const unsub4 = window.api.on("update:error", (data: any) => {
-      setStatusMsg(data?.message || "检查失败");
+      say(friendlyUpdateError(data?.message), "error");
     });
     return () => { unsub1?.(); unsub2?.(); unsub3?.(); unsub4?.(); };
   }, []);
 
   const handleCheck = async () => {
     setChecking(true);
-    setStatusMsg("检查中…");
+    say("检查中…");
     try {
       const r = await window.api.invoke("update:check") as {
         success: boolean; data?: { version: string; available: boolean } | null; error?: string;
       };
       if (r?.success && r.data?.version) {
         setPendingVersion(r.data.version);
-        setStatusMsg(`发现新版本 v${r.data.version}`);
+        say(`发现新版本 v${r.data.version}`, "found");
       } else if (r?.success) {
-        setStatusMsg("已是最新版本");
+        say("已是最新版本", "ok");
         setTimeout(() => setStatusMsg(""), 3000);
       } else {
-        setStatusMsg(r?.error || "检查失败");
+        say(r?.error || "检查失败", "error");
       }
     } catch (e: any) {
-      setStatusMsg(e?.message || "检查失败");
+      say(friendlyUpdateError(e?.message), "error");
     } finally {
       setChecking(false);
       await loadVersions();
@@ -481,9 +503,18 @@ function UpdateChecker() {
   const handleDownload = async () => {
     setDownloading(true);
     setDownloaded(false);
-    try { await window.api.invoke("update:download"); }
-    catch { setStatusMsg("下载失败"); }
-    setDownloading(false);
+    setProgress(0);
+    setSpeedInfo("");
+    say("正在下载更新…");
+    try {
+      const r = await window.api.invoke("update:download") as { success: boolean; error?: string };
+      // 整包下完才返回：成功就等 update:downloaded 把状态切成「立即重启安装」
+      if (!r?.success) say(friendlyUpdateError(r?.error), "error");
+    } catch (e: any) {
+      say(friendlyUpdateError(e?.message), "error");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handleInstall = async () => {
@@ -519,10 +550,9 @@ function UpdateChecker() {
         </Button>
         {statusMsg && (
           <span className={`text-xs ${
-            statusMsg.includes("发现") || statusMsg.includes("下载")
-              ? "text-teal-600"
-              : statusMsg.includes("最新") ? "text-green-600"
-              : statusMsg.includes("失败") ? "text-red-500"
+            statusKind === "found" ? "text-teal-600"
+              : statusKind === "ok" ? "text-green-600"
+              : statusKind === "error" ? "text-red-500"
               : "text-gray-400"
           }`}>{statusMsg}</span>
         )}
