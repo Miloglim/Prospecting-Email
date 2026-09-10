@@ -104,9 +104,23 @@ export function ContactPicker({ value, onChange, onNext }: {
   const selectedSet = useMemo(() => new Set(value), [value]);
   const selectedRows = useMemo(() => rows.filter(r => selectedSet.has(r.id)), [rows, selectedSet]);
   const companyCount = useMemo(() => new Set(selectedRows.map(r => r.companyId ?? `c_${r.id}`)).size, [selectedRows]);
-  // 已触达/已回复的已选客户：开发信任务通常不该再给他们，汇总条上给一键移除
-  const reachedIds = useMemo(() => new Set(selectedRows.filter(r => r.status === "reached" || r.status === "replied").map(r => r.id)), [selectedRows]);
-  const reachedSelected = reachedIds.size;
+  // 已选里「不该再收开发信」的：已触达/已回复（已在跟进，不该收冷启动信）、退信与自动回复（地址无效或人不在）
+  // —— 汇总条上给一个快捷移除，按状态分类计数，点一下全部剔出勾选
+  const UNSUITABLE_LABELS: Record<string, string> = { reached: "已触达", replied: "已回复", bounced: "退信", autoreply: "自动回复" };
+  const unsuitable = useMemo(() => {
+    const byStatus = new Map<string, number[]>();
+    for (const r of selectedRows) {
+      const st = r.status ?? "";
+      if (!UNSUITABLE_LABELS[st]) continue;
+      byStatus.set(st, [...(byStatus.get(st) ?? []), r.id]);
+    }
+    const ids = new Set([...byStatus.values()].flat());
+    const breakdown = [...byStatus.entries()]
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([st, list]) => `${UNSUITABLE_LABELS[st]} ${list.length}`).join(" · ");
+    return { ids, count: ids.size, breakdown };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRows]);
 
   const columns = useMemo(() => [
     { title: "姓名", dataIndex: "firstName", width: 104, ellipsis: true,
@@ -135,7 +149,7 @@ export function ContactPicker({ value, onChange, onNext }: {
   const applyPreset = (key: "never" | "replied" | "autoreply" | "bounced") => {
     setFStatus(key); setFStage(undefined); setSearch("");
   };
-  const removeReachedSelected = () => onChange(value.filter(id => !reachedIds.has(id)));
+  const removeUnsuitable = () => onChange(value.filter(id => !unsuitable.ids.has(id)));
 
   // 虚拟滚动要求 scroll.y 为数字 → 实测容器高度（antd 表头约占 39px 已扣）
   const boxRef = useRef<HTMLDivElement>(null);
@@ -231,14 +245,14 @@ export function ContactPicker({ value, onChange, onNext }: {
           <span>已选 <strong className="text-gray-900">{value.length}</strong> 人</span>
           <span className="text-gray-300">·</span>
           <span>覆盖 <strong className="text-gray-900">{companyCount}</strong> 家公司</span>
-          {reachedSelected > 0 && (
-            <Tooltip title="这些客户会照常入队发送（资格闸已解除），发不发由你圈名单决定">
-              <span className="text-amber-600">含 {reachedSelected} 位已触达/已回复</span>
+          {unsuitable.count > 0 && (
+            <Tooltip title="资格闸已解除，他们仍会照常入队；不想发就一键从勾选里去掉">
+              <span className="text-amber-600">含 {unsuitable.count} 位不宜发信（{unsuitable.breakdown}）</span>
             </Tooltip>
           )}
-          {reachedSelected > 0 && (
-            <Button size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={removeReachedSelected}>
-              移除这些客户（{reachedSelected}）
+          {unsuitable.count > 0 && (
+            <Button size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={removeUnsuitable}>
+              移除这些客户（{unsuitable.count}）
             </Button>
           )}
         </div>
