@@ -19,6 +19,20 @@
    不经 hash 传大名单。
 5. 首页即新会话页（`#/assistant` 空态）。问候语保留，气泡区换卡片。
 
+## 0.6 已拍板决策（2026-09-10，用户定；详见 docs/task-card-devletter-spec.md）
+
+1. **推荐口径改"真·从未触达"**：旧判据只看 `contacts.status` 为空，而发信成功只写 `sent` 交互并推进 `stage`
+   （status 一直是空）→ 同一批人被反复推荐、用户重复建任务。现判据 = status 空 **且** 无 `sent` 交互
+   **且** `stage` 仍是 cold（与选人页 `neverIds` 同源），并排除挂在未完结任务（draft/running/paused、触点
+   pending/queued）里的人；`done`/`stopped` 任务里的人照常可再开发。被排除的人数如实报出来（`excludedInCampaign`）。
+2. **卡片二新增"说要求"输入框**：用户一句话（如"只要巴西的英语客户，先来 20 位"）→ 一次性解析成结构化条件
+   （`country/language/clientType/limit`）→ **仍由同一套确定性规则出名单**。解析通道不进会话、不落 transcript、
+   不带工具；端点没配好或模型没听懂就走**关键词兜底**（国家别名表下沉到 `country-alias.ts`），并在界面上如实
+   标注这次是"AI 理解"还是"关键词理解"。留空 = 原零模型默认推荐。本卡片池子天生是冷客户，所以不受理"发给跟进过的
+   老客户"这类要求（会永远空集）——要求里出现时给一句可执行说明，不静默丢掉。
+3. **发送中心任务卡补删除**：草稿/已完成/已终止可删（删任务行与触点账本，**发送历史与队列保留**）；
+   运行中/已暂停拒删，先终止。
+
 ## 1. 卡片一：运价查询
 
 - 弹窗字段：起运港（可空=不限）、目的港（必填）、柜型（下拉 20GP/40GP/40HQ/40NOR，可空）、备注（可空，用户键入）。
@@ -30,29 +44,57 @@
 
 ## 2. 卡片二：自动开发信
 
-- 点击即调 `devLetter:recommend`（主进程确定性计算，无模型调用），弹窗展示：
-  推荐名单（姓名/邮箱/公司/语言）、限额（今日已发/上限/剩余、可用账号数）、推荐理由四条。
-- **确定** → 名单写入 localStorage（`dev-letter-preset`，一次性）→ 跳 `#/campaigns?tab=new`；
-  CampaignList 挂载时取走预选名单显示来源横幅，用户在发送界面完成模板/发送模式的选择与最终确定。
+- 点击即调 `devLetter:recommend`（主进程确定性计算），弹窗展示：推荐名单（姓名/邮箱/公司/语言）、限额
+  （今日已发/上限/剩余、可用账号数）、推荐理由、**已在任务里被剔除的人数**（`excludedInCampaign`）。
+  名单口径见 §0.6-1（真·从未触达 + 不撞未完结任务）。
+- **要求输入框（§0.6-2）**：弹窗顶部常驻一行「说要求，如：只要巴西的英语客户，先来 20 位」+「按我的要求重算」
+  （回车同效）+「回默认推荐」。输入框常驻是硬要求——按条件没筛到人时，用户要能当场放宽一条，而不是关掉重开。
+  提交后 queryKey 带上已提交的要求重新拉一次；界面上标注这次生效的条件与解析来源（AI 理解 / 关键词理解 / 默认规则）。
+- **确定** → 名单写入 localStorage（`dev-letter-preset`，一次性）→ 跳 `#/campaigns?create=1`；向导取走预选名单
+  并显示来源横幅（横幅里带上"按要求筛的"那句原话），用户在发送界面完成模板/发送模式的选择与最终确定。
 - 红线：本卡片只产生"推荐 + 预选"，绝不入队、绝不发送。
 
 ## 3. 数据与接口
 
 ```ts
-// src/main/services/dev-letter.service.ts（确定性规则，无模型）
+// src/main/services/dev-letter.service.ts（确定性规则：选谁、排第几、取几位全在这里）
 export interface DevLetterContact { id: number; email: string; name: string; company: string | null; country: string | null; language: string | null }
 export interface DevLetterRecommendation {
   contacts: DevLetterContact[];   // 推荐群组（已按规则排序、截断）
   groupSize: number;              // = contacts.length
-  totalCandidates: number;        // 剔除后仍可用的冷客户总数
+  totalCandidates: number;        // 符合"真·从未触达"口径的池子大小（经用户要求收窄后）
   companyCount: number;           // 涉及公司数
+  excludedInCampaign: number;     // 因挂在未完结任务里而不推荐的人数（界面如实报）
+  applied: DevLetterCriteria;     // 这次实际生效的条件 + 解析来源（model/keyword/none）
   quota: { dailyLimit: number; sentToday: number; remaining: number | null; accountCount: number };
   languages: Array<{ lang: string; n: number }>;  // 群内语言分布（展示模板匹配预期）
-  reasons: string[];              // 给人看的推荐理由（逐条可解释）
+  reasons: string[];              // 给人看的推荐理由（逐条可解释；两种空集说法不同）
 }
-export function recommendDevLetterGroup(now?: Date): Result<DevLetterRecommendation>
+export function recommendDevLetterGroup(
+  capOverride?: number, now?: Date, criteria?: DevLetterCriteria,
+): Result<DevLetterRecommendation>
 ```
-IPC：`devLetter:recommend`（contract 加组，preload 白名单自动生成）。
+
+```ts
+// src/main/services/dev-letter-intent.ts —— 一句要求 → 结构化条件（模型优先、关键词兜底）
+export interface DevLetterCriteria { country?: string; language?: string; clientType?: string; limit?: number; note?: string; parsedBy: "model"|"keyword"|"none" }
+export async function parseDevLetterIntent(text: string): Promise<DevLetterCriteria>
+export function keywordParse(text: string): Partial<DevLetterCriteria>   // 纯函数，可单测
+export function describeCriteria(c?: DevLetterCriteria | null): string    // "巴西 · 英语 · 前 20 位"
+
+// src/main/services/agent/oneshot.ts —— 轻量一次性 JSON 解析（不进会话、不落 transcript、不带工具）
+export async function askJsonOnce<T>(system: string, user: string, timeoutMs?: number): Promise<T | null>
+export function onceModelReady(): boolean
+
+// src/main/services/country-alias.ts —— 国家中英别名单一事实源（运价线与开发信共用，rate-update.service 原样转出口）
+export const COUNTRY_ALIAS: Record<string, string[]>
+export function looksLikeCountry(word: string | null | undefined): string | null
+export function countryMatchWords(word: string): string[]
+export function matchCountryInText(text: string | null | undefined): string | null
+```
+
+IPC：`devLetter:recommend`（contract 加组，preload 白名单自动生成）；入参
+`{ cap?: number; criteriaText?: string }`（兼容旧的位置 number 调用），无 `criteriaText` 时零模型调用。
 
 ## 4. UI 与死代码边界
 
@@ -83,5 +125,7 @@ IPC：`devLetter:recommend`（contract 加组，preload 白名单自动生成）
 
 1. 自动开发信只做"推荐 + 预选 + 跳转"，入队/发送决策全部在发送界面由人完成。
 2. 运价查询卡片只是规范化提问的入口，查价口径（两段查、分层、诚实定论）全部复用既有服务端，不新写一条查询链路。
-3. 推荐规则确定性、可解释：不引入模型、不引入随机。
+3. 推荐规则确定性、可解释：**选谁、排第几、取几位不引入模型、不引入随机**。"说要求"那条通道里模型只做
+   一件事——把自然语言翻成结构化筛选条件（`country/language/clientType/limit`），翻不出来就关键词兜底，
+   兜底也认不出就不加条件；生效条件与解析来源必须在界面上如实标出。模型永不决定名单，也不发任何东西。
 4. 今日邮箱概览是只读快照：不改已读状态、不触发抓取、不代发任何邮件。
