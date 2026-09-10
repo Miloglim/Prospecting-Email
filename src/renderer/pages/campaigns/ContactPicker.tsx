@@ -24,6 +24,8 @@ interface PickRow {
 interface PickerStats {
   neverIds: number[];
   lastSent: Array<{ id: number; label: string }>;
+  /** 已归属未完结任务（draft/running/paused）的联系人：灰显 + 「已在任务」标签 */
+  inCampaign: Array<{ id: number; campaignName: string }>;
 }
 type StatsResult = Result2<PickerStats>;
 interface Result2<T> { success: boolean; data?: T }
@@ -50,6 +52,8 @@ export function ContactPicker({ value, onChange, onNext }: {
   const [fCountry, setFCountry] = useState<string | undefined>();
   const [fLang, setFLang] = useState<string | undefined>();
   const [fType, setFType] = useState<string | undefined>();
+  /** 快捷筛选：true=只看已在任务里的人（chip 点亮）；undefined=不过滤 */
+  const [fOnlyCampaign, setFOnlyCampaign] = useState<boolean | undefined>();
 
   const { data: listData, isLoading } = useQuery({
     queryKey: ["contacts", "allForPick"],
@@ -75,6 +79,12 @@ export function ContactPicker({ value, onChange, onNext }: {
     for (const e of statsData?.data?.lastSent || []) m.set(e.id, e.label);
     return m;
   }, [statsData]);
+  // 已在未完结任务里的人 → 任务名（灰显与「已在任务」标签共用；同一人只记第一个）
+  const campaignMap = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const e of statsData?.data?.inCampaign || []) if (!m.has(e.id)) m.set(e.id, e.campaignName);
+    return m;
+  }, [statsData]);
 
   const statusOf = (r: PickRow): string => r.status || (neverIds.has(r.id) ? "never" : "");
   const statusLabel = (r: PickRow) => {
@@ -96,14 +106,18 @@ export function ContactPicker({ value, onChange, onNext }: {
       if (fCountry && r.country !== fCountry) return false;
       if (fLang && (r.language || "EN") !== fLang) return false;
       if (fType && (r.clientType || "general") !== fType) return false;
+      if (fOnlyCampaign && !campaignMap.has(r.id)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, search, fStatus, fStage, fCountry, fLang, fType, neverIds]);
+  }, [rows, search, fStatus, fStage, fCountry, fLang, fType, fOnlyCampaign, neverIds, campaignMap]);
 
   const selectedSet = useMemo(() => new Set(value), [value]);
   const selectedRows = useMemo(() => rows.filter(r => selectedSet.has(r.id)), [rows, selectedSet]);
   const companyCount = useMemo(() => new Set(selectedRows.map(r => r.companyId ?? `c_${r.id}`)).size, [selectedRows]);
+  // 已选里「已经在别的任务里有人跟」的人数：只提示不拦截（smart-send-spec §0.6-1 资格闸已解除）
+  const selectedInCampaign = useMemo(() => selectedRows.filter(r => campaignMap.has(r.id)).length, [selectedRows, campaignMap]);
+  const dropInCampaign = () => onChange(value.filter(id => !campaignMap.has(id)));
   // 已选里「不该再收开发信」的：已触达/已回复（已在跟进，不该收冷启动信）、退信与自动回复（地址无效或人不在）
   // —— 汇总条上给一个快捷移除，按状态分类计数，点一下全部剔出勾选
   const UNSUITABLE_LABELS: Record<string, string> = { reached: "已触达", replied: "已回复", bounced: "退信", autoreply: "自动回复" };
@@ -135,20 +149,27 @@ export function ContactPicker({ value, onChange, onNext }: {
       render: (v: string | null) => v ? <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color="cyan">{v.toUpperCase()}</Tag> : <span className="text-[10px] text-gray-300">—</span> },
     { title: "类型", dataIndex: "clientType", width: 50,
       render: (v: string | null) => <span className="text-[10px] text-gray-600">{TYPE_LABELS[v || "general"] || "通用"}</span> },
-    { title: "状态", key: "status", width: 62,
-      render: (_: unknown, r: PickRow) => { const m = statusLabel(r); return <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color={m.color}>{m.label}</Tag>; } },
+    { title: "状态", key: "status", width: 78,
+      render: (_: unknown, r: PickRow) => {
+        const cn = campaignMap.get(r.id);
+        if (cn) return <Tooltip title={`已在任务「${cn}」，再建任务会重复触达`}>
+          <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color="purple">已在任务</Tag></Tooltip>;
+        const m = statusLabel(r);
+        return <Tag className="text-[9px] leading-none px-1 py-0.5 m-0" color={m.color}>{m.label}</Tag>;
+      } },
     { title: "阶段", dataIndex: "stage", width: 46,
       render: (v: string | null) => <span className="text-[10px] text-gray-600">{STAGE_LABELS[v || "cold"]}</span> },
     { title: "最近发送", key: "lastSent", width: 62,
       render: (_: unknown, r: PickRow) => { const t = lastSentMap.get(r.id); return t ? <span className="text-[10px] text-gray-500">{t}</span> : <span className="text-[10px] text-gray-300">—</span>; } },
     { title: "负责人", dataIndex: "assignee", width: 64, ellipsis: true,
       render: (v: string | null) => v ? <Tag color="geekblue" className="text-[9px] leading-none px-1 py-0.5 m-0">{v}</Tag> : <span className="text-[10px] text-gray-300">—</span> },
-  ], [lastSentMap, neverIds]);
+  ], [lastSentMap, neverIds, campaignMap]);
 
   // 快捷分桶 chips：点击 = 应用对应筛选（与三栏分桶心智一致）
   const applyPreset = (key: "never" | "replied" | "autoreply" | "bounced") => {
-    setFStatus(key); setFStage(undefined); setSearch("");
+    setFStatus(key); setFStage(undefined); setSearch(""); setFOnlyCampaign(undefined);
   };
+  const toggleCampaignPreset = () => { setFStatus(undefined); setFOnlyCampaign(v => (v ? undefined : true)); };
   const removeUnsuitable = () => onChange(value.filter(id => !unsuitable.ids.has(id)));
 
   // 虚拟滚动要求 scroll.y 为数字 → 实测容器高度（antd 表头约占 39px 已扣）
@@ -200,6 +221,12 @@ export function ContactPicker({ value, onChange, onNext }: {
           <Tag color="blue" className="cursor-pointer text-[10px] m-0" onClick={() => applyPreset("replied")}>已回复</Tag>
           <Tag color="orange" className="cursor-pointer text-[10px] m-0" onClick={() => applyPreset("autoreply")}>自动回复</Tag>
           <Tag color="red" className="cursor-pointer text-[10px] m-0" onClick={() => applyPreset("bounced")}>退信</Tag>
+          {campaignMap.size > 0 && (
+            <Tag color="purple" className={`cursor-pointer text-[10px] m-0 ${fOnlyCampaign ? "" : "!bg-white !text-purple-500 !border-purple-200"}`}
+              onClick={toggleCampaignPreset}>
+              已在任务 {campaignMap.size}
+            </Tag>
+          )}
         </Space>
       </div>
 
@@ -215,7 +242,8 @@ export function ContactPicker({ value, onChange, onNext }: {
             rowKey="id"
             loading={isLoading}
             pagination={false}
-            scroll={{ x: 880, y: boxH }}
+            scroll={{ x: 900, y: boxH }}
+            rowClassName={r => (campaignMap.has(r.id) ? "row-in-campaign" : "")}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有符合筛选条件的联系人" /> }}
             rowSelection={{
               selectedRowKeys: value,
@@ -245,6 +273,16 @@ export function ContactPicker({ value, onChange, onNext }: {
           <span>已选 <strong className="text-gray-900">{value.length}</strong> 人</span>
           <span className="text-gray-300">·</span>
           <span>覆盖 <strong className="text-gray-900">{companyCount}</strong> 家公司</span>
+          {selectedInCampaign > 0 && (
+            <Tooltip title="已归属未完结任务的人：再建任务会对同一批人重复触达。灰显只是提示，选不选由你定">
+              <span className="text-purple-600">其中 {selectedInCampaign} 位已在其他任务</span>
+            </Tooltip>
+          )}
+          {selectedInCampaign > 0 && (
+            <Button size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={dropInCampaign}>
+              去掉已在任务的（{selectedInCampaign}）
+            </Button>
+          )}
           {unsuitable.count > 0 && (
             <Tooltip title="资格闸已解除，他们仍会照常入队；不想发就一键从勾选里去掉">
               <span className="text-amber-600">含 {unsuitable.count} 位不宜发信（{unsuitable.breakdown}）</span>

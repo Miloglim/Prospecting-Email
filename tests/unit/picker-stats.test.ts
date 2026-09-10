@@ -105,3 +105,32 @@ describe("getPickerStats 与旧桶实现语义等价", () => {
     expect(m.has(4)).toBe(false);
   });
 });
+
+// ── 规范 §3：选人器「已在任务」灰显的数据口径 ──────────────────────────────
+describe("getPickerStats().inCampaign", () => {
+  const putCampaign = (id: string, status: string) => raw.run(
+    "INSERT INTO send_campaigns (id, name, status, touch_plan_json) VALUES (?, ?, ?, '[]')",
+    [id, `任务-${id}`, status],
+  );
+  const putTarget = (campaignId: string, contactId: number, status: string) => raw.run(
+    "INSERT INTO send_campaign_targets (campaign_id, contact_id, status) VALUES (?, ?, ?)",
+    [campaignId, contactId, status],
+  );
+
+  it("未完结任务的待发/已入队触点算「已在任务」；done 任务与终态触点都不算", () => {
+    putCampaign("run1", "running"); putTarget("run1", 1, "pending");
+    putCampaign("draft1", "draft"); putTarget("draft1", 2, "queued");
+    putCampaign("done1", "done");   putTarget("done1", 3, "pending");     // 完结任务不挡再开发
+    putCampaign("run2", "running"); putTarget("run2", 4, "sent");         // 触点已终态
+    const s = SendService.getPickerStats().data!;
+    expect(s.inCampaign.map(e => e.id).sort((a, b) => a - b)).toEqual([1, 2]);
+    expect(s.inCampaign.find(e => e.id === 1)?.campaignName).toBe("任务-run1");
+  });
+
+  it("同一人挂在两个未完结任务里只回一条（取先查到的那个任务名）", () => {
+    putCampaign("a1", "running"); putTarget("a1", 5, "pending");
+    putCampaign("a2", "paused");  putTarget("a2", 5, "pending");
+    const s = SendService.getPickerStats().data!;
+    expect(s.inCampaign.filter(e => e.id === 5)).toHaveLength(1);
+  });
+});

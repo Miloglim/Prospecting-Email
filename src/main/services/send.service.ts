@@ -11,6 +11,8 @@ import { okResult, failResult, type Result } from "../errors";
 import { Log } from "../logger";
 import { saveDatabase, getRawDb } from "../db";
 import { sendQueue } from "../db/schema/send-queue";
+// 选人器「已在任务」灰显用（getPickerStats）：只引 schema，不引 campaign.service（它反向依赖本文件）
+import { sendCampaigns, sendCampaignTargets } from "../db/schema/send-campaign";
 import { EVENTS } from "../events";
 import { nudge as nudgeSuggestions } from "./suggestion-bus";
 import { isCircuitOpen, CIRCUIT_TTL_MS } from "./sender-block.service";
@@ -392,10 +394,12 @@ export interface PickerStats {
   neverIds: number[];
   /** 有发送记录且未触达的联系人：id → 最近发送档位标签（对齐 getSendTimeBuckets） */
   lastSent: Array<{ id: number; label: string }>;
+  /** 已归属未完结任务（draft/running/paused 且触点 pending/queued）的联系人：选人器据此灰显「已在任务」 */
+  inCampaign: Array<{ id: number; campaignName: string }>;
 }
 
 function lastSentBucketLabel(lastAt: string): string {
-  const days = (Date.now() - new Date(lastAt).getTime()) / 86400000;
+  const days = (Date.now() - new Date(lastAt).getTime()) / 86_400_000;
   if (days < 1) return "今天";
   if (days < 2) return "1天";
   if (days < 3) return "2天";
@@ -419,9 +423,21 @@ export function getPickerStats(): Result<PickerStats> {
     .where(dsql`${interactions.type} = 'sent' AND (contacts.status IS NULL OR contacts.status != 'reached')`)
     .groupBy(interactions.contactId)
     .all();
+  // 已在未完结任务里的人（规范 §3）：done/stopped 任务不算——那批人可以再开发；同一人只记一个任务名
+  const campaignRows = db.select({
+    id: sendCampaignTargets.contactId,
+    name: sendCampaigns.name,
+  }).from(sendCampaignTargets)
+    .innerJoin(sendCampaigns, dsql`${sendCampaigns.id} = ${sendCampaignTargets.campaignId}`)
+    .where(dsql`${sendCampaignTargets.status} IN ('pending','queued')
+      AND ${sendCampaigns.status} IN ('draft','running','paused')`)
+    .all();
+  const inCampaignMap = new Map<number, string>();
+  for (const r of campaignRows) if (!inCampaignMap.has(r.id)) inCampaignMap.set(r.id, r.name);
   return okResult({
     neverIds: neverRows.map(r => r.id),
     lastSent: lastRows.map(r => ({ id: r.id, label: lastSentBucketLabel(r.lastAt) })),
+    inCampaign: [...inCampaignMap].map(([id, campaignName]) => ({ id, campaignName })),
   });
 }
 

@@ -468,3 +468,11 @@ body {
   padding: 4px 6px !important; font-size: 10px; line-height: 14px; white-space: nowrap;
 }
 .picker-compact .ant-table-tbody > tr > td { padding: 3px 6px !important; }
+
+/* 已在未完结任务里的联系人：整行压灰，一眼看出"这人已经有人在跟"（规范 §3，灰显不拦截勾选）。
+   只走 class 覆盖，不用 onRow.style——那会压掉 antd 的悬停/选中底色。 */
+.picker-compact .ant-table-tbody > tr.row-in-campaign > td { background: #fafafa !important; }
+.picker-compact .ant-table-tbody > tr.row-in-campaign:hover > td { background: #f2f3f5 !important; }
+.picker-compact .ant-table-tbody > tr.row-in-campaign > td span { color: #b2b6bd !important; }
+/* 「已在任务」标签保持紫色，别被上面的压灰吃掉 */
+.picker-compact .ant-table-tbody > tr.row-in-campaign .ant-tag-purple { color: #722ed1 !important; }
