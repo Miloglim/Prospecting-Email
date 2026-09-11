@@ -24,12 +24,12 @@ describe("parseDevLetterIntent：模型优先，失败即兜底", () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
-  it("模型给的条件按白名单收：认不出的字段丢掉，国家归一成中文，limit 钳到 1..50", async () => {
+  it("模型给的条件按白名单收：认不出的字段丢掉，国家归一成中文，limit 不设天花板", async () => {
     ask.mockResolvedValue({ country: "Brazil", language: "en", clientType: "boss", limit: 999, extra: "模型爱编的字段" });
     const r = await parseDevLetterIntent("巴西的英文客户，来 999 位");
     expect(r).toMatchObject({ country: "巴西", language: "EN", parsedBy: "model" });
     expect(r.clientType).toBeUndefined();          // "boss" 不是我们的客户类型
-    expect(r.limit).toBe(50);
+    expect(r.limit).toBe(999);                     // 解析层不夹 50，取数时才按日限额/候选池夹
     expect((r as Record<string, unknown>).extra).toBeUndefined();
   });
 
@@ -63,6 +63,13 @@ describe("sanitize / keywordParse / describeCriteria 边界", () => {
   it("keywordParse 认不出的说法一律不编条件", () => {
     expect(keywordParse("随便来点人")).toEqual({});
     expect(keywordParse("亚特兰大那片的直客")).toEqual({ clientType: "direct" });   // 不是我们认识的国家名就不瞎猜
+  });
+
+  it("keywordParse 认得出点名的数量（含无单位/超 50），且不夹 50", () => {
+    expect(keywordParse("改成30")).toEqual({ limit: 30 });
+    expect(keywordParse("换成 120 位")).toEqual({ limit: 120 });
+    expect(keywordParse("前 8 个")).toEqual({ limit: 8 });
+    expect(keywordParse("给我 999")).toEqual({ limit: 999 });
   });
 
   it("describeCriteria：无条件说「默认规则」，有条件逐项拼", () => {

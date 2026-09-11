@@ -3,7 +3,7 @@
 // 推荐逻辑（docs/home-cards-spec.md §2 + docs/task-card-devletter-spec.md §2）：
 //   真·从未触达（status 空 + 无 sent 交互 + stage 仍 cold）+ 邮箱有效 + 剔占位邮箱
 //   + 不在未完结任务（draft/running/paused）名单里 → 每公司取 1 位（资料齐全度优先，同分取最早录入）
-//   → 按齐全度降序取前 N，N = min(候选数, 日限额剩余, 50)。
+//   → 按齐全度降序取前 N：用户点名了数量就以它为准（只受日限额剩余与候选池夹），没点名时 N = min(候选数, 日限额剩余, 50)。
 //   旧口径只看 status 空——发过信的人 status 也是空（只推进 stage），于是同一批人被反复推荐、重复建任务。
 // 红线：只产生"推荐 + 名单"，绝不入队、绝不发送——入队/发送决策在发送界面由人完成。
 import { getDb } from "../db";
@@ -35,7 +35,8 @@ export interface DevLetterRecommendation {
   reasons: string[];
 }
 
-/** 首批推荐上限：广撒也要有边界，50 位是一轮开发信的合理批量 */
+/** 默认一批推荐上限：用户没在要求里点名数量时用它兜底（广撒也要有边界）。
+ *  用户点了数量就不受此值限制，只受日限额剩余与候选池约束（见下方 want/cap 计算）。 */
 export const DEV_LETTER_CAP = 50;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -153,10 +154,15 @@ export function recommendDevLetterGroup(
     if (!cur || c.score > cur.score || (c.score === cur.score && c.createdAt < cur.createdAt)) byCompany.set(c.companyKey, c);
   }
 
-  // ④ 排序：齐全度降序 → 最早录入升序（先录入的先开发），取前 N（用户点名的数量优先于限额）
+  // ④ 排序：齐全度降序 → 最早录入升序（先录入的先开发），取前 N
+  //    人数口径：用户在那句话里点名了数量（criteria.limit）就以它为准，只再受「日限额剩余」与
+  //    「符合条件的候选池」两道天然上限夹一次，不再写死 50；没点名时才走默认一批 DEV_LETTER_CAP。
+  const want = criteria?.limit ?? capOverride;
+  const cap = Math.max(0, want != null
+    ? Math.min(want, remaining ?? want)
+    : Math.min(DEV_LETTER_CAP, remaining ?? DEV_LETTER_CAP));
   const ordered = [...byCompany.values()].sort((a, b) =>
     b.score - a.score || a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
-  const cap = Math.max(0, Math.min(DEV_LETTER_CAP, criteria?.limit ?? capOverride ?? remaining ?? DEV_LETTER_CAP));
   const picked = ordered.slice(0, cap);
 
   // 语言分布（展示模板匹配预期；EN/ES/PT 之外记「未标注」）
@@ -166,15 +172,21 @@ export function recommendDevLetterGroup(
     langCount.set(lang, (langCount.get(lang) ?? 0) + 1);
   }
 
+  const quotaReason = want != null
+    ? (picked.length >= want
+      ? `本轮按你说的取 ${picked.length} 位`
+      : `你要 ${want} 位，但${remaining != null && remaining < want ? `今日剩余额度只有 ${remaining} 位` : "符合条件的冷客户不足"}，本轮取 ${picked.length} 位`)
+    : q.dailyLimit > 0
+      ? `默认先给 ${picked.length} 位（今日已发 ${q.sentToday}/${q.dailyLimit}，在剩余额度内；想多要，在那句要求里写人数即可）`
+      : `默认先给 ${picked.length} 位（未设日限额，默认一批 ${DEV_LETTER_CAP} 位封顶；想多要，在那句要求里写人数即可）`;
+
   const reasons = [
     ...(criteria
       ? [`按「${describeCriteria(criteria)}」从 ${pool.length} 位从未触达的冷客户里筛出（发过信的、退信/自动回复与占位邮箱都已剔除）`]
       : [`从未触达的冷客户 ${pool.length} 位（剔除了发过信的、退信/自动回复与占位邮箱）`]),
     `每家公司只取 1 位（共 ${byCompany.size} 家），避免同一公司收到多封`,
     "资料齐全的优先：有语言/公司/国家的客户排前面，模板变量能填满",
-    q.dailyLimit > 0
-      ? `本轮上限 ${picked.length} 位（今日已发 ${q.sentToday}/${q.dailyLimit}，剩余额度内）`
-      : `本轮上限 ${picked.length} 位（未设日限额，按单轮 ${DEV_LETTER_CAP} 位封顶）`,
+    quotaReason,
     ...(criteria?.note ? [`另记：${criteria.note}`] : []),
     ...(excludedInCampaign > 0
       ? [`另有 ${excludedInCampaign} 位已在进行中的任务里，本次不重复推荐（防重复建任务）`] : []),

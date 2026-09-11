@@ -258,11 +258,34 @@ describe("用户要求的确定性收窄 criteria", () => {
     expect(byType.success && byType.data.contacts.map(c => c.id)).toEqual([1]);
   });
 
-  it("点名的数量优先于日限额与 50 封顶", () => {
+  it("点名的数量优先于默认批量与日限额", () => {
     quotaState.dailyLimit = 100; quotaState.sentToday = 0;
     const r = recommendDevLetterGroup(undefined, new Date(), { limit: 2, parsedBy: "model" });
     expect(r.success && r.data.groupSize).toBe(2);
     expect(r.success && r.data.reasons[0]).toContain("前 2 位");
+  });
+
+  it("点名的数量可超过默认 50：候选够就照取，候选不足或被日限额剩余夹住才少给", () => {
+    // 本 describe 的 beforeEach 已预置 id 1/2/3（三家不同公司，均冷客户）——这里用 id 11..70 另加 60 家，避开主键冲突
+    for (let i = 1; i <= 60; i++) addContact({ id: i + 10, email: `x${i}@x${i}.com`, name: `X${i}` });
+    quotaState.dailyLimit = 0; quotaState.sentToday = 0;
+
+    // 点名 55 > 默认 50，候选池（3 预置 + 60 新加 = 63）充足 → 如实给 55
+    const big = recommendDevLetterGroup(undefined, new Date(), { limit: 55, parsedBy: "model" });
+    expect(big.success && big.data.groupSize).toBe(55);
+    expect(big.success && big.data.reasons.join()).toContain("本轮按你说的取 55 位");
+
+    // 点名 500 > 候选池 → 被池子夹到（groupSize = totalCandidates），并如实说"不足"
+    const poolBound = recommendDevLetterGroup(undefined, new Date(), { limit: 500, parsedBy: "model" });
+    expect(poolBound.success && poolBound.data.groupSize).toBe(poolBound.data.totalCandidates);
+    expect(poolBound.success && poolBound.data.totalCandidates).toBe(63);
+    expect(poolBound.success && poolBound.data.reasons.join()).toContain("符合条件的冷客户不足");
+
+    // 点名 55，但今日剩余额度只有 20 → 被日限额夹到 20，并如实说"剩余额度"
+    quotaState.dailyLimit = 20; quotaState.sentToday = 0;
+    const quotaBound = recommendDevLetterGroup(undefined, new Date(), { limit: 55, parsedBy: "model" });
+    expect(quotaBound.success && quotaBound.data.groupSize).toBe(20);
+    expect(quotaBound.success && quotaBound.data.reasons.join()).toContain("今日剩余额度只有 20 位");
   });
 
   it("「按这个要求没人」与「库里没冷客户」两种空集必须分开说", () => {

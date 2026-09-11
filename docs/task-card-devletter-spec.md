@@ -393,9 +393,9 @@ export async function parseDevLetterIntent(text: string): Promise<DevLetterCrite
 }
 ```
 
-`pick()` 只做白名单取值与钳制（`limit` 钳到 1..50，`language` 只认 EN/ES/PT，其余丢弃）；
-`keywordParse()`：国家用 `looksLikeCountry(t)` / 逐个 `countryMatchWords` 命中，语言/阶段/类型走上面词表，
-数量抓 `前\s*(\d+)|最多\s*(\d+)|(\d+)\s*(位|个|封)`。两个函数都是纯函数，方便单测。
+`sanitize()` 只做白名单取值（`limit` 只取正整数、**不设天花板**——用户点名多少就交给引擎按日限额/候选池夹，`language` 只认 EN/ES/PT，其余丢弃）；
+`keywordParse()`：国家用 `matchCountryInText(t)` / 逐个 `countryMatchWords` 命中，语言/类型走上面词表，
+数量抓 `(?:前|最多|来|取|要|改成|改到|换成|…)\s*(\d{1,4})\s*(?:位|个|家|封)?|(\d{1,4})\s*(?:位|个|家|封)`（含无单位说法，最多 4 位，同样不夹 50）。两个函数都是纯函数，方便单测。
 
 `src/main/services/dev-letter.service.ts` — 签名向后兼容（既有测试是 `recommendDevLetterGroup()` 无参调用）：
 
@@ -420,11 +420,15 @@ export function recommendDevLetterGroup(
 ```
 
 `CandidateRow` 与候选 `select` 需要补 `stage: contacts.stage, clientType: contacts.clientType` 两列。
-`cap` 计算处让 `criteria.limit` 优先：
+`cap` 计算：用户点名了数量就以它为准（只受日限额剩余与候选池夹，不写死 50），没点名才走默认一批：
 
 ```ts
-  const cap = Math.max(0, Math.min(DEV_LETTER_CAP, criteria?.limit ?? capOverride ?? remaining ?? DEV_LETTER_CAP));
+  const want = criteria?.limit ?? capOverride;
+  const cap = Math.max(0, want != null
+    ? Math.min(want, remaining ?? want)                         // 点名：只受日限额剩余夹，上限交给池子/额度
+    : Math.min(DEV_LETTER_CAP, remaining ?? DEV_LETTER_CAP));   // 未点名：默认一批 ≤50
 ```
+`DEV_LETTER_CAP` 因此只是"默认批量"，不再是硬上限；理由行按是否被 `remaining`/候选池夹到如实说明。
 
 `reasons` 头部插入一条"已按你的要求筛：…"（把命中的条件逐项写出来，`parsedBy` 也写进去），
 返回体加 `applied: criteria ?? { parsedBy: "none" }`。空结果时 `reasons[0]` 要说清是
@@ -517,10 +521,11 @@ export function recommendDevLetterGroup(
    - 已在 draft/running/paused 任务里的人被排除，且 `excludedInCampaign` 计数正确；
    - done/stopped 任务里的人**照常**可推荐；
    - `criteria` 过滤：country（含 `countryMatchWords` 语义命中）/ language / limit；
-   - 空结果时 `reasons[0]` 能区分"按这个要求没人"与"库里没冷客户"。
+   - 空结果时 `reasons[0]` 能区分"按这个要求没人"与"库里没冷客户"；
+   - 点名数量可超过默认 50：候选够就照取，被候选池或日限额剩余夹到时少给且理由行如实说明。
 4. `tests/unit/dev-letter-intent.test.ts`（新）：`keywordParse` 纯函数——「巴西的冷客户，英语，前 20 位」
-   → `{country:"巴西", stage:"cold", language:"EN", limit:20, parsedBy:"keyword"}`；
-   `askJsonOnce` 返回 null 时不抛、落到 keyword；`limit` 越界钳到 1..50。
+   → `{country:"巴西", language:"EN", limit:20}`；含无单位「改成30」也能认；`askJsonOnce` 返回 null 时不抛、落到 keyword；
+   `limit` 不设天花板（解析层照收，取数时才按日限额/候选池夹）。
 5. `tests/unit/picker-stats.test.ts`：`inCampaign` 只含未完结任务的 pending/queued 触点，
    同一人在两个任务里只出现一次。
 

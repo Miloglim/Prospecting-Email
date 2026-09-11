@@ -12,7 +12,7 @@ export interface DevLetterCriteria {
   language?: string;
   /** direct / agent / peer / general */
   clientType?: string;
-  /** 这次要几位（1..50） */
+  /** 这次要几位。不设人为天花板（用户点名多少就取多少），实际取数由 dev-letter.service 按日限额剩余与候选池再夹一次 */
   limit?: number;
   /** 规则表达不了的剩余要求，原样带给人看（不进筛选） */
   note?: string;
@@ -55,7 +55,7 @@ export function sanitize(raw: unknown): Partial<DevLetterCriteria> {
   if (country) out.country = country;
   if (LANGS.has(language)) out.language = language;
   if (CLIENT_TYPES.has(clientType)) out.clientType = clientType;
-  if (Number.isFinite(limit) && limit > 0) out.limit = Math.min(50, Math.floor(limit));
+  if (Number.isFinite(limit) && limit > 0) out.limit = Math.floor(limit);   // 不设天花板；取数时按日限额/候选池再夹
   if (note) out.note = note.slice(0, 200);
   return out;
 }
@@ -66,7 +66,8 @@ const LANG_WORDS: Array<[RegExp, string]> = [
 const TYPE_WORDS: Array<[RegExp, string]> = [
   [/直客|直接客户|\bdirect\b/i, "direct"], [/货代|代理|\bagent\b|forwarder/i, "agent"], [/同行|\bpeer\b/i, "peer"],
 ];
-const LIMIT_RE = /(?:前|最多|来|取|要)\s*(\d{1,3})\s*(?:位|个|家|封)|(\d{1,3})\s*(?:位|个|家|封)/;
+// 「改成/换到 N」这类无单位说法也认，数字最多 4 位；bare「N 位/个/家/封」仍单独成支
+const LIMIT_RE = /(?:前|最多|来|取|要|改成|改到|改为|换成|调成|调整为|给我|做|发)\s*(\d{1,4})\s*(?:位|个|家|封)?|(\d{1,4})\s*(?:位|个|家|封)/;
 
 /** 生效条件拼成一句人话（主进程写推荐理由用；界面提示与之同源，别两处各写一套） */
 export function describeCriteria(c?: DevLetterCriteria | null): string {
@@ -92,7 +93,7 @@ export function keywordParse(t: string): Partial<DevLetterCriteria> {
   if (type) out.clientType = type[1];
   const m = t.match(LIMIT_RE);
   const n = Number(m?.[1] ?? m?.[2]);
-  if (Number.isFinite(n) && n > 0) out.limit = Math.min(50, Math.floor(n));
+  if (Number.isFinite(n) && n > 0) out.limit = Math.floor(n);   // 不设天花板；取数时按日限额/候选池再夹
   if (FOLLOWED_UP_RE.test(t)) out.note = "本卡片只开发从未联系过的新客户：老客户请去跟进看板或任务里发";
   return out;
 }
