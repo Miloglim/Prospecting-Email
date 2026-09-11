@@ -2450,7 +2450,7 @@ ${priceDigest}`;
         if (r.isActive !== 1) probs.push("已停用");
         if (open && r.circuitReason === "sender_block") probs.push(`发信受阻熔断中（服务商反垃圾/限流拦截，30 分钟内 ${blockCount} 封）— 已从发信轮换摘除，24h 自动过期或设置页手动解除`);
         else if (open) probs.push("发信熔断中（连续发送失败）");
-        else if (blockCount > 0) probs.push(`近期有 ${blockCount} 封服务商拦截退信（未满熔断阈值，注意调整内容/频率）`);
+        else if (blockCount > 0) probs.push(`近 30 分钟有 ${blockCount} 封反垃圾/限流拦截退信（熔断已解除；再被拦会立即重新触发，注意先改内容/降频）`);
         if (r.consecutiveFails > 0) probs.push(`发信连续失败 ${r.consecutiveFails} 次`);
         if (r.fetchFailCount > 0) probs.push(`收信连续失败 ${r.fetchFailCount} 次${r.lastFetchError ? `：${r.lastFetchError}` : ""}`);
         else if (r.lastFetchError) probs.push(`最近收信异常：${r.lastFetchError}`);

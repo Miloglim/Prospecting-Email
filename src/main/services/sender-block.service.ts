@@ -19,7 +19,9 @@ import { Log } from "../logger";
 
 export interface SenderBlockSignal { code: string; excerpt: string }
 
-/** 判据族 → 特征串（小写比对）。命中任一即认定为发信受阻。 */
+/** 判据族 → 特征串（小写比对）。命中任一即认定为发信受阻。
+ *  只保留「反垃圾 / 限流」两类（用户明确要求）；信誉黑名单（Spamhaus/Barracuda/blacklist…）不在此列——
+ *  那是发信域名的长期信誉问题、非本轮拦截，不该据此暂停整批。 */
 const SENDER_BLOCK_PATTERNS: Array<{ code: string; marks: string[] }> = [
   // 阿里云邮件投递：本次实测样本（人读文案优先命中，摘录才有信息量；错误码兜底）
   { code: "ESO_LOCAL_SPAM", marks: ["系统反垃圾拦截", "建议调整邮件内容或发信频率", "eso_local_spam", "spamed by local spam engine"] },
@@ -27,8 +29,6 @@ const SENDER_BLOCK_PATTERNS: Array<{ code: string; marks: string[] }> = [
   { code: "spam_blocked", marks: ["blocked by spam", "spam content", "content rejected", "suspected spam", "junk mail filter", "反垃圾拦截"] },
   // 通用限流（发信频率）
   { code: "rate_limited", marks: ["rate limit", "ratelimit", "too many messages", "too frequent", "throttl", "发送频率过高", "发信频率过高", "超出发送频率"] },
-  // 信誉 / 黑名单
-  { code: "blacklisted", marks: ["blacklist", "black list", "dnsbl", "spamhaus", "barracuda", "blocked due to your reputation", "列入黑名单"] },
 ];
 
 /** 从退信原文（正文/预览均可）判断是否「发信受阻」。不命中返回 null —— 判不准一律按普通退信走。 */
@@ -71,9 +71,10 @@ export function isCircuitOpen(
 
 // ── 记录与触发 ──
 
-/** 滚动窗口：30 分钟内同账号 ≥3 封拦截通知 → 熔断 + 暂停整批 */
+/** 滚动窗口：命中即算（≥1 封）——一封明确的反垃圾/限流拦截通知就说明服务商已在拦本轮，立即熔断 + 暂停整批。
+ *  窗口只用于计数呈现（windowCount），不再作触发门槛；计数口径仍是「命中判据的退信」，普通退信不进这张表、永不触发。 */
 export const BLOCK_WINDOW_MS = 30 * 60 * 1000;
-export const BLOCK_TRIP_COUNT = 3;
+export const BLOCK_TRIP_COUNT = 1;
 
 export interface SenderBlockInput {
   accountId: number;

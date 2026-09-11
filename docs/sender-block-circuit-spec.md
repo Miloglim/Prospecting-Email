@@ -37,13 +37,16 @@
 | 族 | 判据 |
 |---|---|
 | 阿里云投递 | `ESO_LOCAL_SPAM`、`spamed by local spam engine`、`系统反垃圾拦截`、`建议调整邮件内容或发信频率` |
-| 通用反垃圾拦截 | `blocked by spam`、`spam content`、`content rejected`、`suspected spam`、`junk mail filter` |
-| 通用限流 | `rate limit`、`too many messages`、`too frequent`、`throttl`、`发送频率过高`、`发信频率` |
-| 信誉/黑名单 | `blacklist`、`black list`、`DNSBL`、`Spamhaus`、`blocked due to your reputation`、`IP 已被列入黑名单` |
+| 通用反垃圾/内容拦截 | `blocked by spam`、`spam content`、`content rejected`、`suspected spam`、`junk mail filter`、`反垃圾拦截` |
+| 通用限流 | `rate limit`、`too many messages`、`too frequent`、`throttl`、`发送频率过高`、`发信频率过高`、`超出发送频率` |
 
 不命中的情形（保持现状，绝不接管）：只有「无法发送到 / user unknown / 550 5.1.1 / mailbox full」
 等收件人侧原因的退信；判不准的一律按普通退信走。**分类字段仍是 `bounce`**（它在收件箱里
 确实是一封退信通知），改变的只是「这条退信该记在谁头上」。
+
+> **信誉黑名单类文案（`blacklist` / `Spamhaus` / `Barracuda` / `列入黑名单`）不纳入判据**（用户明确要求只留「反垃圾 / 限流」）：
+> 那是发信域名的长期信誉问题、非本轮内容/频率拦截，据此暂停整批既不对症也会误伤。普通退信概率很高，
+> 计数只认上表两类命中，其余一律不进 `send_block_events`、永不触发熔断。
 
 ## 3. 数据模型
 
@@ -54,17 +57,17 @@
 
 ## 4. 触发与处置
 
-命中判据 → 写 `send_block_events` → 按账号统计**滚动 30 分钟**内封数：
+命中判据 → 写 `send_block_events`（按 `message_id` 幂等）→ **命中即触发（≥1 封）**，且该账号未处于熔断：
 
-- 计数 `< 3`：只记账号事件（设置页可见），不动批次。
-- 计数 `≥ 3` 且该账号未处于熔断：
-  1. 该账号置熔断（`circuit_open_at=now`、`circuit_reset_after=now+24h`、`circuit_reason='sender_block'`）；
-  2. **暂停整个批次**（`pauseSend('sender_block')`，不取消、不丢队列——域名与账号信誉是共享资产，
-     换账号继续猛发只会把第二个账号一起拖进去）；
-  3. 推 `accounts:circuitChanged`（带 reason/count），队列页与设置页据此呈现；
-  4. 联系人**不标退信**、不写 `bounced` 事件、不发信任务止损。
+1. 该账号置熔断（`circuit_open_at=now`、`circuit_reset_after=now+24h`、`circuit_reason='sender_block'`）；
+2. **暂停整个批次**（`pauseSend('sender_block')`，不取消、不丢队列——域名与账号信誉是共享资产，
+   换账号继续猛发只会把第二个账号一起拖进去）；
+3. 推 `accounts:circuitChanged`（带 reason/count），队列页与设置页据此呈现；
+4. 联系人**不标退信**、不写 `bounced` 事件、不发信任务止损。
 
-熔断账号一律从选号中剔除（第 5 节），所以新批次/恢复批次都不会再排到它。
+一封明确的反垃圾/限流通知就说明服务商已经在拦本轮，没必要等攒够三五封再去撞墙——故阈值取 1。
+（30 分钟窗口仅用于计数呈现，不再是触发门槛。）熔断账号一律从选号中剔除（第 5 节），
+所以新批次/恢复批次都不会再排到它。
 
 ## 5. 选号口径唯一化
 
@@ -95,8 +98,8 @@
 ## 9. 测试钉
 
 1. 判据：阿里云 `ESO_LOCAL_SPAM` 样本命中；只有「无法发送到 + 5xx」的硬退信样本不命中；
-   限流文案（rate limit / 发信频率）命中。
-2. 窗口计数：30 分钟内第 3 封触发，第 1、2 封只记账号事件；同 `message_id` 重复记录幂等。
+   限流文案（rate limit / 发信频率过高）命中；**信誉黑名单文案（blacklist / Spamhaus）不命中**。
+2. 触发门槛：命中一封即熔断 + 暂停整批（≥1）；同 `message_id` 重复记录幂等，第二封时 `alreadyOpen` 不再重复触发。
 3. 触发后：账号进入有效熔断、批次转 `pausedReason='sender_block'`、联系人未被标 bounced、未写 bounced 事件。
 4. 选号：熔断账号（未过期）被 `selectableAccountIds()` 剔除；过 `circuit_reset_after` 后回归。
 5. 一键解除：清干净三字段 + 计数归零。

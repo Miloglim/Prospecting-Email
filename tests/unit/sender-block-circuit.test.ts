@@ -99,10 +99,11 @@ describe("发信受阻判据（只认针对性拦截，其他退信照旧）", (
     expect(S.detectSenderBlockSignal("无法发送到 a@b.c\n系统应答:550 No such user")).toBeNull();
   });
 
-  it("限流/黑名单族也认（rate limit / 发送频率过高 / blacklist）", () => {
+  it("限流族认；信誉黑名单族不认（已按用户要求剔除，不据此停批）", () => {
     expect(S.detectSenderBlockSignal("Delivery rate limit exceeded, slow down")).not.toBeNull();
     expect(S.detectSenderBlockSignal("您的发送频率过高，请稍后再试")).not.toBeNull();
-    expect(S.detectSenderBlockSignal("Recipient server blocked: your IP is on a blacklist")).not.toBeNull();
+    expect(S.detectSenderBlockSignal("Recipient server blocked: your IP is on a blacklist")).toBeNull();
+    expect(S.detectSenderBlockSignal("listed at Spamhaus and Barracuda DNSBL")).toBeNull();
   });
 
   it("空文/纯 HTML 不误报", () => {
@@ -122,21 +123,15 @@ describe("熔断生效期与解除", () => {
   });
 });
 
-describe("滚动窗口触发", () => {
-  it("30 分钟内第 3 封触发：熔断该账号 + 暂停整批 + 播报；第 4 封不重复触发", async () => {
+describe("命中即触发", () => {
+  it("一封命中即熔断该账号 + 暂停整批 + 播报；后续不重复触发", async () => {
     await freshDb();
-    const base = Date.now();
-    const at = (min: number) => new Date(base + min * 60_000).toISOString();
+    const at = (min: number) => new Date(Date.now() + min * 60_000).toISOString();
+    const sig = { code: "ESO_LOCAL_SPAM", excerpt: "反垃圾" };
 
-    const r1 = S.recordSenderBlock({ accountId: 1, messageId: "m1", occurredAt: at(0), signal: { code: "ESO_LOCAL_SPAM", excerpt: "反垃圾" } });
-    const r2 = S.recordSenderBlock({ accountId: 1, messageId: "m2", occurredAt: at(3), signal: { code: "ESO_LOCAL_SPAM", excerpt: "反垃圾" } });
-    expect([r1.tripped, r2.tripped]).toEqual([false, false]);
+    const r1 = S.recordSenderBlock({ accountId: 1, messageId: "m1", occurredAt: at(0), signal: sig });
+    expect(r1.tripped).toBe(true);
     expect(r1.windowCount).toBe(1);
-    expect(S.isCircuitOpen(h.db.select({ circuitOpenAt: schema.emailAccounts.circuitOpenAt, circuitResetAfter: schema.emailAccounts.circuitResetAfter }).from(schema.emailAccounts).where(ONE).get())).toBe(false);
-
-    const r3 = S.recordSenderBlock({ accountId: 1, messageId: "m3", occurredAt: at(6), signal: { code: "ESO_LOCAL_SPAM", excerpt: "反垃圾" } });
-    expect(r3.tripped).toBe(true);
-    expect(r3.windowCount).toBe(3);
 
     const acct = h.db.select().from(schema.emailAccounts).where(ONE).get()!;
     expect(acct.circuitReason).toBe("sender_block");
@@ -145,13 +140,13 @@ describe("滚动窗口触发", () => {
     expect(Date.parse(acct.circuitResetAfter!) - Date.parse(acct.circuitOpenAt!)).toBe(S.CIRCUIT_TTL_MS);
 
     await vi.waitFor(() => expect(sendSpy.pauseSend).toHaveBeenCalledWith("sender_block"), { timeout: 2000 });
-    expect(sendSpy.pauseSend).toHaveBeenCalledWith("sender_block");
     expect(sendSpy.markAccountCircuitOpen).toHaveBeenCalledWith(1);
-    expect(sendSpy.pushCircuitChanged).toHaveBeenCalledWith(expect.objectContaining({ accountId: 1, reason: "sender_block", windowCount: 3 }));
+    expect(sendSpy.pushCircuitChanged).toHaveBeenCalledWith(expect.objectContaining({ accountId: 1, reason: "sender_block", windowCount: 1 }));
 
-    const r4 = S.recordSenderBlock({ accountId: 1, messageId: "m4", occurredAt: at(9), signal: { code: "ESO_LOCAL_SPAM", excerpt: "反垃圾" } });
-    expect(r4.tripped).toBe(false);
-    expect(r4.alreadyOpen).toBe(true);
+    // 第二封：账号已在熔断中，不重复触发（幂等暂停，不会反复打断）
+    const r2 = S.recordSenderBlock({ accountId: 1, messageId: "m2", occurredAt: at(3), signal: sig });
+    expect(r2.tripped).toBe(false);
+    expect(r2.alreadyOpen).toBe(true);
   });
 
   it("同一封通知重复记录幂等（messageId 唯一键）", async () => {
