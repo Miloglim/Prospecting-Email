@@ -285,12 +285,12 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
         <div className="text-[11px] text-gray-500 leading-relaxed">
           共 <span className="font-medium text-gray-700">{rows.length}</span> 个任务组{rows.length > 0 && <> · 进行中 <span className="text-teal-600 font-medium">{runningCount}</span></>}
           {totalQueuedGroups > 0 && <> · 队列 <span className="text-blue-600 font-medium">{totalQueuedGroups}</span> 组</>}。
-          点任务卡片展开运行情况；一次创建、按计划自动执行，客户回复/退订/退信自动止损。
+          点任务卡片查看详情；一次创建、按计划自动执行，客户回复/退订/退信自动止损。
         </div>
         <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onCreate}>创建任务</Button>
       </div>
 
-      {/* 任务组卡片网格（整卡可点 → 展开运行情况） */}
+      {/* 任务组卡片网格（整卡可点 → 查看详情抽屉） */}
       {rows.length === 0 && !isLoading ? (
         <Card>
           <Empty description="还没有开发任务 — 点右上角「创建任务」配置你的第一个任务组，或到 AI 助手说「给巴西的冷客户自动跟进」" />
@@ -348,10 +348,8 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
                   <span className="font-mono">{fmtTime(r.createdAt)}</span>
                 </div>
 
-                {/* 操作（stopPropagation 防冒泡触发抽屉） */}
+                {/* 操作（整卡可点→详情抽屉，这里只放控制按钮） */}
                 <div className="flex gap-1 flex-wrap border-t border-gray-100 pt-2">
-                  <Button size="small" type="text" style={{ fontSize: 12 }}
-                    onClick={e => { e.stopPropagation(); setDrawerId(r.id); }}>运行情况</Button>
                   {cardOps(r)}
                 </div>
               </div>
@@ -362,7 +360,7 @@ export function CampaignTasks({ onCreate, onEdit }: { onCreate: () => void; onEd
 
       {/* 卡片展开：运行情况（队列组 + 引擎）+ 触点明细 */}
       <Drawer
-        title={detail?.campaign ? `${detail.campaign.name} · 运行情况` : "任务运行情况"}
+        title={detail?.campaign ? `${detail.campaign.name} · 详情` : "任务详情"}
         placement="right"
         width={780}
         open={!!drawerId}
